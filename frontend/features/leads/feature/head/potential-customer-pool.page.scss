@@ -1,0 +1,37 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.who {
+  display: flex;
+  flex-direction: column;
+
+  strong {
+    font-weight: 500;
+  }
+
+  span {
+    font-size: var(--t-sm);
+  }
+}
+
+.assign {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+
+  select {
+    height: 28px;
+    font-size: var(--t-sm);
+    max-width: 130px;
+  }
+}
+
+.error {
+  padding: var(--s-3) var(--s-4);
+  color: var(--c-rose);
+  font-size: var(--t-sm);
+}

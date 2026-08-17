@@ -1,0 +1,21 @@
+/*
+ * THG's visual language — the only place this customer's look is decided.
+ *
+ * Loaded after the foundation's token contract, so every declaration here is an
+ * override of a documented default. Nothing else in the application, and
+ * nothing at all in libs/, holds a brand value.
+ *
+ * A second customer is a sibling folder: same file names, different values, and
+ * not one line of libs/ touched.
+ *
+ * Not overridden, on purpose — the foundation's defaults already suit us:
+ *   shape/density   --r-* and --control-h
+ *   accent scale    --c-blue … --c-slate and their -soft pairs
+ *   elevation       --sh-*
+ *   motion          --motion-*
+ * Add _shape.scss (and so on) here when THG actually needs to deviate, not
+ * before — an override file that only restates the default is a file that will
+ * silently drift.
+ */
+@forward 'palette';
+@forward 'type';

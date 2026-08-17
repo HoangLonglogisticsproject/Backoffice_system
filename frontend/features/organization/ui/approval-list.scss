@@ -1,0 +1,69 @@
+@use 'mixins' as *;
+
+:host {
+  display: block;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--line);
+  transition: background-color 0.12s ease;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+
+  &:hover {
+    background: var(--bg-subtle);
+  }
+
+  @include small-mobile {
+    flex-wrap: wrap;
+  }
+}
+
+.tile {
+  @include accent-tile(30px, 8px);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--t-base);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  line-height: 1.4;
+  /* Wraps rather than truncates: the request's subject is the point of the row. */
+  @include clamp-lines(2);
+}
+
+.context {
+  margin-top: 1px;
+  color: var(--fg-subtle);
+  font-size: var(--t-sm);
+  @include truncate;
+}
+
+time {
+  flex: none;
+  width: 82px;
+  color: var(--fg-subtle);
+  font-size: var(--t-sm);
+  text-align: right;
+
+  @include below-desktop {
+    display: none;
+  }
+
+  @include small-mobile {
+    display: block;
+    width: auto;
+    margin-left: auto;
+  }
+}

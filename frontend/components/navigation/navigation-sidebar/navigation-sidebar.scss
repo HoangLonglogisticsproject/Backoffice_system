@@ -1,0 +1,771 @@
+@use 'mixins' as *;
+
+//
+// NAVIGATION CHROME.
+//
+// Two compositions — full sidebar and rail — sharing one visual language rather
+// than one DOM. What they share is the part that matters:
+//
+//   material   both sit on --bg-chrome, a plane recessed below the content
+//   colour     monochrome at rest; colour only ever reports state
+//   active     a mark on the chrome's leading edge, never a filled row
+//   hover      a faint fill on the row, geometrically unlike active
+//   shape      no resting containers anywhere — no tiles, no slots, no cards
+//
+// The rule that drives all of it: nothing in this file paints a surface unless
+// the user is pointing at it or standing on it. Fourteen resting containers is
+// what made this read as a collection of little cards instead of one
+// instrument, and no amount of spacing or stroke tuning could cover for it.
+// The navigation's own palette and metrics are declared in the token contract
+// (libs/tokens/_tokens.scss, "navigation surface"), not here. They stayed local
+// for a long time and that is exactly what made the navigation the one part of
+// the product a customer could not re-theme.
+:host {
+  // Where you are, in the colour of the thing you are in. Raw accents are
+  // graphics, not text — amber measures 2.7:1 on white and teal 3.3:1, so a
+  // department label set in one would be unreadable. Mixed 70% into the
+  // foreground every accent clears 4.5:1, worst case amber at 4.8:1, and the
+  // hue survives. Derived rather than hand-picked, so a new department accent
+  // is legible the day it is added.
+  //
+  // Declared again on .dept below, because a custom property is substituted
+  // where it is DECLARED, not where it is used: resolved only here, every
+  // department inherited one computed blue instead of its own hue.
+  --nav-accent-ink: color-mix(in srgb, var(--c-primary) 70%, var(--fg));
+
+  --nav-ring: 0 0 0 2px var(--nav-surface), 0 0 0 4px var(--c-primary);
+
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: var(--nav-w);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  background: var(--nav-surface);
+  border-right: 1px solid var(--line-chrome);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+:host(.rail) {
+  width: var(--nav-rail-w);
+}
+
+//  Drawer: off-canvas until opened.
+@include mobile {
+  :host {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: var(--z-drawer);
+    width: min(288px, 82vw);
+    transform: translateX(-100%);
+    transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: var(--sh-lg);
+  }
+
+  :host(.open) {
+    transform: none;
+  }
+}
+
+//  --- brand -----------------------------------------------------------------
+// An anchor, not a titlebar and not the first nav row. It needs no plate and no
+// rule: it is the one filled shape in a column of unfilled ones, and the void
+// beneath it does the separating.
+.brand {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  height: 56px;
+  padding-inline: 15px;
+
+  :host(.rail) & {
+    justify-content: center;
+    padding: 0;
+  }
+}
+
+//
+// The anchor. Built on the navigation's own grid rather than dropped on top of
+// it: 28px square on the same 15px margin as every row, so the mark's left edge
+// and every icon below it share one vertical line, and its optical centre sits
+// on the icon column. A logo that ignores the grid is the fastest way to make
+// an otherwise disciplined interface look assembled from parts.
+//
+// The inner rule is a single hairline of the brand at low alpha — it gives the
+// square an edge without a border, which is the same restraint the rest of the
+// navigation follows.
+.brand__mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--fg-invert);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+//
+// Wordmark, not a heading: the product name is set tighter and one notch
+// heavier than any destination under it, so it reads as identity rather than as
+// the first item in the list.
+.brand__name {
+  // The page h1 is set at 650/-0.025em; the wordmark had been sitting at row
+  // size and weight, which is why the top of the column read as furniture
+  // rather than as the product's name.
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--nav-fg);
+  @include truncate;
+
+  :host(.rail) & {
+    display: none;
+  }
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  width: 100%;
+  padding: var(--s-3) 12px;
+
+  :host(.rail) & {
+    padding-inline: 0;
+  }
+}
+
+.nav__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav__section {
+  padding-inline: 15px;
+  margin: 0 0 8px;
+  color: var(--nav-section-fg);
+  //  Below the type scale on purpose: a caption naming a zone, not a heading
+  // competing with the destinations under it. The tracking is what keeps it
+  // legible at this size and gives the column its precision.
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  @include truncate;
+
+  * + & {
+    margin-top: var(--s-5);
+  }
+}
+
+//
+// System destinations belong at the bottom: position is the hierarchy, so the
+// tier does not have to shout to be understood as secondary. The spring goes on
+// the HEADING, not on the list — putting it on the list pushed the rows to the
+// floor and left their own label stranded next to the departments.
+.nav__section--system {
+  margin-top: auto;
+  padding-top: var(--s-5);
+}
+
+//  Only the rail keeps a rule: with the labels gone there is nothing else left
+// to separate one section from the next.
+.nav__rule {
+  display: none;
+}
+
+//  --- the primitive --------------------------------------------------------
+// Label column at 48px for every tier: 15 padding + 20 icon + 13 gap. The child
+// indent is measured back to that same number.
+.nav__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  height: 36px;
+  padding-inline: 15px;
+  border-radius: var(--r-md);
+  color: var(--nav-fg-muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.006em;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+
+  //  The only fill in the navigation, and it exists only while pointed at.
+  &:hover {
+    background: var(--nav-hover);
+    color: var(--nav-fg);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--nav-ring);
+  }
+
+  //
+  // The current page, said the same way in both compositions: a mark on the
+  // chrome's own leading edge plus an accent glyph. Nothing is filled. A tinted
+  // row would only ever read as a heavier hover, which is precisely the failure
+  // this replaces.
+  //
+  // `--accent` resolves to the department's colour inside a department and
+  // falls back to the brand everywhere else — one declaration, two meanings.
+  &[aria-current='page'] {
+    color: var(--nav-fg);
+    font-weight: 600;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 50%;
+      width: 3px;
+      height: 20px;
+      border-radius: 0 2px 2px 0;
+      background: var(--nav-accent-ink);
+      transform: translateY(-50%);
+    }
+
+    .nav__slot,
+    .nav__label {
+      color: var(--nav-accent-ink);
+    }
+  }
+
+  @include mobile {
+    height: 44px;
+  }
+}
+
+//
+// Not a container — an alignment box. It carries no surface in any state, which
+// is what lets the icons form a column rather than a stack of little cards. The
+// white hairlined plate that used to live here was the single most template-
+// looking element in the product.
+.nav__slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--nav-icon);
+  transition: color 0.14s ease;
+
+  .nav__row:hover & {
+    color: var(--nav-fg);
+  }
+}
+
+.nav__label {
+  flex: 1;
+  min-width: 0;
+  @include truncate;
+}
+
+//
+// A count, not a badge. The filled pill was the loudest thing in a navigation
+// that otherwise paints nothing, and it made a backlog of twelve look like an
+// alert. Tabular figures so the column does not shift as numbers change.
+.nav__count {
+  flex: none;
+  color: var(--nav-section-fg);
+  // The product already sets metadata in mono — capability keys read `overview`,
+  // `tasks`. A count is measurement, so it speaks in that voice rather than in
+  // a second one invented here.
+  font-family: ui-monospace, monospace;
+  font-size: var(--t-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.12s ease;
+
+  .nav__row:hover & {
+    color: var(--nav-fg-muted);
+  }
+}
+
+//
+// THE PULSE — data moving through this destination right now.
+//
+// One element serving both compositions: beside the count in the sidebar, on the
+// glyph's corner in the rail. It replaced a separate rail-only dot that would
+// have rendered alongside it — two marks for one fact.
+//
+// Deliberately 3px and slower than the eye tracks: at 3.2s it never catches
+// attention on its own, but a screen watched all day quietly reads as live
+// rather than as a document. It sits beside the count because the two say
+// different things — flow versus backlog.
+.nav__pulse {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  margin-right: -1px;
+  border-radius: var(--r-full);
+  background: var(--nav-accent-ink);
+  opacity: 0.55;
+  animation: bo-nav-pulse var(--motion-pulse) ease-in-out infinite;
+}
+
+@keyframes bo-nav-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.5);
+  }
+}
+
+//
+// THE BREATH — the platform working on its own behalf.
+//
+// Once every 14 seconds the glyph warms toward the brand colour and settles
+// back, about four times a minute. This began as a gloss sweeping across the
+// icon; rendered, that was a blue rectangle behind the glyph — a container, the
+// exact device this navigation removed. Colouring the glyph itself paints
+// nothing, needs no overlay and no clipping, and is the quieter signal anyway:
+// unnoticed while you read, caught if you glance at the column.
+.nav__slot--thinking {
+  animation: bo-nav-think var(--motion-think) ease-in-out infinite;
+
+  // The glyph's own colour is the signal, so hover has to win outright —
+  // an animation beats a normal declaration, and a paused one would freeze
+  // mid-breath.
+  .nav__row:hover & {
+    animation: none;
+  }
+}
+
+@keyframes bo-nav-think {
+  0%,
+  92%,
+  100% {
+    color: var(--nav-icon);
+  }
+  96% {
+    color: var(--c-primary);
+  }
+}
+
+//
+// Motion here is decorative — it reports state that is also carried by the
+// count and the label — so it comes off entirely rather than being slowed down.
+@media (prefers-reduced-motion: reduce) {
+  .nav__pulse {
+    animation: none;
+    opacity: 0.8;
+  }
+
+  .nav__slot--thinking {
+    animation: none;
+  }
+}
+
+//  Tier 4: quieter by size and colour, and by sitting at the bottom.
+.nav__row--system {
+  height: 34px;
+  font-size: var(--t-base);
+  color: var(--nav-fg-muted);
+
+  &[aria-current='page'] {
+    color: var(--nav-fg);
+  }
+}
+
+//  --- department: a disclosure, not a destination ---------------------------
+// It owns a tile, a gutter and a list, so it is built as its own thing rather
+// than as the primitive with a chevron added on the end.
+.dept {
+  // Re-resolved per department, so the ink carries this department's accent.
+  --nav-accent-ink: color-mix(in srgb, var(--accent) 70%, var(--fg));
+}
+
+.dept + .dept {
+  margin-top: 2px;
+}
+
+.dept__header {
+  position: relative;
+}
+
+//
+// The disclosure sits on the TRAILING edge. It began on the leading edge — to
+// announce "container, not destination" — but that put it directly on top of the
+// active marker, and two marks fighting for the same 3px reads as a rendering
+// fault. The leading edge belongs to state; the trailing edge belongs to
+// control. It stays after the link in the DOM, so tab order is unchanged.
+.dept__disclosure {
+  position: absolute;
+  right: 7px;
+  top: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--nav-section-fg);
+  transition: color 0.12s ease;
+
+  &:hover {
+    color: var(--nav-fg);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--nav-ring);
+  }
+
+  @include mobile {
+    width: 28px;
+  }
+}
+
+//
+// The department you are inside — the only place a department's colour is
+// allowed to appear, and only one department can be current at a time. Colour
+// therefore always answers a question ("where am I?") instead of labelling.
+.nav__row--here {
+  .nav__slot,
+  .nav__label {
+    color: var(--nav-accent-ink);
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 3px;
+    height: 18px;
+    border-radius: 0 2px 2px 0;
+    background: var(--nav-accent-ink);
+    transform: translateY(-50%);
+  }
+}
+
+.nav__row--dept {
+  //  Reserves the trailing edge so a long department name never runs under its
+  // own disclosure.
+  padding-right: 34px;
+
+  //  Deliberately the same weight as a primary destination. Departments were
+  // heavier for a while, which quietly inverted the hierarchy — the section
+  // caption and the group's own indented children already say what this is,
+  // so making it bolder than the tier above it only muddled the order.
+  &[aria-current='page'],
+  &.nav__row--here {
+    font-weight: 600;
+  }
+
+  //  The current page already carries the edge mark from the primitive; the
+  // department's own "you are here" bar must not stack a second one on it.
+  &[aria-current='page']::after {
+    display: none;
+  }
+}
+
+//  --- children: the spine ---------------------------------------------------
+// A permanent line in the gutter, aligned to the centre of the tile above it
+// (10 padding + 14 half-tile = 24). It is always drawn while the group is open,
+// so the structure does not appear and vanish with the route.
+.dept__children {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 2px 25px;
+  padding: 0;
+  list-style: none;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 3px;
+    bottom: 3px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--nav-spine);
+  }
+
+  //  aria-controls needs the element to exist, so hiding is presentational.
+  &[hidden] {
+    display: none;
+  }
+}
+
+//
+// 25 gutter + 12 margin + 11 padding = 48: the child's icon lands on the same
+// column as every label above it.
+.nav__row--child {
+  height: 32px;
+  margin-left: 12px;
+  padding-inline: 11px;
+  gap: 9px;
+  font-size: var(--t-base);
+  font-weight: 500;
+  color: var(--nav-fg-muted);
+
+  bo-icon {
+    color: var(--nav-icon);
+    transition: color 0.12s ease;
+  }
+
+  &:hover {
+    color: var(--nav-fg);
+
+    bo-icon {
+      color: var(--nav-fg);
+    }
+  }
+
+  //
+  // The child's indicator is a lit segment of the spine it already hangs from —
+  // structure reused, not a second device invented. Overrides the primitive's
+  // edge mark, which belongs to the sidebar edge and would be adrift out here.
+  &[aria-current='page'] {
+    color: var(--nav-fg);
+    font-weight: 600;
+
+    &::before {
+      left: -12px;
+      top: 3px;
+      bottom: 3px;
+      height: auto;
+      width: 2px;
+      border-radius: 1px;
+      transform: none;
+      background: var(--accent);
+    }
+
+    bo-icon {
+      color: var(--accent);
+    }
+  }
+
+  @include mobile {
+    height: 40px;
+  }
+}
+
+//  --- rail ------------------------------------------------------------------
+// NOT the sidebar with its labels hidden. A 72px canvas is its own problem, and
+// it is composed as three zones — brand, navigation, system — separated by
+// space alone. Nothing here draws a container at rest: the icons stand on the
+// surface, and the only painted thing in the whole column is a 3px mark on the
+// rail's leading edge showing where you are.
+//
+// The test this composition is built to pass: strip every colour and the four
+// tiers are still legible, because the hierarchy is carried by position and
+// void rather than by hue.
+:host(.rail) {
+  //  Space is the separator. A rule would just be a second, weaker one.
+  .nav__rule,
+  .nav__section {
+    display: none;
+  }
+
+  //
+  // The brand is an anchor, not the first item: no plate, no border, no chrome
+  // bar — just the mark and a deliberate void beneath it. Its authority comes
+  // from being the one filled shape above a column of unfilled ones.
+  .brand {
+    height: 44px;
+    justify-content: center;
+    padding: 0;
+    background: none;
+    border-bottom: 0;
+  }
+
+  //
+  // The whole column is budgeted to fit 768px of viewport height — 1024×768 is
+  // squarely inside the rail's own breakpoint, and if the content overflows
+  // there the system zone unpins and the flexible void collapses, which is the
+  // composition. Fitting is a design requirement here, not housekeeping.
+  .nav {
+    padding: 18px 0 10px;
+  }
+
+  //  Items sit on a tight rhythm; zones are set apart by an order of magnitude
+  // more space. That ratio is the hierarchy.
+  .nav__list {
+    gap: 0;
+  }
+
+  .nav__list ~ .nav__list {
+    margin-top: 30px;
+  }
+
+  //  Position is what demotes the system tier — not opacity, not size alone.
+  // Written as a sibling selector so it outweighs the zone-gap rule above,
+  // which would otherwise pin a fixed margin here and kill the spring.
+  .nav__list ~ .nav__list--system {
+    margin-top: auto;
+    padding-top: 30px;
+  }
+
+  .nav__row {
+    justify-content: center;
+    height: 44px;
+    padding: 0;
+    gap: 0;
+
+    //  A row-wide fill here would be a 72px bar across the whole rail.
+    &:hover {
+      background: none;
+    }
+
+    &:focus-visible {
+      box-shadow: none;
+    }
+
+    &:focus-visible .nav__slot {
+      box-shadow: var(--nav-ring);
+    }
+  }
+
+  //  A tighter pitch and a lighter glyph, so the bottom cluster reads as
+  // utilities rather than as a third rank of destinations. Lighter, not faint:
+  // these still have to be usable.
+  .nav__row--system {
+    height: 36px;
+
+    .nav__slot {
+      color: var(--nav-slot-fg);
+    }
+  }
+
+  //
+  // The hit target stays 44 tall and stays invisible. This 36×36 is only ever
+  // painted under the pointer — at rest it is nothing at all, which is the
+  // whole difference between a navigation rail and a strip of buttons.
+  .nav__slot {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+
+  .nav__row:hover .nav__slot {
+    background: var(--nav-hover);
+  }
+
+  //
+  // The signature. The indicator belongs to the rail, not to the item: it sits
+  // flush on the leading edge, so it reads as the chrome marking your position
+  // rather than as a button that happens to be switched on. Geometrically
+  // unrelated to hover — a hard edge mark against a soft centred square — so
+  // the two can never be read as strong and weak versions of one state.
+  //
+  // `--accent` is only defined inside a department, so this resolves to that
+  // department's own colour there and to the brand everywhere else.
+  .nav__row[aria-current='page']::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 3px;
+    height: 20px;
+    border-radius: 0 2px 2px 0;
+    background: var(--accent, var(--c-primary));
+    transform: translateY(-50%);
+  }
+
+  //
+  // Departments are neutral at rest. The accent appears on exactly one of them
+  // — the one you are in — so the rail carries at most a single hue at any
+  // moment and colour means "current context" instead of "decoration".
+  .nav__row--here .nav__slot {
+    background: none;
+    color: var(--accent);
+  }
+
+  //  One mark per row: the primitive's edge bar already fires for the current
+  // page, so the department's "you are here" bar must not double it.
+  .nav__row--here[aria-current='page']::after {
+    display: none;
+  }
+
+  .dept + .dept {
+    margin-top: 0;
+  }
+
+  // On the glyph's corner here, since the count is not shown in the rail.
+  .nav__pulse {
+    position: absolute;
+    inset: 11px 23px auto auto;
+  }
+
+  //
+  // Visually hidden but still announced: the label is the icon link's
+  // accessible name, and the count is the only place the badge number exists
+  // once the rail has reduced it to a dot.
+  .nav__label,
+  .nav__count {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  //  Genuinely gone — off-screen focusable links are a trap, not an aid.
+  .dept__disclosure,
+  .dept__children,
+  footer {
+    display: none;
+  }
+}
+
+//
+// Appearance only — the CDK overlay owns placement, so there is no positioning
+// here to drift out of sync with the rail. The portal is built from this
+// component's own template, so the encapsulation attribute still applies even
+// though the element lives in the overlay container on <body>.
+.tip {
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  background: var(--fg);
+  color: var(--fg-invert);
+  font-size: var(--t-base);
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--sh-md);
+}
+
+footer {
+  flex: none;
+  padding: var(--s-3) 22px var(--s-4);
+  border-top: 1px solid var(--nav-line);
+  color: var(--fg-subtle);
+  font-size: var(--t-xs);
+  line-height: 1.7;
+
+  @include mobile {
+    padding-bottom: max(var(--s-4), env(safe-area-inset-bottom));
+  }
+}

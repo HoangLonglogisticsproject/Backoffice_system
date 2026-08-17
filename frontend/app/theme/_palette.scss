@@ -1,0 +1,17 @@
+/*
+ * THG — brand palette.
+ *
+ * These six values are the whole of THG's colour identity. The accent scale
+ * (blue/teal/rose/amber/violet/green/slate) stays on the foundation's defaults
+ * because it is a system palette, not a brand: departments pick from it, and
+ * THG has never needed a hue the foundation does not ship. Override any of
+ * those here the day that stops being true.
+ */
+:root {
+  --c-primary-50: #eef3ff;
+  --c-primary-100: #dbe6ff;
+  --c-primary-200: #bdd0ff;
+  --c-primary: #2563eb;
+  --c-primary-600: #1d4ed8;
+  --c-primary-700: #1840ad;
+}

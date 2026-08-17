@@ -1,0 +1,26 @@
+# PostgreSQL cho phát triển cục bộ.
+#
+# Mô hình triển khai: MỘT deployment = MỘT database. Không multi-tenant,
+# không tenant_id, không cross-tenant routing — database chính là ranh giới
+# cô lập.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: backoffice-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: backoffice
+      POSTGRES_PASSWORD: backoffice
+      POSTGRES_DB: backoffice
+    ports:
+      - '5432:5432'
+    volumes:
+      - backoffice-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U backoffice -d backoffice']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  backoffice-pgdata:

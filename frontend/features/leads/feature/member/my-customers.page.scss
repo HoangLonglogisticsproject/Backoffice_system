@@ -1,0 +1,109 @@
+@use 'mixins' as *;
+
+:host {
+  display: block;
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+
+  @include mobile {
+    /* Search takes the width; the filters become a swipeable strip. */
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+
+  @include mobile {
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+
+    .btn {
+      flex: none;
+    }
+  }
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h-sm);
+  padding: 0 var(--s-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--fg-subtle);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+  &:focus-within {
+    border-color: var(--c-primary);
+    box-shadow: var(--ring);
+  }
+
+  input {
+    width: 140px;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: var(--t-sm);
+    color: var(--fg);
+    outline: none;
+  }
+
+  @include mobile {
+    input {
+      width: 100%;
+    }
+  }
+}
+
+.who {
+  display: flex;
+  flex-direction: column;
+
+  strong {
+    font-weight: 500;
+  }
+
+  span {
+    font-size: var(--t-sm);
+  }
+}
+
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: var(--t-sm);
+}
+
+.follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+
+  &--due {
+    color: var(--c-amber);
+    font-weight: 500;
+  }
+
+  &--stale {
+    color: var(--c-rose);
+    font-weight: 500;
+  }
+}

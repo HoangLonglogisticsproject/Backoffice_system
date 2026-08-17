@@ -1,0 +1,93 @@
+@use 'mixins' as *;
+
+:host {
+  @include card-surface;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  min-width: 0;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+
+  &:hover {
+    border-color: var(--line-strong);
+    box-shadow: var(--sh-md);
+    transform: translateY(-1px);
+  }
+
+  &:focus-within {
+    border-color: var(--c-primary);
+  }
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+.tile {
+  @include accent-tile(40px, var(--r-md));
+  transition: transform 0.16s ease;
+
+  :host(:hover) & {
+    transform: scale(1.04);
+  }
+}
+
+.name {
+  font-size: var(--t-md);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--fg);
+  @include truncate;
+}
+
+.description {
+  color: var(--fg-muted);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  /* Three lines, so the capability strip lines up across the row. */
+  min-height: 4.5em;
+  @include clamp-lines(3);
+}
+
+bo-badge {
+  align-self: flex-start;
+}
+
+.capabilities {
+  margin-top: auto;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
+}
+
+.caption {
+  color: var(--fg-subtle);
+  font-size: var(--t-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.chip {
+  @include accent-tile(28px, 8px);
+
+  &--more {
+    background: var(--bg-hover);
+    color: var(--fg-muted);
+    font-size: var(--t-xs);
+    font-weight: 600;
+  }
+}

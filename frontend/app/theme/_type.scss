@@ -1,0 +1,14 @@
+/*
+ * THG — typography.
+ *
+ * Inter, kept deliberately over a more distinctive display face: it carries the
+ * tabular figures this interface needs for dense numeric tables, and full
+ * Vietnamese diacritic coverage. A display face would cost both.
+ *
+ * The font itself is loaded by this application's index.html. The foundation
+ * never fetches a webfont — it falls back to the platform stack, so libs/ still
+ * renders correctly with no theme at all.
+ */
+:root {
+  --f-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
