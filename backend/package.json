@@ -15,7 +15,7 @@
     "migrate": "ts-node -T src/infrastructure/database/migrate.cli.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "user:create": "ts-node -T src/core/users/create-user.cli.ts"
+    "user:create": "ts-node -T src/core/users/cli/create-user.cli.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
-import { UsersModule } from '../users/users.module';
-import { AuthController } from './auth.controller';
-import { AuthGuard } from './auth.guard';
-import { AuthenticationService } from './authentication.service';
-import { CsrfGuard } from './csrf.guard';
-import { LoginThrottleService } from './login-throttle.service';
-import { SessionService } from './session.service';
+import { AuthController } from './api/auth.controller';
+import { AuthGuard } from './api/auth.guard';
+import { AuthenticationService } from './application/authentication.service';
+import { CsrfGuard } from './api/csrf.guard';
+import { LoginThrottleService } from './application/login-throttle.service';
+import { IdentityRepository } from './persistence/identity.repository';
+import { SessionRepository } from './persistence/session.repository';
+import { SessionService } from './application/session.service';
 
 /**
  * Who is calling, and how they proved it.
@@ -15,9 +16,16 @@ import { SessionService } from './session.service';
  * its permission model without touching login.
  */
 @Module({
-  imports: [UsersModule],
   controllers: [AuthController],
-  providers: [SessionService, AuthenticationService, AuthGuard, CsrfGuard, LoginThrottleService],
-  exports: [SessionService, AuthGuard],
+  providers: [
+    IdentityRepository,
+    SessionRepository,
+    SessionService,
+    AuthenticationService,
+    AuthGuard,
+    CsrfGuard,
+    LoginThrottleService,
+  ],
+  exports: [SessionService, SessionRepository, IdentityRepository, AuthGuard, AuthenticationService],
 })
 export class IdentityModule {}

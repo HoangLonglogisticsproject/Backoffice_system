@@ -14,7 +14,12 @@ import {
  * can define its own DomainError without this file importing it — importing
  * from `core/` here would make `common/` depend on the layer above it.
  */
-const STATUS_BY_CODE = new Map<string, HttpStatus>([['TOO_MANY_ATTEMPTS', HttpStatus.TOO_MANY_REQUESTS]]);
+const STATUS_BY_CODE = new Map<string, HttpStatus>([
+  ['TOO_MANY_ATTEMPTS', HttpStatus.TOO_MANY_REQUESTS],
+  // Refused like a ForbiddenError but carrying its own code, so it is mapped
+  // here rather than by class — the mechanism working as intended.
+  ['PASSWORD_CHANGE_REQUIRED', HttpStatus.FORBIDDEN],
+]);
 
 const STATUS_BY_ERROR = new Map<Function, HttpStatus>([
   [NotFoundError, HttpStatus.NOT_FOUND],

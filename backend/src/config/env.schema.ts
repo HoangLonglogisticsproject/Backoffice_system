@@ -102,6 +102,34 @@ export const envSchema = z.object({
    * load balancer, set 1.
    */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+
+  /**
+   * Email domains an account may be provisioned under, comma-separated.
+   *
+   * EMPTY MEANS NO RESTRICTION, and that is a deliberate choice rather than an
+   * oversight. This foundation has to be clonable: a different deployment must
+   * boot and create its first account without first learning about a variable
+   * that only one customer needed. The opposite default — empty refuses
+   * everything — turns a forgotten variable into "no account can be created",
+   * and that symptom points nowhere near its cause.
+   *
+   * The accepted cost: a deployment that MEANT to restrict and forgot will
+   * accept outside addresses. Which is why the value belongs in `.env.example`
+   * and in the deployment checklist, not in a default here.
+   *
+   * Applied ONLY when provisioning an account. Never at login — see
+   * `authentication.service`: refusing a login for a domain reason would tell
+   * an attacker which domains exist.
+   */
+  ALLOWED_EMAIL_DOMAINS: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((domain) => domain.trim().toLowerCase())
+        .filter((domain) => domain.length > 0),
+    ),
 });
 
 export type Env = z.infer<typeof envSchema>;

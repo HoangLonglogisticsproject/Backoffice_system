@@ -81,7 +81,7 @@ report "B5  không có thư mục top-level theo loại file" \
 # Glob "*.cli.ts" sẽ khiến mọi CLI tương lai âm thầm thừa hưởng quyền đọc
 # config ngoài schema.
 #
-#   create-user.cli.ts   BOOTSTRAP_PASSWORD cố ý KHÔNG nằm trong envSchema.
+#   cli/create-user.cli.ts  BOOTSTRAP_PASSWORD cố ý KHÔNG nằm trong envSchema.
 #                        Đó là credential dùng một lần, không phải cấu hình
 #                        deployment; đưa vào schema là để mật khẩu sống trong
 #                        AppConfig suốt vòng đời tiến trình.
@@ -89,7 +89,7 @@ report "B5  không có thư mục top-level theo loại file" \
 #                        PostgreSQL. Không phải đường chạy thật.
 report "B6  không đọc process.env.X ngoài validate" \
   "$(grep -rnE "process\.env(\.[A-Za-z_]|\[)" --include=*.ts src 2>/dev/null \
-     | grep -vE "(src/core/users/create-user\.cli\.ts|\.integration\.spec\.ts):")"
+     | grep -vE "(src/core/users/cli/create-user\.cli\.ts|\.integration\.spec\.ts):")"
 
 # --- B7 ── foundation không mang từ vựng nghiệp vụ -------------------------
 # Danh sách này là ví dụ, không phải giới hạn: nếu một domain mới rò rỉ vào
@@ -114,6 +114,49 @@ report "B7  foundation ↛ từ vựng nghiệp vụ" \
   "$(grep -rinE "(customer|invoice|shipment|warehouse|recruitment|\bcrm\b)" \
        --include=*.ts src/core src/common src/infrastructure src/config 2>/dev/null \
      | grep -vE ':[0-9]+: *(\*|//|/\*)')"
+
+# --- B8 ── chỉ MỘT thư mục infrastructure, ở gốc src ------------------------
+# `src/infrastructure/` = hạ tầng kỹ thuật của TOÀN HỆ THỐNG (driver database,
+# migration runner, adapter framework). Việc lưu trữ dữ liệu CỦA MỘT CONTEXT
+# thuộc `core/<context>/persistence/`.
+#
+# Hai thư mục cùng tên `infrastructure` ở hai scope khác nhau là cách nhanh nhất
+# để người đọc không còn biết "infrastructure" nghĩa là gì trong repo này.
+report "B8  không có infrastructure lồng trong context"   "$(find src/core src/capabilities -type d -name infrastructure 2>/dev/null)"
+
+# --- B9 ── api/ không chứa SQL ----------------------------------------------
+# Controller map HTTP; SQL thuộc persistence/. Một controller biết tên bảng là
+# một controller không test được nếu không có database.
+report "B9  api ↛ SQL"   "$(grep -rlniE "(SELECT|INSERT INTO|UPDATE|DELETE FROM) " --include=*.ts        src/core/*/api src/capabilities/*/api 2>/dev/null | grep -v '\.spec\.ts')"
+
+# --- B10 ── domain/ không phụ thuộc framework hay driver --------------------
+# Domain là luật nghiệp vụ thuần: nó phải chạy được trong một test không có
+# Nest, không có HTTP, không có PostgreSQL. Nếu domain import @nestjs thì luật
+# đó chỉ kiểm chứng được bằng cách dựng cả một container.
+report "B10 domain ↛ @nestjs · pg · express"   "$(grep -rnE "from '(@nestjs|pg|express)" --include=*.ts        src/core/*/domain src/capabilities/*/domain 2>/dev/null)"
+
+# --- B11 ── persistence không tự mở transaction -----------------------------
+# Transaction boundary thuộc application/use-case: chỉ tầng đó biết những lệnh
+# ghi nào phải cùng thành công hoặc cùng thất bại. Repository tự mở transaction
+# thì không compose được, và hai repository trong cùng một flow sẽ commit rời
+# nhau — partial commit chỉ lộ ra khi đã xảy ra trên production.
+# Chỉ soi CODE, không soi comment — repository giải thích VÌ SAO nó không mở
+# transaction, và một checker vấp vào chính tài liệu của nó là checker sẽ bị tắt.
+# Cùng bài học như B7.
+report "B11 persistence ↛ tự mở transaction"   "$(grep -rn "\.transaction(" --include=*.ts        src/core/*/persistence src/capabilities/*/persistence 2>/dev/null      | grep -v '\.spec\.ts'      | grep -vE ':[0-9]+: *(\*|//|/\*)')"
+
+# --- B12 ── forwardRef chỉ được tồn tại ở đúng cặp đã biết -------------------
+# `organization ↔ authorization` là cycle DUY NHẤT được chấp nhận, và lý do nằm
+# trong README của cả hai context. Rule này không cấm cycle đó; nó cấm cycle thứ
+# hai — vì hai cycle chồng nhau là lúc đồ thị module không còn đọc được.
+#
+# Ngưỡng là 2: một forwardRef ở mỗi phía của cặp đó.
+# Soi lời gọi THẬT `forwardRef(`, bỏ qua dòng comment — module giải thích vì sao
+# nó KHÔNG dùng forwardRef, và checker vấp vào chính tài liệu đó là checker sẽ bị
+# tắt. Bài học thứ ba cùng loại, sau B7 và B11.
+report "B12 không có forwardRef mới ngoài cặp đã biết"   "$(found=$(grep -rn "forwardRef(" --include=*.module.ts src 2>/dev/null        | grep -vE ':[0-9]+: *(\*|//|/\*)'        | cut -d: -f1 | sort -u);      count=$(printf '%s
+' "$found" | grep -c . );      if [[ $count -gt 2 ]]; then printf '%s
+' "$found"; fi)"
 
 echo
 if [[ $fail -eq 0 ]]; then

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { type ScryptOptions, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import type { PasswordHasher } from '../../core/identity/password-hasher.port';
+import type { PasswordHasher } from '../../core/identity/domain/password-hasher.port';
 
 /**
  * `promisify` resolves to scrypt's 3-argument overload and drops `options`,

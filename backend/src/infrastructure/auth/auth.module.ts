@@ -1,5 +1,5 @@
 import { Global, Module } from '@nestjs/common';
-import { PASSWORD_HASHER } from '../../core/identity/password-hasher.port';
+import { PASSWORD_HASHER } from '../../core/identity/domain/password-hasher.port';
 import { ScryptPasswordHasher } from './scrypt-password-hasher';
 
 /**

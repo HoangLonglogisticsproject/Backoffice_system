@@ -43,4 +43,21 @@ Database đó bị **XOÁ SCHEMA** giữa các case. Đừng trỏ vào database
 Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose.yml` chỉ là
 đường tiện nhất, không phải đường duy nhất.
 
-Rỗng ở Phase 0: chưa có bảng nghiệp vụ nào.
+## Migration hiện có
+
+| File | Owner | Nội dung |
+|---|---|---|
+| `0001_identity.sql` | core | users · identities · sessions |
+| `0002_users_updated_at.sql` | core | `set_updated_at()` + trigger trên users |
+| `0003_organization.sql` | core | departments · department_memberships · `uq_single_active_membership` |
+| `0004_authorization.sql` | core | role_assignments · 2 partial unique index · FK invariant #6 |
+| `0005_identity_credential_state.sql` | core | `identities.must_change_secret` |
+
+`0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
+gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được.
+
+Mỗi migration có một spec kiểm **hình dạng** file, chạy không cần database:
+`migration-schema.spec.ts` cho `0001`, `organization-schema.spec.ts` cho `0003`,
+`authorization-schema.spec.ts` cho `0004` và `0005`.
+Chúng bắt đúng loại lỗi sống sót qua review rồi thành lỗ hổng: thiếu unique index,
+cascade ăn mất lịch sử, seed dữ liệu nghiệp vụ.

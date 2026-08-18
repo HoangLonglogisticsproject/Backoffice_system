@@ -3,8 +3,13 @@ import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './infrastructure/database/database.module';
 import { HealthModule } from './infrastructure/health/health.module';
 import { AuthModule } from './infrastructure/auth/auth.module';
+import { TtyModule } from './infrastructure/tty/tty.module';
+import { AuthorizationModule } from './core/authorization/authorization.module';
 import { IdentityModule } from './core/identity/identity.module';
+import { OrganizationModule } from './core/organization/organization.module';
 import { UsersModule } from './core/users/users.module';
+import { AccountInvitationModule } from './capabilities/account-invitation/account-invitation.module';
+import { MembershipApprovalModule } from './capabilities/membership-approval/membership-approval.module';
 
 /**
  * THE COMPOSITION ROOT — the only file that knows the whole system.
@@ -32,11 +37,18 @@ import { UsersModule } from './core/users/users.module';
     ConfigModule,
     DatabaseModule,
     AuthModule,
+    TtyModule,
     HealthModule,
 
     // the foundation
     UsersModule,
     IdentityModule,
+    OrganizationModule,
+    AuthorizationModule,
+
+    // project capabilities — a deployment without them is still valid
+    MembershipApprovalModule,
+    AccountInvitationModule,
   ],
 })
 export class AppModule {}
