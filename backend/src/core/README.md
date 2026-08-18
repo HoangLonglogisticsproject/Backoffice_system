@@ -143,7 +143,7 @@ chối.
 | Thứ | Giá trị |
 |---|---|
 | Session | cookie `HttpOnly`, trình duyệt tự gửi. Không có token nào cho JS đọc |
-| CSRF | mọi `POST`/`PATCH` phải có header `X-Requested-With: XMLHttpRequest`; thiếu → **403**. `GET` không cần |
+| CSRF | mọi mutation — `POST` · `PATCH` · `DELETE` — phải có header `X-Requested-With: XMLHttpRequest`; thiếu → **403**. `GET` · `HEAD` · `OPTIONS` không cần |
 | Lỗi | luôn là `{ "error": { "code", "message", "details?" } }` — `code` là thứ để switch, `message` là thứ để hiện |
 | 401 | phải đăng nhập lại |
 | 403 `FORBIDDEN` | đăng nhập lại không giúp gì |

@@ -83,13 +83,22 @@ hướng về màn đăng nhập — không có cách nào tiếp tục phiên c
 
 ## 2. CSRF contract
 
+Guard nhìn **method**, không nhìn route. Mọi method ngoài `GET` · `HEAD` ·
+`OPTIONS` là mutation và bị đòi header — không có ngoại lệ nào theo endpoint.
+
 | Method | Yêu cầu |
 |---|---|
-| `GET` | không cần gì |
-| `POST` · `PATCH` | **bắt buộc** header `X-Requested-With: XMLHttpRequest` |
+| `GET` · `HEAD` · `OPTIONS` | không cần gì |
+| `POST` · `PATCH` · `DELETE` | **bắt buộc** header `X-Requested-With: XMLHttpRequest` |
 
-Thiếu header → **403**, kiểm trước cả authentication. Cơ chế: một trang
-cross-origin không thể đặt custom header mà không kích hoạt CORS preflight.
+Thiếu header → **403**. Cơ chế: một trang cross-origin không thể đặt custom
+header mà không kích hoạt CORS preflight.
+
+Thứ tự guard: trên `/auth/*` guard CSRF chạy **trước** authentication, nên
+`POST /auth/login` thiếu header nhận 403 chứ không phải 401; trên các route
+khác `AuthGuard` chạy trước, nên một request vừa không có phiên vừa thiếu header
+nhận 401. Với một phiên hợp lệ — tức mọi tình huống frontend thật sự gặp — thiếu
+header luôn là **403**.
 
 ```ts
 fetch(url, {
@@ -100,14 +109,28 @@ fetch(url, {
 });
 ```
 
-Đặt header này **một lần** ở HTTP interceptor. Quên ở một chỗ là 403 khó hiểu ở
-đúng chỗ đó.
+Đặt header này **một lần** ở HTTP interceptor, theo method chứ không theo danh
+sách endpoint. Quên ở một chỗ là 403 khó hiểu ở đúng chỗ đó.
+
+Hai chỗ dễ quên nhất, vì trông không giống "gửi form": `DELETE
+/departments/:departmentId/head` (§15b) và `POST /auth/login`.
 
 ---
 
 ## 3. `GET /authorization/me`
 
 Hợp đồng render của toàn bộ frontend. Gọi ngay sau khi đăng nhập.
+
+**Điều kiện tiên quyết: một session đã xác thực.** Endpoint này không có chế độ
+ẩn danh — không cookie, cookie hết hạn, hoặc cookie đã bị huỷ → **401
+`UNAUTHORIZED`**, không phải 200 với `permissions: []`. Không có câu trả lời
+"anonymous authorization" nào tồn tại.
+
+**Ngoại lệ duy nhất của điều kiện đó: `must_change_secret = true`.** Session hợp
+lệ, authentication đã xong, nhưng credential còn tạm → **403
+`PASSWORD_CHANGE_REQUIRED`** (§12). Đây **không phải** hết phiên: cookie vẫn
+sống, `GET /auth/me` vẫn 200, `POST /auth/password` vẫn gọi được. Xem §3b trước
+khi viết interceptor.
 
 ```jsonc
 {
@@ -134,6 +157,56 @@ Response được tính lại từ database mỗi request. **Nạp lại nó** s
 khẩu, sau bất kỳ 403 nào, và sau bất kỳ 409 nào: role có thể đã bị thu hồi.
 
 **403 `PASSWORD_CHANGE_REQUIRED`** ở đây nghĩa là credential còn tạm — xem §12.
+
+---
+
+## 3b. `SessionRepository.current()`
+
+Frontend cần **một** chỗ trả lời câu hỏi "phiên hiện tại là gì", và câu trả lời
+có **ba** giá trị, không phải hai. Nhánh thứ ba là chỗ mọi tích hợp làm sai.
+
+| Trạng thái | Nhận ra bằng | `current()` trả về | Điều hướng |
+|---|---|---|---|
+| authenticated + authorization thành công | `GET /authorization/me` → **200** | `{ status: 'ready', authorization }` | vào app |
+| authenticated + `PASSWORD_CHANGE_REQUIRED` | **403** + `code === 'PASSWORD_CHANGE_REQUIRED'` | `{ status: 'password-change-required', identity }` | màn **đổi mật khẩu** |
+| anonymous | **401** `UNAUTHORIZED` | `{ status: 'anonymous' }` | màn **login** |
+
+```ts
+async function current(): Promise<SessionState> {
+  try {
+    return { status: 'ready', authorization: await get('/authorization/me') };
+  } catch (e) {
+    const status = statusOf(e);
+    const body = bodyOf(e);
+    const code = typeof body?.error === 'object' ? body.error.code : undefined;
+
+    if (status === 401) return { status: 'anonymous' };
+    if (status === 403 && code === 'PASSWORD_CHANGE_REQUIRED') {
+      // Phiên còn sống: `/auth/me` vẫn trả danh tính để hiện trên màn đổi mật khẩu.
+      return { status: 'password-change-required', identity: await get('/auth/me') };
+    }
+    throw e;   // không phải trạng thái phiên — để tầng lỗi chung xử lý
+  }
+}
+```
+
+⚠️ **`PASSWORD_CHANGE_REQUIRED` không được biến thành logout.** Một interceptor
+kiểu `if (status === 401 || status === 403) redirectToLogin()` khoá người dùng
+ra ngoài vĩnh viễn: họ đăng nhập được, nhưng `/authorization/me` trả 403, bị đá
+về login, đăng nhập lại, lại 403 — vòng lặp không có lối ra, vì lối ra duy nhất
+(`POST /auth/password`) nằm ở màn hình mà interceptor không bao giờ cho tới.
+
+| Mã | Có phải logout không |
+|---|---|
+| 401 `UNAUTHORIZED` | **có** — xoá state, về login |
+| 403 `PASSWORD_CHANGE_REQUIRED` | **không** — phiên còn sống, đi tới màn đổi mật khẩu |
+| 403 `FORBIDDEN` | **không** — đăng nhập lại không giúp gì; hiện thông báo tại chỗ |
+
+Chỉ khi `POST /auth/password` thành công thì mới đăng xuất — và lúc đó là do
+server đã huỷ mọi session (§1), không phải do interceptor quyết định.
+
+Nạp lại `current()` sau khi đổi mật khẩu, sau bất kỳ 403 nào, và sau bất kỳ 409
+nào.
 
 ---
 
@@ -501,6 +574,9 @@ GET  /authorization/me
 Không có cờ nào trong `/auth/me` báo trạng thái này. **Mã 403 là tín hiệu duy
 nhất**, và đó là lý do nó có `code` riêng.
 
+Trạng thái này là một trạng thái phiên hợp lệ, không phải hết phiên — cách mô
+hình hoá nó ở một chỗ duy nhất nằm ở §3b.
+
 ---
 
 ## 13. `temporaryPassword` behavior
@@ -695,6 +771,10 @@ Danh sách những điều **sai**, kèm chuyện gì thật sự xảy ra:
 | "đổi mật khẩu xong dùng tiếp phiên cũ" | mọi session chết, phải đăng nhập lại |
 | "`initialPassword` là mật khẩu chính thức" | là mật khẩu **tạm**, bị gate cho tới khi đổi |
 | "403 nghĩa là hết phiên" | 403 ≠ 401; xem `code` để phân biệt |
+| "gặp `PASSWORD_CHANGE_REQUIRED` thì đăng xuất người dùng" | phiên vẫn sống → đi màn đổi mật khẩu; đá về login là vòng lặp không lối ra (§3b) |
+| "`GET /authorization/me` gọi được khi chưa đăng nhập" | **401** — session là điều kiện tiên quyết (§3) |
+| "`DELETE` không cần header CSRF" | cần — guard tính theo method, mọi thứ ngoài `GET`/`HEAD`/`OPTIONS` đều phải có (§2) |
+| "`POST /auth/login` không cần header CSRF vì chưa có session" | vẫn cần; thiếu → 403 trước cả khi kiểm mật khẩu |
 | "retry khi gặp 409" | 409 = trạng thái đã đổi → **tải lại** trước |
 | "gửi `role` khi tạo user thì được cấp role" | field bị strip, không có tác dụng |
 | "HEAD tự bổ nhiệm được người kế nhiệm" | 403 — `role.assign` là GLOBAL only |
@@ -732,3 +812,62 @@ kế của từng vùng nằm ở README của nó:
 | migration | `backend/migrations/README.md` |
 
 Khi tài liệu này và source mâu thuẫn: **source đúng, và tài liệu này là bug.**
+
+---
+
+## 20. API matrix
+
+Toàn bộ bề mặt HTTP của deployment này, một hàng một endpoint. Bảng này là bản
+tra cứu; ngữ nghĩa vẫn nằm ở các mục ở trên và không có gì ở đây mở rộng nó.
+
+Bốn luật đúng cho **mọi** hàng, nên không lặp lại trong bảng:
+
+* mọi `POST` · `PATCH` · `DELETE` phải có header `X-Requested-With` — với một
+  phiên hợp lệ, thiếu header là **403** (§2);
+* mọi endpoint cần session, khi không có session hợp lệ, trả **401
+  `UNAUTHORIZED`** (§11);
+* mọi endpoint ngoài `/auth/*` và `/health`, khi caller còn credential tạm, trả
+  **403 `PASSWORD_CHANGE_REQUIRED`** trước mọi kiểm tra khác (§12);
+* lỗi nghiệp vụ luôn là `{ error: { code, message, details? } }`; lỗi framework
+  (URL sai route) thì không (§11).
+
+| Method | Path | Auth | Permission | Scope | Thành công | Lỗi hay gặp |
+|---|---|---|---|---|---|---|
+| `GET` | `/health` | không | — | — | **200**, hoặc **503** khi database không tới được | — |
+| `POST` | `/auth/login` | không (header CSRF vẫn bắt buộc) | — | — | **200** + cookie phiên | 401 sai credential · 422 thiếu `subject` · 429 `Retry-After` |
+| `GET` | `/auth/me` | session — **kể cả credential tạm** | — | — | **200** | 401 |
+| `POST` | `/auth/password` | session — **kể cả credential tạm** | — | — | **204**, mọi session chết | 401 · 422 mật khẩu < 12 ký tự hoặc `currentPassword` sai |
+| `POST` | `/auth/logout` | session — **kể cả credential tạm** | — | — | **204** | 401 |
+| `GET` | `/authorization/me` | session | — | — | **200** | 401 · **403 `PASSWORD_CHANGE_REQUIRED`** (§3b) |
+| `POST` | `/users` | session | `user.write` | GLOBAL | **201** | 403 HEAD · 409 email đã có account · 422 thiếu `departmentId`, mật khẩu < 8 |
+| `PATCH` | `/users/:userId/status` | session | `user.write` | GLOBAL | **200** | 403 · 404 user · 409 đã disabled / SuperAdmin cuối cùng · 422 `status` ≠ `disabled` |
+| `GET` | `/departments` | session | `unit.read` (**không scope**) | **GLOBAL only** | **200** | 403 với HEAD và MEMBER (§5) |
+| `GET` | `/departments/:departmentId` | session | `unit.read` scoped theo route param | member của phòng đó, hoặc GLOBAL | **200** | 403 phòng khác · 404 |
+| `POST` | `/departments` | session | `unit.write` | GLOBAL | **201** | 403 · 409 `slug` trùng · 422 |
+| `PATCH` | `/departments/:departmentId` | session | `unit.write` | GLOBAL | **200** | 403 · 404 · 409 `slug` trùng · 422 |
+| `POST` | `/departments/:departmentId/archive` | session | `unit.write` | GLOBAL | **200** | 403 · 404 · 409 còn người active / đã archive |
+| `GET` | `/departments/:departmentId/members` | session | `unit.member.read` scoped theo route param | HEAD của phòng đó, hoặc GLOBAL | **200** | 403 MEMBER thường · 404 |
+| `POST` | `/departments/:departmentId/members` | session | `unit.member.write` | GLOBAL | **201** (đây là TRANSFER, §7) | 403 HEAD · 404 phòng/user · 409 đã ở phòng đó / phòng archived / không có membership · 422 |
+| `GET` | `/departments/:departmentId/head` | session | `role.assign` | GLOBAL | **200** | 403 · **404 phòng chưa có trưởng phòng** |
+| `POST` | `/departments/:departmentId/head` | session | `role.assign` | GLOBAL | **201** | 403 · 404 phòng · 409 đã có head / không phải member active / phòng archived · 422 |
+| `DELETE` | `/departments/:departmentId/head` | session | `role.assign` | GLOBAL | **200** | 403 · 404 chưa có head · 409 vừa bị thu hồi song song |
+| `POST` | `/departments/:departmentId/account-invitations` | session | `HeadOfRouteDepartmentGuard` | HEAD của phòng **trên URL**, hoặc GLOBAL | **201** | 403 phòng khác · 404 phòng · 409 email đã có account / đã có invitation pending / phòng archived · 422 |
+| `GET` | `/departments/:departmentId/account-invitations` | session | `HeadOfRouteDepartmentGuard` | như trên | **200** | 403 · 404 |
+| `GET` | `/account-invitations` | session | `user.write` | GLOBAL | **200**, `[]` khi rỗng | 403 |
+| `POST` | `/account-invitations/:invitationId/approve` | session | `user.write` | GLOBAL | **201** — tạo account, trả `temporaryPassword` một lần (§13) | 403 · 409 đã quyết / id không tồn tại / tự quyết / email đã có account / người đề xuất thôi làm HEAD / phòng archived |
+| `POST` | `/account-invitations/:invitationId/reject` | session | `user.write` | GLOBAL | **200** | 403 · 409 đã quyết / id không tồn tại / tự quyết |
+| `POST` | `/departments/:departmentId/membership-requests` | session | `HeadOfRouteDepartmentGuard` | HEAD của phòng **trên URL**, hoặc GLOBAL | **201** | 403 phòng khác · 404 user/phòng đích · 409 target không active / khác phòng / đã có request trùng / phòng đích archived · 422 `action` sai, thiếu `targetDepartmentId` |
+| `GET` | `/departments/:departmentId/membership-requests` | session | `HeadOfRouteDepartmentGuard` | như trên | **200** | 403 · 404 |
+| `GET` | `/membership-requests` | session | `unit.member.write` | GLOBAL | **200**, `[]` khi rỗng | 403 |
+| `POST` | `/membership-requests/:requestId/approve` | session | `unit.member.write` | GLOBAL | **200** — không tạo resource (§10) | 403 HEAD · 404 target user · 409 đã quyết / id không tồn tại / tự quyết / target đã chuyển phòng hoặc bị disable / người đề xuất thôi làm HEAD |
+| `POST` | `/membership-requests/:requestId/reject` | session | `unit.member.write` | GLOBAL | **200** | 403 · 409 đã quyết / id không tồn tại / tự quyết |
+
+Hai chi tiết dễ đọc nhầm khỏi bảng:
+
+* **approve/reject với id không tồn tại trả 409, không phải 404.** Cùng một mã
+  với "đã được người khác quyết" — từ ngoài nhìn vào, cả hai đều là "request này
+  không còn chờ duyệt", và đó là câu trả lời cố ý.
+* **`Permission` không phải quyền của caller trên phòng nào đó.** Nó là key mà
+  `PermissionGuard` đòi; cột `Scope` mới nói key đó được kiểm trên phạm vi nào
+  (§15).
+
