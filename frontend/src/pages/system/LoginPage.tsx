@@ -71,12 +71,13 @@ export default function LoginPage() {
             <form onSubmit={handleLogin} className="space-y-5">
               
               <div className="space-y-2">
-                <label className="text-[13px] font-bold text-gray-700 ml-1">Email</label>
+                <label htmlFor="email" className="text-[13px] font-bold text-gray-700 ml-1">Email</label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
                     <Mail className="h-[18px] w-[18px]" />
                   </div>
                   <Input 
+                    id="email"
                     type="email" 
                     placeholder="Nhập email của bạn" 
                     className="pl-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
@@ -86,12 +87,13 @@ export default function LoginPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-[13px] font-bold text-gray-700 ml-1">Mật khẩu</label>
+                <label htmlFor="password" className="text-[13px] font-bold text-gray-700 ml-1">Mật khẩu</label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
                     <Lock className="h-[18px] w-[18px]" />
                   </div>
                   <Input 
+                    id="password"
                     type={showPassword ? "text" : "password"}
                     placeholder="Nhập mật khẩu của bạn" 
                     className="pl-11 pr-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"

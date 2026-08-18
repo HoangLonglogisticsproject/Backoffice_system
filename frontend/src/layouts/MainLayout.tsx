@@ -15,6 +15,74 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 
+const NavItem = ({ to, icon: Icon, label, isSidebarOpen }: { to: string, icon: any, label: string, isSidebarOpen: boolean }) => {
+  const location = useLocation()
+  const isActive = location.pathname.startsWith(to)
+  return (
+    <Link to={to} className="w-full block mb-1">
+      <Button 
+        variant={isActive ? "secondary" : "ghost"} 
+        className={clsx(
+          "w-full justify-start transition-all", 
+          !isSidebarOpen && "justify-center px-2",
+          isActive && "font-semibold"
+        )}
+        title={!isSidebarOpen ? label : undefined}
+      >
+        <Icon className={clsx("h-5 w-5 shrink-0", isSidebarOpen && "mr-3")} />
+        {isSidebarOpen && <span>{label}</span>}
+      </Button>
+    </Link>
+  )
+}
+
+const SidebarSection = ({ 
+  title, 
+  icon: Icon, 
+  sectionKey, 
+  isSidebarOpen, 
+  expandedSections, 
+  toggleSection,
+  children 
+}: { 
+  title: string, 
+  icon: any, 
+  sectionKey: string, 
+  isSidebarOpen: boolean, 
+  expandedSections: Record<string, boolean>, 
+  toggleSection: (key: string) => void,
+  children: React.ReactNode
+}) => {
+  return (
+    <div>
+      <button 
+        type="button"
+        className={clsx(
+          "w-full flex items-center justify-between px-2 mb-2 cursor-pointer text-gray-500 hover:text-gray-800 transition-colors focus:outline-none rounded",
+          !isSidebarOpen && "justify-center"
+        )}
+        onClick={() => isSidebarOpen && toggleSection(sectionKey)}
+        title={!isSidebarOpen ? title : undefined}
+      >
+        {isSidebarOpen ? (
+          <>
+            <span className="font-semibold text-xs uppercase tracking-wider">{title}</span>
+            {expandedSections[sectionKey] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </>
+        ) : (
+          <Icon className="h-5 w-5 mt-1" />
+        )}
+      </button>
+      
+      {(!isSidebarOpen || expandedSections[sectionKey]) && (
+        <div className="space-y-1">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function MainLayout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -22,34 +90,12 @@ export default function MainLayout() {
     organization: true,
     worklist: true,
   })
-  
-  const location = useLocation()
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev => ({
       ...prev,
       [section]: !prev[section]
     }))
-  }
-
-  const NavItem = ({ to, icon: Icon, label }: { to: string, icon: any, label: string }) => {
-    const isActive = location.pathname.startsWith(to)
-    return (
-      <Link to={to} className="w-full block mb-1">
-        <Button 
-          variant={isActive ? "secondary" : "ghost"} 
-          className={clsx(
-            "w-full justify-start transition-all", 
-            !isSidebarOpen && "justify-center px-2",
-            isActive && "font-semibold"
-          )}
-          title={!isSidebarOpen ? label : undefined}
-        >
-          <Icon className={clsx("h-5 w-5 shrink-0", isSidebarOpen && "mr-3")} />
-          {isSidebarOpen && <span>{label}</span>}
-        </Button>
-      </Link>
-    )
   }
 
   return (
@@ -90,90 +136,46 @@ export default function MainLayout() {
           <nav className="flex-1 overflow-y-auto p-3 space-y-6 mt-2 custom-scrollbar">
             
             {/* Leads Section */}
-            <div>
-              <div 
-                className={clsx(
-                  "flex items-center justify-between px-2 mb-2 cursor-pointer text-gray-500 hover:text-gray-800 transition-colors",
-                  !isSidebarOpen && "justify-center"
-                )}
-                onClick={() => isSidebarOpen && toggleSection('leads')}
-                title={!isSidebarOpen ? "Leads" : undefined}
-              >
-                {isSidebarOpen ? (
-                  <>
-                    <span className="font-semibold text-xs uppercase tracking-wider">Leads</span>
-                    {expandedSections['leads'] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                  </>
-                ) : (
-                  <Users className="h-5 w-5 mt-1" />
-                )}
-              </div>
-              
-              {(!isSidebarOpen || expandedSections['leads']) && (
-                <div className="space-y-1">
-                  <NavItem to="/leads/pool" icon={Users} label="Pool" />
-                  <NavItem to="/leads/my-customers" icon={UserCircle} label="My Customers" />
-                </div>
-              )}
-            </div>
+            {/* Leads Section */}
+            <SidebarSection
+              title="Leads"
+              icon={Users}
+              sectionKey="leads"
+              isSidebarOpen={isSidebarOpen}
+              expandedSections={expandedSections}
+              toggleSection={toggleSection}
+            >
+              <NavItem to="/leads/pool" icon={Users} label="Pool" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/leads/my-customers" icon={UserCircle} label="My Customers" isSidebarOpen={isSidebarOpen} />
+            </SidebarSection>
 
             {/* Organization Section */}
-            <div>
-              <div 
-                className={clsx(
-                  "flex items-center justify-between px-2 mb-2 cursor-pointer text-gray-500 hover:text-gray-800 transition-colors",
-                  !isSidebarOpen && "justify-center"
-                )}
-                onClick={() => isSidebarOpen && toggleSection('organization')}
-                title={!isSidebarOpen ? "Organization" : undefined}
-              >
-                {isSidebarOpen ? (
-                  <>
-                    <span className="font-semibold text-xs uppercase tracking-wider">Organization</span>
-                    {expandedSections['organization'] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                  </>
-                ) : (
-                  <Building className="h-5 w-5 mt-1" />
-                )}
-              </div>
-              
-              {(!isSidebarOpen || expandedSections['organization']) && (
-                <div className="space-y-1">
-                  <NavItem to="/organization/dashboard" icon={LayoutDashboard} label="Dashboard" />
-                  <NavItem to="/organization/departments" icon={Building} label="Departments" />
-                  <NavItem to="/organization/department-control-center" icon={Building} label="Control Center" />
-                  <NavItem to="/organization/personal-desk" icon={UserCircle} label="Personal Desk" />
-                </div>
-              )}
-            </div>
+            <SidebarSection
+              title="Organization"
+              icon={Building}
+              sectionKey="organization"
+              isSidebarOpen={isSidebarOpen}
+              expandedSections={expandedSections}
+              toggleSection={toggleSection}
+            >
+              <NavItem to="/organization/dashboard" icon={LayoutDashboard} label="Dashboard" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/organization/departments" icon={Building} label="Departments" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/organization/department-control-center" icon={Building} label="Control Center" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/organization/personal-desk" icon={UserCircle} label="Personal Desk" isSidebarOpen={isSidebarOpen} />
+            </SidebarSection>
 
             {/* Worklist Section */}
-            <div>
-              <div 
-                className={clsx(
-                  "flex items-center justify-between px-2 mb-2 cursor-pointer text-gray-500 hover:text-gray-800 transition-colors",
-                  !isSidebarOpen && "justify-center"
-                )}
-                onClick={() => isSidebarOpen && toggleSection('worklist')}
-                title={!isSidebarOpen ? "Worklist" : undefined}
-              >
-                {isSidebarOpen ? (
-                  <>
-                    <span className="font-semibold text-xs uppercase tracking-wider">Worklist</span>
-                    {expandedSections['worklist'] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                  </>
-                ) : (
-                  <Briefcase className="h-5 w-5 mt-1" />
-                )}
-              </div>
-              
-              {(!isSidebarOpen || expandedSections['worklist']) && (
-                <div className="space-y-1">
-                  <NavItem to="/worklist/my-work" icon={Briefcase} label="My Work" />
-                  <NavItem to="/worklist/all" icon={Briefcase} label="All Work" />
-                </div>
-              )}
-            </div>
+            <SidebarSection
+              title="Worklist"
+              icon={Briefcase}
+              sectionKey="worklist"
+              isSidebarOpen={isSidebarOpen}
+              expandedSections={expandedSections}
+              toggleSection={toggleSection}
+            >
+              <NavItem to="/worklist/my-work" icon={Briefcase} label="My Work" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/worklist/all" icon={Briefcase} label="All Work" isSidebarOpen={isSidebarOpen} />
+            </SidebarSection>
 
           </nav>
         </aside>
