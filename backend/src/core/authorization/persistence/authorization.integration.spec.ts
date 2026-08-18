@@ -327,7 +327,7 @@ describeIntegration('Authorization against real PostgreSQL', () => {
         grantedBy: admin,
       });
 
-      await authorization.revokeDepartmentHead({ assignmentId: head.id, revokedBy: admin });
+      await authorization.revokeAssignment({ assignmentId: head.id, revokedBy: admin });
       const moved = await memberships.transfer({ userId: person, toDepartmentId: b.id });
 
       expect(moved.departmentId).toBe(b.id);
@@ -344,7 +344,7 @@ describeIntegration('Authorization against real PostgreSQL', () => {
         grantedBy: admin,
       });
 
-      await authorization.revokeDepartmentHead({ assignmentId: head.id, revokedBy: admin });
+      await authorization.revokeAssignment({ assignmentId: head.id, revokedBy: admin });
 
       const context = await authorization.loadContext(person);
       expect(context.headOf).toEqual([]);
@@ -493,7 +493,7 @@ describeIntegration('Authorization against real PostgreSQL', () => {
         grantedBy: admin,
       });
 
-      const revoked = await authorization.revokeDepartmentHead({
+      const revoked = await authorization.revokeAssignment({
         assignmentId: head.id,
         revokedBy: admin,
       });
@@ -576,7 +576,7 @@ describeIntegration('Authorization against real PostgreSQL', () => {
       });
 
       expect((await authorization.loadContext(person)).headOf).toEqual([a.id]);
-      await authorization.revokeDepartmentHead({ assignmentId: head.id, revokedBy: admin });
+      await authorization.revokeAssignment({ assignmentId: head.id, revokedBy: admin });
       expect((await authorization.loadContext(person)).headOf).toEqual([]);
     });
 

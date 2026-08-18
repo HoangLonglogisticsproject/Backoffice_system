@@ -92,41 +92,6 @@ export class AuthorizationService {
     });
   }
 
-  /**
-   * RevokeDepartmentHead.
-   *
-   * Revoking leadership is NOT leaving the department: the membership stays,
-   * the account stays active, and the person becomes an ordinary member. Those
-   * are two lifecycles and collapsing them would mean demoting somebody
-   * silently removes them from the company.
-   */
-  async revokeDepartmentHead(input: {
-    assignmentId: string;
-    revokedBy: string;
-    now?: Date;
-  }): Promise<RoleAssignment> {
-    const now = input.now ?? new Date();
-
-    return this.db.transaction(async (tx) => {
-      const assignment = await this.repository.findActiveAssignmentById(input.assignmentId, tx);
-      if (!assignment) throw new NotFoundError('Active role assignment not found.');
-
-      if (assignment.roleKey === 'SUPERADMIN') {
-        throw new ConflictError(
-          'Use the SuperAdmin hand-over path to change who holds global authority.',
-        );
-      }
-
-      const revoked = await this.repository.revoke(
-        { id: assignment.id, revokedVia: 'api', revokedBy: input.revokedBy, now },
-        tx,
-      );
-      if (!revoked) throw new ConflictError('That assignment was already revoked.');
-
-      return revoked;
-    });
-  }
-
   // ------------------------------------------------------------ superadmin --
 
   /**
@@ -203,18 +168,23 @@ export class AuthorizationService {
   }
 
   /**
-   * RevokeRoleAssignment for the API — the path invariant #7 guards.
+   * RevokeRoleAssignment, addressed by assignment — the path invariant #7
+   * guards.
    *
    * Refuses to revoke the ONLY active SuperAdmin, because that would leave the
-   * deployment with nobody able to administer it and no API path back.
+   * deployment with nobody able to administer it and no API path back. Global
+   * authority moves through `transferSuperAdmin`, never through a revocation.
+   *
+   * For a head this is a DEMOTION and nothing more: the membership stays, the
+   * account stays active, and the person becomes an ordinary member. Those are
+   * two lifecycles, and collapsing them would mean demoting somebody silently
+   * removed them from the company.
    */
   async revokeAssignment(input: {
     assignmentId: string;
     revokedBy: string;
     now?: Date;
   }): Promise<RoleAssignment> {
-    const now = input.now ?? new Date();
-
     return this.db.transaction(async (tx) => {
       const assignment = await this.repository.findActiveAssignmentById(input.assignmentId, tx);
       if (!assignment) throw new NotFoundError('Active role assignment not found.');
@@ -225,13 +195,7 @@ export class AuthorizationService {
         );
       }
 
-      const revoked = await this.repository.revoke(
-        { id: assignment.id, revokedVia: 'api', revokedBy: input.revokedBy, now },
-        tx,
-      );
-      if (!revoked) throw new ConflictError('That assignment was already revoked.');
-
-      return revoked;
+      return this.revokeActive(assignment, input.revokedBy, input.now ?? new Date(), tx);
     });
   }
 
@@ -291,15 +255,36 @@ export class AuthorizationService {
       const assignment = await this.repository.findActiveHeadOfDepartment(input.departmentId, tx);
       if (!assignment) throw new NotFoundError('That department has no active head.');
 
-      const revoked = await this.repository.revoke(
-        { id: assignment.id, revokedVia: 'api', revokedBy: input.revokedBy, now },
-        tx,
-      );
-      // Two concurrent revocations: `revoke` reports rows affected, so exactly
-      // one of them is the one that did it.
-      if (!revoked) throw new ConflictError('That assignment was already revoked.');
-
-      return revoked;
+      // No SuperAdmin check here, unlike `revokeAssignment`: this lookup only
+      // ever returns DEPARTMENT_HEAD rows, so a global assignment cannot arrive.
+      return this.revokeActive(assignment, input.revokedBy, now, tx);
     });
+  }
+
+  /**
+   * The revocation itself, shared by the two paths that reach it.
+   *
+   * They differ in HOW the assignment is found — by id, or by the department it
+   * scopes — and agree on everything after. `revoke` reports rows affected, so
+   * two concurrent callers cannot both succeed: the loser gets the conflict
+   * rather than a silent no-op.
+   *
+   * Takes the caller's transaction, never opening one: both callers have
+   * already read the assignment inside theirs, and re-reading it on another
+   * connection would defeat the reason they did.
+   */
+  private async revokeActive(
+    assignment: RoleAssignment,
+    revokedBy: string,
+    now: Date,
+    tx: DatabaseQuery,
+  ): Promise<RoleAssignment> {
+    const revoked = await this.repository.revoke(
+      { id: assignment.id, revokedVia: 'api', revokedBy, now },
+      tx,
+    );
+    if (!revoked) throw new ConflictError('That assignment was already revoked.');
+
+    return revoked;
   }
 }

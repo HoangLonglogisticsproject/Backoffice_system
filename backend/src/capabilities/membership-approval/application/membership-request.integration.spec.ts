@@ -392,7 +392,7 @@ describeIntegration('Membership approval against real PostgreSQL', () => {
           WHERE user_id = $1 AND role_key = 'DEPARTMENT_HEAD' AND status = 'active'`,
         [headId],
       );
-      await authorization.revokeDepartmentHead({
+      await authorization.revokeAssignment({
         assignmentId: head.rows[0]!.id,
         revokedBy: adminId,
       });

@@ -407,7 +407,7 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
            AND role_key = 'DEPARTMENT_HEAD'`,
         [headBId],
       );
-      await authorization.revokeDepartmentHead({
+      await authorization.revokeAssignment({
         assignmentId: headAssignment.rows[0]!.id,
         revokedBy: adminId,
       });
@@ -434,7 +434,7 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
            AND role_key = 'DEPARTMENT_HEAD'`,
         [headAId],
       );
-      await authorization.revokeDepartmentHead({
+      await authorization.revokeAssignment({
         assignmentId: headAssignment.rows[0]!.id,
         revokedBy: adminId,
       });

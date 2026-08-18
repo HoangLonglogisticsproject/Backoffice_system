@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
-import { NotFoundError } from '../../../common/errors/domain.error';
+import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
@@ -52,13 +52,29 @@ interface DepartmentHeadResponse {
   grantedAt: string;
 }
 
-const asResponse = (assignment: RoleAssignment): DepartmentHeadResponse => ({
-  assignmentId: assignment.id,
-  departmentId: assignment.scopeId as string,
-  userId: assignment.userId,
-  membershipId: assignment.membershipId,
-  grantedAt: assignment.grantedAt.toISOString(),
-});
+/**
+ * A head assignment always names a department — `role_assignments_scope_shape`
+ * and `role_assignments_role_scope_agree` both say so, and the three routes
+ * here only ever produce head assignments.
+ *
+ * Checked rather than asserted anyway: a cast would let a future path that
+ * returns a GLOBAL assignment serialise `null` into a field typed `string`,
+ * and the client would find out instead of the server.
+ */
+const asResponse = (assignment: RoleAssignment): DepartmentHeadResponse => {
+  const { scopeId } = assignment;
+  if (scopeId === null) {
+    throw new ConflictError('That role assignment is not scoped to a department.');
+  }
+
+  return {
+    assignmentId: assignment.id,
+    departmentId: scopeId,
+    userId: assignment.userId,
+    membershipId: assignment.membershipId,
+    grantedAt: assignment.grantedAt.toISOString(),
+  };
+};
 
 @Controller('departments/:departmentId/head')
 export class DepartmentHeadController {

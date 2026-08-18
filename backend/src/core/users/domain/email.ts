@@ -42,7 +42,7 @@ function hasProvisionableShape(email: string): boolean {
   if (at <= 0) return false;
 
   // A second `@`. Exactly one is what makes the split below meaningful.
-  if (email.indexOf('@', at + 1) !== -1) return false;
+  if (email.includes('@', at + 1)) return false;
 
   const local = email.slice(0, at);
   const domain = email.slice(at + 1);
