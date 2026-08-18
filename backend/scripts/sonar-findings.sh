@@ -64,8 +64,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# No `return` at the end: `exit 1` is terminal, so anything after it would be
+# dead code. shelldre:S7682 does not model that, and is answered on SonarCloud
+# rather than by adding a line this script could never reach.
 fatal() {
-  printf '\n\033[31m%s\033[0m\n\n' "$1" >&2
+  local message="$1"
+  printf '\n\033[31m%s\033[0m\n\n' "$message" >&2
   exit 1
 }
 
@@ -85,6 +89,7 @@ fi
 
 scope() {
   if [[ -n "$BRANCH" ]]; then printf 'branch=%s' "$BRANCH"; else printf 'pullRequest=%s' "$PR"; fi
+  return 0
 }
 
 # The token goes to curl over stdin so it never appears in the process list.
@@ -111,13 +116,22 @@ api() {
     000) fatal "could not reach sonarcloud.io - check network access." ;;
     *)   fatal "SonarCloud answered HTTP ${status}." ;;
   esac
+  # Explicit, but NOT `return 0`: callers read this status (`api ... || exit
+  # 1`), and on the 200 path it is the printf's. Forcing success would turn a
+  # short write into a silent empty body. The other branches never arrive
+  # here at all -- fatal exits first.
+  return $?
 }
+
+# The parsers below are handed to python with -c, NOT as a `python - <<EOF`
+# heredoc: a heredoc IS stdin, so it displaces the piped JSON and every parser
+# reads an empty stream. -c keeps the program in argv and leaves stdin to data.
 
 # ----------------------------------------------------------------- projects --
 
 if [[ "$MODE" == projects ]]; then
   PROJECTS=$(api "components/search?organization=$ORG&qualifiers=TRK&ps=100") || exit 1
-  printf '%s' "$PROJECTS" | python - <<'PY'
+  printf '%s' "$PROJECTS" | python -c "$(cat <<'PY'
 import json, sys
 d = json.load(sys.stdin)
 if 'errors' in d:
@@ -130,7 +144,19 @@ print(f"{len(rows)} project(s) visible to this token:\n")
 for c in rows:
     print(f"  {c['key']}\n    name: {c.get('name', '')}")
 PY
+)"
   exit $?
+fi
+
+ISSUES_PATH="issues/search?componentKeys=$PROJECT&$(scope)&resolved=false&ps=500&additionalFields=rules"
+
+# Answered before anything else writes to stdout: --json is documented as raw
+# JSON for diffing, and a header or a quality gate printed ahead of it makes
+# the output unparseable by every reader it exists for.
+if [[ "$RAW" == true ]]; then
+  api "$ISSUES_PATH" || exit 1
+  printf '\n'
+  exit 0
 fi
 
 printf '\033[1mSonarCloud - %s (%s)\033[0m\n' "$PROJECT" "$(scope)"
@@ -138,7 +164,7 @@ printf '\033[1mSonarCloud - %s (%s)\033[0m\n' "$PROJECT" "$(scope)"
 # ------------------------------------------------------------ quality gate --
 
 GATE=$(api "qualitygates/project_status?projectKey=$PROJECT&$(scope)") || exit 1
-printf '%s' "$GATE" | python - <<'PY'
+printf '%s' "$GATE" | python -c "$(cat <<'PY'
 import json, sys
 d = json.load(sys.stdin)
 if 'errors' in d:
@@ -153,17 +179,13 @@ for c in s.get('conditions', []):
         print(f"    x {c.get('metricKey')}: actual {c.get('actualValue')} "
               f"{c.get('comparator', '')} {c.get('errorThreshold')}")
 PY
+)"
 
 # ----------------------------------------------------------------- issues --
 
-ISSUES=$(api "issues/search?componentKeys=$PROJECT&$(scope)&resolved=false&ps=500&additionalFields=rules") || exit 1
+ISSUES=$(api "$ISSUES_PATH") || exit 1
 
-if [[ "$RAW" == true ]]; then
-  printf '%s\n' "$ISSUES"
-  exit 0
-fi
-
-printf '%s' "$ISSUES" | python - <<'PY'
+printf '%s' "$ISSUES" | python -c "$(cat <<'PY'
 import collections, json, sys
 d = json.load(sys.stdin)
 if 'errors' in d:
@@ -194,13 +216,14 @@ for i in sorted(issues, key=lambda x: (rank.get(x.get('severity'), 9),
             c = loc.get('component', '').split(':', 1)[-1]
             print(f"      -> {c}:{t.get('startLine')}  {loc.get('msg', '')}")
 PY
+)"
 
 # ------------------------------------------------------- security hotspots --
 # Reported separately from issues: a project can show zero issues and still
 # have hotspots waiting for review, so both have to be read.
 
 HOTSPOTS=$(api "hotspots/search?projectKey=$PROJECT&$(scope)&ps=500") || exit 1
-printf '%s' "$HOTSPOTS" | python - <<'PY'
+printf '%s' "$HOTSPOTS" | python -c "$(cat <<'PY'
 import json, sys
 d = json.load(sys.stdin)
 if 'errors' in d:
@@ -213,5 +236,6 @@ for h in hs:
     print(f"    {where}:{h.get('line')}")
     print(f"    {h.get('message')}")
 PY
+)"
 
 printf '\n'

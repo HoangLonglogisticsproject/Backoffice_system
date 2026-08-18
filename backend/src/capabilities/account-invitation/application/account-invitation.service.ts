@@ -135,7 +135,7 @@ export class AccountInvitationService {
       }
 
       const head = await this.assignments.findActiveHeadOfDepartment(invitation.departmentId, tx);
-      if (!head || head.userId !== invitation.requestedBy) {
+      if (head?.userId !== invitation.requestedBy) {
         throw new ConflictError('The requester no longer leads that department.');
       }
 

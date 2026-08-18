@@ -72,7 +72,7 @@ export class AuthorizationService {
       }
 
       const membership = await this.memberships.lockActiveForUser(input.userId, tx);
-      if (!membership || membership.departmentId !== input.departmentId) {
+      if (membership?.departmentId !== input.departmentId) {
         throw new ConflictError(
           'A department head must hold an active membership of the department they lead.',
         );

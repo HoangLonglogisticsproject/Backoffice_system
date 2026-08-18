@@ -241,7 +241,7 @@ export class MembershipRequestService {
     // demoted must not still be able to move people through a request they
     // raised while they could.
     const head = await this.assignments.findActiveHeadOfDepartment(request.departmentId, tx);
-    if (!head || head.userId !== request.requestedBy) {
+    if (head?.userId !== request.requestedBy) {
       throw new ConflictError('The requester no longer leads that department.');
     }
 
