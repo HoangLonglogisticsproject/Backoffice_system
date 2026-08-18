@@ -1,0 +1,734 @@
+# Frontend integration contract
+
+Hợp đồng **duy nhất** giữa backoffice backend và frontend. Đọc file này là đủ để
+tích hợp — không cần đọc source để đoán hành vi.
+
+Mọi ví dụ trong tài liệu này được ghi lại từ một deployment thật (PostgreSQL 17,
+build production), không phải viết tay.
+
+---
+
+## 0. Nguyên tắc
+
+Frontend **chỉ tiêu thụ API**. Nó không phải lớp bảo mật thứ hai.
+
+Server quyết định quyền trên **mọi** request, đọc lại từ database mỗi lần, không
+cache. Ẩn một nút là tiện lợi cho người dùng; nó **không bao giờ** là kiểm soát.
+Nếu frontend có bug và gọi vào endpoint không được phép, server trả 403 — đó là
+thiết kế, không phải sự cố.
+
+| Frontend KHÔNG làm | Vì sao |
+|---|---|
+| tự quyết caller được làm gì | `PermissionGuard` quyết, mỗi request |
+| suy ra role/department từ dữ liệu tự có | `GET /authorization/me` là nguồn duy nhất |
+| tự tách username từ email | server đã trả `username` |
+| gọi endpoint core để đi vòng approval | các đường đó là GLOBAL-only, HEAD nhận 403 |
+| coi `permissions[]` là quyền thật | đó là gợi ý render |
+| đoán department từ body gửi lên | scope luôn nằm trên URL |
+
+---
+
+## 1. Authentication flow
+
+Session là **cookie `HttpOnly`**. JavaScript không đọc được, và không có token
+nào để lưu. Mọi request chỉ cần `credentials: 'include'`.
+
+### `POST /auth/login` → 200
+
+⚠️ **Field tên là `subject`, không phải `email`.** Giá trị điền vào là email —
+email là định danh đăng nhập duy nhất — nhưng tên field giữ nguyên `subject` vì
+nó là khoá của identity provider. Gửi `email` sẽ nhận 422.
+
+```jsonc
+// request
+{ "subject": "admin@example.com", "password": "…" }
+
+// 200 — cookie phiên được set kèm response
+{
+  "user": { "id": "8b18fa79-…", "displayName": "Root Admin", "status": "active" },
+  "expiresAt": "2026-08-18T20:30:44.911Z"
+}
+```
+
+`expiresAt` để cảnh báo trước khi hết hạn. Token **không** có trong response và
+sẽ không bao giờ có.
+
+Sai mật khẩu → **401**. Quá nhiều lần → **429** kèm `Retry-After`. Cả hai đều
+không tiết lộ email có tồn tại hay không.
+
+### `GET /auth/me` → 200
+
+```jsonc
+{ "id": "fab71f53-…", "displayName": "Head Person", "status": "active" }
+```
+
+Chỉ danh tính, không có quyền. Dùng được **ngay cả khi** credential còn tạm.
+
+### `POST /auth/logout` → 204
+
+### `POST /auth/password` → 204
+
+```jsonc
+{ "currentPassword": "…", "newPassword": "…" }
+```
+
+`currentPassword` bắt buộc dù đã có session: cookie có thể bị đánh cắp, và
+chứng minh biết mật khẩu cũ là thứ chặn một cookie bị lộ thành chiếm quyền vĩnh
+viễn.
+
+**Mọi session chết, kể cả session đang gọi.** Cookie bị xoá. Frontend phải điều
+hướng về màn đăng nhập — không có cách nào tiếp tục phiên cũ.
+
+---
+
+## 2. CSRF contract
+
+| Method | Yêu cầu |
+|---|---|
+| `GET` | không cần gì |
+| `POST` · `PATCH` | **bắt buộc** header `X-Requested-With: XMLHttpRequest` |
+
+Thiếu header → **403**, kiểm trước cả authentication. Cơ chế: một trang
+cross-origin không thể đặt custom header mà không kích hoạt CORS preflight.
+
+```ts
+fetch(url, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+  body: JSON.stringify(payload),
+});
+```
+
+Đặt header này **một lần** ở HTTP interceptor. Quên ở một chỗ là 403 khó hiểu ở
+đúng chỗ đó.
+
+---
+
+## 3. `GET /authorization/me`
+
+Hợp đồng render của toàn bộ frontend. Gọi ngay sau khi đăng nhập.
+
+```jsonc
+{
+  "userId": "8b18fa79-…",
+  "username": "admin",                 // local part của email, server suy ra
+  "role": "SUPERADMIN",                // SUPERADMIN | DEPARTMENT_HEAD | MEMBER
+  "departmentIds": [],                 // rỗng với SUPERADMIN
+  "permissions": ["unit.read", "unit.write", "unit.member.read",
+                  "unit.member.write", "role.assign", "user.write"]
+}
+```
+
+| Trường | Dùng để | KHÔNG dùng để |
+|---|---|---|
+| `role` | nhãn, layout | quyết định cho phép |
+| `departmentIds` | biết gọi `/departments/:id` nào | suy quyền trên phòng khác |
+| `permissions` | ẩn/hiện nút | thay cho kiểm ở server |
+| `username` | hiển thị | parse lại từ email |
+
+`departmentIds` có **tối đa một phần tử**: một người active thuộc đúng một phòng.
+Đừng dựng UI nhiều phòng cho một người — trạng thái đó không tồn tại được.
+
+Response được tính lại từ database mỗi request. **Nạp lại nó** sau khi đổi mật
+khẩu, sau bất kỳ 403 nào, và sau bất kỳ 409 nào: role có thể đã bị thu hồi.
+
+**403 `PASSWORD_CHANGE_REQUIRED`** ở đây nghĩa là credential còn tạm — xem §12.
+
+---
+
+## 4. User provisioning
+
+### `POST /users` → 201 · GLOBAL only
+
+```jsonc
+// request
+{
+  "displayName": "Head Person",
+  "email": "head@example.com",
+  "initialPassword": "a valid head passphrase",
+  "departmentId": "7ce2630e-…"          // BẮT BUỘC
+}
+
+// 201
+{
+  "id": "fab71f53-…",
+  "displayName": "Head Person",
+  "username": "head",
+  "status": "active",
+  "departmentId": "7ce2630e-…"
+}
+```
+
+Một transaction tạo cùng lúc: `users` + `identities` + credential + membership.
+Không tồn tại account "chưa có phòng" — thiếu `departmentId` → **422**.
+
+⚠️ **`initialPassword` là mật khẩu TẠM.** Account tạo ra có
+`must_change_secret = true`: người đó đăng nhập được, nhưng **mọi** endpoint
+khác trả 403 cho tới khi họ đổi mật khẩu. Xem §12.
+
+Mật khẩu tạm chỉ cần **≥ 8 ký tự** — nó do người quản trị đọc cho nhân viên,
+nên `12345678` là hợp lệ. Mật khẩu **vĩnh viễn** người dùng tự đặt ở
+`POST /auth/password` phải **≥ 12**. Hai ngưỡng khác nhau, cố ý — xem §13.
+
+HEAD gọi vào đây → **403**. Đường của HEAD là account invitation (§9).
+
+### `PATCH /users/:userId/status` → 200 · GLOBAL only
+
+```jsonc
+{ "status": "disabled" }   // giá trị hợp lệ duy nhất
+```
+
+```jsonc
+// 200
+{ "id": "7d47b2ac-…", "status": "disabled" }
+```
+
+Đây là **offboarding**, một transaction: kết thúc membership, thu hồi role, huỷ
+mọi session, disable account. Người đó lập tức mất phiên và không đăng nhập lại
+được.
+
+`{"status":"active"}` → **422**. Bật lại account **không được implement** — xem
+§18.
+
+---
+
+## 5. Department API
+
+| Endpoint | Ai gọi được | Thành công |
+|---|---|---|
+| `GET /departments` | **chỉ GLOBAL** | 200 |
+| `GET /departments/:id` | member của phòng đó, hoặc GLOBAL | 200 |
+| `POST /departments` | GLOBAL | 201 |
+| `PATCH /departments/:id` | GLOBAL | 200 |
+| `POST /departments/:id/archive` | GLOBAL | 200 |
+
+⚠️ `GET /departments` **không có scope**, nên chỉ GLOBAL qua được. HEAD và MEMBER
+nhận **403**. Đừng dùng nó để dựng menu — lấy id từ `/authorization/me`, rồi gọi
+`GET /departments/:id`.
+
+```jsonc
+// GET /departments — 200
+[
+  { "id": "60630e75-…", "slug": "finance", "name": "Finance", "status": "active",
+    "createdAt": "2026-08-18T08:34:22.918Z", "updatedAt": "2026-08-18T08:34:22.918Z" }
+]
+```
+
+```jsonc
+// POST /departments — 201
+{ "slug": "ops", "name": "Operations" }
+```
+
+Archive một phòng còn người active → **409**. Chuyển hết người đi trước.
+
+---
+
+## 6. Membership API
+
+| Endpoint | Ai gọi được |
+|---|---|
+| `GET /departments/:id/members` | **HEAD** của phòng đó, hoặc GLOBAL |
+| `POST /departments/:id/members` | **chỉ GLOBAL** |
+
+⚠️ MEMBER thường **không** xem được danh sách đồng nghiệp, kể cả phòng của chính
+mình → 403. Đây là mặc định đã chốt, không phải thiếu sót.
+
+```jsonc
+// GET /departments/:id/members — 200
+[
+  { "id": "d4b58fd3-…", "userId": "fab71f53-…", "departmentId": "7ce2630e-…",
+    "status": "active", "createdAt": "2026-08-18T08:34:04.975Z", "endedAt": null }
+]
+```
+
+---
+
+## 7. Transfer flow
+
+### Đường trực tiếp — `POST /departments/:id/members` → 201 · GLOBAL only
+
+```jsonc
+{ "userId": "7d47b2ac-…" }    // CHỈ userId
+```
+
+Đây là **TRANSFER**, không phải "add":
+
+* **đích** = phòng trên URL
+* **nguồn** = phòng người đó đang ở, đọc từ database
+* body chỉ nói *ai*
+
+Không có `ADD_MEMBER`, và không có endpoint "gỡ khỏi phòng" — người active luôn
+thuộc đúng một phòng.
+
+Gửi thêm `departmentId`, `toDepartmentId`, `sourceDepartmentId`, `role`,
+`permissions` trong body: các field đó bị **strip im lặng**, không đổi được gì và
+cũng không báo lỗi. Đừng gửi.
+
+### Đường của HEAD — request + approve (§10)
+
+HEAD gọi `POST /departments/:id/members` → **403**.
+
+---
+
+## 8. Remove flow
+
+`REMOVE_MEMBER` **là offboarding khỏi Backoffice**, không phải gỡ khỏi phòng.
+
+Duyệt một `REMOVE_MEMBER` làm đúng những gì `PATCH /users/:id/status` làm: kết
+thúc membership, thu hồi role, huỷ session, disable account — trong một
+transaction.
+
+**Copy trên UI phải nói đúng điều đó.** Nút ghi "Xoá khỏi phòng" là mô tả sai
+một hành động không đảo ngược được.
+
+Hai đường:
+
+| Ai | Đường |
+|---|---|
+| SUPERADMIN | `PATCH /users/:id/status {"status":"disabled"}` — hiệu lực ngay |
+| HEAD | `POST /departments/:id/membership-requests` với `action: "REMOVE_MEMBER"` → chờ duyệt |
+
+---
+
+## 9. Account invitation flow
+
+Người **chưa có account**. HEAD mời, SUPERADMIN duyệt, và account chỉ tồn tại
+lúc duyệt.
+
+| Endpoint | Ai | Thành công |
+|---|---|---|
+| `POST /departments/:id/account-invitations` | HEAD phòng đó, hoặc GLOBAL | 201 |
+| `GET /departments/:id/account-invitations` | như trên | 200 |
+| `GET /account-invitations` | GLOBAL | 200 |
+| `POST /account-invitations/:id/approve` | GLOBAL | **201** |
+| `POST /account-invitations/:id/reject` | GLOBAL | 200 |
+
+```jsonc
+// POST /departments/:id/account-invitations
+{ "email": "newcomer@example.com", "reason": "tuyển mới" }   // reason tuỳ chọn
+
+// 201
+{
+  "id": "…", "departmentId": "7ce2630e-…", "email": "newcomer@example.com",
+  "status": "pending", "requestedBy": "fab71f53-…",
+  "requestedAt": "2026-08-18T08:34:20.114Z",
+  "decidedBy": null, "decidedAt": null, "reason": null, "createdUserId": null
+}
+```
+
+Khi `pending`: **chưa có** user, identity, credential, membership nào.
+
+```jsonc
+// POST /account-invitations/:id/approve — body TUỲ CHỌN
+{ "displayName": "New Comer" }
+
+// 201
+{
+  "invitation": { "…": "…", "status": "approved", "createdUserId": "d68579df-…" },
+  "username": "newcomer",
+  "temporaryPassword": "…"           // ← chỉ ở đây, chỉ lần này
+}
+```
+
+Duyệt trả **201** (không phải 200) vì nó **tạo ra một account**. Gọi approve
+không kèm body là hợp lệ.
+
+Người mới vào **đúng phòng của HEAD đã mời**.
+
+`GET /account-invitations` trả `[]` khi không có gì chờ duyệt.
+
+---
+
+## 10. Approval / rejection flow
+
+Membership change request: **HEAD đề xuất, SUPERADMIN quyết**.
+
+| Endpoint | Ai | Thành công |
+|---|---|---|
+| `POST /departments/:id/membership-requests` | HEAD phòng đó, hoặc GLOBAL | 201 |
+| `GET /departments/:id/membership-requests` | như trên | 200 |
+| `GET /membership-requests` | GLOBAL | 200 |
+| `POST /membership-requests/:id/approve` | GLOBAL | **200** |
+| `POST /membership-requests/:id/reject` | GLOBAL | 200 |
+
+⚠️ **Field là `userId`, không phải `targetUserId`.** Response trả về
+`targetUserId` — request nhận `userId`. Hai tên khác nhau, và đây là chỗ dễ sai
+nhất trong toàn bộ API.
+
+```jsonc
+// POST /departments/:id/membership-requests
+{
+  "userId": "7d47b2ac-…",                 // ← request dùng tên này
+  "action": "TRANSFER_MEMBER",            // TRANSFER_MEMBER | REMOVE_MEMBER
+  "targetDepartmentId": "60630e75-…",     // bắt buộc cho TRANSFER, cấm cho REMOVE
+  "reason": "…"                           // tuỳ chọn
+}
+```
+
+```jsonc
+// 201 / GET /membership-requests — 200
+[{
+  "id": "f6d42eed-…",
+  "departmentId": "60630e75-…",        // NGUỒN — server suy ra, không nhận từ client
+  "targetDepartmentId": null,          // ĐÍCH — chỉ transfer mới có
+  "targetUserId": "7d47b2ac-…",        // ← response dùng tên này
+  "action": "REMOVE_MEMBER",
+  "status": "pending",                 // pending | approved | rejected
+  "requestedBy": "8b18fa79-…",
+  "requestedAt": "2026-08-18T08:34:23.633Z",
+  "decidedBy": null, "decidedAt": null, "reason": null
+}]
+```
+
+Ba giá trị, ba nguồn:
+
+| Giá trị | Đến từ |
+|---|---|
+| route department | **URL** — phòng HEAD quản lý |
+| source department | **DATABASE** — membership hiện tại của target |
+| target department | **body** `targetDepartmentId` |
+
+Approve trả **200**: không tạo resource nào, chỉ chuyển một membership hoặc đóng
+một account.
+
+**HEAD không duyệt được gì**, kể cả request của chính mình → 403. Hai lớp độc lập
+nói điều đó: permission, và CHECK `decided_by <> requested_by` ở database.
+
+Mọi giá trị được **đọc lại lúc duyệt**. Request tạo thứ Hai có thể được duyệt thứ
+Sáu, và trong khoảng đó target có thể đã chuyển phòng, đã bị disable, hoặc người
+đề xuất đã thôi làm HEAD → **409**.
+
+---
+
+## 11. Error codes
+
+Mọi lỗi đều cùng một hình dạng:
+
+```jsonc
+{ "error": { "code": "…", "message": "…", "details": { "field": "…" } } }
+```
+
+`code` để `switch`. `message` để hiện. `details` chỉ có ở `VALIDATION_FAILED`.
+
+| HTTP | `code` | Nghĩa | Frontend làm gì |
+|---|---|---|---|
+| 401 | `UNAUTHORIZED` | chưa/hết đăng nhập | về màn login |
+| 403 | `FORBIDDEN` | không được phép | đăng nhập lại **không** giúp gì |
+| 403 | `PASSWORD_CHANGE_REQUIRED` | credential còn tạm | → màn đổi mật khẩu (§12) |
+| 404 | `NOT_FOUND` | không có | |
+| 409 | `CONFLICT` | trạng thái đã đổi | **tải lại rồi thử lại**, không retry mù |
+| 422 | `VALIDATION_FAILED` | body sai | map `details` vào field |
+| 429 | `TOO_MANY_ATTEMPTS` | quá nhiều lần login | tôn trọng `Retry-After` |
+
+⚠️ **Hai mã 403 khác nhau.** Phân biệt bằng `code`, không bằng `message`.
+
+```jsonc
+// 422
+{ "error": { "code": "VALIDATION_FAILED", "message": "Request failed validation.",
+             "details": { "subject": "Required" } } }
+```
+
+### ⚠️ Hai hình dạng lỗi, không phải một
+
+Envelope ở trên là của **lỗi nghiệp vụ** — thứ backend chủ động ném ra. Lỗi do
+framework sinh (URL không khớp route nào, method sai, body không phải JSON) giữ
+hình dạng mặc định của Nest:
+
+```jsonc
+// GET /nope — 404
+{ "message": "Cannot GET /nope", "error": "Not Found", "statusCode": 404 }
+```
+
+Ở đây `error` là **string**, không phải object — nên `body.error.code` là
+`undefined`. Interceptor của frontend phải chịu được cả hai:
+
+```ts
+const code = typeof body?.error === 'object' ? body.error.code : undefined;
+// code === undefined  →  lỗi không thuộc nghiệp vụ: log rồi hiện thông báo chung
+```
+
+Gặp hình dạng thứ hai ở một endpoint có thật gần như luôn nghĩa là **URL sai** —
+kiểm lại đường dẫn trước khi nghi ngờ backend.
+
+### 409 hay gặp
+
+| Tình huống | Endpoint |
+|---|---|
+| email đã có account (kể cả disabled) | invitation create |
+| đã có invitation pending cho email đó (bất kể phòng nào) | invitation create |
+| request/invitation đã được người khác quyết | approve · reject |
+| tự quyết request của mình | approve · reject |
+| target đã chuyển phòng / bị disable từ lúc đề xuất | approve |
+| archive phòng còn người | department archive |
+| disable SuperAdmin cuối cùng | user status |
+
+---
+
+## 12. `must_change_secret` behavior
+
+Account được cấp credential tạm — qua `POST /users` hoặc qua duyệt invitation —
+**chưa hoàn tất provisioning**. Người đó:
+
+| Được | Không được |
+|---|---|
+| `POST /auth/login` | mọi endpoint khác |
+| `GET /auth/me` | |
+| `POST /auth/password` | |
+| `POST /auth/logout` | |
+
+Mọi endpoint khác — **kể cả `GET /authorization/me`** — trả:
+
+```jsonc
+// 403
+{ "error": { "code": "PASSWORD_CHANGE_REQUIRED",
+             "message": "Password change required before using this deployment." } }
+```
+
+### Trình tự bắt buộc của frontend
+
+```text
+POST /auth/login              → 200
+GET  /authorization/me
+   ├─ 200                     → vào app bình thường
+   └─ 403 PASSWORD_CHANGE_REQUIRED
+        → màn đổi mật khẩu (dữ liệu hiển thị lấy từ GET /auth/me)
+        → POST /auth/password → 204, MỌI session chết
+        → về màn login
+        → đăng nhập lại bằng mật khẩu mới
+```
+
+Không có cờ nào trong `/auth/me` báo trạng thái này. **Mã 403 là tín hiệu duy
+nhất**, và đó là lý do nó có `code` riêng.
+
+---
+
+## 13. `temporaryPassword` behavior
+
+Chỉ tồn tại ở **một** response: `POST /account-invitations/:id/approve`.
+
+Không có ở: list, detail, `/auth/me`, `/authorization/me`, response của reject,
+response 409 của approve lần hai. **Không cột nào trong database chứa nó** — chỉ
+có hash.
+
+| Frontend PHẢI | Frontend KHÔNG ĐƯỢC |
+|---|---|
+| hiện ngay, một lần, kèm cảnh báo không lấy lại được | ghi vào `localStorage`/`sessionStorage` |
+| để người duyệt copy và tự chuyển cho người mới | log ra console, gửi analytics |
+| coi việc rời màn hình là mất vĩnh viễn | đưa vào URL, query string, title |
+
+Approve lần hai → **409**, không có password trong response. Mất rồi thì không có
+endpoint "xem lại".
+
+**Hạn chế đã biết:** plaintext đi qua browser của người duyệt. Deployment này cố
+ý chưa có email adapter, nên người duyệt là kênh giao duy nhất.
+
+### Hai chính sách mật khẩu
+
+| | Tối thiểu | Ai đặt | Khi nào |
+|---|---|---|---|
+| **tạm** | 8 ký tự | SUPERADMIN, hoặc server sinh ra | lúc tạo account / duyệt invitation |
+| **vĩnh viễn** | 12 ký tự | chính người dùng | ở `POST /auth/password` |
+
+Ngưỡng tạm thấp hơn là **cố ý**: mật khẩu tạm được đọc cho nhau nghe, mỗi người
+một cái khác nhau, và nó không mở được gì ngoài màn đổi mật khẩu. Frontend phải
+dùng đúng ngưỡng ở đúng form — bắt 12 ký tự ở form tạo nhân sự sẽ chặn những giá
+trị mà backend chấp nhận.
+
+Form đổi mật khẩu **phải** validate 12 ký tự phía client để báo lỗi sớm, nhưng
+server vẫn là nơi quyết định: gửi mật khẩu ngắn → **422**.
+
+---
+
+## 14. Role / permission matrix
+
+Ba role. `MEMBER` là **sự vắng mặt** của role row, không phải một giá trị được
+lưu.
+
+| Permission | SUPERADMIN | DEPARTMENT_HEAD | MEMBER |
+|---|---|---|---|
+| `unit.read` | mọi phòng | phòng của mình | phòng của mình |
+| `unit.member.read` | mọi phòng | **phòng mình quản lý** | ✗ |
+| `unit.write` | ✓ | ✗ | ✗ |
+| `unit.member.write` | ✓ | ✗ | ✗ |
+| `role.assign` | ✓ | ✗ | ✗ |
+| `user.write` | ✓ | ✗ | ✗ |
+
+Server quyết theo **quan hệ** (`headOf`, `memberOf`), không theo role. Role chỉ
+là nhãn suy ra để hiển thị.
+
+### HEAD dứt khoát KHÔNG có
+
+* `POST /users` — tạo account
+* `PATCH /users/:id/status` — offboard
+* `POST /departments/:id/members` — chuyển phòng trực tiếp
+* `GET` · `POST` · `DELETE /departments/:id/head` — kể cả phòng mình quản lý
+* `POST /departments` · `PATCH` · `archive`
+* `GET /departments` — danh sách toàn hệ thống
+* approve/reject bất cứ thứ gì, kể cả request của chính mình
+* gán/thu hồi role
+
+HEAD chỉ **đề xuất**: membership request và account invitation.
+
+### SUPERADMIN
+
+* GLOBAL, **không** bị scope vào phòng nào — `departmentIds` luôn rỗng
+* mọi permission, mọi phòng, kể cả phòng chưa tồn tại
+* trực tiếp: tạo user · gán phòng · transfer · offboard · bổ nhiệm/bãi nhiệm
+  trưởng phòng · approve/reject
+* **không** tự duyệt request của chính mình (409)
+* SuperAdmin cuối cùng không disable được (409)
+
+---
+
+## 15. Department scope rules
+
+**Scope luôn nằm trên URL, không bao giờ trong body.**
+
+```text
+POST /departments/:departmentId/membership-requests
+                  ^^^^^^^^^^^^^ phòng HEAD quản lý — server kiểm cái này
+```
+
+Không DTO nào nhận `departmentId` như một field quyết định phạm vi. Body có gửi
+thì bị strip.
+
+| Loại | Ý nghĩa |
+|---|---|
+| route param | phòng caller phải có thẩm quyền — luôn được kiểm |
+| `targetDepartmentId` (body) | dữ liệu nghiệp vụ: chuyển ĐI ĐÂU |
+| source department | **không bao giờ** từ client — đọc từ database |
+
+Đổi id trên URL sang phòng khác → **403**, không phải 404: không có IDOR.
+
+---
+
+## 15b. Department head API
+
+Bổ nhiệm và bãi nhiệm trưởng phòng. **GLOBAL only** (`role.assign`) — HEAD
+không gọi được route nào ở đây, kể cả route đọc.
+
+| Endpoint | Thành công |
+|---|---|
+| `GET /departments/:departmentId/head` | 200, hoặc **404** nếu phòng chưa có trưởng phòng |
+| `POST /departments/:departmentId/head` | 201 |
+| `DELETE /departments/:departmentId/head` | 200 |
+
+```jsonc
+// POST /departments/:departmentId/head
+{ "userId": "fab71f53-…" }        // CHỈ userId — phòng lấy từ URL
+
+// 201 · 200 (cả assign, revoke và read đều trả hình dạng này)
+{
+  "assignmentId": "…",
+  "departmentId": "7ce2630e-…",
+  "userId": "fab71f53-…",
+  "membershipId": "d4b58fd3-…",
+  "grantedAt": "2026-01-01T00:00:00.000Z"
+}
+```
+
+**Người được bổ nhiệm phải đang là member active của đúng phòng đó** — đây là
+invariant #6, được foreign key canh ở database. Bổ nhiệm người ngoài phòng →
+**409**.
+
+| Tình huống | Mã |
+|---|---|
+| người đó không phải member active của phòng | 409 |
+| phòng đã có trưởng phòng | 409 — `DELETE` trước rồi `POST` |
+| phòng đã archive | 409 |
+| phòng chưa có trưởng phòng (`GET`/`DELETE`) | 404 |
+
+**Đổi trưởng phòng = `DELETE` rồi `POST`**, không có một lời gọi "set head":
+unique index không cho hai active head cùng lúc, nên hai thao tác không hoán vị
+được.
+
+Bãi nhiệm **không phải** cho nghỉ việc: membership giữ nguyên, account vẫn
+active, người đó thành member thường. Copy trên UI phải nói đúng vậy.
+
+`DELETE` là mutation → **vẫn cần header CSRF**.
+
+---
+
+## 16. Bootstrap và những gì KHÔNG có endpoint
+
+### Tài khoản đầu tiên
+
+Không có endpoint nào tạo SuperAdmin. Đường duy nhất là CLI trên máy chủ:
+
+```bash
+npm run user:create -- --email admin@example.com --name "Root Admin" --superadmin
+```
+
+Frontend không có màn hình nào cho việc này, và không nên có.
+
+### Gán / thu hồi DEPARTMENT_HEAD
+
+**Đã có endpoint** — xem §15b. Frontend dựng được màn hình bổ nhiệm trưởng
+phòng cho SUPERADMIN.
+
+### Chuyển SUPERADMIN — **chưa có endpoint**
+
+`transferSuperAdmin` đã implement và đã test ở tầng application, nhưng chưa có
+route HTTP. Việc chuyển quyền SuperAdmin hiện làm bằng CLI/SQL trên máy chủ.
+Frontend **không** dựng màn hình cho việc này — xem §18.
+
+---
+
+## 17. Frontend forbidden assumptions
+
+Danh sách những điều **sai**, kèm chuyện gì thật sự xảy ra:
+
+| Giả định sai | Thực tế |
+|---|---|
+| "ẩn nút là đủ" | server vẫn là chỗ duy nhất từ chối |
+| "login dùng field `email`" | field là **`subject`** → gửi `email` nhận 422 |
+| "membership request dùng `targetUserId`" | request dùng **`userId`**; response mới là `targetUserId` |
+| "approve luôn trả 200" | invitation approve trả **201** |
+| "`GET /departments` ai cũng gọi được" | **GLOBAL only**, HEAD nhận 403 |
+| "MEMBER xem được đồng nghiệp cùng phòng" | 403 |
+| "một người có thể ở nhiều phòng" | tối đa **một** active membership |
+| "`ADD_MEMBER` là một action" | **422** — chỉ có TRANSFER và REMOVE |
+| "REMOVE_MEMBER = gỡ khỏi phòng" | = **offboarding khỏi hệ thống** |
+| "HEAD tự duyệt được request của mình" | 403 (permission) + CHECK ở DB |
+| "có thể lấy lại `temporaryPassword`" | không, ở đâu cũng không |
+| "đổi mật khẩu xong dùng tiếp phiên cũ" | mọi session chết, phải đăng nhập lại |
+| "`initialPassword` là mật khẩu chính thức" | là mật khẩu **tạm**, bị gate cho tới khi đổi |
+| "403 nghĩa là hết phiên" | 403 ≠ 401; xem `code` để phân biệt |
+| "retry khi gặp 409" | 409 = trạng thái đã đổi → **tải lại** trước |
+| "gửi `role` khi tạo user thì được cấp role" | field bị strip, không có tác dụng |
+| "HEAD tự bổ nhiệm được người kế nhiệm" | 403 — `role.assign` là GLOBAL only |
+| "đổi trưởng phòng bằng một lời gọi" | `DELETE` rồi `POST` — §15b |
+| "mật khẩu tạm phải ≥ 12 ký tự" | tạm cần ≥ 8; **vĩnh viễn** mới cần ≥ 12 |
+| "có endpoint bật lại account đã disable" | chưa có — §18 |
+
+---
+
+## 18. Known limitations
+
+| Hạn chế | Ảnh hưởng tới frontend |
+|---|---|
+| Không có endpoint chuyển SUPERADMIN | không dựng màn hình chuyển quyền; làm bằng CLI/SQL |
+| Không có endpoint bật lại account disabled | `PATCH …/status` chỉ nhận `disabled`; `active` → 422 |
+| Không có email adapter | `temporaryPassword` giao tay qua người duyệt |
+| Không có endpoint đổi `displayName` | không dựng màn hình sửa hồ sơ |
+| Không có phân trang trên các list | tất cả list trả toàn bộ; sẽ đổi khi dữ liệu lớn |
+| `POST /auth/login` dùng field `subject` | đặt tên biến ở frontend cho khớp, hoặc map ở API client |
+
+---
+
+## 19. Nguồn sự thật
+
+Tài liệu này mô tả hành vi đã được xác minh trên deployment thật. Chi tiết thiết
+kế của từng vùng nằm ở README của nó:
+
+| Vùng | README |
+|---|---|
+| foundation, chiều phụ thuộc | `backend/src/core/README.md` |
+| quyết định truy cập | `backend/src/core/authorization/README.md` |
+| phòng ban và membership | `backend/src/core/organization/README.md` |
+| approval workflow | `backend/src/capabilities/membership-approval/README.md` |
+| onboarding | `backend/src/capabilities/account-invitation/README.md` |
+| migration | `backend/migrations/README.md` |
+
+Khi tài liệu này và source mâu thuẫn: **source đúng, và tài liệu này là bug.**

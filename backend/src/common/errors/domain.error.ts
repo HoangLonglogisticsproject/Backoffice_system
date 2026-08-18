@@ -47,6 +47,25 @@ export class ForbiddenError extends DomainError {
   readonly code = 'FORBIDDEN';
 }
 
+/**
+ * Refused because the caller still holds a temporary credential.
+ *
+ * A 403 like any other — the same caller is refused the same routes — but with
+ * its OWN CODE, because the client's correct reaction is different. Ordinary
+ * FORBIDDEN means "this is not for you"; this one means "finish provisioning
+ * and try again", and the only screen that resolves it is the password change.
+ * Without a distinct code a client has to match on the message text to tell
+ * them apart, and that is a contract nobody can maintain.
+ *
+ * A sibling of ForbiddenError rather than a subclass: `code` is a literal type
+ * on each class, so narrowing it in a subclass does not typecheck. The filter
+ * maps it to 403 by code, which is the escape hatch that exists for exactly
+ * this.
+ */
+export class PasswordChangeRequiredError extends DomainError {
+  readonly code = 'PASSWORD_CHANGE_REQUIRED';
+}
+
 /** The request is well-formed but breaks a rule of the domain. */
 export class ValidationError extends DomainError {
   readonly code = 'VALIDATION_FAILED';
