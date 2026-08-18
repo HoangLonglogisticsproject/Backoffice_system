@@ -131,15 +131,19 @@ describe('organization HTTP security', () => {
       ['post', `/departments/${A}/archive`],
       ['post', `/departments/${A}/members`],
     ] as const)('refuses %s %s with 401', async (method, path) => {
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         [method](path)
-        .set('X-Requested-With', 'XMLHttpRequest')
-        .expect(401);
+        .set('X-Requested-With', 'XMLHttpRequest');
+
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
     });
 
     it('reaches no service at all', async () => {
-      await request(app.getHttpServer()).get('/departments').expect(401);
-      await request(app.getHttpServer()).get(`/departments/${A}/members`).expect(401);
+      const list = await request(app.getHttpServer()).get('/departments');
+      const roster = await request(app.getHttpServer()).get(`/departments/${A}/members`);
+
+      expect([list.status, roster.status]).toEqual([401, 401]);
       noneOfTheServicesRan();
     });
   });
@@ -335,7 +339,10 @@ describe('organization HTTP security', () => {
       const { NotFoundError } = errors();
       departments.require.mockRejectedValue(new NotFoundError('No such department.'));
 
-      await authed('get', `/departments/${A}`).expect(404);
+      const response = await authed('get', `/departments/${A}`);
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe('NOT_FOUND');
     });
 
     it('maps archiving a populated unit to 409', async () => {
@@ -344,14 +351,22 @@ describe('organization HTTP security', () => {
         new ConflictError('That department still has active members.'),
       );
 
-      await authed('post', `/departments/${A}/archive`).expect(409);
+      const response = await authed('post', `/departments/${A}/archive`);
+
+      // 409 and not 422: the request is well formed, the world is not ready.
+      // A client should reload and re-check, not correct the body and resend.
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
 
     it('maps a duplicate slug to 409', async () => {
       const { ConflictError } = errors();
       departments.create.mockRejectedValue(new ConflictError('That slug is taken.'));
 
-      await authed('post', '/departments').send({ slug: 'ops', name: 'Operations' }).expect(409);
+      const response = await authed('post', '/departments').send({ slug: 'ops', name: 'Operations' });
+
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
   });
 
@@ -363,12 +378,20 @@ describe('organization HTTP security', () => {
     });
 
     it('is refused every route here, reads included', async () => {
-      await authed('get', '/departments').expect(403);
-      await authed('get', `/departments/${A}`).expect(403);
-      await authed('get', `/departments/${A}/members`).expect(403);
-      await authed('post', '/departments').send({ slug: 'x', name: 'X' }).expect(403);
-      await authed('post', `/departments/${A}/members`).send({ userId: TARGET }).expect(403);
+      const responses = [
+        await authed('get', '/departments'),
+        await authed('get', `/departments/${A}`),
+        await authed('get', `/departments/${A}/members`),
+        await authed('post', '/departments').send({ slug: 'x', name: 'X' }),
+        await authed('post', `/departments/${A}/members`).send({ userId: TARGET }),
+      ];
 
+      expect(responses.map((r) => r.status)).toEqual([403, 403, 403, 403, 403]);
+      // The distinct code is what lets a client send them to the password
+      // screen instead of showing a dead end.
+      for (const response of responses) {
+        expect(response.body.error.code).toBe('PASSWORD_CHANGE_REQUIRED');
+      }
       noneOfTheServicesRan();
     });
   });
@@ -384,20 +407,25 @@ describe('organization HTTP security', () => {
       const bare = (method: 'post' | 'patch', path: string) =>
         request(app.getHttpServer())[method](path).set('Cookie', `${SESSION_COOKIE}=${TOKEN}`);
 
-      await bare('post', '/departments').send({ slug: 'ops', name: 'Operations' }).expect(403);
-      await bare('patch', `/departments/${A}`).send({ name: 'X' }).expect(403);
-      await bare('post', `/departments/${A}/archive`).expect(403);
-      await bare('post', `/departments/${A}/members`).send({ userId: TARGET }).expect(403);
+      const responses = [
+        await bare('post', '/departments').send({ slug: 'ops', name: 'Operations' }),
+        await bare('patch', `/departments/${A}`).send({ name: 'X' }),
+        await bare('post', `/departments/${A}/archive`),
+        await bare('post', `/departments/${A}/members`).send({ userId: TARGET }),
+      ];
 
+      expect(responses.map((r) => r.status)).toEqual([403, 403, 403, 403]);
       expect(departments.create).not.toHaveBeenCalled();
       expect(memberships.transfer).not.toHaveBeenCalled();
     });
 
     it('allows a read without it — a GET changes nothing', async () => {
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         .get('/departments')
-        .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
-        .expect(200);
+        .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`);
+
+      expect(response.status).toBe(200);
+      expect(departments.list).toHaveBeenCalled();
     });
   });
 });

@@ -61,7 +61,7 @@ export class AccountLifecycleService {
         // Reading it inside the transaction is what makes the check meaningful:
         // outside it, another hand-over could commit in between.
         const superAdmin = await this.assignments.findActiveSuperAdmin(tx);
-        if (superAdmin && superAdmin.userId === input.userId) {
+        if (superAdmin?.userId === input.userId) {
           throw new ConflictError(
             'Refusing to leave the deployment with no SuperAdmin. Hand the role over first.',
           );

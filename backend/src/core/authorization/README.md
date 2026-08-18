@@ -18,6 +18,23 @@ không?* Không chứa nghiệp vụ, không biết capability nào tồn tại.
 | Endpoint | Guard | Permission |
 |---|---|---|
 | `GET /authorization/me` | `AuthGuard` | — (chỉ cần đăng nhập; 403 nếu `must_change_secret`) |
+| `GET /departments/:departmentId/head` | `AuthGuard` + `PermissionGuard` | `role.assign` |
+| `POST /departments/:departmentId/head` | + `CsrfGuard` | `role.assign` |
+| `DELETE /departments/:departmentId/head` | + `CsrfGuard` | `role.assign` |
+
+Ba route trưởng phòng nằm ở controller riêng (`department-head.controller.ts`)
+chứ không gộp vào `AuthorizationController`: cái kia trả lời câu hỏi **về chính
+caller** và chỉ cần đăng nhập, ba cái này **đổi ai giữ thẩm quyền** và là
+GLOBAL-only. Một controller mang hai câu chuyện guard là cách một route nằm nhầm
+chỗ mà không ai thấy.
+
+`role.assign` là global-only, nên HEAD không bổ nhiệm được người kế nhiệm, không
+tự bãi nhiệm, và cũng không đọc được route đó. Thẩm quyền được trao **từ bên
+ngoài** đơn vị — đó là toàn bộ lý do permission này tồn tại.
+
+Đổi trưởng phòng là `DELETE` rồi `POST`. Không có "set head" một lời gọi: unique
+index chặn hai active head, nên hai thao tác không hoán vị được, và một API giả
+vờ chúng hoán vị được sẽ thất bại tuỳ thứ tự.
 
 Guard `PermissionGuard` được **export** để module khác gắn vào route của họ —
 `core/organization` là consumer đầu tiên. Không đăng ký global: opt-in theo route
@@ -100,6 +117,7 @@ là lý do mọi flow remove/transfer phải **revoke role trước**.
 |---|---|---|
 | `authorization.context.spec.ts` | luật `can()`, fail-closed, role derivation | không |
 | `authorization.security.spec.ts` | HTTP: 401/403, IDOR chéo phòng, spoof body, CSRF | không |
+| `department-head.security.spec.ts` | 25 test: HEAD không tự bổ nhiệm được, spoof body, 409 theo invariant, CSRF trên `DELETE` | không |
 | `authorization.integration.spec.ts` | invariant #1/#2/#6/#7, provenance, concurrency, context từ row thật | **có** |
 | `../../../migrations/authorization-schema.spec.ts` | hình dạng `0004`/`0005` | không |
 

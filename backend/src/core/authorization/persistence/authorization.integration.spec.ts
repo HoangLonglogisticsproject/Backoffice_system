@@ -356,6 +356,107 @@ describeIntegration('Authorization against real PostgreSQL', () => {
       );
       expect(rows[0]!.status).toBe('active');
     });
+
+    /**
+     * The department-keyed revocation the HTTP layer uses.
+     *
+     * Same act, addressed by unit instead of by assignment, and the lookup has
+     * to share the revocation's transaction: done as two calls the head could
+     * change in between, and the caller would revoke somebody they never saw.
+     */
+    it('revokes by department, leaving the person a member', async () => {
+      const admin = await createUser('Admin');
+      const person = await createUser('Person');
+      const a = await departments.create({ slug: 'a', name: 'A' });
+      await memberships.enroll({ userId: person, departmentId: a.id });
+      await authorization.assignDepartmentHead({
+        userId: person,
+        departmentId: a.id,
+        grantedBy: admin,
+      });
+
+      const revoked = await authorization.revokeHeadOfDepartment({
+        departmentId: a.id,
+        revokedBy: admin,
+      });
+
+      expect(revoked.userId).toBe(person);
+      expect(revoked.status).toBe('revoked');
+      expect(revoked.revokedBy).toBe(admin);
+
+      const context = await authorization.loadContext(person);
+      expect(context.headOf).toEqual([]);
+      expect(context.memberOf).toEqual([a.id]);
+      expect(await authorization.findActiveHeadOfDepartment(a.id)).toBeNull();
+    });
+
+    it('refuses to revoke a department that has no head', async () => {
+      const admin = await createUser('Admin');
+      const a = await departments.create({ slug: 'a', name: 'A' });
+
+      await expect(
+        authorization.revokeHeadOfDepartment({ departmentId: a.id, revokedBy: admin }),
+      ).rejects.toThrow(/no active head/);
+    });
+
+    it('lets exactly one of two concurrent revocations win', async () => {
+      const admin = await createUser('Admin');
+      const person = await createUser('Person');
+      const a = await departments.create({ slug: 'a', name: 'A' });
+      await memberships.enroll({ userId: person, departmentId: a.id });
+      await authorization.assignDepartmentHead({
+        userId: person,
+        departmentId: a.id,
+        grantedBy: admin,
+      });
+
+      const results = await Promise.allSettled([
+        authorization.revokeHeadOfDepartment({ departmentId: a.id, revokedBy: admin }),
+        authorization.revokeHeadOfDepartment({ departmentId: a.id, revokedBy: admin }),
+      ]);
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      // And the loser is told the truth rather than silently succeeding.
+      const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+      expect((rejected.reason as Error).message).toMatch(/no active head|already revoked/);
+
+      const { rows } = await pool.query<{ count: string }>(
+        `SELECT count(*) AS count FROM role_assignments
+          WHERE scope_id = $1 AND role_key = 'DEPARTMENT_HEAD' AND status = 'revoked'`,
+        [a.id],
+      );
+      expect(Number(rows[0]!.count)).toBe(1);
+    });
+
+    it('a revoked head can be replaced, and the unique index allows it', async () => {
+      const admin = await createUser('Admin');
+      const first = await createUser('First');
+      const second = await createUser('Second');
+      const a = await departments.create({ slug: 'a', name: 'A' });
+      await memberships.enroll({ userId: first, departmentId: a.id });
+      await memberships.enroll({ userId: second, departmentId: a.id });
+      await authorization.assignDepartmentHead({
+        userId: first,
+        departmentId: a.id,
+        grantedBy: admin,
+      });
+
+      await authorization.revokeHeadOfDepartment({ departmentId: a.id, revokedBy: admin });
+      const replacement = await authorization.assignDepartmentHead({
+        userId: second,
+        departmentId: a.id,
+        grantedBy: admin,
+      });
+
+      expect(replacement.userId).toBe(second);
+      // The old row is kept, revoked: leadership history survives the change.
+      const { rows } = await pool.query<{ count: string }>(
+        `SELECT count(*) AS count FROM role_assignments
+          WHERE scope_id = $1 AND role_key = 'DEPARTMENT_HEAD'`,
+        [a.id],
+      );
+      expect(Number(rows[0]!.count)).toBe(2);
+    });
   });
 
   // ------------------------------------------------------------- provenance --

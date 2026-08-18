@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { IdentityModule } from '../identity/identity.module';
 import { OrganizationModule } from '../organization/organization.module';
 import { AuthorizationController } from './api/authorization.controller';
+import { DepartmentHeadController } from './api/department-head.controller';
 import { AuthorizationRepository } from './persistence/authorization.repository';
 import { AuthorizationService } from './application/authorization.service';
 import { HeadOfRouteDepartmentGuard, PermissionGuard } from './api/permission.guard';
@@ -22,7 +23,7 @@ import { HeadOfRouteDepartmentGuard, PermissionGuard } from './api/permission.gu
  */
 @Module({
   imports: [forwardRef(() => OrganizationModule), IdentityModule],
-  controllers: [AuthorizationController],
+  controllers: [AuthorizationController, DepartmentHeadController],
   providers: [
     AuthorizationRepository,
     AuthorizationService,

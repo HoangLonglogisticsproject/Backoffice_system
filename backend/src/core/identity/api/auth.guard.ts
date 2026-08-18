@@ -45,5 +45,8 @@ export class AuthGuard implements CanActivate {
 export function sessionTokenFrom(request: Request): string | null {
   const cookies = (request as Request & { cookies?: Record<string, string> }).cookies;
   const token = cookies?.[SESSION_COOKIE];
-  return token && token.length > 0 ? token : null;
+
+  // `||` and not `??`: an EMPTY cookie must read as absent. `??` only replaces
+  // null and undefined, so it would hand an empty token to the session lookup.
+  return token || null;
 }

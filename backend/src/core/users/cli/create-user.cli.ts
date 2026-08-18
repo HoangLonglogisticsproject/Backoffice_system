@@ -28,6 +28,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../../../app.module';
 import { AuthorizationService } from '../../authorization/application/authorization.service';
+import { PASSWORD_POLICY } from '../../identity/domain/password.policy';
 import { UserService } from '../application/user.service';
 import { SECRET_READER, type SecretReader } from '../../../common/types/secret-reader.port';
 
@@ -83,9 +84,13 @@ async function main(): Promise<void> {
     app.get<SecretReader>(SECRET_READER),
     process.env['BOOTSTRAP_PASSWORD'],
   );
-  if (password.length < 12) {
-    // Not a policy engine — one floor, applied where the first account is made.
-    console.error('Password must be at least 12 characters.');
+  // The PERMANENT floor, from the one place that defines it. This account
+  // chooses its own secret and is not asked to change it, so it is a permanent
+  // credential — not the temporary kind provisioning hands out. Reading the
+  // constant rather than repeating the number is what keeps the two in step
+  // when one of them moves.
+  if (password.length < PASSWORD_POLICY.minLength) {
+    console.error(`Password must be at least ${PASSWORD_POLICY.minLength} characters.`);
     process.exit(1);
   }
 

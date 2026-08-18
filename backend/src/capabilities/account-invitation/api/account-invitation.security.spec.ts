@@ -136,10 +136,14 @@ describe('account-invitation HTTP security', () => {
       ['post', `/account-invitations/${INVITATION_ID}/approve`],
       ['post', `/account-invitations/${INVITATION_ID}/reject`],
     ] as const)('refuses %s %s with 401', async (method, path) => {
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         [method](path)
-        .set('X-Requested-With', 'XMLHttpRequest')
-        .expect(401);
+        .set('X-Requested-With', 'XMLHttpRequest');
+
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
+      expect(invitations.create).not.toHaveBeenCalled();
+      expect(invitations.approve).not.toHaveBeenCalled();
     });
   });
 
@@ -218,8 +222,13 @@ describe('account-invitation HTTP security', () => {
     });
 
     it('reads every queue', async () => {
-      await authed('get', '/account-invitations').expect(200);
-      await authed('get', `/departments/${B}/account-invitations`).expect(200);
+      const queue = await authed('get', '/account-invitations');
+      const scoped = await authed('get', `/departments/${B}/account-invitations`);
+
+      expect([queue.status, scoped.status]).toEqual([200, 200]);
+      expect(invitations.listPending).toHaveBeenCalled();
+      // B is a department this caller neither leads nor belongs to.
+      expect(invitations.listForDepartment).toHaveBeenCalledWith(B);
     });
 
     it('approves, and receives the temporary password exactly here', async () => {
@@ -368,13 +377,21 @@ describe('account-invitation HTTP security', () => {
         conflict('That email already has an invitation awaiting a decision.'),
       );
 
-      await authed('post', `/departments/${A}/account-invitations`).send(inviteBody).expect(409);
+      const response = await authed('post', `/departments/${A}/account-invitations`)
+        .send(inviteBody);
+
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
 
     it('maps an address that already has an account to 409', async () => {
       invitations.create.mockRejectedValue(conflict('That email already has an account.'));
 
-      await authed('post', `/departments/${A}/account-invitations`).send(inviteBody).expect(409);
+      const response = await authed('post', `/departments/${A}/account-invitations`)
+        .send(inviteBody);
+
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
 
     it('maps a domain outside the allowlist to 422', async () => {
@@ -385,7 +402,16 @@ describe('account-invitation HTTP security', () => {
         new ValidationError('That email domain is not permitted for this deployment.'),
       );
 
-      await authed('post', `/departments/${A}/account-invitations`).send(inviteBody).expect(422);
+      const response = await authed('post', `/departments/${A}/account-invitations`)
+        .send(inviteBody);
+
+      // 422 rather than 409: the address is refusable on its own terms, so the
+      // client can correct the field and resend rather than reload and retry.
+      expect(response.status).toBe(422);
+      expect(response.body.error.code).toBe('VALIDATION_FAILED');
+      // The allowlist itself is never echoed back — that would hand out the
+      // deployment's shape for free.
+      expect(JSON.stringify(response.body)).not.toContain('example.com');
     });
 
     it('rejects a malformed address before the service is reached', async () => {

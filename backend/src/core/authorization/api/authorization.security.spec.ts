@@ -131,10 +131,16 @@ describe('authorization HTTP security', () => {
       ['post', `/departments/${A}/archive`],
       ['get', '/authorization/me'],
     ] as const)('refuses %s %s with 401', async (method, path) => {
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         [method](path)
-        .set('X-Requested-With', 'XMLHttpRequest')
-        .expect(401);
+        .set('X-Requested-With', 'XMLHttpRequest');
+
+      // 401 rather than 403, because a client acts on the difference: one means
+      // "log in again", the other means logging in again will not help.
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
+      expect(organization.list).not.toHaveBeenCalled();
+      expect(organization.transfer).not.toHaveBeenCalled();
     });
   });
 
@@ -146,8 +152,13 @@ describe('authorization HTTP security', () => {
     });
 
     it('reads its own department and the people in it', async () => {
-      await authed('get', `/departments/${A}`).expect(200);
-      await authed('get', `/departments/${A}/members`).expect(200);
+      const unit = await authed('get', `/departments/${A}`);
+      const roster = await authed('get', `/departments/${A}/members`);
+
+      expect(unit.status).toBe(200);
+      expect(roster.status).toBe(200);
+      expect(organization.require).toHaveBeenCalledWith(A);
+      expect(organization.listActiveMembers).toHaveBeenCalledWith(A);
     });
 
     it('is refused the SAME routes for another department — IDOR', async () => {
@@ -171,7 +182,11 @@ describe('authorization HTTP security', () => {
     });
 
     it('cannot list all departments — that permission has no departmental scope', async () => {
-      await authed('get', '/departments').expect(403);
+      const response = await authed('get', '/departments');
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(organization.list).not.toHaveBeenCalled();
     });
   });
 
@@ -183,20 +198,38 @@ describe('authorization HTTP security', () => {
     });
 
     it('reads its own department', async () => {
-      await authed('get', `/departments/${A}`).expect(200);
+      const response = await authed('get', `/departments/${A}`);
+
+      expect(response.status).toBe(200);
+      expect(organization.require).toHaveBeenCalledWith(A);
     });
 
     it('cannot see who else is in it', async () => {
-      await authed('get', `/departments/${A}/members`).expect(403);
+      const response = await authed('get', `/departments/${A}/members`);
+
+      // A plain member seeing nobody — including in their own unit — is the
+      // decided default, not an oversight.
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(organization.listActiveMembers).not.toHaveBeenCalled();
     });
 
     it('cannot reach another department at all', async () => {
-      await authed('get', `/departments/${B}`).expect(403);
+      const response = await authed('get', `/departments/${B}`);
+
+      expect(response.status).toBe(403);
+      // Nothing was read, so nothing about B leaked — not even that it exists.
+      expect(organization.require).not.toHaveBeenCalled();
     });
 
     it('cannot mutate anything', async () => {
-      await authed('post', '/departments').send({ slug: 'x', name: 'X' }).expect(403);
-      await authed('post', `/departments/${A}/members`).send({ userId: USER }).expect(403);
+      const created = await authed('post', '/departments').send({ slug: 'x', name: 'X' });
+      const transferred = await authed('post', `/departments/${A}/members`).send({ userId: USER });
+
+      expect(created.status).toBe(403);
+      expect(transferred.status).toBe(403);
+      expect(organization.create).not.toHaveBeenCalled();
+      expect(organization.transfer).not.toHaveBeenCalled();
     });
   });
 
@@ -208,9 +241,15 @@ describe('authorization HTTP security', () => {
     });
 
     it('reaches every department route, including ones it has no membership in', async () => {
-      await authed('get', '/departments').expect(200);
-      await authed('get', `/departments/${B}`).expect(200);
-      await authed('get', `/departments/${B}/members`).expect(200);
+      const list = await authed('get', '/departments');
+      const unit = await authed('get', `/departments/${B}`);
+      const roster = await authed('get', `/departments/${B}/members`);
+
+      expect([list.status, unit.status, roster.status]).toEqual([200, 200, 200]);
+      // B is a department this caller has no membership of, which is the point:
+      // GLOBAL is not scoped, so membership never enters the decision.
+      expect(organization.require).toHaveBeenCalledWith(B);
+      expect(organization.listActiveMembers).toHaveBeenCalledWith(B);
     });
 
     it('creates, renames, archives and transfers directly', async () => {
@@ -235,9 +274,17 @@ describe('authorization HTTP security', () => {
     });
 
     it('cannot grant itself a role', async () => {
-      await authed('post', '/departments')
-        .send({ slug: 'x', name: 'X', role: 'SUPERADMIN', global: true })
-        .expect(403);
+      const response = await authed('post', '/departments')
+        .send({ slug: 'x', name: 'X', role: 'SUPERADMIN', global: true });
+
+      expect(response.status).toBe(403);
+      expect(organization.create).not.toHaveBeenCalled();
+
+      // Nor did the claim survive into the next request: authority is reloaded
+      // from the database every time, never carried over from a body.
+      const me = await authed('get', '/authorization/me');
+      expect(me.body.role).toBe('MEMBER');
+      expect(me.body.permissions).not.toContain('role.assign');
     });
 
     it('cannot widen its scope by naming another department in the body', async () => {
@@ -257,9 +304,11 @@ describe('authorization HTTP security', () => {
     });
 
     it('cannot claim a permission it does not hold', async () => {
-      await authed('post', `/departments/${A}/members`)
-        .send({ userId: USER, permissions: ['unit.member.write'] })
-        .expect(403);
+      const response = await authed('post', `/departments/${A}/members`)
+        .send({ userId: USER, permissions: ['unit.member.write'] });
+
+      expect(response.status).toBe(403);
+      expect(organization.transfer).not.toHaveBeenCalled();
     });
   });
 
@@ -271,13 +320,23 @@ describe('authorization HTTP security', () => {
     });
 
     it('is refused /authorization/me', async () => {
-      await authed('get', '/authorization/me').expect(403);
+      const response = await authed('get', '/authorization/me');
+
+      expect(response.status).toBe(403);
+      // Refused BEFORE any authority is described: an unprovisioned caller does
+      // not get to learn what they will be able to do until they finish.
+      expect(response.body.role).toBeUndefined();
+      expect(response.body.permissions).toBeUndefined();
     });
 
     it('is refused every guarded route, even holding global authority', async () => {
-      await authed('get', '/departments').expect(403);
-      await authed('get', `/departments/${A}`).expect(403);
-      await authed('post', '/departments').send({ slug: 'x', name: 'X' }).expect(403);
+      const list = await authed('get', '/departments');
+      const unit = await authed('get', `/departments/${A}`);
+      const created = await authed('post', '/departments').send({ slug: 'x', name: 'X' });
+
+      expect([list.status, unit.status, created.status]).toEqual([403, 403, 403]);
+      expect(organization.list).not.toHaveBeenCalled();
+      expect(organization.require).not.toHaveBeenCalled();
       expect(organization.create).not.toHaveBeenCalled();
     });
 

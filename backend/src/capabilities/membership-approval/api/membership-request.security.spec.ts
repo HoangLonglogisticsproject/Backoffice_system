@@ -134,10 +134,14 @@ describe('membership-request HTTP security', () => {
       ['post', `/membership-requests/${REQUEST_ID}/approve`],
       ['post', `/membership-requests/${REQUEST_ID}/reject`],
     ] as const)('refuses %s %s with 401', async (method, path) => {
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         [method](path)
-        .set('X-Requested-With', 'XMLHttpRequest')
-        .expect(401);
+        .set('X-Requested-With', 'XMLHttpRequest');
+
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
+      expect(requests.create).not.toHaveBeenCalled();
+      expect(requests.approve).not.toHaveBeenCalled();
     });
   });
 
@@ -208,12 +212,20 @@ describe('membership-request HTTP security', () => {
     });
 
     it('cannot read requests, anywhere', async () => {
-      await authed('get', `/departments/${A}/membership-requests`).expect(403);
-      await authed('get', '/membership-requests').expect(403);
+      const scoped = await authed('get', `/departments/${A}/membership-requests`);
+      const queue = await authed('get', '/membership-requests');
+
+      expect([scoped.status, queue.status]).toEqual([403, 403]);
+      expect(requests.listForDepartment).not.toHaveBeenCalled();
+      expect(requests.listPending).not.toHaveBeenCalled();
     });
 
     it('cannot decide', async () => {
-      await authed('post', `/membership-requests/${REQUEST_ID}/approve`).expect(403);
+      const response = await authed('post', `/membership-requests/${REQUEST_ID}/approve`);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(requests.approve).not.toHaveBeenCalled();
     });
   });
 
@@ -225,8 +237,14 @@ describe('membership-request HTTP security', () => {
     });
 
     it('reads every queue, including departments it has no membership in', async () => {
-      await authed('get', '/membership-requests').expect(200);
-      await authed('get', `/departments/${B}/membership-requests`).expect(200);
+      const queue = await authed('get', '/membership-requests');
+      const scoped = await authed('get', `/departments/${B}/membership-requests`);
+
+      expect([queue.status, scoped.status]).toEqual([200, 200]);
+      expect(requests.listPending).toHaveBeenCalled();
+      // B is a department this caller has no membership of — GLOBAL is not
+      // scoped, so no membership is consulted.
+      expect(requests.listForDepartment).toHaveBeenCalledWith(B);
     });
 
     it('approves and rejects', async () => {
@@ -244,9 +262,13 @@ describe('membership-request HTTP security', () => {
       // `unit.member.write` and `user.write` respectively. Those are asserted in
       // the organization and users security specs; what matters here is that
       // this capability does not gate them.
-      await authed('post', `/departments/${A}/membership-requests`)
-        .send(transferBody)
-        .expect(201);
+      const response = await authed('post', `/departments/${A}/membership-requests`)
+        .send(transferBody);
+
+      expect(response.status).toBe(201);
+      expect(requests.create).toHaveBeenCalledWith(
+        expect.objectContaining({ requestedBy: ACTOR, routeDepartmentId: A }),
+      );
     });
   });
 
@@ -320,27 +342,41 @@ describe('membership-request HTTP security', () => {
       requests.create.mockRejectedValue(conflict('An identical request is already awaiting a decision.'));
       context = asContext({ headOf: [A], memberOf: [A] });
 
-      await authed('post', `/departments/${A}/membership-requests`)
-        .send(transferBody)
-        .expect(409);
+      const response = await authed('post', `/departments/${A}/membership-requests`)
+        .send(transferBody);
+
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
 
     it('maps a second approval to 409', async () => {
       requests.approve.mockRejectedValue(conflict('That request is not awaiting a decision.'));
 
-      await authed('post', `/membership-requests/${REQUEST_ID}/approve`).expect(409);
+      const response = await authed('post', `/membership-requests/${REQUEST_ID}/approve`);
+
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
 
     it('maps a second rejection to 409', async () => {
       requests.reject.mockRejectedValue(conflict('That request is not awaiting a decision.'));
 
-      await authed('post', `/membership-requests/${REQUEST_ID}/reject`).expect(409);
+      const response = await authed('post', `/membership-requests/${REQUEST_ID}/reject`);
+
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
 
     it('maps a self-decision to 409, deterministically', async () => {
       requests.approve.mockRejectedValue(conflict('You cannot decide your own request.'));
 
-      await authed('post', `/membership-requests/${REQUEST_ID}/approve`).expect(409);
+      const response = await authed('post', `/membership-requests/${REQUEST_ID}/approve`);
+
+      // 409 rather than 403: the caller HAS the permission to decide, and it is
+      // this particular request they may not decide. The database CHECK says
+      // the same thing independently.
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
 
     it('maps a request gone stale to 409', async () => {
@@ -348,7 +384,10 @@ describe('membership-request HTTP security', () => {
         conflict('That user has moved department since this request was raised.'),
       );
 
-      await authed('post', `/membership-requests/${REQUEST_ID}/approve`).expect(409);
+      const response = await authed('post', `/membership-requests/${REQUEST_ID}/approve`);
+
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe('CONFLICT');
     });
   });
 
@@ -390,10 +429,12 @@ describe('membership-request HTTP security', () => {
     });
 
     it('allows a GET without it — reads are not state changes', async () => {
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         .get('/membership-requests')
-        .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
-        .expect(200);
+        .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`);
+
+      expect(response.status).toBe(200);
+      expect(requests.listPending).toHaveBeenCalled();
     });
   });
 });

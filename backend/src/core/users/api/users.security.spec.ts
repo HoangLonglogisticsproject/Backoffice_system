@@ -105,16 +105,19 @@ describe('users HTTP security', () => {
 
   describe('without authentication', () => {
     it('refuses both routes with 401', async () => {
-      await request(app.getHttpServer())
+      const created = await request(app.getHttpServer())
         .post('/users')
         .set('X-Requested-With', 'XMLHttpRequest')
-        .send(validBody)
-        .expect(401);
-      await request(app.getHttpServer())
+        .send(validBody);
+      const disabled = await request(app.getHttpServer())
         .patch(`/users/${TARGET}/status`)
         .set('X-Requested-With', 'XMLHttpRequest')
-        .send({ status: 'disabled' })
-        .expect(401);
+        .send({ status: 'disabled' });
+
+      expect([created.status, disabled.status]).toEqual([401, 401]);
+      expect(created.body.error.code).toBe('UNAUTHORIZED');
+      expect(provisioning.provision).not.toHaveBeenCalled();
+      expect(lifecycle.disable).not.toHaveBeenCalled();
     });
   });
 
@@ -140,8 +143,13 @@ describe('users HTTP security', () => {
     });
 
     it('cannot reach either route', async () => {
-      await authed('post', '/users').send(validBody).expect(403);
-      await authed('patch', `/users/${TARGET}/status`).send({ status: 'disabled' }).expect(403);
+      const created = await authed('post', '/users').send(validBody);
+      const disabled = await authed('patch', `/users/${TARGET}/status`).send({ status: 'disabled' });
+
+      expect([created.status, disabled.status]).toEqual([403, 403]);
+      expect(created.body.error.code).toBe('FORBIDDEN');
+      expect(provisioning.provision).not.toHaveBeenCalled();
+      expect(lifecycle.disable).not.toHaveBeenCalled();
     });
   });
 

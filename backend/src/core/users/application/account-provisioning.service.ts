@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import { AppConfig } from '../../../config/app.config';
-import { assertPasswordAcceptable } from '../../identity/domain/password.policy';
+import { assertTemporaryPasswordAcceptable } from '../../identity/domain/password.policy';
 import { PASSWORD_HASHER, type PasswordHasher } from '../../identity/domain/password-hasher.port';
 import { IdentityRepository } from '../../identity/persistence/identity.repository';
 import { MembershipService } from '../../organization/application/membership.service';
@@ -88,7 +88,12 @@ export class AccountProvisioningService {
 
     const generated = input.initialPassword === undefined;
     const password = input.initialPassword ?? randomBytes(GENERATED_SECRET_BYTES).toString('base64url');
-    assertPasswordAcceptable(password);
+
+    // THE TEMPORARY FLOOR, not the permanent one. What is created here is a
+    // hand-over credential that opens nothing until it is replaced; holding it
+    // to the passphrase rule an employee chooses for themselves would make
+    // onboarding harder without making anything safer. See `password.policy`.
+    assertTemporaryPasswordAcceptable(password);
 
     // Checked before hashing so a duplicate does not cost 100 ms of scrypt, and
     // before the transaction so the common conflict needs no rollback. The

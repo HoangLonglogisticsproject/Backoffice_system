@@ -167,6 +167,10 @@ Không tồn tại account "chưa có phòng" — thiếu `departmentId` → **4
 `must_change_secret = true`: người đó đăng nhập được, nhưng **mọi** endpoint
 khác trả 403 cho tới khi họ đổi mật khẩu. Xem §12.
 
+Mật khẩu tạm chỉ cần **≥ 8 ký tự** — nó do người quản trị đọc cho nhân viên,
+nên `12345678` là hợp lệ. Mật khẩu **vĩnh viễn** người dùng tự đặt ở
+`POST /auth/password` phải **≥ 12**. Hai ngưỡng khác nhau, cố ý — xem §13.
+
 HEAD gọi vào đây → **403**. Đường của HEAD là account invitation (§9).
 
 ### `PATCH /users/:userId/status` → 200 · GLOBAL only
@@ -519,6 +523,21 @@ endpoint "xem lại".
 **Hạn chế đã biết:** plaintext đi qua browser của người duyệt. Deployment này cố
 ý chưa có email adapter, nên người duyệt là kênh giao duy nhất.
 
+### Hai chính sách mật khẩu
+
+| | Tối thiểu | Ai đặt | Khi nào |
+|---|---|---|---|
+| **tạm** | 8 ký tự | SUPERADMIN, hoặc server sinh ra | lúc tạo account / duyệt invitation |
+| **vĩnh viễn** | 12 ký tự | chính người dùng | ở `POST /auth/password` |
+
+Ngưỡng tạm thấp hơn là **cố ý**: mật khẩu tạm được đọc cho nhau nghe, mỗi người
+một cái khác nhau, và nó không mở được gì ngoài màn đổi mật khẩu. Frontend phải
+dùng đúng ngưỡng ở đúng form — bắt 12 ký tự ở form tạo nhân sự sẽ chặn những giá
+trị mà backend chấp nhận.
+
+Form đổi mật khẩu **phải** validate 12 ký tự phía client để báo lỗi sớm, nhưng
+server vẫn là nơi quyết định: gửi mật khẩu ngắn → **422**.
+
 ---
 
 ## 14. Role / permission matrix
@@ -543,6 +562,7 @@ là nhãn suy ra để hiển thị.
 * `POST /users` — tạo account
 * `PATCH /users/:id/status` — offboard
 * `POST /departments/:id/members` — chuyển phòng trực tiếp
+* `GET` · `POST` · `DELETE /departments/:id/head` — kể cả phòng mình quản lý
 * `POST /departments` · `PATCH` · `archive`
 * `GET /departments` — danh sách toàn hệ thống
 * approve/reject bất cứ thứ gì, kể cả request của chính mình
@@ -554,7 +574,8 @@ HEAD chỉ **đề xuất**: membership request và account invitation.
 
 * GLOBAL, **không** bị scope vào phòng nào — `departmentIds` luôn rỗng
 * mọi permission, mọi phòng, kể cả phòng chưa tồn tại
-* trực tiếp: tạo user · gán phòng · transfer · offboard · approve/reject
+* trực tiếp: tạo user · gán phòng · transfer · offboard · bổ nhiệm/bãi nhiệm
+  trưởng phòng · approve/reject
 * **không** tự duyệt request của chính mình (409)
 * SuperAdmin cuối cùng không disable được (409)
 
@@ -582,6 +603,53 @@ thì bị strip.
 
 ---
 
+## 15b. Department head API
+
+Bổ nhiệm và bãi nhiệm trưởng phòng. **GLOBAL only** (`role.assign`) — HEAD
+không gọi được route nào ở đây, kể cả route đọc.
+
+| Endpoint | Thành công |
+|---|---|
+| `GET /departments/:departmentId/head` | 200, hoặc **404** nếu phòng chưa có trưởng phòng |
+| `POST /departments/:departmentId/head` | 201 |
+| `DELETE /departments/:departmentId/head` | 200 |
+
+```jsonc
+// POST /departments/:departmentId/head
+{ "userId": "fab71f53-…" }        // CHỈ userId — phòng lấy từ URL
+
+// 201 · 200 (cả assign, revoke và read đều trả hình dạng này)
+{
+  "assignmentId": "…",
+  "departmentId": "7ce2630e-…",
+  "userId": "fab71f53-…",
+  "membershipId": "d4b58fd3-…",
+  "grantedAt": "2026-01-01T00:00:00.000Z"
+}
+```
+
+**Người được bổ nhiệm phải đang là member active của đúng phòng đó** — đây là
+invariant #6, được foreign key canh ở database. Bổ nhiệm người ngoài phòng →
+**409**.
+
+| Tình huống | Mã |
+|---|---|
+| người đó không phải member active của phòng | 409 |
+| phòng đã có trưởng phòng | 409 — `DELETE` trước rồi `POST` |
+| phòng đã archive | 409 |
+| phòng chưa có trưởng phòng (`GET`/`DELETE`) | 404 |
+
+**Đổi trưởng phòng = `DELETE` rồi `POST`**, không có một lời gọi "set head":
+unique index không cho hai active head cùng lúc, nên hai thao tác không hoán vị
+được.
+
+Bãi nhiệm **không phải** cho nghỉ việc: membership giữ nguyên, account vẫn
+active, người đó thành member thường. Copy trên UI phải nói đúng vậy.
+
+`DELETE` là mutation → **vẫn cần header CSRF**.
+
+---
+
 ## 16. Bootstrap và những gì KHÔNG có endpoint
 
 ### Tài khoản đầu tiên
@@ -594,16 +662,16 @@ npm run user:create -- --email admin@example.com --name "Root Admin" --superadmi
 
 Frontend không có màn hình nào cho việc này, và không nên có.
 
-### Gán / thu hồi DEPARTMENT_HEAD — **chưa có endpoint**
+### Gán / thu hồi DEPARTMENT_HEAD
 
-Logic đã tồn tại và đã được test đầy đủ ở tầng application
-(`assignDepartmentHead`, `revokeDepartmentHead`, `transferSuperAdmin`), nhưng
-**chưa có route HTTP nào gọi tới**.
+**Đã có endpoint** — xem §15b. Frontend dựng được màn hình bổ nhiệm trưởng
+phòng cho SUPERADMIN.
 
-Hệ quả cho frontend: **không dựng màn hình "bổ nhiệm trưởng phòng"** ở phase này.
-Việc gán HEAD hiện phải làm bằng SQL trực tiếp trên database.
+### Chuyển SUPERADMIN — **chưa có endpoint**
 
-Đây là hạn chế đã biết, không phải bug — xem §18.
+`transferSuperAdmin` đã implement và đã test ở tầng application, nhưng chưa có
+route HTTP. Việc chuyển quyền SuperAdmin hiện làm bằng CLI/SQL trên máy chủ.
+Frontend **không** dựng màn hình cho việc này — xem §18.
 
 ---
 
@@ -629,7 +697,9 @@ Danh sách những điều **sai**, kèm chuyện gì thật sự xảy ra:
 | "403 nghĩa là hết phiên" | 403 ≠ 401; xem `code` để phân biệt |
 | "retry khi gặp 409" | 409 = trạng thái đã đổi → **tải lại** trước |
 | "gửi `role` khi tạo user thì được cấp role" | field bị strip, không có tác dụng |
-| "có endpoint gán HEAD" | chưa có — §16 |
+| "HEAD tự bổ nhiệm được người kế nhiệm" | 403 — `role.assign` là GLOBAL only |
+| "đổi trưởng phòng bằng một lời gọi" | `DELETE` rồi `POST` — §15b |
+| "mật khẩu tạm phải ≥ 12 ký tự" | tạm cần ≥ 8; **vĩnh viễn** mới cần ≥ 12 |
 | "có endpoint bật lại account đã disable" | chưa có — §18 |
 
 ---
@@ -638,7 +708,7 @@ Danh sách những điều **sai**, kèm chuyện gì thật sự xảy ra:
 
 | Hạn chế | Ảnh hưởng tới frontend |
 |---|---|
-| Không có endpoint gán/thu hồi DEPARTMENT_HEAD | không dựng màn hình bổ nhiệm; làm bằng SQL |
+| Không có endpoint chuyển SUPERADMIN | không dựng màn hình chuyển quyền; làm bằng CLI/SQL |
 | Không có endpoint bật lại account disabled | `PATCH …/status` chỉ nhận `disabled`; `active` → 422 |
 | Không có email adapter | `temporaryPassword` giao tay qua người duyệt |
 | Không có endpoint đổi `displayName` | không dựng màn hình sửa hồ sơ |

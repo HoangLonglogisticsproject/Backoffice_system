@@ -319,6 +319,53 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       expect(account.temporaryPassword).toBeUndefined();
     });
 
+    /**
+     * The onboarding credential is dictated by an administrator, so it is held
+     * to the TEMPORARY floor and not to the passphrase rule an employee chooses
+     * for themselves. What makes that safe is the row asserted at the end: the
+     * account cannot use the deployment until the credential is replaced.
+     */
+    it('accepts a short administrator-chosen credential, and marks it temporary', async () => {
+      const dept = await departments.create({ slug: 'a', name: 'A' });
+
+      const account = await provisioning.provision({
+        displayName: 'A',
+        email: 'a@example.com',
+        departmentId: dept.id,
+        initialPassword: '12345678',
+      });
+
+      const { rows } = await pool.query<{ must_change_secret: boolean }>(
+        'SELECT must_change_secret FROM identities WHERE user_id = $1',
+        [account.user.id],
+      );
+      expect(rows[0]!.must_change_secret).toBe(true);
+    });
+
+    it('still refuses a credential below the temporary floor, and creates nothing', async () => {
+      const dept = await departments.create({ slug: 'a', name: 'A' });
+
+      await expect(
+        provisioning.provision({
+          displayName: 'A',
+          email: 'a@example.com',
+          departmentId: dept.id,
+          initialPassword: 'short',
+        }),
+      ).rejects.toThrow(/at least 8/);
+
+      const users = await pool.query<{ count: string }>('SELECT count(*) AS count FROM users');
+      const identities = await pool.query<{ count: string }>(
+        'SELECT count(*) AS count FROM identities',
+      );
+      const memberships = await pool.query<{ count: string }>(
+        'SELECT count(*) AS count FROM department_memberships',
+      );
+      expect(Number(users.rows[0]!.count)).toBe(0);
+      expect(Number(identities.rows[0]!.count)).toBe(0);
+      expect(Number(memberships.rows[0]!.count)).toBe(0);
+    });
+
     it('serialises two concurrent provisionings of the same email', async () => {
       const dept = await departments.create({ slug: 'a', name: 'A' });
 

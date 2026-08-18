@@ -95,6 +95,9 @@ describe('AuthenticationService', () => {
     users.findWithUserBySubject.mockResolvedValue(null);
 
     await expectIndistinguishableRejection(service.login('nobody@example.com', 'anything'));
+    // Same observable outcome as a wrong password, down to the session that was
+    // never issued — the two failures must be indistinguishable from outside.
+    expect(sessions.issue).not.toHaveBeenCalled();
   });
 
   it('spends the same work on an unknown subject, so timing does not answer either', async () => {

@@ -266,4 +266,40 @@ export class AuthorizationService {
   async findActiveHeadOfDepartment(departmentId: string): Promise<RoleAssignment | null> {
     return this.repository.findActiveHeadOfDepartment(departmentId);
   }
+
+  /**
+   * RevokeHeadOfDepartment — the same act as `revokeDepartmentHead`, addressed
+   * by DEPARTMENT rather than by assignment.
+   *
+   * The HTTP surface is keyed on the unit, because that is what an administrator
+   * knows: "this department should have no head". Looking the assignment up and
+   * revoking it are ONE transaction on purpose — done as two calls, the head
+   * could change in between and the second call would revoke somebody the
+   * caller never saw.
+   *
+   * Revoking leadership is not leaving the department: the membership stays and
+   * the person becomes an ordinary member.
+   */
+  async revokeHeadOfDepartment(input: {
+    departmentId: string;
+    revokedBy: string;
+    now?: Date;
+  }): Promise<RoleAssignment> {
+    const now = input.now ?? new Date();
+
+    return this.db.transaction(async (tx) => {
+      const assignment = await this.repository.findActiveHeadOfDepartment(input.departmentId, tx);
+      if (!assignment) throw new NotFoundError('That department has no active head.');
+
+      const revoked = await this.repository.revoke(
+        { id: assignment.id, revokedVia: 'api', revokedBy: input.revokedBy, now },
+        tx,
+      );
+      // Two concurrent revocations: `revoke` reports rows affected, so exactly
+      // one of them is the one that did it.
+      if (!revoked) throw new ConflictError('That assignment was already revoked.');
+
+      return revoked;
+    });
+  }
 }
