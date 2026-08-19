@@ -124,14 +124,51 @@ các case — đừng trỏ vào database có dữ liệu:
 DATABASE_URL_TEST=postgres://user:pass@localhost:5432/backoffice_itest npm test
 ```
 
-## 7. Giới hạn vận hành đã biết
+## 7. Ba principal PostgreSQL
+
+Ứng dụng **không** được chạy bằng superuser. Ba role, mỗi role một lý do:
+
+| Role | Dùng ở đâu | Quyền |
+|---|---|---|
+| `bo_migrator` | `npm run migrate`, bước deploy | owner của database + mọi object |
+| `bo_app` | runtime + `npm run user:create` | `SELECT, INSERT, UPDATE` — **không DELETE** |
+| `bo_ops` | cron dọn session | `SELECT, DELETE` trên `sessions` |
+
+Tách được mà không phải sửa code, vì `migrate.cli.ts` vốn đã là entry point
+riêng — migration là bước deploy, không phải bước boot.
+
+**Vì sao bo_app không có DELETE:** vòng đời ở đây là disable / archive / end /
+revoke, toàn UPDATE, vì lịch sử là mục đích. Không cấp DELETE biến quyết định
+thiết kế đó thành thứ PostgreSQL cưỡng chế, thay vì thứ repository sau phải nhớ.
+`npm run check` canh phía code bằng **B13**, nên một câu DELETE mới fail ở CI
+chứ không fail trên production.
+
+Provision một lần, bằng DBA:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d postgres -v db=backoffice      -v migrator_pw="$MIGRATOR_PASSWORD" -v app_pw="$APP_PASSWORD" -v ops_pw="$OPS_PASSWORD"      -f scripts/provision-db-roles.sql
+DATABASE_URL=postgres://bo_migrator:PW@HOST/backoffice npm run migrate
+psql -c 'GRANT SELECT, DELETE ON sessions TO bo_ops;'      -c 'REVOKE ALL ON schema_migrations FROM bo_app;'
+```
+
+Script không chứa mật khẩu — chúng vào bằng biến psql từ môi trường.
+
+## 8. Giới hạn vận hành đã biết
 
 Không phải lỗi — là thứ deployment phải biết trước khi đưa lên production.
 
 **Rate limiter đăng nhập nằm trong bộ nhớ, tính theo TIẾN TRÌNH.** Chạy nhiều
 replica thì mỗi replica có ngân sách riêng, nên giới hạn thực tế nhân lên theo số
-replica. Cần giới hạn thật sự toàn cục thì đặt ở edge/reverse proxy, hoặc thay
-bằng một shared store.
+replica; restart cũng xoá bộ đếm.
+
+Đây là ĐIỀU KIỆN TIÊN QUYẾT, không phải ghi chú: **trước khi chạy quá 1 replica**,
+chuyển throttle sang shared store hoặc đặt rate limit ở edge/reverse proxy. Repo
+này không chứa artifact deployment nào (không k8s, không Terraform, không
+Dockerfile) nên số replica production là thứ chỉ deployment biết — mặc định đang
+giả định 1.
+
+Không thêm Redis sẵn cho việc này: một dependency hạ tầng mới cho một giới hạn
+chưa tồn tại là chi phí vận hành thật đổi lấy một rủi ro giả định.
 
 **HSTS và CSP thuộc về deployment, không phải ứng dụng.** HSTS là thuộc tính của
 lớp kết thúc TLS — đặt từ một app có thể chạy HTTP ở dev thì hoặc vô tác dụng,
@@ -162,7 +199,7 @@ một tiến trình, không crash-loop. Nhưng `POST /auth/login` lúc đó tr�
 không phải 503. Nó đóng lại đúng cách và không lộ chi tiết nội bộ; chỉ là mã
 trạng thái chưa mô tả đúng nguyên nhân.
 
-## 8. Bảo mật — hình dạng hiện tại
+## 9. Bảo mật — hình dạng hiện tại
 
 Phiên đăng nhập là **token mờ phía server**, không phải JWT: database chỉ lưu
 SHA-256 của token, còn token thô chỉ tồn tại trong một cookie `HttpOnly` —

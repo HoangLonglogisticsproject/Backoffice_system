@@ -158,6 +158,25 @@ report "B12 không có forwardRef mới ngoài cặp đã biết"   "$(found=$(g
 ' "$found" | grep -c . );      if [[ $count -gt 2 ]]; then printf '%s
 ' "$found"; fi)"
 
+# --- B13 ── runtime không phát lệnh DELETE ----------------------------------
+# Vòng đời của hệ này là disable / archive / end / revoke — toàn UPDATE, vì lịch
+# sử là mục đích: membership, role assignment và audit trail phải đọc được sau
+# khi người ta rời đi.
+#
+# `scripts/provision-db-roles.sql` biến điều đó thành ràng buộc thật: role
+# runtime (bo_app) được GRANT SELECT, INSERT, UPDATE và KHÔNG có DELETE. Nên một
+# câu DELETE mới trong code sẽ không fail lúc review — nó fail trên production,
+# bằng `permission denied for table ...`, đúng lúc ai đó đang bấm nút.
+#
+# Rule này bắt nó ở CI thay vì ở đó. Nếu một DELETE thật sự cần thiết thì nó là
+# một quyết định kiến trúc: sửa grant, sửa rule này, và ghi lý do — không phải
+# lặng lẽ thêm một câu lệnh.
+#
+# Chỉ soi CODE, không soi comment — session.service.ts chép sẵn câu DELETE cho
+# cron của deployment, và một checker vấp vào chính tài liệu của nó là checker
+# sẽ bị tắt. Bài học thứ tư cùng loại, sau B7, B11 và B12.
+report "B13 runtime ↛ DELETE"                  "$(grep -rniE "delete[[:space:]]+from" --include=*.ts src 2>/dev/null      | grep -v '\.spec\.ts'      | grep -vE ':[0-9]+: *(\*|//|/\*)')"
+
 echo
 if [[ $fail -eq 0 ]]; then
   printf '\033[32mTất cả ranh giới đều sạch.\033[0m\n'
