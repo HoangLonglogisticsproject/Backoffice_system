@@ -152,10 +152,28 @@ describe('trusted proxy — who the login throttle counts', () => {
       for (let i = 1; i <= 31; i += 1) {
         await attempt('198.51.100.99', `v${i}@example.com`, 'wrong one');
       }
-      await attempt('198.51.100.99', 'real@example.com', 'wrong one').expect(429);
 
-      // A different person, correct password, while that source is still blocked.
-      await attempt('198.51.100.7', 'real@example.com', PASSWORD).expect(200);
+      const blocked = await attempt('198.51.100.99', 'real@example.com', 'wrong one');
+      const bystander = await attempt('198.51.100.7', 'real@example.com', PASSWORD);
+
+      // The noisy source is refused BY THE THROTTLE, not by credentials — the
+      // code and Retry-After are what tell those two 4xx apart, and only the
+      // throttle answer proves the budget is still being enforced per source.
+      expect(blocked.status).toBe(429);
+      expect(blocked.body.error.code).toBe('TOO_MANY_ATTEMPTS');
+      expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
+
+      // The bystander is a DIFFERENT client with the correct password, asked
+      // while that source is still blocked. A 200 alone would not prove much,
+      // so assert they actually got a session: the whole point is that one
+      // source exhausting its budget costs everybody else nothing.
+      expect(bystander.status).toBe(200);
+      expect(bystander.body.user).toEqual({
+        id: 'u1',
+        displayName: 'A Person',
+        status: 'active',
+      });
+      expect(bystander.headers['set-cookie']?.[0]).toContain('bo_session=');
     });
 
     it('keeps the ordinary login path working', async () => {
