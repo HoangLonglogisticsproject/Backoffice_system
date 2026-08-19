@@ -52,6 +52,9 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0003_organization.sql` | core | departments · department_memberships · `uq_single_active_membership` |
 | `0004_authorization.sql` | core | role_assignments · 2 partial unique index · FK invariant #6 |
 | `0005_identity_credential_state.sql` | core | `identities.must_change_secret` |
+| `0006_membership_change_requests.sql` | project | membership_change_requests · `uq_pending_membership_request` |
+| `0007_account_invitations.sql` | project | account_invitations · `uq_pending_invitation_email` |
+| `0008_role_assignment_membership_fk_index.sql` | core | partial index cho FK check của invariant #6 |
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
 gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được.

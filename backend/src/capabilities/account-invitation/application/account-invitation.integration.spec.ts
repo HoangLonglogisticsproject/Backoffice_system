@@ -81,6 +81,7 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
       '0005_identity_credential_state.sql',
       '0006_membership_change_requests.sql',
       '0007_account_invitations.sql',
+      '0008_role_assignment_membership_fk_index.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }

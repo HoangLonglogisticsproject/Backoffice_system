@@ -1,0 +1,54 @@
+-- 0008_role_assignment_membership_fk_index.sql — one index, no schema change.
+--
+-- 0004 enforces "an active head must hold an active membership of the same
+-- department" with a composite foreign key:
+--
+--   FOREIGN KEY (membership_id, user_id, scope_id, requires_membership_status)
+--   REFERENCES department_memberships (id, user_id, department_id, status)
+--
+-- Because `status` is INSIDE the referenced key, PostgreSQL must run a
+-- referential-integrity check on the REFERENCING side every time a membership's
+-- status changes — that is, on every transfer and every offboarding. The check
+-- looks up `role_assignments` by the FK's leading column, `membership_id`, and
+-- no index led with it. So every membership end sequentially scanned the whole
+-- assignment table.
+--
+-- Measured on PostgreSQL 17, 1,000,000 users / 3,000,000 memberships:
+--
+--   role_assignments rows      FK trigger time
+--   ------------------------   ---------------
+--   6,001                      0.4 ms   (Seq Scan)
+--   106,001                    7.1 ms   (Seq Scan)
+--   106,001 + this index       0.2 ms   (Index Scan)
+--
+-- Linear in the size of `role_assignments`, and that table only ever grows:
+-- revoked assignments are kept as audit history, never deleted. So the cost of
+-- ending a membership rose with the deployment's age rather than with anything
+-- about the membership.
+--
+-- WHY PARTIAL, AND WHY THIS PREDICATE.
+--
+-- `requires_membership_status` is the generated column from 0004: 'active' for a
+-- live head assignment, NULL for everything else. Under MATCH SIMPLE, a NULL in
+-- the key exempts the row from the foreign key entirely — so the rows this index
+-- must cover are exactly the rows where it is NOT NULL, and no others.
+--
+-- The RI query filters `requires_membership_status = 'active'`, which the
+-- planner proves implies `IS NOT NULL`, so it uses this index.
+--
+-- The size difference is the point. The predicate holds only for ACTIVE head
+-- assignments — at most one per department — while the table accumulates every
+-- revoked assignment ever made. Measured at 106,001 rows:
+--
+--   full index on (membership_id)   3208 kB
+--   this partial index                48 kB
+--
+-- Same lookup time, and it stays small as audit history grows.
+--
+-- NOTHING ELSE CHANGES. No column, no constraint, no type, no default. The
+-- invariant from 0004 is enforced by the same foreign key, before and after —
+-- this only changes how PostgreSQL finds the rows it was already checking.
+
+CREATE INDEX IF NOT EXISTS idx_role_assignment_membership_fk
+  ON role_assignments (membership_id)
+  WHERE requires_membership_status IS NOT NULL;
