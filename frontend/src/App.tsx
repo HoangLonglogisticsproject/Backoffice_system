@@ -17,12 +17,25 @@ import WorkListPage from './pages/worklist/WorkListPage'
 import NoAccessPage from './pages/system/NoAccessPage'
 import PlaceholderPage from './pages/system/PlaceholderPage'
 import LoginPage from './pages/system/LoginPage'
+import ChangePasswordPage from './pages/system/ChangePasswordPage'
+import { RequireSession } from './lib/session/RequireSession'
 
 function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route element={<MainLayout />}>
+      <Route path="/change-password" element={<ChangePasswordPage />} />
+
+      {/* Everything below needs a session. RequireSession routes the three
+          session states (§3b); it does not decide permissions — the server
+          does that on every request. */}
+      <Route
+        element={
+          <RequireSession>
+            <MainLayout />
+          </RequireSession>
+        }
+      >
         <Route path="/" element={<OrganizationDashboardPage />} />
         
         <Route path="/leads/pool" element={<PotentialCustomerPoolPage />} />
