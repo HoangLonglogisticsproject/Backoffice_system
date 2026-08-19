@@ -179,9 +179,14 @@ Trigger để xem lại, viết ra để không phải nhớ:
 | Cần giới hạn sống sót qua restart | Shared store, hoặc rate limit ở Cloudflare |
 | Vẫn 1 replica | Không làm gì |
 
-**`TRUST_PROXY_HOPS` phải khớp topology, nếu không throttle sai theo cả hai
-hướng.** Xem `docs/security/security-hardening-audit.md` §22.3 — đây là biến quan
-trọng nhất phải đặt đúng trước khi lên production.
+**`TRUSTED_PROXIES` quyết định throttle đếm AI.** Nó liệt kê những peer được
+phép nói `X-Forwarded-For` — không phải đếm số hop. Peer không nằm trong danh
+sách thì header bị bỏ qua hoàn toàn, nên header giả từ một kết nối trực tiếp
+không mua được gì. Rỗng = không tin ai (mặc định, đúng cho dev).
+
+Nó **không** ngăn được ai đó chạm thẳng vào origin — việc đó thuộc firewall /
+Cloudflare Tunnel. Hai nửa đều bắt buộc: xem
+`docs/security/production-launch-checklist.md` §3 và audit §23.
 
 **HSTS và CSP thuộc về deployment, không phải ứng dụng.** HSTS là thuộc tính của
 lớp kết thúc TLS — đặt từ một app có thể chạy HTTP ở dev thì hoặc vô tác dụng,

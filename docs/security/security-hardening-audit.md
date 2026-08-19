@@ -76,7 +76,7 @@ CSRF tests were needed and none were added.
 | 5 | scrypt `N=2^16`, one notch below current OWASP floor | LOW | **KEEP** — benchmarked in round 2, see §21 |
 | 6 | Session sweep is a deployment duty | INFO | **ACCEPTED / INTENTIONAL** |
 | 7 | No independent penetration test has been performed | — | **OPEN** — see §15, §22.5 |
-| 8 | `TRUST_PROXY_HOPS=0` behind Cloudflare makes the throttle global | MEDIUM | **FIX BEFORE LAUNCH** — config only, §22.3 |
+| 8 | `TRUST_PROXY_HOPS=0` behind Cloudflare makes the throttle global | MEDIUM | **FIX NOW** — fixed in round 4, §23 |
 
 ---
 
@@ -796,7 +796,8 @@ login throttle is actually counting (§22.3).
 | Malformed input handling | **PASS** | 17/17 UUID params → 422 in one envelope; no injection anywhere |
 | Distributed throttle | **ACCEPTED** | 1-replica constraint — §22.2 |
 | scrypt cost | **KEEP / OBSERVE** | Benchmarked; `2^17` costs 6.6× — §21.4 |
-| **`TRUST_PROXY_HOPS`** | ⚠ **FIX BEFORE LAUNCH** | New finding — §22.3 |
+| Client IP attribution | **PASS** | `TRUSTED_PROXIES` trusts the peer, not a hop count — §23 |
+| **Origin restriction** | ⚠ **DEPLOYMENT — REQUIRED** | Not enforceable in code; checklist §3 |
 | External pentest | **NOT PERFORMED** | No independent tester — §22.5 |
 | Infrastructure security | **NOT AUDITED** | Outside this repository — §22.5 |
 
@@ -987,3 +988,162 @@ dependency.
 One item must not be lost between merge and launch, because it is configuration rather than
 code and therefore invisible to CI: **`TRUST_PROXY_HOPS` and origin restriction (§22.3)**.
 It belongs on the launch checklist, not in the merge.
+
+---
+
+# 23. Round 4 — finding 8 fixed: trust the peer, not a hop count
+
+Round 3 raised finding 8 and left it as a launch-checklist item. This round fixes it in the
+application, because the mechanism itself — not just its value — was wrong.
+
+## 23.1 The finding, and its root cause
+
+**Symptom** (measured in round 3): behind Cloudflare with `TRUST_PROXY_HOPS=0`, 30 failed
+logins from 30 *different* client IPs exhausted one shared bucket, and a new client with the
+correct password was then refused 429. The per-source throttle had become global.
+
+**The obvious fix is also wrong.** Setting the count to `1` makes `req.ip` the forwarded
+address — but a hop count believes `X-Forwarded-For` **regardless of which peer connected**.
+Measured on Express 5.2.1, peer `127.0.0.1`, `trust proxy = 1`:
+
+| Header sent | `req.ip` |
+|---|---|
+| *(none)* | `127.0.0.1` |
+| `X-Forwarded-For: 203.0.113.9` | **`203.0.113.9`** |
+
+So with the origin reachable, an attacker rotates the header and mints a fresh throttle
+budget per request. The two failure modes are opposite and a single number cannot avoid
+both.
+
+**Root cause: the setting expressed the wrong idea.** A hop count answers "how many proxies
+are in front", which is a fact about topology that the code cannot verify and that changes
+silently when someone adds nginx. The question that actually decides safety is *"did this
+request arrive through a proxy we trust?"* — a fact about the **peer**, which the runtime can
+check on every request.
+
+## 23.2 The fix
+
+`TRUST_PROXY_HOPS` (a number) is replaced by `TRUSTED_PROXIES` (a list of IPs, CIDR blocks,
+or the presets Express understands). Express checks the list against the peer instead of
+counting.
+
+Measured on the same Express version, same requests:
+
+| `trust proxy` | peer | `X-Forwarded-For: 203.0.113.9` → `req.ip` |
+|---|---|---|
+| `false` *(default)* | `127.0.0.1` | `127.0.0.1` — header ignored |
+| `1` *(old mechanism)* | `127.0.0.1` | `203.0.113.9` — **forgeable** |
+| `['127.0.0.1']` | `127.0.0.1` — **listed** | `203.0.113.9` — believed, correctly |
+| `['198.51.100.1']` | `127.0.0.1` — **not listed** | `127.0.0.1` — **header ignored entirely** |
+
+The last row is the fix: a forged header from a direct connection changes nothing.
+
+**It also removes the question nobody could answer.** Express walks the forwarded chain from
+the right, discarding listed addresses and stopping at the first one that is not — the real
+client. With `['loopback', '172.20.0.0/16']` and `X-Forwarded-For: 203.0.113.9, 172.20.0.5`,
+`req.ip` is `203.0.113.9`. So the same configuration is correct whether the chain is
+`Cloudflare → node` or `Cloudflare → nginx → node`, and **nobody has to count hops**. Adding
+a proxy later does not silently change the meaning of a number.
+
+**Default is `false`, not `[]`.** An empty array is still a list, and Express reads it as
+"consult the chain"; only `false` means trust nobody. Development, where nothing is in
+front, is therefore safe with no configuration at all.
+
+**Typos are refused at boot.** An entry that is not an IP, CIDR or preset stops the process.
+That matters because the failure would otherwise be silent and inverted: the entry never
+matches, no peer is trusted, every caller collapses onto the proxy's address, and the per-IP
+throttle becomes global — which looks like working software until it locks everybody out.
+
+**Nothing else changed.** `WINDOW_MS`, `MAX_PER_SUBJECT` (10) and `MAX_PER_IP` (30) are
+untouched, the throttle stays in memory, no store was added, and no authentication, session,
+cookie or authorization behaviour was modified. The fix changes *who is counted*, not *how
+counting works*.
+
+## 23.3 The regression tests, and proof they discriminate
+
+`src/core/identity/api/trusted-proxy.security.spec.ts` — 7 cases driving the real
+`AuthenticationService` and the real `LoginThrottleService` over HTTP. Supertest always
+connects from `127.0.0.1`, so listing that address models "arrived through the trusted
+chain" and omitting it models "reached the origin directly".
+
+| Case | Asserts |
+|---|---|
+| 36 distinct clients | 36 separate budgets, no 429 — the round-3 symptom cannot return |
+| one source guessing | first 30 → 401, rest → **429** — the control still bites |
+| noisy client vs everyone else | blocked source gets 429 while another client's **correct** login gets 200 |
+| ordinary login | 200, `HttpOnly` cookie, token still absent from the body |
+| **spoofed header, untrusted peer** | 36 rotated addresses collapse to one bucket and hit **429** — no unlimited buckets |
+| socket vs claimed address | one key, not two |
+| no proxy configured | header ignored entirely |
+
+**A regression test that cannot fail is not a test**, so both historical mechanisms were
+replayed against this suite:
+
+| Mechanism replayed | Result |
+|---|---|
+| `trust proxy = false` behind a proxy *(the original bug)* | **2 fail** — "36 distinct clients", "does not lock out everybody else" |
+| `trust proxy = 1` *(the plausible wrong fix)* | **1 fails** — "cannot mint unlimited budgets" |
+| `trust proxy = ['127.0.0.1']` *(the fix)* | **7 pass** |
+
+Each failure mode is caught by the suite, and by a different case.
+
+## 23.4 Origin restriction — **not enforceable by this application**
+
+`TRUSTED_PROXIES` decides *whom to believe*. It cannot stop anyone **reaching** the origin,
+and no amount of application code can: by the time a request is in Express, the connection
+has already been accepted.
+
+| | Origin reachable directly | Origin restricted to Cloudflare |
+|---|---|---|
+| `TRUSTED_PROXIES` empty | throttle global → lockout | throttle global → lockout |
+| `TRUSTED_PROXIES` set | **throttle void** — header forged | ✅ correct |
+
+Only the bottom-right cell is safe, and reaching it needs a control outside this repository.
+The options are in [`production-launch-checklist.md`](production-launch-checklist.md) §3 —
+Cloudflare Tunnel (no public listener at all), a firewall allowlist of Cloudflare's ranges,
+or Authenticated Origin Pulls. Each is a documented product feature; **none is invented
+here, and this repository cannot verify that any of them is in place.**
+
+The check that actually settles it is behavioural, not configurational: from a host outside
+Cloudflare, request the VPS directly and confirm the connection is refused.
+
+## 23.5 Residual risk
+
+| Risk | Status |
+|---|---|
+| **Origin reachable directly** | **OPEN — deployment.** With `TRUSTED_PROXIES` set, this is the one condition that voids the throttle. Checklist §3, and it is the single most important item there |
+| Wrong entries in `TRUSTED_PROXIES` | **Reduced.** A malformed entry stops the boot; a *well-formed but wrong* address still fails silently toward "trust nobody" — the safe direction, but it makes the throttle global. Checklist §1 verifies it with a real request |
+| Cloudflare ranges change | **OPEN — deployment.** Ranges are published and do change; a stale list degrades to "trust nobody". Re-check on change, or use a mechanism that does not depend on IP ranges |
+| Throttle resets on restart | **ACCEPTED.** Someone who can restart the process has already won more than a throttle |
+| Throttle is process-local | **ACCEPTED** at one replica; blocking before a second (§22.2) |
+| `X-Forwarded-For` trusted transitively | **ACCEPTED.** Once the peer is a trusted proxy, the chain it reports is believed as far as the first unlisted entry. That is the standard model and it rests on the proxy not forwarding client-supplied headers unchanged — Cloudflare replaces the header rather than appending to it |
+| Application enforcing origin restriction | **Not possible.** Stated here so no reader assumes the code covers it |
+
+## 23.6 Verification
+
+| Gate | Result |
+|---|---|
+| `npm run check` (B1–B13) | ✅ clean |
+| `npm run typecheck` | ✅ exit 0 |
+| `npm run build` | ✅ exit 0 |
+| `npm test` (real PostgreSQL 17.11) | ✅ **551 passed / 551**, 34 suites, **0 skipped** |
+| New regression suite | ✅ 7/7, and proven to fail under both historical mechanisms |
+| Express behaviour | ✅ probed directly on 5.2.1 rather than assumed |
+
+## 23.7 Files changed in round 4
+
+| File | Change |
+|---|---|
+| `src/config/env.schema.ts` | `TRUST_PROXY_HOPS` → `TRUSTED_PROXIES`, validated at boot |
+| `src/config/app.config.ts` | `trustProxyHops` → `trustedProxies` |
+| `src/main.ts` | `trust proxy` takes the peer list, `false` when empty |
+| `src/config/env.schema.spec.ts` | updated for the new variable, including boot refusal |
+| `src/core/identity/api/trusted-proxy.security.spec.ts` | **new** — 7 regression cases |
+| `.env.example` | documents the variable, the Cloudflare source, and the origin caveat |
+| `docs/security/production-launch-checklist.md` | **new** — the deployment half |
+| `docs/security/security-hardening-audit.md` | this section |
+
+**Config migration:** a deployment still setting `TRUST_PROXY_HOPS` is not broken — the
+variable is simply ignored, and the app falls back to trusting nobody, which is the safe
+direction. It must be replaced with `TRUSTED_PROXIES` before launch or the throttle will be
+global.
