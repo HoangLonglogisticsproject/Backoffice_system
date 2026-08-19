@@ -44,8 +44,12 @@ jobs:
         image: postgres:17-alpine
         env:
           POSTGRES_USER: backoffice
-          POSTGRES_PASSWORD: backoffice
           POSTGRES_DB: backoffice
+          # No password EXISTS, rather than a fake one written down. The
+          # container listens only on the runner and dies with the job, so the
+          # honest configuration is one with nothing to leak — and a connection
+          # string with no credential in it cannot be mistaken for a real one.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -55,11 +59,9 @@ jobs:
           --health-retries 10
 
     env:
-      # Local to the runner and thrown away with it. Not a secret, and
-      # deliberately not read from one — a secret that is the same in every fork
-      # is a secret that teaches people secrets do not matter.
-      DATABASE_URL: postgres://backoffice:backoffice@localhost:5432/backoffice_itest
-      DATABASE_URL_TEST: postgres://backoffice:backoffice@localhost:5432/backoffice_itest
+      # No credential: the service above uses trust auth (see the note there).
+      DATABASE_URL: postgres://backoffice@localhost:5432/backoffice_itest
+      DATABASE_URL_TEST: postgres://backoffice@localhost:5432/backoffice_itest
 
     steps:
       - uses: actions/checkout@v4
@@ -70,9 +72,14 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
+      # `--ignore-scripts` keeps dependency lifecycle scripts from executing
+      # during install. Verified rather than assumed: with it, the backend still
+      # migrates, builds and passes all 551 tests, and the frontend still lints,
+      # typechecks, builds and passes its 56 — the latter checked in a Linux
+      # container, because a Windows file lock is not evidence about a runner.
       - name: Install
         working-directory: backend
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # GitHub waits for the service health check before the first step, but
       # "the container is up" and "the server accepts queries" are not the same
@@ -84,7 +91,7 @@ jobs:
           for attempt in $(seq 1 30); do
             if pg_isready -h localhost -p 5432 -U backoffice -d backoffice >/dev/null 2>&1; then
               echo "PostgreSQL is accepting connections (attempt ${attempt})"
-              psql "postgres://backoffice:backoffice@localhost:5432/backoffice" -tAc "SHOW server_version;"
+              psql "postgres://backoffice@localhost:5432/backoffice" -tAc "SHOW server_version;"
               exit 0
             fi
             sleep 2
@@ -95,7 +102,7 @@ jobs:
       - name: Create the test database
         run: |
           set -euo pipefail
-          psql "postgres://backoffice:backoffice@localhost:5432/postgres" \
+          psql "postgres://backoffice@localhost:5432/postgres" \
             -v ON_ERROR_STOP=1 \
             -c "DROP DATABASE IF EXISTS ${PGDATABASE_TEST};" \
             -c "CREATE DATABASE ${PGDATABASE_TEST};"
@@ -148,7 +155,7 @@ jobs:
 
       - name: Install
         working-directory: frontend
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Lint
         working-directory: frontend
@@ -164,9 +171,12 @@ jobs:
 
       # Unit tests only. The integration suite has its own config and its own
       # job, because it needs a server on the other end.
+      # `npm test`, not `npx`: npx will fetch and execute a package that is not
+      # installed, so the version that runs is whatever the registry offers that
+      # day. The script resolves the vitest already pinned by package-lock.
       - name: Unit tests
         working-directory: frontend
-        run: npx vitest run --reporter=json --outputFile=vitest-results.json
+        run: npm test -- --reporter=json --outputFile=vitest-results.json
 
       - name: Assert no test was skipped
         working-directory: frontend
@@ -182,8 +192,12 @@ jobs:
         image: postgres:17-alpine
         env:
           POSTGRES_USER: backoffice
-          POSTGRES_PASSWORD: backoffice
           POSTGRES_DB: backoffice
+          # No password EXISTS, rather than a fake one written down. The
+          # container listens only on the runner and dies with the job, so the
+          # honest configuration is one with nothing to leak — and a connection
+          # string with no credential in it cannot be mistaken for a real one.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -193,7 +207,7 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgres://backoffice:backoffice@localhost:5432/backoffice_itest
+      DATABASE_URL: postgres://backoffice@localhost:5432/backoffice_itest
       API_BASE_URL: http://localhost:3000
       BOSS_EMAIL: boss@hoanglong.test
 
@@ -210,11 +224,11 @@ jobs:
 
       - name: Install backend
         working-directory: backend
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Install frontend
         working-directory: frontend
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Wait for PostgreSQL
         run: |
@@ -233,7 +247,7 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          psql "postgres://backoffice:backoffice@localhost:5432/postgres" \
+          psql "postgres://backoffice@localhost:5432/postgres" \
             -v ON_ERROR_STOP=1 \
             -c "DROP DATABASE IF EXISTS ${PGDATABASE_TEST};" \
             -c "CREATE DATABASE ${PGDATABASE_TEST};"
@@ -297,7 +311,7 @@ jobs:
 
       - name: Integration tests (no mocks)
         working-directory: frontend
-        run: npx vitest run --config vitest.integration.config.ts --reporter=json --outputFile=vitest-integration.json
+        run: npm run test:integration -- --reporter=json --outputFile=vitest-integration.json
 
       # ★ The integration suite throws in `beforeAll` when the backend is
       # unreachable, so it fails loudly rather than skipping. This guards the
