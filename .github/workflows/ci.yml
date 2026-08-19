@@ -1,0 +1,335 @@
+name: CI
+
+# Two triggers and no more: a pull request is where this has to be true, and
+# `main` is where it has to stay true after a merge.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The build only reads the repository. Nothing here comments, pushes, or
+# publishes, so nothing here needs permission to.
+permissions:
+  contents: read
+
+# A superseded run on the same ref is answering a question nobody is asking any
+# more. `main` is excluded: every commit there is worth a real answer.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # The database name MUST contain "test". The integration specs refuse to run
+  # against anything else, because they wipe the schema between cases:
+  #   "DATABASE_URL_TEST points at "…", which is not named as a test database."
+  #
+  # Used by the `run:` steps as a shell variable. The job-level connection URLs
+  # below repeat the name literally rather than interpolating it, because the
+  # `env` context is not reliably resolvable inside `jobs.<id>.env` — a silently
+  # empty database name there would be far worse than this duplication. If you
+  # change it here, change it in both job `env:` blocks too.
+  PGDATABASE_TEST: backoffice_itest
+
+jobs:
+  # ---------------------------------------------------------------- backend --
+  backend:
+    name: backend · boundaries, types, build, tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Matches backend/docker-compose.yml and the version every audit in
+        # docs/ was measured on. Testing on a different major would make those
+        # numbers, and the query plans behind them, statements about nothing.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: backoffice
+          POSTGRES_PASSWORD: backoffice
+          POSTGRES_DB: backoffice
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U backoffice -d backoffice"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Local to the runner and thrown away with it. Not a secret, and
+      # deliberately not read from one — a secret that is the same in every fork
+      # is a secret that teaches people secrets do not matter.
+      DATABASE_URL: postgres://backoffice:backoffice@localhost:5432/backoffice_itest
+      DATABASE_URL_TEST: postgres://backoffice:backoffice@localhost:5432/backoffice_itest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install
+        working-directory: backend
+        run: npm ci
+
+      # GitHub waits for the service health check before the first step, but
+      # "the container is up" and "the server accepts queries" are not the same
+      # claim. This asserts the second one, and fails rather than letting the
+      # migration step produce a confusing error instead.
+      - name: Wait for PostgreSQL
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U backoffice -d backoffice >/dev/null 2>&1; then
+              echo "PostgreSQL is accepting connections (attempt ${attempt})"
+              psql "postgres://backoffice:backoffice@localhost:5432/backoffice" -tAc "SHOW server_version;"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL never became ready" >&2
+          exit 1
+
+      - name: Create the test database
+        run: |
+          set -euo pipefail
+          psql "postgres://backoffice:backoffice@localhost:5432/postgres" \
+            -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS ${PGDATABASE_TEST};" \
+            -c "CREATE DATABASE ${PGDATABASE_TEST};"
+
+      # A separate step from the tests on purpose: a migration that fails to
+      # apply is its own kind of broken, and it should say so under its own name
+      # rather than as a confusing test error twenty lines later.
+      - name: Run migrations 0001 → latest
+        working-directory: backend
+        run: npm run migrate
+
+      - name: Architecture boundaries (B1–B13)
+        working-directory: backend
+        run: npm run check
+
+      - name: Typecheck
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: backend
+        run: npm run build
+
+      # `--ci` so a missing snapshot is a failure rather than a file the runner
+      # helpfully writes. The JSON report is what the next step reads.
+      - name: Tests (unit + integration, real PostgreSQL)
+        working-directory: backend
+        run: npm test -- --ci --json --outputFile=jest-results.json
+
+      # ★ The step that makes the one above mean something. Without
+      # DATABASE_URL_TEST the integration specs are PENDING, not failed, and
+      # Jest exits 0 with success: true. See the script for the measured proof.
+      - name: Assert no test was skipped
+        working-directory: backend
+        run: node ../.github/scripts/assert-tests-ran.mjs jest-results.json 500 "backend"
+
+  # --------------------------------------------------------------- frontend --
+  frontend:
+    name: frontend · lint, types, build, unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      # Unit tests only. The integration suite has its own config and its own
+      # job, because it needs a server on the other end.
+      - name: Unit tests
+        working-directory: frontend
+        run: npx vitest run --reporter=json --outputFile=vitest-results.json
+
+      - name: Assert no test was skipped
+        working-directory: frontend
+        run: node ../.github/scripts/assert-tests-ran.mjs vitest-results.json 50 "frontend unit"
+
+  # ------------------------------------------------------------ integration --
+  integration:
+    name: integration · frontend ↔ real backend ↔ real PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: backoffice
+          POSTGRES_PASSWORD: backoffice
+          POSTGRES_DB: backoffice
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U backoffice -d backoffice"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://backoffice:backoffice@localhost:5432/backoffice_itest
+      API_BASE_URL: http://localhost:3000
+      BOSS_EMAIL: boss@hoanglong.test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend
+        working-directory: backend
+        run: npm ci
+
+      - name: Install frontend
+        working-directory: frontend
+        run: npm ci
+
+      - name: Wait for PostgreSQL
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U backoffice -d backoffice >/dev/null 2>&1; then
+              echo "PostgreSQL is accepting connections (attempt ${attempt})"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL never became ready" >&2
+          exit 1
+
+      - name: Create the database and migrate 0001 → latest
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          psql "postgres://backoffice:backoffice@localhost:5432/postgres" \
+            -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS ${PGDATABASE_TEST};" \
+            -c "CREATE DATABASE ${PGDATABASE_TEST};"
+          npm run migrate
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      # Generated per run and masked, so no credential lives in this file and
+      # none reaches the log. The account exists for the life of a database that
+      # is destroyed with the runner.
+      - name: Mint a throwaway bootstrap credential
+        run: |
+          set -euo pipefail
+          password="$(openssl rand -base64 24)"
+          echo "::add-mask::${password}"
+          echo "BOSS_PASSWORD=${password}" >> "$GITHUB_ENV"
+
+      - name: Bootstrap the first SuperAdmin
+        working-directory: backend
+        env:
+          BOOTSTRAP_PASSWORD: ${{ env.BOSS_PASSWORD }}
+        run: npm run user:create -- --email "$BOSS_EMAIL" --name "CI SuperAdmin" --superadmin
+
+      # NODE_ENV=production on purpose: it is the shape the integration suite
+      # was written against, and it is what makes the session cookie `Secure`
+      # and `SameSite=Strict` — attributes the suite asserts on.
+      #
+      # `Secure` over plain HTTP is safe HERE and only here: the client is Node,
+      # not a browser, and `Secure` is a rule browsers enforce. Verified rather
+      # than assumed — 66/66 pass against a production-mode backend on
+      # http://localhost.
+      - name: Start the backend
+        working-directory: backend
+        env:
+          NODE_ENV: production
+          PORT: 3000
+          LOG_LEVEL: error
+          CORS_ORIGINS: ''
+          TRUSTED_PROXIES: ''
+        run: |
+          set -euo pipefail
+          nohup node dist/main.js > "${RUNNER_TEMP}/backend.log" 2>&1 &
+          echo "$!" > "${RUNNER_TEMP}/backend.pid"
+
+      - name: Wait for the backend to answer
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if curl -fsS "${API_BASE_URL}/health" >/dev/null 2>&1; then
+              echo "Backend healthy (attempt ${attempt})"
+              curl -fsS "${API_BASE_URL}/health"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend never became healthy. Server log:" >&2
+          cat "${RUNNER_TEMP}/backend.log" >&2 || true
+          exit 1
+
+      - name: Integration tests (no mocks)
+        working-directory: frontend
+        run: npx vitest run --config vitest.integration.config.ts --reporter=json --outputFile=vitest-integration.json
+
+      # ★ The integration suite throws in `beforeAll` when the backend is
+      # unreachable, so it fails loudly rather than skipping. This guards the
+      # other direction: a filter or a config change that quietly matches no
+      # files would otherwise be a green run with nothing in it.
+      - name: Assert no test was skipped
+        working-directory: frontend
+        run: node ../.github/scripts/assert-tests-ran.mjs vitest-integration.json 60 "frontend integration"
+
+      # Only on failure, and only the server's own log. Nothing here prints the
+      # environment, the database URL or the bootstrap credential.
+      - name: Backend log (on failure)
+        if: failure()
+        run: cat "${RUNNER_TEMP}/backend.log" || true
+
+# ---------------------------------------------------------------- SonarCloud --
+#
+# There is deliberately NO Sonar job in this file.
+#
+# This repository uses SonarCloud's AUTOMATIC ANALYSIS through the GitHub App:
+# there is no sonar-project.properties, no scanner dependency and no workflow,
+# yet pull requests #4 and #6 were both analysed and reported findings. Adding a
+# scanner here would not add coverage — SonarCloud refuses CI-based analysis
+# while automatic analysis is enabled, so the job would fail with
+# "You are running CI analysis while Automatic Analysis is enabled" and the only
+# way to make it pass would be to turn off the analysis that already works.
+#
+# The Quality Gate is therefore enforced where it already is: as the SonarCloud
+# check on the pull request, made blocking by branch protection on `main`. That
+# is repository configuration rather than workflow, and it is not something this
+# file can assert.
+#
+# If automatic analysis is ever switched off, the scanner belongs here as a job
+# that runs AFTER the test jobs (it needs their coverage output), reading
+# SONAR_TOKEN from GitHub Secrets and never from a file.
