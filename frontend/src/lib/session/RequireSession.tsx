@@ -10,7 +10,7 @@ import { useSession } from './SessionProvider';
  * the server answers that on every request, and a 403 coming back is the
  * design working, not a bug (§0).
  */
-export function RequireSession({ children }: { children: ReactNode }) {
+export function RequireSession({ children }: Readonly<{ children: ReactNode }>) {
   const { state, loading } = useSession();
   const location = useLocation();
 

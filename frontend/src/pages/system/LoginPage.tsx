@@ -7,7 +7,7 @@ import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import logo from '@/assets/img/LOGO.png'
 import bgImage from '@/assets/img/bg-login.png'
 import { useSession } from '@/lib/session/SessionProvider'
-import { isApiError } from '@/lib/http/apiError'
+import { loginErrorMessage } from './loginErrorMessage'
 
 /**
  * Login. The layout is unchanged; what was added is the part that talks to the
@@ -44,28 +44,8 @@ export default function LoginPage() {
       // guard reads the reloaded state and routes accordingly.
       const from = (location.state as { from?: string } | null)?.from
       navigate(from && from !== '/login' ? from : '/', { replace: true })
-    } catch (caught) {
-      // Branch on status and code, never on message text (§11).
-      if (isApiError(caught)) {
-        if (caught.status === 401) {
-          setError('Email hoặc mật khẩu không đúng.')
-        } else if (caught.status === 429) {
-          const wait = caught.retryAfterSeconds
-          setError(
-            wait
-              ? `Bạn đã thử quá nhiều lần. Vui lòng đợi ${Math.ceil(wait / 60)} phút.`
-              : 'Bạn đã thử quá nhiều lần. Vui lòng thử lại sau.',
-          )
-        } else if (caught.status === 422) {
-          setError('Vui lòng nhập email và mật khẩu hợp lệ.')
-        } else if (caught.status === 0) {
-          setError('Không kết nối được tới máy chủ.')
-        } else {
-          setError(caught.message)
-        }
-      } else {
-        setError('Đã xảy ra lỗi không mong muốn.')
-      }
+    } catch (error_) {
+      setError(loginErrorMessage(error_))
     } finally {
       setSubmitting(false)
     }

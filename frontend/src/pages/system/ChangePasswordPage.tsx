@@ -58,16 +58,16 @@ export default function ChangePasswordPage() {
       // to log in with the new password.
       await signOut()
       navigate('/login', { replace: true })
-    } catch (caught) {
-      if (isApiError(caught)) {
-        if (caught.status === 401) {
+    } catch (error_) {
+      if (isApiError(error_)) {
+        if (error_.status === 401) {
           setError('Mật khẩu hiện tại không đúng.')
-        } else if (caught.status === 422) {
-          setError(caught.details ? Object.values(caught.details).join(' ') : caught.message)
-        } else if (caught.status === 0) {
+        } else if (error_.status === 422) {
+          setError(error_.details ? Object.values(error_.details).join(' ') : error_.message)
+        } else if (error_.status === 0) {
           setError('Không kết nối được tới máy chủ.')
         } else {
-          setError(caught.message)
+          setError(error_.message)
         }
       } else {
         setError('Đã xảy ra lỗi không mong muốn.')

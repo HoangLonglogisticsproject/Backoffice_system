@@ -75,12 +75,12 @@ export function useSessionResource<T>(
         setData(result);
         setError(null);
       })
-      .catch((caught: unknown) => {
+      .catch((error_: unknown) => {
         if (!current) return;
         setData(null);
         // Anything that is not an ApiError never passed through the transport
         // layer, so it is a programming fault rather than a server answer.
-        setError(isApiError(caught) ? caught : new ApiError(0, undefined, 'Unexpected error.'));
+        setError(isApiError(error_) ? error_ : new ApiError(0, undefined, 'Unexpected error.'));
       })
       .finally(() => {
         if (current) setLoading(false);

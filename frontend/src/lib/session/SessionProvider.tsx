@@ -35,7 +35,7 @@ interface SessionContextValue {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-export function SessionProvider({ children }: { children: ReactNode }) {
+export function SessionProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [state, setState] = useState<SessionState | null>(null);
   const [loading, setLoading] = useState(true);
 
