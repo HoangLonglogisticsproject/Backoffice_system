@@ -91,6 +91,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       '0003_organization.sql',
       '0004_authorization.sql',
       '0005_identity_credential_state.sql',
+      '0008_role_assignment_membership_fk_index.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
