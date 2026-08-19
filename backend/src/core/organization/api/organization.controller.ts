@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
 import { PermissionGuard, RequirePermission } from '../../authorization/api/permission.guard';
@@ -85,7 +86,7 @@ export class OrganizationController {
   @Get(':departmentId')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('unit.read', 'departmentId')
-  async findOne(@Param('departmentId') departmentId: string): Promise<Department> {
+  async findOne(@Param('departmentId', UuidParam) departmentId: string): Promise<Department> {
     return this.departments.require(departmentId);
   }
 
@@ -102,7 +103,7 @@ export class OrganizationController {
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('unit.write')
   async rename(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(renameDepartmentSchema)) body: RenameDepartmentInput,
   ): Promise<Department> {
     return this.departments.rename(departmentId, body.name);
@@ -113,7 +114,7 @@ export class OrganizationController {
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('unit.write')
   @HttpCode(HttpStatus.OK)
-  async archive(@Param('departmentId') departmentId: string): Promise<Department> {
+  async archive(@Param('departmentId', UuidParam) departmentId: string): Promise<Department> {
     return this.departments.archive(departmentId);
   }
 
@@ -127,7 +128,7 @@ export class OrganizationController {
   @Get(':departmentId/members')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('unit.member.read', 'departmentId')
-  async members(@Param('departmentId') departmentId: string): Promise<DepartmentMembership[]> {
+  async members(@Param('departmentId', UuidParam) departmentId: string): Promise<DepartmentMembership[]> {
     return this.memberships.listActiveMembers(departmentId);
   }
 
@@ -142,7 +143,7 @@ export class OrganizationController {
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('unit.member.write')
   async transferInto(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(transferIntoSchema)) body: TransferIntoInput,
   ): Promise<DepartmentMembership> {
     return this.memberships.transfer({

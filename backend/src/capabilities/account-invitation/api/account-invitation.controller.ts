@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import {
   HeadOfRouteDepartmentGuard,
   PermissionGuard,
@@ -54,7 +55,7 @@ export class AccountInvitationController {
   @Post('departments/:departmentId/account-invitations')
   @UseGuards(AuthGuard, CsrfGuard, HeadOfRouteDepartmentGuard)
   async create(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(createInvitationSchema)) body: CreateInvitationInput,
     @CurrentUser() actor: SessionUser,
   ): Promise<AccountInvitation> {
@@ -69,7 +70,7 @@ export class AccountInvitationController {
   @Get('departments/:departmentId/account-invitations')
   @UseGuards(AuthGuard, HeadOfRouteDepartmentGuard)
   async listForDepartment(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
   ): Promise<AccountInvitation[]> {
     return this.invitations.listForDepartment(departmentId);
   }
@@ -86,7 +87,7 @@ export class AccountInvitationController {
   @RequirePermission('user.write')
   @HttpCode(HttpStatus.CREATED)
   async approve(
-    @Param('invitationId') invitationId: string,
+    @Param('invitationId', UuidParam) invitationId: string,
     @Body(new ZodValidationPipe(approveInvitationSchema)) body: ApproveInvitationInput,
     @CurrentUser() actor: SessionUser,
   ): Promise<ApprovedInvitation> {
@@ -102,7 +103,7 @@ export class AccountInvitationController {
   @RequirePermission('user.write')
   @HttpCode(HttpStatus.OK)
   async reject(
-    @Param('invitationId') invitationId: string,
+    @Param('invitationId', UuidParam) invitationId: string,
     @CurrentUser() actor: SessionUser,
   ): Promise<AccountInvitation> {
     return this.invitations.reject({ invitationId, decidedBy: actor.id });
