@@ -4,6 +4,8 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App.jsx'
 import './index.css'
 
+import { LanguageProvider } from './contexts/LanguageContext'
+
 const rootElement = document.getElementById('root')
 
 if (!rootElement) {
@@ -13,7 +15,9 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
+      <LanguageProvider>
+        <App />
+      </LanguageProvider>
     </BrowserRouter>
   </StrictMode>,
 )
