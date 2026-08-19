@@ -22,23 +22,29 @@ export function Pagination({
   onPageChange,
   onItemsPerPageChange,
   className
-}: PaginationProps) {
+}: Readonly<PaginationProps>) {
   const startItem = (currentPage - 1) * itemsPerPage + 1;
   const endItem = Math.min(currentPage * itemsPerPage, totalItems);
 
   // Generate page numbers
   const getPageNumbers = () => {
-    const pages = [];
+    const pages: { id: string; type: 'page' | 'ellipsis'; value?: number }[] = [];
     if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
+      for (let i = 1; i <= totalPages; i++) pages.push({ id: `page-${i}`, type: 'page', value: i });
+    } else if (currentPage <= 3) {
+      [1, 2, 3, 4].forEach(p => pages.push({ id: `page-${p}`, type: 'page', value: p }));
+      pages.push({ id: 'ellipsis-1', type: 'ellipsis' });
+      pages.push({ id: `page-${totalPages}`, type: 'page', value: totalPages });
+    } else if (currentPage >= totalPages - 2) {
+      pages.push({ id: `page-1`, type: 'page', value: 1 });
+      pages.push({ id: 'ellipsis-1', type: 'ellipsis' });
+      [totalPages - 3, totalPages - 2, totalPages - 1, totalPages].forEach(p => pages.push({ id: `page-${p}`, type: 'page', value: p }));
     } else {
-      if (currentPage <= 3) {
-        pages.push(1, 2, 3, 4, 'ellipsis', totalPages);
-      } else if (currentPage >= totalPages - 2) {
-        pages.push(1, 'ellipsis', totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
-      } else {
-        pages.push(1, 'ellipsis', currentPage - 1, currentPage, currentPage + 1, 'ellipsis', totalPages);
-      }
+      pages.push({ id: `page-1`, type: 'page', value: 1 });
+      pages.push({ id: 'ellipsis-1', type: 'ellipsis' });
+      [currentPage - 1, currentPage, currentPage + 1].forEach(p => pages.push({ id: `page-${p}`, type: 'page', value: p }));
+      pages.push({ id: 'ellipsis-2', type: 'ellipsis' });
+      pages.push({ id: `page-${totalPages}`, type: 'page', value: totalPages });
     }
     return pages;
   };
@@ -62,10 +68,10 @@ export function Pagination({
             <span className="sr-only">Previous page</span>
           </Button>
           
-          {getPageNumbers().map((page, index) => (
-            page === 'ellipsis' ? (
+          {getPageNumbers().map((pageItem) => (
+            pageItem.type === 'ellipsis' ? (
               <Button
-                key={`ellipsis-${index}`}
+                key={pageItem.id}
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 text-gray-500"
@@ -75,16 +81,16 @@ export function Pagination({
               </Button>
             ) : (
               <Button
-                key={`page-${page}`}
-                variant={currentPage === page ? "default" : "outline"}
+                key={pageItem.id}
+                variant={currentPage === pageItem.value ? "default" : "outline"}
                 size="icon"
                 className={cn(
                   "h-8 w-8",
-                  currentPage === page ? "bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100" : "text-gray-500"
+                  currentPage === pageItem.value ? "bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100" : "text-gray-500"
                 )}
-                onClick={() => onPageChange(page as number)}
+                onClick={() => onPageChange(pageItem.value as number)}
               >
-                {page}
+                {pageItem.value}
               </Button>
             )
           ))}

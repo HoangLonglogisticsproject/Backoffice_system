@@ -11,7 +11,7 @@ interface ModalProps {
   className?: string;
 }
 
-export function Modal({ isOpen, onClose, title, children, footer, className }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, footer, className }: Readonly<ModalProps>) {
   // Prevent body scroll when modal is open
   React.useEffect(() => {
     if (isOpen) {
@@ -36,19 +36,20 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: M
       />
       
       {/* Modal Content */}
-      <div 
+      <dialog 
         className={cn(
           "relative z-50 w-full max-w-lg bg-white rounded-xl shadow-xl flex flex-col max-h-[90vh]",
           "animate-in fade-in zoom-in-95 duration-200",
           className
         )}
-        role="dialog"
         aria-modal="true"
+        open
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           {title && <h2 className="text-lg font-semibold text-gray-900">{title}</h2>}
           <button 
+            type="button"
             onClick={onClose}
             className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 ml-auto"
           >
@@ -68,7 +69,7 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: M
             {footer}
           </div>
         )}
-      </div>
+      </dialog>
     </div>
   );
 }

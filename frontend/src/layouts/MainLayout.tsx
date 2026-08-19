@@ -3,8 +3,6 @@ import { Outlet, Link, useLocation } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { 
-  ChevronDown, 
-  ChevronRight, 
   Menu, 
   LogOut, 
   Building, 
@@ -26,7 +24,7 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useLanguage } from '@/contexts/LanguageContext'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
 
 const NavItem = ({ to, icon: Icon, label, badge, isSidebarOpen }: { to: string, icon: any, label: string, badge?: number, isSidebarOpen: boolean }) => {
   const location = useLocation()

@@ -9,7 +9,7 @@ interface AddEmployeeModalProps {
   onClose: () => void;
 }
 
-export function AddEmployeeModal({ isOpen, onClose }: AddEmployeeModalProps) {
+export function AddEmployeeModal({ isOpen, onClose }: Readonly<AddEmployeeModalProps>) {
   const { t } = useLanguage();
 
   return (
