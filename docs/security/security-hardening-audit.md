@@ -70,10 +70,10 @@ CSRF tests were needed and none were added.
 | # | Finding | Severity | Class |
 |---|---|---|---|
 | 1 | Malformed UUID path param → 500 | LOW | **FIX NOW** — fixed on this branch |
-| 2 | App connects to PostgreSQL as a **superuser** role | MEDIUM | **FIX LATER** — deployment, not code |
-| 3 | Login throttle is in-memory, per process | MEDIUM (multi-replica only) | **ACCEPTED** — documented deferral |
+| 2 | App connects to PostgreSQL as a **superuser** role | MEDIUM | **FIX NOW** — resolved in round 2, see §21 |
+| 3 | Login throttle is in-memory, per process | MEDIUM (multi-replica only) | **ACCEPTED / INTENTIONAL** — precondition, see §21 |
 | 4 | `/health` unauthenticated, exposes `environment` + uptime | LOW | **OBSERVE** |
-| 5 | scrypt `N=2^16`, one notch below current OWASP floor | LOW | **OBSERVE** — do not change without requirement |
+| 5 | scrypt `N=2^16`, one notch below current OWASP floor | LOW | **KEEP** — benchmarked in round 2, see §21 |
 | 6 | Session sweep is a deployment duty | INFO | **ACCEPTED / INTENTIONAL** |
 | 7 | No independent penetration test has been performed | — | **OPEN** — see §15 |
 
@@ -469,7 +469,7 @@ handling. The application-layer surface audited here is the smaller half of that
 > context to exercise the path that actually failed. Discovered when the first version of
 > the tests failed with 403.
 
-### Finding 2 — Application connects to PostgreSQL as superuser · **FIX LATER**
+### Finding 2 — Application connects to PostgreSQL as superuser · **FIX NOW** · resolved in round 2 (§21)
 
 - **Evidence:** `rolsuper=t, rolcreatedb=t, rolcreaterole=t, rolbypassrls=t`.
 - **Production impact:** removes the last containment layer; `rolbypassrls` defeats future RLS.
@@ -479,7 +479,7 @@ handling. The application-layer surface audited here is the smaller half of that
 - **Why not now:** it changes deployment topology, not code. Inventing a role split without
   the ops owner would be guessing at infrastructure the repository does not describe.
 
-### Finding 3 — In-memory login throttle · **ACCEPTED** (conditional)
+### Finding 3 — In-memory login throttle · **ACCEPTED / INTENTIONAL** (conditional, §21)
 
 - **Evidence:** `Map` in `login-throttle.service.ts`; documented in-source as a deferral.
 - **Production impact:** none at one replica. At N replicas an attacker gets N× budget.
@@ -494,7 +494,7 @@ handling. The application-layer surface audited here is the smaller half of that
   drop `environment`. **Why not now:** hardening without a concrete threat; the payload is a
   deployment contract.
 
-### Finding 5 — scrypt `N=2^16` · **OBSERVE** · deliberately not changed
+### Finding 5 — scrypt `N=2^16` · **KEEP** · benchmarked in round 2 (§21)
 
 - **Evidence:** `COST = { N: 65_536, r: 8, p: 1 }` ≈ 64 MB / ~100 ms.
 - Current OWASP guidance for scrypt is `N=2^17, r=8, p=1`; this is one notch below, and
@@ -536,8 +536,8 @@ See §15. Not a defect in the code; a gap in assurance.
 | Input validation | **Low** | No injection; malformed identifiers now 422 |
 | Error handling | **Low** | No leakage in any tested case |
 | Dependencies | **Low** | 0 vulnerabilities |
-| **Database privileges** | **Medium** | Superuser runtime role — finding 2 |
-| **Rate-limit durability** | **Medium at >1 replica** | In-memory — finding 3 |
+| Database privileges | **Low** | Three least-privilege roles, runtime has no DELETE and no DDL — §21 |
+| **Rate-limit durability** | **Medium at >1 replica** | In-memory — precondition documented, §21 |
 | Infrastructure / TLS / proxy | **Unknown** | Out of repository scope — finding 7 |
 
 ## 18. Fixes performed
@@ -595,3 +595,173 @@ produced a 500 changed, and they now produce the documented validation error.
 - No CSRF relaxation, no wildcard CORS.
 - No scrypt cost change without a requirement (finding 5).
 - No cron worker added inside the application (finding 6) — the architecture puts it outside.
+
+---
+
+# 21. Round 2 — hardening the accepted findings
+
+Second pass on the same branch. Round 1 audited and fixed one defect; this round takes the
+three findings left open, resolves the one that can be resolved inside the repository, and
+settles the other two with measurement rather than opinion.
+
+**No security semantics changed.** No permission, workflow, cookie attribute,
+authentication rule or business lifecycle was touched.
+
+## 21.1 Required decision matrix
+
+| Finding | Severity | Production impact | Decision | Evidence | Follow-up |
+|---|---|---|---|---|---|
+| **DB superuser** | MEDIUM | Runtime held `rolsuper` + `bypassrls`: no containment if ever reached, and future RLS silently void | **FIX NOW** — done | Three roles provisioned and exercised on real PostgreSQL 17.11; full business flow passes as `bo_app`; DDL/DELETE/TRUNCATE/COPY/CREATE ROLE all denied (§21.2) | DBA runs `provision-db-roles.sql` per environment |
+| **Distributed throttle** | MEDIUM *only* at >1 replica | At N replicas an attacker gets N× the login budget; restart clears counters | **ACCEPTED / INTENTIONAL** | Repository contains **zero** production deployment artifacts — no k8s, Terraform, Dockerfile or Procfile; only a local `docker-compose.yml`. No multi-replica target stated anywhere (§21.3) | README §8 precondition: shared store **before** the second replica |
+| **scrypt cost** | LOW | Raising it triples the cost of the attack the throttle bounds | **KEEP** at `N=2^16` | Benchmarked: `2^17` costs **6.6×** single-hash latency (104 ms → 693 ms), throughput 30 → 9 hash/s, at 2× memory (§21.4) | Revisit if auth gets dedicated capacity; digest self-describing, no reset ever needed |
+| **Pentest** | — | Application layer covered; infrastructure entirely unverified | **OPEN — NOT PERFORMED** | No independent tester exists. §15 and the test plan both say so plainly | Commission before production |
+| **Session cleanup** | INFO | Table growth only; rows are inert | **ACCEPTED / INTENTIONAL** | `session.service.ts` documents it and ships the statement; `idx_sessions_expires_at` makes it cheap | `bo_ops` now exists precisely to run it (§21.2) |
+| **Malformed UUID → 500** | LOW | Wrong status code; 500s mask real faults | **FIX NOW** — done in round 1 | 5 routes verified 500 → 422 live; 14 regression tests | none |
+
+## 21.2 PostgreSQL least privilege — implemented and proven
+
+**Before:** one role, `backoffice`, holding `rolsuper`, `rolcreatedb`, `rolcreaterole` and
+`rolbypassrls`, used for migrations, runtime, bootstrap and tests alike.
+
+**The enabling discovery:** `migrate.cli.ts` is *already* a separate entry point from
+application boot, deliberately — "migrating is a deploy step, not a boot step". So the
+runtime never needed DDL: **only the configuration conflated the principals, not the code**.
+No application change was required to split them.
+
+| Role | Used by | Privileges |
+|---|---|---|
+| `bo_migrator` | `npm run migrate`, deploy step | owns the database and every object in it |
+| `bo_app` | runtime + bootstrap CLI | `SELECT, INSERT, UPDATE` — **no DELETE**, no DDL |
+| `bo_ops` | session-sweep cron | `SELECT, DELETE` on `sessions` only |
+
+**The runtime has no DELETE, and that is evidence-based.** Every repository was read: the
+application issues **no DELETE at all**. It disables users, archives departments, ends
+memberships and revokes assignments — all UPDATEs, because keeping history is the design.
+Withholding DELETE turns that decision into something PostgreSQL enforces rather than
+something the next repository has to remember.
+
+Grants use `ALTER DEFAULT PRIVILEGES FOR ROLE bo_migrator`, so tables added by *future*
+migrations are covered automatically. A hand-maintained grant list would rot at the next
+migration and fail in production rather than at deploy. The one cost is stated in the
+script itself: a blanket default also covers `schema_migrations`, which step 2 revokes.
+
+Bootstrap deliberately shares `bo_app`: at the database level it issues the same INSERTs
+the API already issues when a SuperAdmin provisions somebody, so a fourth role would carry
+identical grants and imply a boundary PostgreSQL is not enforcing. What gates bootstrap is
+shell access and `BOOTSTRAP_PASSWORD`, not a GRANT.
+
+### Verified on real PostgreSQL 17.11
+
+| Check | Result |
+|---|---|
+| `provision-db-roles.sql` from a clean cluster | ✅ roles created; no elevated attribute on any of the three |
+| Migrations `0001`→`0008` as `bo_migrator` (non-superuser) | ✅ 8 applied; all objects owned by `bo_migrator` |
+| Default privileges reached migration-created tables | ✅ all 9 tables granted `INSERT,SELECT,UPDATE` automatically |
+| Bootstrap CLI as `bo_app` | ✅ SuperAdmin created |
+| Full business flow as `bo_app` | ✅ login · create department · provision user · assign head · `/authorization/me` · list members · revoke head · disable user (5 writes, 1 tx) · logout — **zero permission errors** |
+| Invitation approval as `bo_app` | ✅ provisions user + identity + membership in one transaction; temporary secret returned once |
+| Session sweep as `bo_ops` | ✅ 4 rows swept |
+| Previous round-1 fixes still hold | ✅ malformed UUID → 422, CSRF without header → 403 |
+| Full test suite as `bo_migrator` | ✅ **543 passed / 543**, 33 suites, **0 skipped** |
+
+### Negative boundaries — every one denied for `bo_app`
+
+```
+DELETE FROM users           ERROR:  permission denied for table users
+DELETE FROM sessions        ERROR:  permission denied for table sessions
+TRUNCATE users              ERROR:  permission denied for table users
+DROP TABLE sessions         ERROR:  must be owner of table sessions
+ALTER TABLE users ADD ...   ERROR:  must be owner of table users
+CREATE TABLE evil(...)      ERROR:  permission denied for schema public
+SELECT * schema_migrations  ERROR:  permission denied for table schema_migrations
+CREATE ROLE eviluser        ERROR:  permission denied to create role
+COPY users TO '/tmp/x.csv'  ERROR:  permission denied to COPY to a file
+```
+
+For `bo_ops`: reading `users`, deleting `users` and inserting a forged session are all
+denied. It can sweep sessions and nothing else.
+
+### B13 — the invariant the grant model rests on
+
+The grant model assumes the application never issues a DELETE. If someone adds one, the
+failure surfaces in **production** as `permission denied` while a reviewer sees nothing
+wrong. So the assumption is now checked at CI, in the mechanism this repository already
+uses for architectural rules:
+
+```
+✔ B13 runtime ↛ DELETE
+```
+
+Proven to catch a real violation: injecting `DELETE FROM department_memberships` into a
+repository makes `npm run check` exit 1 and name the file and line; removing it makes the
+check pass again. A check that has never failed is not a check.
+
+**No credentials are committed.** `provision-db-roles.sql` takes passwords as psql
+variables from the operator's environment, so the file is safe to commit and safe to read
+over somebody's shoulder.
+
+## 21.3 Distributed throttle — ACCEPTED, with the precondition made binding
+
+The brief's rule was to build a shared store only if production already targets more than
+one replica. The repository was searched for that target and **there is none**: no
+Kubernetes manifest, no Terraform, no Dockerfile, no Procfile, no process-manager config.
+The only YAML is `docker-compose.yml`, which starts a local PostgreSQL for development.
+
+Adding Redis on that evidence would be exactly what the brief forbids — a new
+infrastructure dependency, with its own availability and failure semantics, bought for a
+limit that does not yet exist.
+
+**Decision: ACCEPTED / INTENTIONAL**, and the deferral is upgraded from a note to a
+precondition in README §8: *before running more than one replica*, move the throttle to a
+shared store or put the rate limit at the edge.
+
+> The production replica count is the one input this audit could not derive from the
+> repository. **If the target is already more than one, this decision flips** and the
+> shared store should be designed before launch.
+
+## 21.4 scrypt cost — KEEP, measured not assumed
+
+Benchmarked on the audit machine (Intel i5-13500HX, Node 24.18, `UV_THREADPOOL_SIZE` default 4):
+
+| Parameters | Single hash | Memory/hash | 30 concurrent | Throughput |
+|---|---|---|---|---|
+| **`N=2^16, r=8, p=1` (current)** | **104 ms** | **64 MiB** | 933 ms | **30 hash/s** |
+| `N=2^17, r=8, p=1` (OWASP) | 693 ms | 128 MiB | 3,228 ms | 9 hash/s |
+
+Raising N costs **6.6×**, not the 2× the parameter change suggests: at 128 MiB per hash
+scrypt falls out of cache and memory bandwidth dominates. Throughput drops to a third, and
+30 concurrent logins — the per-IP budget the throttle already permits — would reserve
+3.8 GiB instead of 1.9 GiB.
+
+That interacts badly with the control protecting this endpoint. The throttle exists
+*because* each login costs ~100 ms of memory-hard work; tripling that cost triples the
+leverage of the attack it bounds.
+
+**Backward compatibility was proven, not assumed.** Digests are self-describing
+(`scrypt$N$r$p$salt$hash`) and `verify()` reads the cost from the digest, so both costs
+coexist in one table:
+
+```
+old digest   scrypt$65536$8$1    correct pw → verifies    wrong pw → rejected
+new digest   scrypt$131072$8$1   correct pw → verifies    wrong pw → rejected
+```
+
+**Decision: KEEP.** 104 ms sits in the band OWASP itself targets, no requirement exists,
+and the expensive property — raising cost later without invalidating a single stored
+password or forcing a reset — is already in place. **RAISE LATER** if authentication gets
+dedicated capacity or the threat model changes; new passwords would take the new cost, old
+digests keep verifying, and re-hash on successful login is available if wanted.
+
+## 21.5 Files changed in round 2
+
+| File | Change |
+|---|---|
+| `backend/scripts/provision-db-roles.sql` | **new** — three-role provisioning, no credentials, run once by a DBA |
+| `backend/scripts/check-boundaries.sh` | **B13 runtime ↛ DELETE**, proven to fail on a real violation |
+| `backend/README.md` | new §7 (three PostgreSQL principals); §8 throttle deferral upgraded to a precondition |
+| `backend/.env.example` | `DATABASE_URL` documented as the runtime role; migration command shown separately |
+| `docs/security/security-hardening-audit.md` | this section, the decision matrix, and updated cross-references |
+| `docs/security/security-test-plan.md` | database-privilege attack cases added |
+
+**No application source changed in round 2.** The privilege split needed configuration and
+documentation, not code — because `migrate.cli.ts` had already made the separation possible.
