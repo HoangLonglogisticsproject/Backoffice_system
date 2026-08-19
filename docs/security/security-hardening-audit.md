@@ -71,11 +71,12 @@ CSRF tests were needed and none were added.
 |---|---|---|---|
 | 1 | Malformed UUID path param → 500 | LOW | **FIX NOW** — fixed on this branch |
 | 2 | App connects to PostgreSQL as a **superuser** role | MEDIUM | **FIX NOW** — resolved in round 2, see §21 |
-| 3 | Login throttle is in-memory, per process | MEDIUM (multi-replica only) | **ACCEPTED / INTENTIONAL** — precondition, see §21 |
+| 3 | Login throttle is in-memory, per process | MEDIUM (multi-replica only) | **ACCEPTED / INTENTIONAL** — 1 replica confirmed, §22.2 |
 | 4 | `/health` unauthenticated, exposes `environment` + uptime | LOW | **OBSERVE** |
 | 5 | scrypt `N=2^16`, one notch below current OWASP floor | LOW | **KEEP** — benchmarked in round 2, see §21 |
 | 6 | Session sweep is a deployment duty | INFO | **ACCEPTED / INTENTIONAL** |
-| 7 | No independent penetration test has been performed | — | **OPEN** — see §15 |
+| 7 | No independent penetration test has been performed | — | **OPEN** — see §15, §22.5 |
+| 8 | `TRUST_PROXY_HOPS=0` behind Cloudflare makes the throttle global | MEDIUM | **FIX BEFORE LAUNCH** — config only, §22.3 |
 
 ---
 
@@ -765,3 +766,224 @@ digests keep verifying, and re-hash on successful login is available if wanted.
 
 **No application source changed in round 2.** The privilege split needed configuration and
 documentation, not code — because `migrate.cli.ts` had already made the separation possible.
+
+---
+
+# 22. Round 3 — confirmed topology, posture, and PR readiness
+
+The production topology was confirmed by the project owner after round 2:
+
+```
+Cloudflare  →  1 VPS  →  1 backend replica  →  PostgreSQL
+```
+
+That settles the one input the previous rounds could not derive from the repository. It
+also surfaced a new finding, because a proxy in front of the application changes what the
+login throttle is actually counting (§22.3).
+
+## 22.1 Security posture
+
+| Area | Status | Basis |
+|---|---|---|
+| Authentication / session | **PASS** | No enumeration, no timing signal, throttle holds against the correct password, 256-bit tokens hashed at rest, replay refused, revocation immediate |
+| Authorization / IDOR | **PASS** | Relation-based, route-scoped, context reloaded per request; 13/13 cross-department and global attacks refused |
+| Cookie / CORS / CSRF | **PASS** | `HttpOnly; Secure; SameSite=Strict; Path=/`, host-only; exact-match CORS with 7 bypasses refused; all 17 mutations behind `CsrfGuard` |
+| Secret handling | **PASS** | Nothing logged, echoed or persisted; temporary secret only in its agreed response |
+| **DB least privilege** | **PASS** | Three roles; runtime has no DELETE and no DDL; verified on PostgreSQL 17.11 (§21.2, §22.6) |
+| DB invariants / race | **PASS** | FK + partial-unique + CHECK, proven live at 1M-row scale in the PR #3 audit |
+| Approval / bypass | **PASS** | Every race and self-decision case covered with final-state assertions |
+| Automated security regression | **PASS** | 543/543, 0 skipped, real PostgreSQL |
+| Malformed input handling | **PASS** | 17/17 UUID params → 422 in one envelope; no injection anywhere |
+| Distributed throttle | **ACCEPTED** | 1-replica constraint — §22.2 |
+| scrypt cost | **KEEP / OBSERVE** | Benchmarked; `2^17` costs 6.6× — §21.4 |
+| **`TRUST_PROXY_HOPS`** | ⚠ **FIX BEFORE LAUNCH** | New finding — §22.3 |
+| External pentest | **NOT PERFORMED** | No independent tester — §22.5 |
+| Infrastructure security | **NOT AUDITED** | Outside this repository — §22.5 |
+
+## 22.2 Distributed throttle — ACCEPTED / INTENTIONAL
+
+> **Login throttle is process-local by design because current production topology has one
+> backend replica. Before horizontal scale-out to 2+ replicas, the throttle must move to a
+> shared atomic store and this becomes a production launch precondition.**
+
+Nothing was implemented. No Redis, no KV, no shared store, no multi-replica infrastructure.
+
+**Attacker budget, stated precisely.** `WINDOW_MS` 15 minutes, `MAX_PER_SUBJECT` 10,
+`MAX_PER_IP` 30, counters in a `Map` in the single Node process:
+
+| Topology | Effective budget |
+|---|---|
+| **1 replica (today)** | 10 per account and 30 per source IP per 15 min — process-local *is* global |
+| 2 replicas | 20 per account, 60 per source IP — an attacker simply spreads requests |
+| N replicas | N × the intended limit |
+| After any restart | Counters reset to zero |
+
+The restart reset is accepted: an attacker who can restart the process has already won more
+than a throttle.
+
+**Exact trigger to revisit** — written down so it is not a memory:
+
+| Condition | Required action |
+|---|---|
+| A second backend replica | **Blocking.** Move to a shared atomic store *before* it serves traffic |
+| Any multi-instance load balancer | Same |
+| A limit that must survive restart | Shared store, or rate limit at Cloudflare |
+| Still one replica | Nothing |
+
+If that day comes, the shape is already implied by the current key scheme: the same
+normalised subject and IP keys, atomic increment with TTL, and a fail decision that must be
+chosen deliberately — failing open turns the store's outage into an open door, failing
+closed turns it into a login outage. Neither is free, and neither should be picked in an
+audit that has no requirement in front of it.
+
+## 22.3 ⚠ NEW FINDING — `TRUST_PROXY_HOPS` under the confirmed topology
+
+**Severity: MEDIUM · Decision: FIX BEFORE LAUNCH · Configuration only, no code change.**
+
+This did not exist as a finding until the topology was confirmed. With Cloudflare in front
+of the application, `TRUST_PROXY_HOPS=0` — the current default — makes Express ignore
+`X-Forwarded-For` and take `req.ip` from the socket, which is **Cloudflare's edge address,
+not the caller's**. The login throttle keys on `req.ip`.
+
+**Demonstrated live**, `NODE_ENV=production`, `TRUST_PROXY_HOPS=0`, a proxy simulated by
+`X-Forwarded-For`:
+
+```
+36 failed logins, each from a DIFFERENT client IP and a different account:
+  attempts  1–30 → 401
+  attempts 31–36 → 429      ← distinct clients shared ONE bucket
+
+then, a brand-new client IP with the CORRECT password:
+  → 429                      ← locked out by other people's failures
+```
+
+Two consequences, and the first is the one that bites:
+
+1. **Availability.** The per-source throttle degenerates into a *global* one. Thirty failed
+   logins anywhere — one confused user with caps lock, or one attacker — lock out **every
+   user of the deployment** for fifteen minutes. That is a one-command denial of service
+   against login.
+2. **Security.** The per-source isolation the code intends does not exist, so an attacker
+   gets no worse treatment than a legitimate user, and legitimate users absorb the penalty.
+
+**With `TRUST_PROXY_HOPS=1`, both are fixed** — same build, same code:
+
+```
+36 failed logins from 36 different client IPs  → all 401, no shared lockout
+legitimate user from a fresh client IP         → 200
+one client brute-forcing 35 times              → 401 ×30 then 429   (still contained)
+```
+
+### The companion control this REQUIRES
+
+Trusting `X-Forwarded-For` is only safe if the header cannot be written by the caller. In
+the test above **the header was set by curl** — which is exactly the attack: with
+`TRUST_PROXY_HOPS=1` and an origin reachable directly, an attacker rotates
+`X-Forwarded-For` and mints an unlimited number of fresh throttle buckets, voiding the
+control completely.
+
+So the two settings are a pair, and neither is correct alone:
+
+| | Origin open to the internet | Origin restricted to Cloudflare |
+|---|---|---|
+| `TRUST_PROXY_HOPS=0` | throttle is global → lockout DoS | throttle is global → lockout DoS |
+| `TRUST_PROXY_HOPS=1` | **throttle void** — attacker forges XFF | ✅ **correct** |
+
+**Required before launch, both together:**
+
+1. Set `TRUST_PROXY_HOPS` to the real hop count between the caller and the application.
+2. Restrict the origin so only Cloudflare can reach it — firewall to Cloudflare's published
+   ranges, or Cloudflare Tunnel so the origin has no public listener at all.
+
+### Determining the hop count
+
+The value is the number of proxies that append to `X-Forwarded-For`, and it depends on
+something this repository cannot see — whether nginx sits on the VPS between Cloudflare and
+Node:
+
+| Actual path | `TRUST_PROXY_HOPS` |
+|---|---|
+| Cloudflare → Node directly | `1` |
+| Cloudflare → nginx → Node | `2` |
+
+**Confirm it rather than assume it.** Temporarily log `req.ip` alongside
+`req.headers['x-forwarded-for']` on a staging request from a known address, and pick the
+value that makes `req.ip` equal that address. Setting it too high is as bad as too low: the
+caller's own forged entry starts being believed.
+
+> **Cloudflare's `CF-Connecting-IP` is deliberately not used.** Reading it would be a code
+> change, and it is only trustworthy under the same condition — that the request really came
+> from Cloudflare. It buys nothing over a correct hop count plus a restricted origin, and it
+> would add a provider-specific header to an application that currently has none.
+
+## 22.4 Session cleanup — ACCEPTED / INTENTIONAL
+
+No scheduler was added to the backend: the deployment layer is not in this repository, and
+a job runner with leader election would be more machinery than the single statement needs.
+
+| | |
+|---|---|
+| **Owner** | Deployment / ops — cron on the VPS |
+| **Principal** | `bo_ops`, which holds `SELECT, DELETE` on `sessions` and nothing else |
+| **Command** | `DELETE FROM sessions WHERE expires_at < now() - interval '30 days' OR (revoked_at IS NOT NULL AND revoked_at < now() - interval '30 days');` |
+| **Recommended frequency** | Daily, off-peak. The 30-day window means being several days late costs nothing |
+| **If it stops** | Table growth only — **no loss of safety**. `resolve()` already refuses expired and revoked sessions, so dead rows are inert. The cost is disk and a larger index |
+| **Monitoring** | Alert when `SELECT count(*) FROM sessions` exceeds a threshold set from user count, or when the job has not run for 7 days |
+
+`idx_sessions_expires_at` exists to keep the delete cheap. Verified live: `bo_ops` swept
+sessions successfully and could neither read `users` nor forge a session.
+
+## 22.5 Assurance status — read this before saying "secure"
+
+| Activity | Status | By whom |
+|---|---|---|
+| **Automated security regression** | **PASS** — 543/543, 0 skipped | The test suite, in CI |
+| **Internal adversarial testing** | **PERFORMED** — 72 live cases across 3 rounds | The same agent that reviewed the code |
+| **External penetration test** | **NOT PERFORMED** | — no independent tester has examined this system |
+| **Infrastructure security** | **NOT AUDITED** | Cloudflare configuration, VPS hardening, TLS, firewall, backups — none of it is in this repository |
+
+**This system is not certified secure, and this audit does not claim it is.** What it
+claims is narrower and checkable: the application-layer controls listed in §22.1 were
+tested and held. The internal adversarial testing shares the blind spots of the person who
+wrote the code being tested, which is precisely what an external test exists to correct.
+
+Now that the topology is known, an external test has a concrete scope: Cloudflare
+configuration and origin exposure, TLS and HSTS at the edge, VPS hardening and SSH,
+PostgreSQL network reachability, backup handling, and the `TRUST_PROXY_HOPS` pairing in
+§22.3 as deployed rather than as documented.
+
+## 22.6 Round 3 re-verification on PostgreSQL 17.11
+
+The roles were dropped and re-provisioned from the committed script, from a clean cluster.
+
+| Check | Result |
+|---|---|
+| Role attributes | ✅ `rolsuper`, `rolcreatedb`, `rolcreaterole`, `rolbypassrls` all **false** on all three |
+| Migrations as `bo_migrator` | ✅ 8 applied |
+| `bo_app` DELETE / DELETE sessions | ✅ `permission denied` |
+| `bo_app` TRUNCATE | ✅ `permission denied` |
+| `bo_app` DROP TABLE | ✅ `must be owner` |
+| `bo_app` ALTER TABLE | ✅ `must be owner` |
+| `bo_app` CREATE TABLE | ✅ `permission denied for schema public` |
+| `bo_app` CREATE INDEX | ✅ `must be owner` |
+| `bo_app` CREATE ROLE | ✅ `permission denied to create role` |
+| `bo_app` read `schema_migrations` | ✅ `permission denied` |
+| `bo_app` `COPY … TO FILE` | ✅ `permission denied` |
+| `bo_app` GRANT itself DELETE | ✅ `no privileges were granted` — it is not the owner |
+| `bo_app` SELECT / INSERT / UPDATE | ✅ all work — runtime is fully functional |
+| `bo_ops` read or delete `users` | ✅ `permission denied` |
+| `bo_ops` forge a session | ✅ `permission denied` |
+| `bo_ops` sweep sessions | ✅ works |
+| **B13** | ✅ passes clean; proven in round 2 to fail with exit 1 on an injected DELETE |
+| UUID params | ✅ 17/17 covered; all malformed values → 422 in one envelope |
+
+## 22.7 PR readiness
+
+**Ready.** Scope is security audit documentation, the two focused fixes already agreed, and
+database privilege configuration. No frontend file, no business feature, no change to the
+authorization model, session semantics or cookie semantics, and no new infrastructure
+dependency.
+
+One item must not be lost between merge and launch, because it is configuration rather than
+code and therefore invisible to CI: **`TRUST_PROXY_HOPS` and origin restriction (§22.3)**.
+It belongs on the launch checklist, not in the merge.

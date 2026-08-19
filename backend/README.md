@@ -157,18 +157,31 @@ Script không chứa mật khẩu — chúng vào bằng biến psql từ môi t
 
 Không phải lỗi — là thứ deployment phải biết trước khi đưa lên production.
 
-**Rate limiter đăng nhập nằm trong bộ nhớ, tính theo TIẾN TRÌNH.** Chạy nhiều
-replica thì mỗi replica có ngân sách riêng, nên giới hạn thực tế nhân lên theo số
-replica; restart cũng xoá bộ đếm.
+**Login throttle is process-local by design because current production topology
+has one backend replica. Before horizontal scale-out to 2+ replicas, the throttle
+must move to a shared atomic store and this becomes a production launch
+precondition.**
 
-Đây là ĐIỀU KIỆN TIÊN QUYẾT, không phải ghi chú: **trước khi chạy quá 1 replica**,
-chuyển throttle sang shared store hoặc đặt rate limit ở edge/reverse proxy. Repo
-này không chứa artifact deployment nào (không k8s, không Terraform, không
-Dockerfile) nên số replica production là thứ chỉ deployment biết — mặc định đang
-giả định 1.
+Topology đã chốt: **Cloudflare → 1 VPS → 1 backend replica → PostgreSQL**. Một
+tiến trình, nên bộ đếm trong bộ nhớ *là* bộ đếm toàn cục — không có replica thứ
+hai để lệch khỏi nó. Restart vẫn xoá bộ đếm; chấp nhận được ở quy mô này.
 
-Không thêm Redis sẵn cho việc này: một dependency hạ tầng mới cho một giới hạn
-chưa tồn tại là chi phí vận hành thật đổi lấy một rủi ro giả định.
+Không thêm Redis/KV cho việc này. Một dependency hạ tầng mới, kèm câu chuyện
+availability và failure của riêng nó, đổi lấy một giới hạn chưa tồn tại — đó là
+chi phí thật cho rủi ro giả định.
+
+Trigger để xem lại, viết ra để không phải nhớ:
+
+| Điều kiện | Hành động |
+|---|---|
+| Thêm backend replica thứ 2 | **Bắt buộc** chuyển sang shared atomic store trước khi bật |
+| Chạy sau load balancer nhiều instance | Như trên |
+| Cần giới hạn sống sót qua restart | Shared store, hoặc rate limit ở Cloudflare |
+| Vẫn 1 replica | Không làm gì |
+
+**`TRUST_PROXY_HOPS` phải khớp topology, nếu không throttle sai theo cả hai
+hướng.** Xem `docs/security/security-hardening-audit.md` §22.3 — đây là biến quan
+trọng nhất phải đặt đúng trước khi lên production.
 
 **HSTS và CSP thuộc về deployment, không phải ứng dụng.** HSTS là thuộc tính của
 lớp kết thúc TLS — đặt từ một app có thể chạy HTTP ở dev thì hoặc vô tác dụng,
@@ -183,7 +196,15 @@ dung lượng chứ không phải bảo mật.
 
 Không thêm scheduler vào ứng dụng cho việc này: một job runner kèm chuyện chọn
 leader khi chạy nhiều replica là quá nhiều bộ máy cho một câu lệnh mà cron của
-deployment vốn đã biết chạy.
+deployment vốn đã biết chạy. Deployment layer không nằm trong repo này.
+
+| | |
+|---|---|
+| **Owner** | Deployment/ops — cron trên VPS |
+| **Principal** | `bo_ops` (chỉ có `SELECT, DELETE` trên `sessions`) |
+| **Tần suất khuyến nghị** | Hằng ngày, giờ thấp điểm. Cửa sổ giữ 30 ngày nên trễ vài ngày không mất gì |
+| **Nếu ngừng chạy** | Bảng lớn dần, **không** mất an toàn: session hết hạn/thu hồi vẫn bị `resolve` từ chối. Hệ quả là dung lượng đĩa và index lớn hơn |
+| **Monitoring** | Cảnh báo khi `SELECT count(*) FROM sessions` vượt ngưỡng theo lượng người dùng, hoặc khi job không chạy quá 7 ngày |
 
 ```sql
 DELETE FROM sessions

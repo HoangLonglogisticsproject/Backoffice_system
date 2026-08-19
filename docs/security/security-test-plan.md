@@ -6,6 +6,8 @@ Companion to [`security-hardening-audit.md`](security-hardening-audit.md).
 code. It is NOT an independent penetration test and must not be recorded as one.** See §5
 and §7 for what that distinction costs.
 
+**Confirmed production topology:** Cloudflare → 1 VPS → 1 backend replica → PostgreSQL.
+
 **Executed:** 2026-08-19 · PostgreSQL 17.11 · Node 24.18 · `NODE_ENV=production` ·
 `CORS_ORIGINS=https://app.hoanglong.test` · `TRUST_PROXY_HOPS=0`
 
@@ -248,13 +250,92 @@ one that keeps the other nine honest.
 privilege") is no longer an assumption. It is provisioned by
 `backend/scripts/provision-db-roles.sql`, verified above, and guarded at CI by B13.
 
-**Still standing:** assumptions 1, 2, 3, 5, 6, 7, 8 and 9 of §5 — TLS termination, proxy
-header handling, database network exposure, single replica, the session-sweep cron,
-`ALLOWED_EMAIL_DOMAINS`, frontend XSS, and above all the absence of an independent tester.
+**Also retired in round 3** — assumption 5 ("one replica") is confirmed fact, not an
+assumption: the owner states the topology is Cloudflare → 1 VPS → 1 backend replica →
+PostgreSQL. The in-memory throttle is therefore correct *today*, and README §8 records the
+trigger that would change that.
+
+**Promoted from assumption to finding** — assumption 2 ("the reverse proxy sets
+`X-Forwarded-For` honestly and `TRUST_PROXY_HOPS` matches") is no longer a quiet caveat.
+With Cloudflare confirmed in front, the current default of `0` makes the login throttle
+global, and that was demonstrated live. See audit §22.3 — it is a launch-blocking
+configuration item.
+
+**Still standing:** assumptions 1, 3, 6, 7, 8 and 9 of §5 — TLS termination, database
+network exposure, the session-sweep cron, `ALLOWED_EMAIL_DOMAINS`, frontend XSS, and above
+all the absence of an independent tester.
 
 **Still true, and the reason this document exists:** `PENTEST = NOT PERFORMED`.
 
-## 8. Re-running this plan
+
+---
+
+## 8. The three activities, and which one this is
+
+These are routinely conflated, and conflating them is how a system gets called "tested".
+
+| | Automated security regression | Internal adversarial testing | External penetration test |
+|---|---|---|---|
+| **Status** | **PASS** | **PERFORMED** | **NOT PERFORMED** |
+| What it is | Assertions that run in CI on every change | A person deliberately attacking a running system | An independent party attacking it without the builder's assumptions |
+| Who | The test suite | The same agent that reviewed the code | Nobody yet |
+| Scale | 543 tests, 33 suites, 0 skipped | 72 live cases, 3 rounds | — |
+| Runs against | Real PostgreSQL 17.11, mocked HTTP | Real app, `NODE_ENV=production`, real PostgreSQL | Would run against staging or production |
+| Catches | Regressions in known controls | Gaps between intent and behaviour | Blind spots shared by builder and reviewer |
+| **Cannot catch** | Anything nobody thought to assert | Anything the same mind missed twice | — |
+| Infrastructure | ❌ | ❌ | ✅ TLS, Cloudflare, VPS, firewall, backups |
+
+**The third column is empty, and no amount of the first two fills it.** The internal
+adversarial testing in §3 and §6 was performed by the same agent that reviewed the code, so
+it inherits that agent's blind spots — which is the specific thing an external test exists
+to correct.
+
+**Infrastructure security: NOT AUDITED.** Cloudflare configuration, origin exposure, TLS
+and HSTS, VPS hardening, SSH, PostgreSQL network reachability and backups are outside this
+repository and were not examined.
+
+## 9. Attack classes completed
+
+Every class below was executed live against a running application. Case numbers refer to
+§3 (round 1) and §6 (round 2).
+
+| Attack class | Cases | Result |
+|---|---|---|
+| Account enumeration | 1, 2, 4 | Byte-identical rejection for unknown account, wrong password and disabled account |
+| Timing side channel | 3 | Indistinguishable over 5 samples each; `fakeVerify()` burns matching work |
+| Brute force / throttle | 5, 6, 7 | 429 with `Retry-After`; the correct password is refused while throttled |
+| Session replay | 10–13 | Forged, empty, traversal and SQL-injection tokens all 401 |
+| Logout replay | 14 | Captured token after logout → 401 |
+| Password-change session revocation | 15 | Every session dies, including the caller's own |
+| Disabled account | 4, and lifecycle suite | Status re-checked on every request, not only at login |
+| IDOR | 36–39 | Head of A refused every read and write against B |
+| Cross-department | 36–39 | 403 on members, unit, requests and invitations |
+| Global route escalation | 40–44 | Refused list-all, create department, provision user, global queues, self-promotion, self-disable |
+| Body tampering | 45 | `role`, `global`, `permissions` stripped by the DTO before the service sees them |
+| Approval self-decision | suite | Refused by the permission model **and** by a database CHECK |
+| Approval race | suite | Exactly one of two concurrent approvals wins; final DB state asserted |
+| Invitation race | suite | Exactly one of two concurrent approvals creates the account |
+| Malformed UUID | 48, and §6.3 | 17/17 params → 422, one envelope, service never reached |
+| CSRF | 32–34 | 403 without the header; all 17 mutating routes carry the guard |
+| CORS bypass | 24–31 | Suffix, query-smuggle, scheme downgrade, case and `null` origin all refused |
+| Provisioning gate | 46, 47 | Temporary credential can reach only `/auth/me` and the password change |
+| Database containment | 49–61 | Runtime cannot DELETE, TRUNCATE, DROP, ALTER, CREATE, escalate or COPY to disk |
+| Privilege-invariant guard | 71, 72 | B13 fails with exit 1 on an injected DELETE |
+
+### Attack classes NOT covered
+
+Not weaknesses found — areas nobody has tested, listed so they are not mistaken for
+cleared:
+
+- Everything infrastructural: TLS, Cloudflare rules, origin exposure, VPS, SSH, backups.
+- `TRUST_PROXY_HOPS` **as actually deployed**. It was tested as a behaviour (audit §22.3)
+  and the correct pairing is documented, but the deployed value and the origin firewall
+  have not been verified on the real VPS.
+- Sustained load and concurrency beyond the race cases.
+- Any client-side or browser-level attack, since no frontend file was in scope.
+- Social engineering, physical access, supply chain.
+
+## 10. Re-running this plan
 
 Requirements: Docker PostgreSQL, a built backend, a free port.
 
