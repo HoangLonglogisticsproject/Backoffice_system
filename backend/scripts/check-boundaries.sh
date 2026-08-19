@@ -20,6 +20,18 @@ cd "$(dirname "$0")/.." || exit 2
 # giải thích ranh giới đương nhiên phải nhắc tên các tầng — một checker vấp vào
 # chính tài liệu của nó là checker sẽ bị tắt.
 
+# `grep -n` output whose CODE part is a comment — `path:12:   // ...`.
+#
+# Four rules below strip these, and all four learned the same lesson: a rule
+# that trips over the comment explaining it is a rule somebody switches off.
+# B7 names business words while forbidding them, B11 and B12 explain why they
+# do NOT open a transaction or use forwardRef, and B13 ships the DELETE the
+# deployment's cron is supposed to run. Each would report itself.
+#
+# One definition, so the four cannot drift apart — a fifth rule spelling the
+# pattern slightly differently would silently stop skipping comments.
+readonly COMMENT_LINE=':[0-9]+: *(\*|//|/\*)'
+
 fail=0
 report() {
   local rule="$1"
@@ -113,7 +125,7 @@ report "B6  không đọc process.env.X ngoài validate" \
 report "B7  foundation ↛ từ vựng nghiệp vụ" \
   "$(grep -rinE "(customer|invoice|shipment|warehouse|recruitment|\bcrm\b)" \
        --include=*.ts src/core src/common src/infrastructure src/config 2>/dev/null \
-     | grep -vE ':[0-9]+: *(\*|//|/\*)')"
+     | grep -vE "$COMMENT_LINE")"
 
 # --- B8 ── chỉ MỘT thư mục infrastructure, ở gốc src ------------------------
 # `src/infrastructure/` = hạ tầng kỹ thuật của TOÀN HỆ THỐNG (driver database,
@@ -143,7 +155,7 @@ report "B10 domain ↛ @nestjs · pg · express"   "$(grep -rnE "from '(@nestjs|
 # Chỉ soi CODE, không soi comment — repository giải thích VÌ SAO nó không mở
 # transaction, và một checker vấp vào chính tài liệu của nó là checker sẽ bị tắt.
 # Cùng bài học như B7.
-report "B11 persistence ↛ tự mở transaction"   "$(grep -rn "\.transaction(" --include=*.ts        src/core/*/persistence src/capabilities/*/persistence 2>/dev/null      | grep -v '\.spec\.ts'      | grep -vE ':[0-9]+: *(\*|//|/\*)')"
+report "B11 persistence ↛ tự mở transaction"   "$(grep -rn "\.transaction(" --include=*.ts        src/core/*/persistence src/capabilities/*/persistence 2>/dev/null      | grep -v '\.spec\.ts'      | grep -vE "$COMMENT_LINE")"
 
 # --- B12 ── forwardRef chỉ được tồn tại ở đúng cặp đã biết -------------------
 # `organization ↔ authorization` là cycle DUY NHẤT được chấp nhận, và lý do nằm
@@ -154,9 +166,28 @@ report "B11 persistence ↛ tự mở transaction"   "$(grep -rn "\.transaction(
 # Soi lời gọi THẬT `forwardRef(`, bỏ qua dòng comment — module giải thích vì sao
 # nó KHÔNG dùng forwardRef, và checker vấp vào chính tài liệu đó là checker sẽ bị
 # tắt. Bài học thứ ba cùng loại, sau B7 và B11.
-report "B12 không có forwardRef mới ngoài cặp đã biết"   "$(found=$(grep -rn "forwardRef(" --include=*.module.ts src 2>/dev/null        | grep -vE ':[0-9]+: *(\*|//|/\*)'        | cut -d: -f1 | sort -u);      count=$(printf '%s
+report "B12 không có forwardRef mới ngoài cặp đã biết"   "$(found=$(grep -rn "forwardRef(" --include=*.module.ts src 2>/dev/null        | grep -vE "$COMMENT_LINE"        | cut -d: -f1 | sort -u);      count=$(printf '%s
 ' "$found" | grep -c . );      if [[ $count -gt 2 ]]; then printf '%s
 ' "$found"; fi)"
+
+# --- B13 ── runtime không phát lệnh DELETE ----------------------------------
+# Vòng đời của hệ này là disable / archive / end / revoke — toàn UPDATE, vì lịch
+# sử là mục đích: membership, role assignment và audit trail phải đọc được sau
+# khi người ta rời đi.
+#
+# `scripts/provision-db-roles.sql` biến điều đó thành ràng buộc thật: role
+# runtime (bo_app) được GRANT SELECT, INSERT, UPDATE và KHÔNG có DELETE. Nên một
+# câu DELETE mới trong code sẽ không fail lúc review — nó fail trên production,
+# bằng `permission denied for table ...`, đúng lúc ai đó đang bấm nút.
+#
+# Rule này bắt nó ở CI thay vì ở đó. Nếu một DELETE thật sự cần thiết thì nó là
+# một quyết định kiến trúc: sửa grant, sửa rule này, và ghi lý do — không phải
+# lặng lẽ thêm một câu lệnh.
+#
+# Chỉ soi CODE, không soi comment — session.service.ts chép sẵn câu DELETE cho
+# cron của deployment, và một checker vấp vào chính tài liệu của nó là checker
+# sẽ bị tắt. Bài học thứ tư cùng loại, sau B7, B11 và B12.
+report "B13 runtime ↛ DELETE"                  "$(grep -rniE "delete[[:space:]]+from" --include=*.ts src 2>/dev/null      | grep -v '\.spec\.ts'      | grep -vE "$COMMENT_LINE")"
 
 echo
 if [[ $fail -eq 0 ]]; then

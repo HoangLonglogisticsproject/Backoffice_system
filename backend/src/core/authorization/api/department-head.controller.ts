@@ -12,6 +12,7 @@ import {
 import { z } from 'zod';
 import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
 import { CurrentUser } from '../../identity/api/current-user.decorator';
@@ -90,7 +91,7 @@ export class DepartmentHeadController {
   @Get()
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('role.assign')
-  async current(@Param('departmentId') departmentId: string): Promise<DepartmentHeadResponse> {
+  async current(@Param('departmentId', UuidParam) departmentId: string): Promise<DepartmentHeadResponse> {
     const assignment = await this.authorization.findActiveHeadOfDepartment(departmentId);
     if (!assignment) throw new NotFoundError('That department has no active head.');
 
@@ -109,7 +110,7 @@ export class DepartmentHeadController {
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('role.assign')
   async assign(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(assignHeadSchema)) body: AssignHeadInput,
     @CurrentUser() actor: SessionUser,
   ): Promise<DepartmentHeadResponse> {
@@ -135,7 +136,7 @@ export class DepartmentHeadController {
   @RequirePermission('role.assign')
   @HttpCode(HttpStatus.OK)
   async revoke(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
     @CurrentUser() actor: SessionUser,
   ): Promise<DepartmentHeadResponse> {
     const assignment = await this.authorization.revokeHeadOfDepartment({

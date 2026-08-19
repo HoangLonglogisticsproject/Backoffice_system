@@ -90,18 +90,64 @@ export const envSchema = z.object({
     }),
 
   /**
-   * How many reverse proxies sit in front of this app. DEFAULT 0 — trust none.
+   * WHICH peers may be believed when they send `X-Forwarded-For`.
+   * Comma-separated IPs, CIDR blocks, or the presets Express understands
+   * (`loopback`, `linklocal`, `uniquelocal`). DEFAULT EMPTY — trust nobody.
    *
-   * `X-Forwarded-For` is a request header, so a client that reaches the app
-   * directly can write whatever it likes in it. With a hop count configured,
-   * Express takes the client address from that header — which means trusting it
-   * when nothing is actually in front turns the login throttle's per-IP budget
-   * into a formality: an attacker mints a new "address" per request.
+   * This replaced a hop COUNT, and the difference is the whole point.
    *
-   * So this must be a deployment fact, not a default. Behind one nginx or one
-   * load balancer, set 1.
+   * `X-Forwarded-For` is a request header, so anyone who can reach this app
+   * directly can write whatever they like in it. A hop count believes the
+   * header no matter WHO connected — so with a count configured and the origin
+   * reachable, an attacker rotates the header and mints a fresh throttle budget
+   * per request. Measured, not theorised: with `trust proxy = 1`, a request
+   * from an untrusted peer carrying `X-Forwarded-For: 203.0.113.9` yields
+   * `req.ip = 203.0.113.9`.
+   *
+   * A LIST is checked against the peer instead. Express walks the forwarded
+   * chain from the right, discarding addresses that are on this list, and stops
+   * at the first one that is not — the real client. If the immediate peer is
+   * not on the list, the header is ignored ENTIRELY and `req.ip` stays the
+   * socket address. So a forged header from a direct connection buys nothing.
+   *
+   * It also removes the question a hop count forces you to answer. Listing the
+   * Cloudflare ranges AND the local nginx address is correct whether the chain
+   * is `CF → node` or `CF → nginx → node`; nobody has to count, and adding a
+   * proxy later does not silently shift the meaning of a number.
+   *
+   * The login throttle keys on `req.ip`, so this variable decides whether that
+   * value is a fact or a caller's suggestion.
+   *
+   * PRODUCTION behind Cloudflare: list Cloudflare's published ranges from
+   * https://www.cloudflare.com/ips/ — and restrict the origin so only
+   * Cloudflare can reach it, because this setting alone cannot do that.
    */
-  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+  TRUSTED_PROXIES: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    )
+    .superRefine((entries, ctx) => {
+      // Validated at BOOT, because a typo here fails open in the worst way: the
+      // entry never matches, the peer is never trusted, every caller collapses
+      // to the proxy's address and the per-IP throttle becomes global — which
+      // looks like working software right up until it locks everybody out.
+      const preset = /^(loopback|linklocal|uniquelocal)$/;
+      const ipv4 = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+      const ipv6 = /^[0-9a-fA-F:]+(\/\d{1,3})?$/;
+
+      for (const entry of entries) {
+        if (preset.test(entry) || ipv4.test(entry) || ipv6.test(entry)) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `TRUSTED_PROXIES entry "${entry}" is not an IP, a CIDR block, or one of loopback|linklocal|uniquelocal`,
+        });
+      }
+    }),
 
   /**
    * Email domains an account may be provisioned under, comma-separated.

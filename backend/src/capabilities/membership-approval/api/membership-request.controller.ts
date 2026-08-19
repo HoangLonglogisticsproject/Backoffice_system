@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import {
   HeadOfRouteDepartmentGuard,
   PermissionGuard,
@@ -47,7 +48,7 @@ export class MembershipRequestController {
   @Post('departments/:departmentId/membership-requests')
   @UseGuards(AuthGuard, CsrfGuard, HeadOfRouteDepartmentGuard)
   async create(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(createRequestSchema)) body: CreateRequestInput,
     @CurrentUser() actor: SessionUser,
   ): Promise<MembershipChangeRequest> {
@@ -65,7 +66,7 @@ export class MembershipRequestController {
   @Get('departments/:departmentId/membership-requests')
   @UseGuards(AuthGuard, HeadOfRouteDepartmentGuard)
   async listForDepartment(
-    @Param('departmentId') departmentId: string,
+    @Param('departmentId', UuidParam) departmentId: string,
   ): Promise<MembershipChangeRequest[]> {
     return this.requests.listForDepartment(departmentId);
   }
@@ -89,7 +90,7 @@ export class MembershipRequestController {
   @RequirePermission('unit.member.write')
   @HttpCode(HttpStatus.OK)
   async approve(
-    @Param('requestId') requestId: string,
+    @Param('requestId', UuidParam) requestId: string,
     @CurrentUser() actor: SessionUser,
   ): Promise<MembershipChangeRequest> {
     return this.requests.approve({ requestId, decidedBy: actor.id });
@@ -100,7 +101,7 @@ export class MembershipRequestController {
   @RequirePermission('unit.member.write')
   @HttpCode(HttpStatus.OK)
   async reject(
-    @Param('requestId') requestId: string,
+    @Param('requestId', UuidParam) requestId: string,
     @CurrentUser() actor: SessionUser,
   ): Promise<MembershipChangeRequest> {
     return this.requests.reject({ requestId, decidedBy: actor.id });

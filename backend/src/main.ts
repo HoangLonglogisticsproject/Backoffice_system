@@ -73,17 +73,23 @@ async function bootstrap(): Promise<void> {
   }
 
   /**
-   * Whether to believe X-Forwarded-For, and for how many hops. DEFAULT 0.
+   * WHOSE `X-Forwarded-For` to believe. DEFAULT: nobody.
    *
    * The login throttle keys on `req.ip`, so this decides whether that value is
-   * a fact or a request header the caller chose. Hardcoding a hop count assumes
-   * a proxy is always in front; when one is not — a container reached directly,
-   * a port exposed for debugging — the caller supplies their own address and
-   * gets a fresh throttle budget per request.
+   * a fact or a request header the caller chose.
    *
-   * A deployment that terminates behind nginx sets TRUST_PROXY_HOPS=1.
+   * A LIST, not a hop count, and that is a correctness difference rather than a
+   * style one. A count believes the header no matter who connected, so with the
+   * origin reachable an attacker rotates `X-Forwarded-For` and gets a fresh
+   * throttle budget per request. Express checks a list against the PEER: if the
+   * immediate peer is not on it the header is ignored entirely, and a forged
+   * one buys nothing.
+   *
+   * `false` rather than `[]` when nothing is configured — an empty array is
+   * still a list, and Express reads it as "consult the chain", which is not
+   * what "trust nobody" means.
    */
-  app.set('trust proxy', config.trustProxyHops);
+  app.set('trust proxy', config.trustedProxies.length > 0 ? [...config.trustedProxies] : false);
 
   app.useGlobalFilters(new DomainErrorFilter());
 

@@ -124,14 +124,69 @@ các case — đừng trỏ vào database có dữ liệu:
 DATABASE_URL_TEST=postgres://user:pass@localhost:5432/backoffice_itest npm test
 ```
 
-## 7. Giới hạn vận hành đã biết
+## 7. Ba principal PostgreSQL
+
+Ứng dụng **không** được chạy bằng superuser. Ba role, mỗi role một lý do:
+
+| Role | Dùng ở đâu | Quyền |
+|---|---|---|
+| `bo_migrator` | `npm run migrate`, bước deploy | owner của database + mọi object |
+| `bo_app` | runtime + `npm run user:create` | `SELECT, INSERT, UPDATE` — **không DELETE** |
+| `bo_ops` | cron dọn session | `SELECT, DELETE` trên `sessions` |
+
+Tách được mà không phải sửa code, vì `migrate.cli.ts` vốn đã là entry point
+riêng — migration là bước deploy, không phải bước boot.
+
+**Vì sao bo_app không có DELETE:** vòng đời ở đây là disable / archive / end /
+revoke, toàn UPDATE, vì lịch sử là mục đích. Không cấp DELETE biến quyết định
+thiết kế đó thành thứ PostgreSQL cưỡng chế, thay vì thứ repository sau phải nhớ.
+`npm run check` canh phía code bằng **B13**, nên một câu DELETE mới fail ở CI
+chứ không fail trên production.
+
+Provision một lần, bằng DBA:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d postgres -v db=backoffice      -v migrator_pw="$MIGRATOR_PASSWORD" -v app_pw="$APP_PASSWORD" -v ops_pw="$OPS_PASSWORD"      -f scripts/provision-db-roles.sql
+DATABASE_URL=postgres://bo_migrator:PW@HOST/backoffice npm run migrate
+psql -c 'GRANT SELECT, DELETE ON sessions TO bo_ops;'      -c 'REVOKE ALL ON schema_migrations FROM bo_app;'
+```
+
+Script không chứa mật khẩu — chúng vào bằng biến psql từ môi trường.
+
+## 8. Giới hạn vận hành đã biết
 
 Không phải lỗi — là thứ deployment phải biết trước khi đưa lên production.
 
-**Rate limiter đăng nhập nằm trong bộ nhớ, tính theo TIẾN TRÌNH.** Chạy nhiều
-replica thì mỗi replica có ngân sách riêng, nên giới hạn thực tế nhân lên theo số
-replica. Cần giới hạn thật sự toàn cục thì đặt ở edge/reverse proxy, hoặc thay
-bằng một shared store.
+**Login throttle is process-local by design because current production topology
+has one backend replica. Before horizontal scale-out to 2+ replicas, the throttle
+must move to a shared atomic store and this becomes a production launch
+precondition.**
+
+Topology đã chốt: **Cloudflare → 1 VPS → 1 backend replica → PostgreSQL**. Một
+tiến trình, nên bộ đếm trong bộ nhớ *là* bộ đếm toàn cục — không có replica thứ
+hai để lệch khỏi nó. Restart vẫn xoá bộ đếm; chấp nhận được ở quy mô này.
+
+Không thêm Redis/KV cho việc này. Một dependency hạ tầng mới, kèm câu chuyện
+availability và failure của riêng nó, đổi lấy một giới hạn chưa tồn tại — đó là
+chi phí thật cho rủi ro giả định.
+
+Trigger để xem lại, viết ra để không phải nhớ:
+
+| Điều kiện | Hành động |
+|---|---|
+| Thêm backend replica thứ 2 | **Bắt buộc** chuyển sang shared atomic store trước khi bật |
+| Chạy sau load balancer nhiều instance | Như trên |
+| Cần giới hạn sống sót qua restart | Shared store, hoặc rate limit ở Cloudflare |
+| Vẫn 1 replica | Không làm gì |
+
+**`TRUSTED_PROXIES` quyết định throttle đếm AI.** Nó liệt kê những peer được
+phép nói `X-Forwarded-For` — không phải đếm số hop. Peer không nằm trong danh
+sách thì header bị bỏ qua hoàn toàn, nên header giả từ một kết nối trực tiếp
+không mua được gì. Rỗng = không tin ai (mặc định, đúng cho dev).
+
+Nó **không** ngăn được ai đó chạm thẳng vào origin — việc đó thuộc firewall /
+Cloudflare Tunnel. Hai nửa đều bắt buộc: xem
+`docs/security/production-launch-checklist.md` §3 và audit §23.
 
 **HSTS và CSP thuộc về deployment, không phải ứng dụng.** HSTS là thuộc tính của
 lớp kết thúc TLS — đặt từ một app có thể chạy HTTP ở dev thì hoặc vô tác dụng,
@@ -146,7 +201,15 @@ dung lượng chứ không phải bảo mật.
 
 Không thêm scheduler vào ứng dụng cho việc này: một job runner kèm chuyện chọn
 leader khi chạy nhiều replica là quá nhiều bộ máy cho một câu lệnh mà cron của
-deployment vốn đã biết chạy.
+deployment vốn đã biết chạy. Deployment layer không nằm trong repo này.
+
+| | |
+|---|---|
+| **Owner** | Deployment/ops — cron trên VPS |
+| **Principal** | `bo_ops` (chỉ có `SELECT, DELETE` trên `sessions`) |
+| **Tần suất khuyến nghị** | Hằng ngày, giờ thấp điểm. Cửa sổ giữ 30 ngày nên trễ vài ngày không mất gì |
+| **Nếu ngừng chạy** | Bảng lớn dần, **không** mất an toàn: session hết hạn/thu hồi vẫn bị `resolve` từ chối. Hệ quả là dung lượng đĩa và index lớn hơn |
+| **Monitoring** | Cảnh báo khi `SELECT count(*) FROM sessions` vượt ngưỡng theo lượng người dùng, hoặc khi job không chạy quá 7 ngày |
 
 ```sql
 DELETE FROM sessions
@@ -162,7 +225,7 @@ một tiến trình, không crash-loop. Nhưng `POST /auth/login` lúc đó tr�
 không phải 503. Nó đóng lại đúng cách và không lộ chi tiết nội bộ; chỉ là mã
 trạng thái chưa mô tả đúng nguyên nhân.
 
-## 8. Bảo mật — hình dạng hiện tại
+## 9. Bảo mật — hình dạng hiện tại
 
 Phiên đăng nhập là **token mờ phía server**, không phải JWT: database chỉ lưu
 SHA-256 của token, còn token thô chỉ tồn tại trong một cookie `HttpOnly` —

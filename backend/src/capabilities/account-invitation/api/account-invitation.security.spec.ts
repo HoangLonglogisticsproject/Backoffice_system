@@ -460,4 +460,36 @@ describe('account-invitation HTTP security', () => {
       expect(invitations.approve).not.toHaveBeenCalled();
     });
   });
+  // ------------------------------------------------- malformed identifier --
+
+  /**
+   * A route parameter that is not a UUID used to reach PostgreSQL, which
+   * rejected the cast (SQLSTATE 22P02) as an error the filter does not map —
+   * so the caller got a bare 500. Guards do not catch it: they compare the
+   * value as a string and an authorized caller passes them.
+   *
+   * 422 with the same shape a malformed BODY already produces, and the service
+   * must not be reached at all.
+   */
+  describe('malformed identifier in the path', () => {
+    // A caller the guards ADMIT: they compare the parameter as a string, so a
+    // scoped caller is refused 403 before the pipe runs and never saw the 500.
+    // Only a caller authorized for the route reached PostgreSQL with it.
+    beforeEach(() => {
+      context = asContext({ global: true });
+    });
+
+    it.each([
+      ['get', '/departments/not-a-uuid/account-invitations'],
+      ['post', '/departments/not-a-uuid/account-invitations'],
+      ['post', '/account-invitations/not-a-uuid/approve'],
+      ['post', '/account-invitations/not-a-uuid/reject'],
+    ] as const)(
+      'answers 422 for %s %s, without reaching the service',
+      async (method, path) => {
+        await authed(method, path).expect(422);
+        expect(invitations.approve).not.toHaveBeenCalled();
+      },
+    );
+  });
 });

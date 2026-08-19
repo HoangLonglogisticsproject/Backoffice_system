@@ -51,19 +51,36 @@ describe('validateEnv', () => {
     });
   });
 
-  describe('TRUST_PROXY_HOPS', () => {
-    it('defaults to trusting NO proxy, so X-Forwarded-For cannot be forged', () => {
-      // The login throttle keys on the client address. Trusting a header by
+  describe('TRUSTED_PROXIES', () => {
+    it('defaults to trusting NO peer, so X-Forwarded-For cannot be forged', () => {
+      // The login throttle keys on the client address. Believing the header by
       // default would hand an attacker a fresh budget per request.
-      expect(validateEnv(valid).TRUST_PROXY_HOPS).toBe(0);
+      expect(validateEnv(valid).TRUSTED_PROXIES).toEqual([]);
     });
 
-    it('accepts a hop count for a deployment that really is behind a proxy', () => {
-      expect(validateEnv({ ...valid, TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS).toBe(1);
+    it('accepts the addresses a real chain is made of', () => {
+      expect(
+        validateEnv({
+          ...valid,
+          TRUSTED_PROXIES: '173.245.48.0/20, 103.21.244.0/22, loopback, 2400:cb00::/32',
+        }).TRUSTED_PROXIES,
+      ).toEqual(['173.245.48.0/20', '103.21.244.0/22', 'loopback', '2400:cb00::/32']);
     });
 
-    it('rejects a negative hop count', () => {
-      expect(() => validateEnv({ ...valid, TRUST_PROXY_HOPS: '-1' })).toThrow();
+    it('REFUSES TO BOOT on an entry that is not an address', () => {
+      // A typo here fails open in the worst way: the entry never matches, no
+      // peer is ever trusted, every caller collapses to the proxy's address and
+      // the per-IP throttle silently becomes global. Better to not start.
+      expect(() => validateEnv({ ...valid, TRUSTED_PROXIES: 'cloudflare' })).toThrow(
+        /not an IP, a CIDR block/,
+      );
+      expect(() => validateEnv({ ...valid, TRUSTED_PROXIES: '10.0.0.0/8, nginx' })).toThrow();
+    });
+
+    it('ignores blank entries from a trailing comma', () => {
+      expect(validateEnv({ ...valid, TRUSTED_PROXIES: '10.0.0.1, ,' }).TRUSTED_PROXIES).toEqual([
+        '10.0.0.1',
+      ]);
     });
   });
 

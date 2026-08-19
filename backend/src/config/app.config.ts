@@ -44,9 +44,12 @@ export class AppConfig {
     return this.config.get('ALLOWED_EMAIL_DOMAINS', { infer: true });
   }
 
-  /** 0 means no proxy is trusted, so X-Forwarded-For is ignored. */
-  get trustProxyHops(): number {
-    return this.config.get('TRUST_PROXY_HOPS', { infer: true });
+  /**
+   * Peers whose `X-Forwarded-For` may be believed. Empty means none, so the
+   * header is ignored and `req.ip` is always the socket address.
+   */
+  get trustedProxies(): readonly string[] {
+    return this.config.get('TRUSTED_PROXIES', { infer: true });
   }
 
   get isProduction(): boolean {

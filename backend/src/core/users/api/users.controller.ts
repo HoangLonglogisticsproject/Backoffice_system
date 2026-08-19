@@ -1,6 +1,7 @@
 import { Body, Controller, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { PermissionGuard, RequirePermission } from '../../authorization/api/permission.guard';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
@@ -99,7 +100,7 @@ export class UsersController {
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('user.write')
   async setStatus(
-    @Param('userId') userId: string,
+    @Param('userId', UuidParam) userId: string,
     @Body(new ZodValidationPipe(setStatusSchema)) _body: SetStatusInput,
     @CurrentUser() actor: SessionUser,
   ): Promise<{ id: string; status: string }> {
