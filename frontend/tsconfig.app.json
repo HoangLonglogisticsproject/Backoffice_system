@@ -19,7 +19,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
+    /* TypeScript 7 removed `baseUrl`; `paths` now resolves relative to this
+       file, which is what it already meant here. */
     "paths": {
       "@/*": ["./src/*"]
     }
