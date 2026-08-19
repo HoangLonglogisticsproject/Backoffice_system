@@ -41,3 +41,25 @@ export interface DepartmentMembership {
   /** Set exactly when `status` is `ended`; the database enforces the pair. */
   endedAt: string | null;
 }
+
+/**
+ * `GET /departments/:departmentId/head` (§15b).
+ *
+ * Department-scoped, but owned by AUTHORIZATION rather than organization: the
+ * permission is `role.assign`, which is GLOBAL-only. A head cannot read this
+ * for their own department — the whole route family is closed to them, read
+ * included. It lives with the department types because that is how a screen
+ * consumes it: "who leads this unit".
+ *
+ * Assign, revoke and read all return this same shape. A department with no head
+ * is a **404**, not an empty body — absence is not an error, so a caller checks
+ * for 404 rather than for null.
+ */
+export interface DepartmentHead {
+  assignmentId: string;
+  departmentId: string;
+  userId: string;
+  /** The membership that entitles this person to lead here (invariant #6). */
+  membershipId: string;
+  grantedAt: string;
+}
