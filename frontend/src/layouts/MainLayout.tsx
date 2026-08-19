@@ -3,19 +3,30 @@ import { Outlet, Link, useLocation } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { 
-  ChevronDown, 
-  ChevronRight, 
   Menu, 
   LogOut, 
-  Users, 
   Building, 
   Briefcase,
   LayoutDashboard,
-  UserCircle
+  TrendingUp,
+  Box,
+  Megaphone,
+  DollarSign,
+  Code,
+  Shield,
+  Inbox,
+  CheckSquare,
+  FileText,
+  BarChart2,
+  Sparkles,
+  Settings,
+  Users
 } from 'lucide-react'
 import clsx from 'clsx'
+import { useLanguage } from '@/contexts/LanguageContext'
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
 
-const NavItem = ({ to, icon: Icon, label, isSidebarOpen }: { to: string, icon: any, label: string, isSidebarOpen: boolean }) => {
+const NavItem = ({ to, icon: Icon, label, badge, isSidebarOpen }: { to: string, icon: any, label: string, badge?: number, isSidebarOpen: boolean }) => {
   const location = useLocation()
   const isActive = location.pathname.startsWith(to)
   return (
@@ -23,14 +34,24 @@ const NavItem = ({ to, icon: Icon, label, isSidebarOpen }: { to: string, icon: a
       <Button 
         variant={isActive ? "secondary" : "ghost"} 
         className={clsx(
-          "w-full justify-start transition-all", 
+          "w-full justify-start transition-all text-sm font-medium", 
           !isSidebarOpen && "justify-center px-2",
-          isActive && "font-semibold"
+          isActive ? "font-semibold text-blue-700 bg-blue-50/50" : "text-gray-600 hover:text-gray-900"
         )}
         title={!isSidebarOpen ? label : undefined}
       >
-        <Icon className={clsx("h-5 w-5 shrink-0", isSidebarOpen && "mr-3")} />
-        {isSidebarOpen && <span>{label}</span>}
+        <Icon className={clsx("h-5 w-5 shrink-0", isSidebarOpen && "mr-3", isActive ? "text-blue-600" : "text-gray-500")} />
+        {isSidebarOpen && (
+          <div className="flex items-center justify-between flex-1">
+            <span>{label}</span>
+            {badge !== undefined && (
+              <span className="flex items-center text-xs text-gray-500">
+                <span className="w-1 h-1 rounded-full bg-blue-400 mr-2"></span>
+                {badge}
+              </span>
+            )}
+          </div>
+        )}
       </Button>
     </Link>
   )
@@ -38,65 +59,68 @@ const NavItem = ({ to, icon: Icon, label, isSidebarOpen }: { to: string, icon: a
 
 const SidebarSection = ({ 
   title, 
-  icon: Icon, 
-  sectionKey, 
   isSidebarOpen, 
-  expandedSections, 
-  toggleSection,
   children 
 }: { 
   title: string, 
-  icon: any, 
-  sectionKey: string, 
   isSidebarOpen: boolean, 
-  expandedSections: Record<string, boolean>, 
-  toggleSection: (key: string) => void,
   children: React.ReactNode
 }) => {
   return (
-    <div>
-      <button 
-        type="button"
+    <div className="mb-6">
+      <div 
         className={clsx(
-          "w-full flex items-center justify-between px-2 mb-2 cursor-pointer text-gray-500 hover:text-gray-800 transition-colors focus:outline-none rounded",
+          "px-3 mb-2 flex items-center transition-colors",
           !isSidebarOpen && "justify-center"
         )}
-        onClick={() => isSidebarOpen && toggleSection(sectionKey)}
-        title={!isSidebarOpen ? title : undefined}
       >
         {isSidebarOpen ? (
-          <>
-            <span className="font-semibold text-xs uppercase tracking-wider">{title}</span>
-            {expandedSections[sectionKey] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          </>
+          <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{title}</span>
         ) : (
-          <Icon className="h-5 w-5 mt-1" />
+          <div className="h-px w-8 bg-gray-200 my-2"></div>
         )}
-      </button>
+      </div>
       
-      {(!isSidebarOpen || expandedSections[sectionKey]) && (
-        <div className="space-y-1">
-          {children}
-        </div>
-      )}
+      <div className="space-y-0.5 px-2">
+        {children}
+      </div>
     </div>
   )
 }
 
+const VNFlag = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 40" className="w-5 h-4 shrink-0 rounded-[2px] shadow-sm">
+    <rect width="60" height="40" fill="#da251d"/>
+    <polygon points="30,8 35.3,24.3 21.4,14.2 38.6,14.2 24.7,24.3" fill="#ffcd00"/>
+  </svg>
+)
+
+const USFlag = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 40" className="w-5 h-4 shrink-0 rounded-[2px] shadow-sm">
+    <rect width="60" height="40" fill="#bd3d44"/>
+    <rect width="60" height="3.07" y="3.07" fill="#fff"/>
+    <rect width="60" height="3.07" y="9.23" fill="#fff"/>
+    <rect width="60" height="3.07" y="15.38" fill="#fff"/>
+    <rect width="60" height="3.07" y="21.53" fill="#fff"/>
+    <rect width="60" height="3.07" y="27.69" fill="#fff"/>
+    <rect width="60" height="3.07" y="33.84" fill="#fff"/>
+    <rect width="24" height="21.53" fill="#192f5d"/>
+    <circle cx="4" cy="4" r="1" fill="#fff"/>
+    <circle cx="12" cy="4" r="1" fill="#fff"/>
+    <circle cx="20" cy="4" r="1" fill="#fff"/>
+    <circle cx="8" cy="8" r="1" fill="#fff"/>
+    <circle cx="16" cy="8" r="1" fill="#fff"/>
+    <circle cx="4" cy="12" r="1" fill="#fff"/>
+    <circle cx="12" cy="12" r="1" fill="#fff"/>
+    <circle cx="20" cy="12" r="1" fill="#fff"/>
+    <circle cx="8" cy="16" r="1" fill="#fff"/>
+    <circle cx="16" cy="16" r="1" fill="#fff"/>
+  </svg>
+)
+
 export default function MainLayout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    leads: true,
-    organization: true,
-    worklist: true,
-  })
-
-  const toggleSection = (section: string) => {
-    setExpandedSections(prev => ({
-      ...prev,
-      [section]: !prev[section]
-    }))
-  }
+  const { language, setLanguage, t } = useLanguage()
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 font-sans text-gray-800">
@@ -106,21 +130,41 @@ export default function MainLayout() {
           <Button variant="ghost" size="icon" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
             <Menu className="h-5 w-5" />
           </Button>
-          <h1 className="text-xl font-extrabold text-blue-600 hidden sm:block">Backoffice System</h1>
+          <h1 className="text-xl font-extrabold text-blue-600 hidden sm:block">{t('backofficeSystem')}</h1>
         </div>
         
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
-            <Avatar className="h-8 w-8 cursor-pointer hover:ring-2 hover:ring-blue-100 transition-all">
+          <div className="mr-2">
+            <Select value={language} onValueChange={(val) => setLanguage(val as 'vi' | 'en')}>
+              <SelectTrigger className="w-[85px] h-9 bg-gray-50/50 border-gray-200 px-2.5">
+                {language === 'vi' ? (
+                  <span className="flex items-center gap-2"><VNFlag /> VN</span>
+                ) : (
+                  <span className="flex items-center gap-2"><USFlag /> US</span>
+                )}
+              </SelectTrigger>
+              <SelectContent className="min-w-[85px] w-[85px]">
+                <SelectItem value="vi" className="pl-2 pr-6">
+                  <span className="flex items-center gap-2"><VNFlag /> VN</span>
+                </SelectItem>
+                <SelectItem value="en" className="pl-2 pr-6">
+                  <span className="flex items-center gap-2"><USFlag /> US</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Link to="/account/security" className="flex items-center gap-3 hover:bg-gray-50 p-1.5 rounded-lg transition-colors cursor-pointer">
+            <Avatar className="h-8 w-8 hover:ring-2 hover:ring-blue-100 transition-all">
               <AvatarImage src="" />
               <AvatarFallback className="bg-blue-100 text-blue-700 font-bold">AD</AvatarFallback>
             </Avatar>
-            <span className="text-sm font-medium hidden sm:block">Admin User</span>
-          </div>
+            <span className="text-sm font-medium hidden sm:block">{t('adminUser')}</span>
+          </Link>
           <div className="h-6 w-px bg-gray-200 hidden sm:block"></div>
           <Button variant="outline" size="sm" className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-gray-200">
             <LogOut className="h-4 w-4" />
-            <span className="hidden sm:inline">Logout</span>
+            <span className="hidden sm:inline">{t('logout')}</span>
           </Button>
         </div>
       </header>
@@ -133,55 +177,50 @@ export default function MainLayout() {
             isSidebarOpen ? "w-64" : "w-16"
           )}
         >
-          <nav className="flex-1 overflow-y-auto p-3 space-y-6 mt-2 custom-scrollbar">
+          <nav className="flex-1 overflow-y-auto py-4 custom-scrollbar">
             
-            {/* Leads Section */}
-            {/* Leads Section */}
+            {/* Chung Section */}
             <SidebarSection
-              title="Leads"
-              icon={Users}
-              sectionKey="leads"
+              title={t('common')}
               isSidebarOpen={isSidebarOpen}
-              expandedSections={expandedSections}
-              toggleSection={toggleSection}
             >
-              <NavItem to="/leads/pool" icon={Users} label="Pool" isSidebarOpen={isSidebarOpen} />
-              <NavItem to="/leads/my-customers" icon={UserCircle} label="My Customers" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/overview" icon={LayoutDashboard} label={t('overview')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/my-work" icon={Briefcase} label={t('myWork')} badge={12} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/departments" icon={Building} label={t('departments')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/organization/employees" icon={Users} label={t('employees')} isSidebarOpen={isSidebarOpen} />
             </SidebarSection>
 
-            {/* Organization Section */}
+            {/* Phòng ban Section */}
             <SidebarSection
-              title="Organization"
-              icon={Building}
-              sectionKey="organization"
+              title={t('departmentsSection')}
               isSidebarOpen={isSidebarOpen}
-              expandedSections={expandedSections}
-              toggleSection={toggleSection}
             >
-              <NavItem to="/organization/dashboard" icon={LayoutDashboard} label="Dashboard" isSidebarOpen={isSidebarOpen} />
-              <NavItem to="/organization/departments" icon={Building} label="Departments" isSidebarOpen={isSidebarOpen} />
-              <NavItem to="/organization/department-control-center" icon={Building} label="Control Center" isSidebarOpen={isSidebarOpen} />
-              <NavItem to="/organization/personal-desk" icon={UserCircle} label="Personal Desk" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/departments/sales" icon={TrendingUp} label={t('sales')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/departments/operations" icon={Box} label={t('operations')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/departments/marketing" icon={Megaphone} label={t('marketing')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/departments/finance" icon={DollarSign} label={t('finance')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/departments/it" icon={Code} label={t('it')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/departments/legal" icon={Shield} label={t('legal')} isSidebarOpen={isSidebarOpen} />
             </SidebarSection>
 
-            {/* Worklist Section */}
+            {/* Hệ thống Section */}
             <SidebarSection
-              title="Worklist"
-              icon={Briefcase}
-              sectionKey="worklist"
+              title={t('system')}
               isSidebarOpen={isSidebarOpen}
-              expandedSections={expandedSections}
-              toggleSection={toggleSection}
             >
-              <NavItem to="/worklist/my-work" icon={Briefcase} label="My Work" isSidebarOpen={isSidebarOpen} />
-              <NavItem to="/worklist/all" icon={Briefcase} label="All Work" isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/system/requests" icon={Inbox} label={t('requests')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/system/approvals" icon={CheckSquare} label={t('approvals')} badge={7} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/system/documents" icon={FileText} label={t('documents')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/system/reports" icon={BarChart2} label={t('reports')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/system/ai-coordinator" icon={Sparkles} label={t('aiCoordinator')} isSidebarOpen={isSidebarOpen} />
+              <NavItem to="/system/settings" icon={Settings} label={t('settings')} isSidebarOpen={isSidebarOpen} />
             </SidebarSection>
 
           </nav>
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
           <Outlet />
         </main>
       </div>
