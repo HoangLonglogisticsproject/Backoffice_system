@@ -339,12 +339,15 @@ Mọi resource có tham chiếu tới một con người giờ kèm theo tên c�
 thị và tuyệt đối không được dùng thay. Không `username` — server không lưu, nó
 suy ra từ email, nên trả về là lộ phần local của địa chỉ email.
 
-| Resource | Field id (GIỮ NGUYÊN) | Sibling mới |
-|---|---|---|
-| members | `userId` | `user` |
-| membership request | `targetUserId` · `requestedBy` | `targetUser` · `requestedByUser` |
-| account invitation | `requestedBy` | `requestedByUser` |
-| department head (chỉ READ) | `userId` | `user` |
+**Sibling chỉ xuất hiện trên ĐƯỜNG ĐỌC.** Mọi response của đường ghi — tạo,
+duyệt, từ chối, assign, revoke — trả shape gốc, không có projection.
+
+| Resource | Field id (GIỮ NGUYÊN) | Sibling mới | Có ở |
+|---|---|---|---|
+| members | `userId` | `user` | `GET …/members` |
+| membership request | `targetUserId` · `requestedBy` | `targetUser` · `requestedByUser` | 2 GET danh sách |
+| account invitation | `requestedBy` | `requestedByUser` | 2 GET danh sách |
+| department head | `userId` | `user` | `GET …/head` |
 
 **Không có `decidedByUser`, không có `createdUser`.** Hai field đó nullable và
 chưa màn hình nào hiển thị; thêm join cho field không ai đọc thì trả giá trên
@@ -525,26 +528,47 @@ nhất trong toàn bộ API.
 ```
 
 ```jsonc
-// POST → 201 trả THẲNG object dưới đây (không có envelope).
-// GET /membership-requests — 200 trả envelope { items, nextCursor, hasMore }.
+// ĐƯỜNG GHI — POST tạo / approve / reject → 201 · 200.
+// Trả THẲNG object, KHÔNG envelope, KHÔNG projection.
 {
   "id": "f6d42eed-…",
   "departmentId": "60630e75-…",        // NGUỒN — server suy ra, không nhận từ client
   "targetDepartmentId": null,          // ĐÍCH — chỉ transfer mới có
   "targetUserId": "7d47b2ac-…",        // ← response dùng tên này
-  "targetUser":      { "id": "7d47b2ac-…", "displayName": "Moved Person" },  // ← mới
   "action": "REMOVE_MEMBER",
   "status": "pending",                 // pending | approved | rejected
   "requestedBy": "8b18fa79-…",
-  "requestedByUser": { "id": "8b18fa79-…", "displayName": "Head Person" },   // ← mới
   "requestedAt": "2026-08-18T08:34:23.633Z",
   "decidedBy": null, "decidedAt": null, "reason": null
-  // KHÔNG có decidedByUser — xem §5b
 }
 ```
 
-⚠️ Hai sibling chỉ có trên **danh sách**. `POST` tạo request trả shape cũ,
-không kèm tên: người gọi vừa tự đặt các id đó nên server không đi join lại.
+```jsonc
+// ĐƯỜNG ĐỌC — GET /membership-requests
+//             GET /departments/:id/membership-requests  → 200
+{
+  "items": [{
+    "id": "f6d42eed-…",
+    "departmentId": "60630e75-…",
+    "targetDepartmentId": null,
+    "targetUserId": "7d47b2ac-…",
+    "targetUser":      { "id": "7d47b2ac-…", "displayName": "Moved Person" },  // ← mới
+    "action": "REMOVE_MEMBER",
+    "status": "pending",
+    "requestedBy": "8b18fa79-…",
+    "requestedByUser": { "id": "8b18fa79-…", "displayName": "Head Person" },   // ← mới
+    "requestedAt": "2026-08-18T08:34:23.633Z",
+    "decidedBy": null, "decidedAt": null, "reason": null
+    // KHÔNG có decidedByUser — xem §5b
+  }],
+  "nextCursor": null,
+  "hasMore": false
+}
+```
+
+⚠️ Hai sibling **chỉ có trên hai GET danh sách**. Tạo, duyệt và từ chối đều trả
+shape ở khối trên, không kèm tên: người gọi vừa tự đặt các id đó nên server
+không đi join lại để nói lại.
 
 Ba giá trị, ba nguồn:
 
@@ -786,19 +810,28 @@ không gọi được route nào ở đây, kể cả route đọc.
 // POST /departments/:departmentId/head
 { "userId": "fab71f53-…" }        // CHỈ userId — phòng lấy từ URL
 
-// 201 · 200 — assign, revoke và read dùng chung hình dạng này
+// ĐƯỜNG GHI — POST assign · DELETE revoke → 201 · 200. KHÔNG có `user`.
+{
+  "assignmentId": "…",
+  "departmentId": "7ce2630e-…",
+  "userId": "fab71f53-…",
+  "membershipId": "d4b58fd3-…",
+  "grantedAt": "2026-01-01T00:00:00.000Z"
+}
+
+// ĐƯỜNG ĐỌC — GET /departments/:departmentId/head → 200. Thêm đúng `user`.
 {
   "assignmentId": "…",
   "departmentId": "7ce2630e-…",
   "userId": "fab71f53-…",
   "membershipId": "d4b58fd3-…",
   "grantedAt": "2026-01-01T00:00:00.000Z",
-
-  // CHỈ trên GET. assign/revoke trả lời từ đường ghi và KHÔNG có field này:
-  // người gọi vừa tự nêu tên user đó, server không join lại để nói lại.
   "user": { "id": "fab71f53-…", "displayName": "Head Person" }
 }
 ```
+
+⚠️ `user` chỉ có ở GET. Hai route ghi trả lời từ đường ghi và không join lại —
+người gọi vừa tự nêu user đó, server không cần nói lại tên.
 
 **Người được bổ nhiệm phải đang là member active của đúng phòng đó** — đây là
 invariant #6, được foreign key canh ở database. Bổ nhiệm người ngoài phòng →
@@ -949,12 +982,12 @@ Bốn luật đúng cho **mọi** hàng, nên không lặp lại trong bảng:
 | `DELETE` | `/departments/:departmentId/head` | session | `role.assign` | GLOBAL | **200** | 403 · 404 chưa có head · 409 vừa bị thu hồi song song |
 | `POST` | `/departments/:departmentId/account-invitations` | session | `HeadOfRouteDepartmentGuard` | HEAD của phòng **trên URL**, hoặc GLOBAL | **201** | 403 phòng khác · 404 phòng · 409 email đã có account / đã có invitation pending / phòng archived · 422 |
 | `GET` | `/departments/:departmentId/account-invitations` | session | `HeadOfRouteDepartmentGuard` | như trên | **200** | 403 · 404 |
-| `GET` | `/account-invitations` | session | `user.write` | GLOBAL | **200**, `[]` khi rỗng | 403 |
+| `GET` | `/account-invitations` | session | `user.write` | GLOBAL | **200**, `{ items: [], nextCursor: null, hasMore: false }` khi rỗng | 403 |
 | `POST` | `/account-invitations/:invitationId/approve` | session | `user.write` | GLOBAL | **201** — tạo account, trả `temporaryPassword` một lần (§13) | 403 · 409 đã quyết / id không tồn tại / tự quyết / email đã có account / người đề xuất thôi làm HEAD / phòng archived |
 | `POST` | `/account-invitations/:invitationId/reject` | session | `user.write` | GLOBAL | **200** | 403 · 409 đã quyết / id không tồn tại / tự quyết |
 | `POST` | `/departments/:departmentId/membership-requests` | session | `HeadOfRouteDepartmentGuard` | HEAD của phòng **trên URL**, hoặc GLOBAL | **201** | 403 phòng khác · 404 user/phòng đích · 409 target không active / khác phòng / đã có request trùng / phòng đích archived · 422 `action` sai, thiếu `targetDepartmentId` |
 | `GET` | `/departments/:departmentId/membership-requests` | session | `HeadOfRouteDepartmentGuard` | như trên | **200** | 403 · 404 |
-| `GET` | `/membership-requests` | session | `unit.member.write` | GLOBAL | **200**, `[]` khi rỗng | 403 |
+| `GET` | `/membership-requests` | session | `unit.member.write` | GLOBAL | **200**, `{ items: [], nextCursor: null, hasMore: false }` khi rỗng | 403 |
 | `POST` | `/membership-requests/:requestId/approve` | session | `unit.member.write` | GLOBAL | **200** — không tạo resource (§10) | 403 HEAD · 404 target user · 409 đã quyết / id không tồn tại / tự quyết / target đã chuyển phòng hoặc bị disable / người đề xuất thôi làm HEAD |
 | `POST` | `/membership-requests/:requestId/reject` | session | `unit.member.write` | GLOBAL | **200** | 403 · 409 đã quyết / id không tồn tại / tự quyết |
 

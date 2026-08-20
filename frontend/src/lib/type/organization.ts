@@ -55,13 +55,25 @@ export interface UserSummary {
 export interface DepartmentMembership {
   id: string;
   userId: string;
-  /** Who `userId` refers to. Always present — the join is INNER. */
-  user: UserSummary;
   departmentId: string;
   status: MembershipStatus;
   createdAt: string;
   /** Set exactly when `status` is `ended`; the database enforces the pair. */
   endedAt: string | null;
+}
+
+/**
+ * The same membership as the LIST read returns it, with the member named.
+ *
+ * Separate from the base shape because the server only projects on the GET.
+ * `POST /departments/:id/members` answers from the write path and returns
+ * `DepartmentMembership` with no `user` — the caller of that just named the
+ * person themselves, so the server does not join to tell them what they sent.
+ * Declaring `user` on the base type would make it a promise the POST breaks.
+ */
+export interface DepartmentMembershipWithUser extends DepartmentMembership {
+  /** Who `userId` refers to. Always present — the join is INNER. */
+  user: UserSummary;
 }
 
 /**
@@ -81,15 +93,19 @@ export interface DepartmentHead {
   assignmentId: string;
   departmentId: string;
   userId: string;
-  /**
-   * Who leads the unit, by name. Present on the READ only.
-   *
-   * `assign` and `revoke` answer from the write path and return the same shape
-   * WITHOUT this field: the caller of those already named the user themselves,
-   * so the server does not pay for a join to tell them what they just sent.
-   */
-  user?: UserSummary;
   /** The membership that entitles this person to lead here (invariant #6). */
   membershipId: string;
   grantedAt: string;
+}
+
+/**
+ * What `GET /departments/:departmentId/head` returns: the assignment, named.
+ *
+ * The READ only. `assign` and `revoke` answer from the write path and return
+ * the base `DepartmentHead` without `user`, so the projection is a separate
+ * type rather than an optional field — optional would leave every caller
+ * guessing which of the three routes they are holding.
+ */
+export interface DepartmentHeadWithUser extends DepartmentHead {
+  user: UserSummary;
 }

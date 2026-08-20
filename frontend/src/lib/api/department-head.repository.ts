@@ -1,5 +1,5 @@
 import { httpClient } from '../http/client';
-import type { DepartmentHead } from '../type/organization';
+import type { DepartmentHeadWithUser } from '../type/organization';
 
 /**
  * Reading who leads a department (contract §15b). Read-only: appointing and
@@ -20,8 +20,8 @@ import type { DepartmentHead } from '../type/organization';
  * the two 404s carry different meanings and only the caller knows which one
  * matters to it.
  */
-export async function fetchDepartmentHead(departmentId: string): Promise<DepartmentHead> {
-  const { data } = await httpClient.get<DepartmentHead>(
+export async function fetchDepartmentHead(departmentId: string): Promise<DepartmentHeadWithUser> {
+  const { data } = await httpClient.get<DepartmentHeadWithUser>(
     `/departments/${encodeURIComponent(departmentId)}/head`,
   );
   return data;

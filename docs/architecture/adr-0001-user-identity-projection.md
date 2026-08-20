@@ -35,7 +35,8 @@ So the gap has to be closed on the server, and this ADR is about how.
 
 ## Current state
 
-- All six list queries are single-table `SELECT *` with **no joins**.
+- All six read queries — five lists and the single-row head read — are single-table
+  `SELECT *` with **no joins**.
 - `users` holds `id`, `display_name`, `status`. That is the whole of what could be shown.
 - `username` is **not stored**. `GET /authorization/me` derives it with `localPartOf(subject)`
   from `identities.subject`, which **is the email**. Including `username` therefore means a
@@ -72,7 +73,7 @@ Measured on PostgreSQL 17.11, 200,000 users, 100 departments × 2,000 members �
 | **DB cost, page of 50** | **0.73 ms** (nested loop, no seq scan) | 0.29 ms (+list) |
 | **Baseline today (no names)** | 0.75 ms full list | — |
 | **Adding `username`** | +6 ms full list, +0.4 ms per page (second join) | same second join, inside the endpoint |
-| **Payload** | +21 B/row (`displayName` 14 + `status` 7) on an 88 B row → **≈ +24 %**; repeats a name once per row | dedupes repeated ids; two envelopes |
+| **Payload** | +50 B/row (`id` 36 + `displayName` 14) on an 88 B row → **≈ +57 %**; repeats a name once per row | dedupes repeated ids; two envelopes |
 | **Authorization** | **Inherits the container's decision.** If a caller may see the member list, they may see those members' names. No new rule. | **Needs a new rule** — "may this caller resolve an arbitrary id to a name?" See below. |
 | **Caching** | nothing new; the resource is the unit | a second cache with its own coherence and invalidation |
 | **Consistency** | one snapshot, one transaction | two reads; a name can change between them |
@@ -187,7 +188,13 @@ The two queue endpoints are bounded by workflow throughput rather than organizat
 a queue with thousands of undecided items is an operational problem before it is a
 performance one — so the un-paginated column only really threatens the member list.
 
-Payload grows ≈ 24 % per membership row. At a page of 50 that is under 2 KB.
+Payload grows ≈ 57 % per membership row — the projection adds the UUID (36) and the
+name (14), counted the same way as the 88 B row itself. At a page of 50 that is about
+2.5 KB.
+
+The earlier draft of this table said ≈ 24 %. It was wrong twice over: it counted `status`,
+which the membership row already carried and which the shipped projection does not
+include, and it left out the nested `id` entirely.
 
 ## Migration impact
 
@@ -267,7 +274,7 @@ not touched.
 
 The order is unchanged and the projection is last:
 
-```
+```text
 authn → authz → scope → paginated query → projection
 ```
 
