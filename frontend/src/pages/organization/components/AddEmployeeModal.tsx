@@ -80,17 +80,29 @@ export function AddEmployeeModal({
       reset();
       onCreated();
       onClose();
-    } catch (caught) {
+    } catch (error_) {
       // The server's message is the honest one — it knows about domain
       // allowlists, duplicate addresses and password policy, and this form
       // does not.
-      setError(isApiError(caught) ? caught.message : t('createFailed'));
+      setError(isApiError(error_) ? error_.message : t('createFailed'));
     } finally {
       setBusy(false);
     }
   };
 
   const formId = 'add-employee-form';
+
+  // Three states, read top to bottom instead of nested inside one expression.
+  // Same values and same precedence: `busy` still wins over the workflow, and
+  // the workflow still decides between creating and requesting.
+  let submitLabel: string;
+  if (busy) {
+    submitLabel = t('creating');
+  } else if (isGlobal) {
+    submitLabel = t('saveEmployee');
+  } else {
+    submitLabel = t('submitRequest');
+  }
 
   return (
     <Modal
@@ -108,7 +120,7 @@ export function AddEmployeeModal({
             disabled={busy}
             className="bg-blue-600 hover:bg-blue-700"
           >
-            {busy ? t('creating') : isGlobal ? t('saveEmployee') : t('submitRequest')}
+            {submitLabel}
           </Button>
         </>
       }

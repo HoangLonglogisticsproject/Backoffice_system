@@ -137,10 +137,10 @@ function ChangePasswordForm() {
       // leaving is the only consistent next step.
       await signOut();
       navigate('/login', { replace: true });
-    } catch (caught) {
+    } catch (error_) {
       // The server owns the password policy and the "current password wrong"
       // answer. Repeating either rule here would eventually contradict it.
-      setError(isApiError(caught) ? caught.message : t('loadFailed'));
+      setError(isApiError(error_) ? error_.message : t('loadFailed'));
       setBusy(false);
     }
   };

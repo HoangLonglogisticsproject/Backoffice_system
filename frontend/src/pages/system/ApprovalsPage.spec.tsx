@@ -269,9 +269,9 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    // A head reaching the global queue is refused by design.
-    await waitFor(() =>
-      expect(screen.getByText(/không có quyền|not permitted/i)).toBeInTheDocument(),
-    );
+    // A head reaching the global queue is refused by design. `findByText` is
+    // the right query here: this is waiting for text to APPEAR after an async
+    // read settles, which is exactly what it does.
+    expect(await screen.findByText(/không có quyền|not permitted/i)).toBeInTheDocument();
   });
 });

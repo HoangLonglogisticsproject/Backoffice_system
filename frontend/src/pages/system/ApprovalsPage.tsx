@@ -357,10 +357,10 @@ function ConfirmDecision({
     try {
       await onConfirm(reason.trim() || undefined);
       setReason('');
-    } catch (caught) {
+    } catch (error_) {
       // 409 here is the ordinary race: somebody else decided it first. The
       // server's own words say so better than a guess would.
-      setError(isApiError(caught) ? caught.message : t('loadFailed'));
+      setError(isApiError(error_) ? error_.message : t('loadFailed'));
     } finally {
       setBusy(false);
     }
