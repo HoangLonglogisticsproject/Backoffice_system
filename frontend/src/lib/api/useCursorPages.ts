@@ -39,7 +39,7 @@ export function useCursorPages<T>(
   deps: readonly unknown[],
   initialPageSize: number = DEFAULT_PAGE_SIZE,
 ): CursorPages<T> {
-  const [pageSize, setSize] = useState(initialPageSize);
+  const [pageSize, setPageSize] = useState(initialPageSize);
   // Page one is "no cursor". Every entry after it is a cursor the server gave.
   const [visited, setVisited] = useState<(string | undefined)[]>([undefined]);
 
@@ -83,10 +83,6 @@ export function useCursorPages<T>(
 
   const previous = useCallback(() => {
     setVisited((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
-  }, []);
-
-  const setPageSize = useCallback((size: number) => {
-    setSize(size);
   }, []);
 
   return {

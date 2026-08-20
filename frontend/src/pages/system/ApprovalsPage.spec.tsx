@@ -263,6 +263,89 @@ describe('ApprovalsPage', () => {
     });
   });
 
+  describe('both queues get the same shell', () => {
+    // The two queues share one presentational component now. These pin the
+    // parts that must stay identical, so a change to the shell cannot quietly
+    // fix one queue and break the other.
+    it('renders its own columns plus the shared actions column', async () => {
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      // Membership requests: four of its own, then Actions.
+      let headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+      expect(headers).toHaveLength(5);
+      expect(headers[headers.length - 1]).toMatch(/thao tác|action/i);
+
+      await openInvitations();
+
+      // Invitations: three of its own, then the same Actions column.
+      headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+      expect(headers).toHaveLength(4);
+      expect(headers[headers.length - 1]).toMatch(/thao tác|action/i);
+    });
+
+    it('gives both queues working cursor controls', async () => {
+      // hasMore true so Next is live, and the page-size control is present.
+      fetchPendingMembershipRequests.mockResolvedValue({
+        items: [REQUEST],
+        nextCursor: 'CURSOR',
+        hasMore: true,
+      });
+      fetchPendingAccountInvitations.mockResolvedValue({
+        items: [INVITATION],
+        nextCursor: 'CURSOR',
+        hasMore: true,
+      });
+
+      renderPage();
+      await screen.findByText('Moved Person');
+      expect(screen.getByRole('button', { name: /sau|next/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /trước|previous/i })).toBeDisabled();
+
+      await openInvitations();
+      expect(screen.getByRole('button', { name: /sau|next/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /trước|previous/i })).toBeDisabled();
+    });
+
+    it('sends each queue to its OWN repository, never the other', async () => {
+      renderPage();
+      await screen.findByText('Moved Person');
+      expect(fetchPendingMembershipRequests).toHaveBeenCalled();
+      expect(fetchPendingAccountInvitations).not.toHaveBeenCalled();
+
+      await openInvitations();
+      expect(fetchPendingAccountInvitations).toHaveBeenCalled();
+    });
+
+    it('rejects through the right repository for each queue', async () => {
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      fireEvent.click(screen.getByRole('button', { name: /^từ chối$|^reject$/i }));
+      const confirms = screen.getAllByRole('button', { name: /^từ chối$|^reject$/i });
+      fireEvent.click(confirms[confirms.length - 1]);
+
+      await waitFor(() => expect(rejectMembershipRequest).toHaveBeenCalledWith(REQUEST.id, undefined));
+      expect(rejectAccountInvitation).not.toHaveBeenCalled();
+    });
+
+    it('shows the empty state per queue, with its own wording', async () => {
+      fetchPendingAccountInvitations.mockResolvedValue({
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+      });
+
+      renderPage();
+      await screen.findByText('Moved Person');
+      fireEvent.click(screen.getByRole('button', { name: /lời mời|invitation/i }));
+
+      expect(
+        await screen.findByText(/không có lời mời|no pending invitations/i),
+      ).toBeInTheDocument();
+    });
+  });
+
   it('renders a 403 as a normal answer rather than an error', async () => {
     const { ApiError } = await import('@/lib/http/apiError');
     fetchPendingMembershipRequests.mockRejectedValue(new ApiError(403, 'FORBIDDEN', 'no'));

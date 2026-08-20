@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +15,7 @@ import { CursorPagination } from '@/components/ui/pagination';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { formatDateTime } from '@/lib/format/datetime';
 import { useCursorPages } from '@/lib/api/useCursorPages';
+import type { Page, PageRequest } from '@/lib/type/pagination';
 import {
   approveMembershipRequest,
   fetchPendingMembershipRequests,
@@ -118,18 +120,47 @@ function QueueStates({
   return null;
 }
 
-function MembershipRequestQueue() {
-  const { t, language } = useLanguage();
-  const [refresh, setRefresh] = useState(0);
-  const [pending, setPending] = useState<{
-    row: MembershipChangeRequestWithUsers;
-    decision: 'approve' | 'reject';
-  } | null>(null);
+/**
+ * The parts of a decision queue that are the same whatever is being decided.
+ *
+ * Both queues are a table of pending things, two buttons per row, a confirmation
+ * step, the same four states (loading, forbidden, error, empty) and the same
+ * cursor controls. Written out twice, that was ~150 duplicated lines — and the
+ * real cost is not the lines: two copies drift, and the one that drifts is
+ * usually the error path nobody looks at.
+ *
+ * What stays OUT of here is everything that differs per queue: the endpoint, the
+ * row type, the columns, the cell mapping, and what approving actually does.
+ * Those arrive as a handful of props rather than as flags, so this component
+ * never has to know which queue it is drawing.
+ */
+interface DecisionQueueProps<T> {
+  /** The endpoint. Paged by the shared cursor hook. */
+  read: (page: PageRequest) => Promise<Page<T>>;
+  /** Column headings, already translated. The actions column is added here. */
+  headers: string[];
+  /** The leading cells for one row — everything except the actions column. */
+  renderCells: (row: T) => ReactNode;
+  emptyKey: 'emptyRequests' | 'emptyInvitations';
+  onApprove: (row: T) => Promise<void>;
+  onReject: (row: T, reason?: string) => Promise<void>;
+}
 
-  const page = useCursorPages<MembershipChangeRequestWithUsers>(
-    (request) => fetchPendingMembershipRequests(request),
-    [refresh],
-  );
+function DecisionQueue<T extends { id: string }>({
+  read,
+  headers,
+  renderCells,
+  emptyKey,
+  onApprove,
+  onReject,
+}: Readonly<DecisionQueueProps<T>>) {
+  const { t } = useLanguage();
+  // Bumped after a decision so the queue re-reads: the row just acted on is no
+  // longer pending, and leaving it on screen would invite a second click.
+  const [refresh, setRefresh] = useState(0);
+  const [pending, setPending] = useState<{ row: T; decision: 'approve' | 'reject' } | null>(null);
+
+  const page = useCursorPages<T>(read, [refresh]);
 
   return (
     <>
@@ -137,10 +168,11 @@ function MembershipRequestQueue() {
         <Table>
           <TableHeader className="bg-gray-50/50">
             <TableRow>
-              <TableHead className="font-semibold text-gray-600">{t('colTarget')}</TableHead>
-              <TableHead className="font-semibold text-gray-600">{t('colRequestedBy')}</TableHead>
-              <TableHead className="font-semibold text-gray-600">{t('colAction')}</TableHead>
-              <TableHead className="font-semibold text-gray-600">{t('colRequestedAt')}</TableHead>
+              {headers.map((heading) => (
+                <TableHead key={heading} className="font-semibold text-gray-600">
+                  {heading}
+                </TableHead>
+              ))}
               <TableHead className="text-right font-semibold text-gray-600 pr-6">
                 {t('colActions')}
               </TableHead>
@@ -149,16 +181,7 @@ function MembershipRequestQueue() {
           <TableBody>
             {page.items.map((row) => (
               <TableRow key={row.id} className="hover:bg-blue-50/30">
-                {/* Names, not UUIDs — projected by the server inside the same
-                    authorized read. */}
-                <TableCell className="font-medium text-gray-900">
-                  {row.targetUser.displayName}
-                </TableCell>
-                <TableCell className="text-gray-600">{row.requestedByUser.displayName}</TableCell>
-                <TableCell className="text-gray-600">{row.action}</TableCell>
-                <TableCell className="text-gray-600">
-                  {formatDateTime(row.requestedAt, language)}
-                </TableCell>
+                {renderCells(row)}
                 <TableCell className="text-right pr-4">
                   <div className="flex items-center justify-end gap-2">
                     <Button
@@ -188,7 +211,7 @@ function MembershipRequestQueue() {
           forbidden={page.forbidden}
           error={Boolean(page.error) && !page.forbidden}
           empty={page.items.length === 0}
-          emptyKey="emptyRequests"
+          emptyKey={emptyKey}
         />
       </div>
 
@@ -211,9 +234,9 @@ function MembershipRequestQueue() {
         onConfirm={async (reason) => {
           if (!pending) return;
           if (pending.decision === 'approve') {
-            await approveMembershipRequest(pending.row.id);
+            await onApprove(pending.row);
           } else {
-            await rejectMembershipRequest(pending.row.id, reason);
+            await onReject(pending.row, reason);
           }
           setPending(null);
           setRefresh((n) => n + 1);
@@ -223,104 +246,62 @@ function MembershipRequestQueue() {
   );
 }
 
+function MembershipRequestQueue() {
+  const { t, language } = useLanguage();
+
+  return (
+    <DecisionQueue<MembershipChangeRequestWithUsers>
+      read={fetchPendingMembershipRequests}
+      headers={[t('colTarget'), t('colRequestedBy'), t('colAction'), t('colRequestedAt')]}
+      emptyKey="emptyRequests"
+      renderCells={(row) => (
+        <>
+          {/* Names, not UUIDs — projected by the server inside the same
+              authorized read. */}
+          <TableCell className="font-medium text-gray-900">{row.targetUser.displayName}</TableCell>
+          <TableCell className="text-gray-600">{row.requestedByUser.displayName}</TableCell>
+          <TableCell className="text-gray-600">{row.action}</TableCell>
+          <TableCell className="text-gray-600">{formatDateTime(row.requestedAt, language)}</TableCell>
+        </>
+      )}
+      onApprove={async (row) => {
+        await approveMembershipRequest(row.id);
+      }}
+      onReject={async (row, reason) => {
+        await rejectMembershipRequest(row.id, reason);
+      }}
+    />
+  );
+}
+
 function InvitationQueue() {
   const { t, language } = useLanguage();
-  const [refresh, setRefresh] = useState(0);
-  const [pending, setPending] = useState<{
-    row: AccountInvitationWithUser;
-    decision: 'approve' | 'reject';
-  } | null>(null);
+  // Held HERE rather than in the shell: only this queue produces a credential,
+  // and the shell has no business knowing that approving can return a secret.
   const [approved, setApproved] = useState<ApprovedInvitation | null>(null);
-
-  const page = useCursorPages<AccountInvitationWithUser>(
-    (request) => fetchPendingAccountInvitations(request),
-    [refresh],
-  );
 
   return (
     <>
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader className="bg-gray-50/50">
-            <TableRow>
-              <TableHead className="font-semibold text-gray-600">{t('colEmail')}</TableHead>
-              <TableHead className="font-semibold text-gray-600">{t('colRequestedBy')}</TableHead>
-              <TableHead className="font-semibold text-gray-600">{t('colRequestedAt')}</TableHead>
-              <TableHead className="text-right font-semibold text-gray-600 pr-6">
-                {t('colActions')}
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {page.items.map((row) => (
-              <TableRow key={row.id} className="hover:bg-blue-50/30">
-                {/* The invited ADDRESS. It is the subject of the invitation, not
-                    a display name — there is no user behind it yet. */}
-                <TableCell className="font-medium text-gray-900">{row.email}</TableCell>
-                <TableCell className="text-gray-600">{row.requestedByUser.displayName}</TableCell>
-                <TableCell className="text-gray-600">
-                  {formatDateTime(row.requestedAt, language)}
-                </TableCell>
-                <TableCell className="text-right pr-4">
-                  <div className="flex items-center justify-end gap-2">
-                    <Button
-                      size="sm"
-                      className="bg-blue-600 hover:bg-blue-700 h-8"
-                      onClick={() => setPending({ row, decision: 'approve' })}
-                    >
-                      {t('approve')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 text-red-600 border-gray-200 hover:bg-red-50"
-                      onClick={() => setPending({ row, decision: 'reject' })}
-                    >
-                      {t('reject')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-
-        <QueueStates
-          loading={page.loading}
-          forbidden={page.forbidden}
-          error={Boolean(page.error) && !page.forbidden}
-          empty={page.items.length === 0}
-          emptyKey="emptyInvitations"
-        />
-      </div>
-
-      <CursorPagination
-        shown={page.items.length}
-        hasMore={page.hasMore}
-        canGoBack={page.canGoBack}
-        onNext={page.next}
-        onPrevious={page.previous}
-        pageSize={page.pageSize}
-        onPageSizeChange={page.setPageSize}
-        isLoading={page.loading}
-        className="border-t border-gray-100 bg-gray-50/30"
-      />
-
-      <ConfirmDecision
-        open={pending !== null}
-        decision={pending?.decision ?? 'approve'}
-        onClose={() => setPending(null)}
-        onConfirm={async (reason) => {
-          if (!pending) return;
-          if (pending.decision === 'approve') {
-            // Approving CREATES the account, and the response is the only place
-            // the temporary password will ever appear.
-            setApproved(await approveAccountInvitation(pending.row.id));
-          } else {
-            await rejectAccountInvitation(pending.row.id, reason);
-          }
-          setPending(null);
-          setRefresh((n) => n + 1);
+      <DecisionQueue<AccountInvitationWithUser>
+        read={fetchPendingAccountInvitations}
+        headers={[t('colEmail'), t('colRequestedBy'), t('colRequestedAt')]}
+        emptyKey="emptyInvitations"
+        renderCells={(row) => (
+          <>
+            {/* The invited ADDRESS. It is the subject of the invitation, not a
+                display name — there is no user behind it yet. */}
+            <TableCell className="font-medium text-gray-900">{row.email}</TableCell>
+            <TableCell className="text-gray-600">{row.requestedByUser.displayName}</TableCell>
+            <TableCell className="text-gray-600">{formatDateTime(row.requestedAt, language)}</TableCell>
+          </>
+        )}
+        onApprove={async (row) => {
+          // Approving CREATES the account, and the response is the only place
+          // the temporary password will ever appear.
+          setApproved(await approveAccountInvitation(row.id));
+        }}
+        onReject={async (row, reason) => {
+          await rejectAccountInvitation(row.id, reason);
         }}
       />
 
