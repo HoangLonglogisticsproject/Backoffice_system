@@ -18,6 +18,7 @@ import { AccountProvisioningService } from '../../../core/users/application/acco
 import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { AccountInvitationRepository } from '../persistence/account-invitation.repository';
 import { AccountInvitationService } from './account-invitation.service';
+import { decodeCursor } from '../../../common/pagination/cursor';
 
 /**
  * Onboarding against a REAL PostgreSQL.
@@ -539,6 +540,94 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
   });
 
   // -------------------------------------------------------------- DB CHECKs --
+
+  // ------------------------------------------------- cursor precision --
+
+  describe('cursor precision on the invitation lists', () => {
+    /**
+     * One statement per row, so every `requested_at` comes from its own
+     * transaction and carries MICROSECONDS — the precision a cursor built from
+     * a JavaScript `Date` would round away, serving the page-boundary row
+     * twice.
+     */
+    const seedInvitations = async (count: number): Promise<string> => {
+      const { rows: dept } = await pool.query<{ id: string }>(
+        "INSERT INTO departments (slug, name) VALUES ('prec', 'Precision') RETURNING id",
+      );
+      const departmentId = dept[0]!.id;
+
+      for (let n = 0; n < count; n++) {
+        await pool.query(
+          `WITH u AS (INSERT INTO users (display_name) VALUES ($2) RETURNING id)
+           INSERT INTO account_invitations (department_id, email, requested_by, status)
+           SELECT $1, $3, id, 'pending' FROM u`,
+          [departmentId, `Asker ${n}`, `person${n}@hoanglong.test`],
+        );
+      }
+      return departmentId;
+    };
+
+    const walk = async (
+      list: (cursor?: string) => Promise<{ items: { id: string }[]; hasMore: boolean; nextCursor: string | null }>,
+    ): Promise<{ sizes: number[]; ids: string[] }> => {
+      const sizes: number[] = [];
+      const ids: string[] = [];
+      let cursor: string | undefined;
+
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await list(cursor);
+        sizes.push(page.items.length);
+        ids.push(...page.items.map((i) => i.id));
+        if (!page.hasMore) break;
+        cursor = page.nextCursor as string;
+      }
+      return { sizes, ids };
+    };
+
+    it('a department list of 25 pages as 10 + 10 + 5, with nothing repeated', async () => {
+      const departmentId = await seedInvitations(25);
+
+      const { sizes, ids } = await walk((cursor) =>
+        invitations.listForDepartment(departmentId, { limit: 10, cursor }),
+      );
+
+      expect(sizes).toEqual([10, 10, 5]);
+      expect(ids).toHaveLength(25);
+      expect(new Set(ids).size).toBe(25);
+    });
+
+    it('the global pending queue pages the same way, ascending', async () => {
+      await seedInvitations(25);
+
+      const { sizes, ids } = await walk((cursor) =>
+        invitations.listPending({ limit: 10, cursor }),
+      );
+
+      expect(sizes).toEqual([10, 10, 5]);
+      expect(new Set(ids).size).toBe(25);
+    });
+
+    it('the cursor names the row exactly, not a rounded instant', async () => {
+      const departmentId = await seedInvitations(3);
+
+      const page = await invitations.listForDepartment(departmentId, { limit: 2 });
+      const { t, i } = decodeCursor(page.nextCursor as string);
+
+      const { rows } = await pool.query<{ exact: boolean }>(
+        'SELECT requested_at = $2::timestamptz AS exact FROM account_invitations WHERE id = $1',
+        [i, t],
+      );
+      expect(rows[0]!.exact).toBe(true);
+    });
+
+    it('refuses a malformed cursor rather than silently restarting', async () => {
+      const departmentId = await seedInvitations(3);
+
+      await expect(
+        invitations.listForDepartment(departmentId, { limit: 2, cursor: '!!!' }),
+      ).rejects.toThrow(/Malformed cursor/);
+    });
+  });
 
   describe('database constraints', () => {
     it('refuses approved with no account, and pending with one', async () => {

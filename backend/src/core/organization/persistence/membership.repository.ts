@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import type { Cursor } from '../../../common/pagination/cursor';
+import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
 import { DepartmentMembership, MembershipStatus } from '../domain/department.entity';
 
 const isUniqueViolation = (error: unknown): boolean =>
@@ -15,6 +15,15 @@ interface MembershipRow {
   created_at: Date;
   ended_at: Date | null;
 }
+
+/**
+ * A membership plus the anchor a cursor is built from.
+ *
+ * `cursorAt` is `created_at` AS POSTGRESQL RENDERED IT. `createdAt` beside it is
+ * the same instant parsed into a `Date` for display, and it has already lost the
+ * microseconds — which is exactly why the cursor cannot be built from it.
+ */
+export interface MembershipPageRow extends DepartmentMembership, CursorAnchored {}
 
 const toMembership = (row: MembershipRow): DepartmentMembership => ({
   id: row.id,
@@ -89,28 +98,33 @@ export class MembershipRepository {
     limit: number,
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
-  ): Promise<DepartmentMembership[]> {
+  ): Promise<MembershipPageRow[]> {
     // Row-wise comparison, not `created_at > $2 OR (created_at = $2 AND ...)`.
     // Both are correct; this one the planner satisfies straight from the index,
     // and it is far harder to get subtly wrong.
+    //
+    // `created_at::text` rides along as the cursor anchor. Reading the sort key
+    // back out of the parsed `Date` would round it to milliseconds and hand the
+    // next page a position EARLIER than the row it names, which returns that row
+    // a second time. The text never goes near a `Date`, so nothing is rounded.
     const rows = cursor
-      ? await executor.query<MembershipRow>(
-          `SELECT * FROM department_memberships
+      ? await executor.query<MembershipRow & { cursor_at: string }>(
+          `SELECT *, created_at::text AS cursor_at FROM department_memberships
             WHERE department_id = $1 AND status = 'active'
-              AND (created_at, id) > ($2, $3)
+              AND (created_at, id) > ($2::timestamptz, $3)
             ORDER BY created_at ASC, id ASC
             LIMIT $4`,
           [departmentId, cursor.t, cursor.i, limit + 1],
         )
-      : await executor.query<MembershipRow>(
-          `SELECT * FROM department_memberships
+      : await executor.query<MembershipRow & { cursor_at: string }>(
+          `SELECT *, created_at::text AS cursor_at FROM department_memberships
             WHERE department_id = $1 AND status = 'active'
             ORDER BY created_at ASC, id ASC
             LIMIT $2`,
           [departmentId, limit + 1],
         );
 
-    return rows.map(toMembership);
+    return rows.map((row) => ({ ...toMembership(row), cursorAt: row.cursor_at }));
   }
 
   async countActiveInDepartment(
