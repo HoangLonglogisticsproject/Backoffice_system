@@ -1,5 +1,6 @@
 import { httpClient } from '../http/client';
 import type { AccountInvitation } from '../type/approval';
+import type { Page, PageRequest } from '../type/pagination';
 
 /**
  * Reading account invitations (contract §9). Read-only: inviting and deciding
@@ -21,15 +22,21 @@ import type { AccountInvitation } from '../type/approval';
 /** The invitations raised for one department. Scope is the route parameter (§15). */
 export async function fetchDepartmentAccountInvitations(
   departmentId: string,
-): Promise<AccountInvitation[]> {
-  const { data } = await httpClient.get<AccountInvitation[]>(
+  page: PageRequest = {},
+): Promise<Page<AccountInvitation>> {
+  const { data } = await httpClient.get<Page<AccountInvitation>>(
     `/departments/${encodeURIComponent(departmentId)}/account-invitations`,
+    { params: { limit: page.limit, cursor: page.cursor } },
   );
   return data;
 }
 
 /** The global approval queue. `[]` when nothing is waiting (§9). */
-export async function fetchPendingAccountInvitations(): Promise<AccountInvitation[]> {
-  const { data } = await httpClient.get<AccountInvitation[]>('/account-invitations');
+export async function fetchPendingAccountInvitations(
+  page: PageRequest = {},
+): Promise<Page<AccountInvitation>> {
+  const { data } = await httpClient.get<Page<AccountInvitation>>('/account-invitations', {
+    params: { limit: page.limit, cursor: page.cursor },
+  });
   return data;
 }

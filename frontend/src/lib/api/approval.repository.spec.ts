@@ -27,27 +27,35 @@ const DEPARTMENT = '7ce2630e-0000-4000-8000-000000000000';
 describe('membership request repository (§10)', () => {
   beforeEach(() => {
     get.mockReset();
-    get.mockResolvedValue({ data: [] });
+    get.mockResolvedValue({ data: { items: [], nextCursor: null, hasMore: false } });
   });
 
   it('reads one department queue, id on the PATH (§15)', async () => {
     await fetchDepartmentMembershipRequests(DEPARTMENT);
 
-    expect(get).toHaveBeenCalledWith(`/departments/${DEPARTMENT}/membership-requests`);
-    // One argument: no config object smuggling params, headers or a body.
-    expect(get.mock.calls[0]).toHaveLength(1);
+    expect(get).toHaveBeenCalledWith(`/departments/${DEPARTMENT}/membership-requests`, {
+      params: { limit: undefined, cursor: undefined },
+    });
+    // Two arguments: the path, and the page parameters. Nothing else — no body,
+    // no headers, and no scope beside the path.
+    expect(get.mock.calls[0]).toHaveLength(2);
+    expect((get.mock.calls[0] as [string, Record<string, unknown>])[1]).toEqual({
+      params: { limit: undefined, cursor: undefined },
+    });
   });
 
   it('reads the global queue with no arguments at all', async () => {
     await fetchPendingMembershipRequests();
 
-    expect(get).toHaveBeenCalledWith('/membership-requests');
+    expect(get).toHaveBeenCalledWith('/membership-requests', {
+      params: { limit: undefined, cursor: undefined },
+    });
     // No actor, no role, no permission — who is asking is the session cookie.
-    expect(fetchPendingMembershipRequests).toHaveLength(0);
+    expect(fetchPendingMembershipRequests).toHaveLength(0); // page arg is optional
   });
 
   it('takes ONLY a department id for the scoped read', () => {
-    expect(fetchDepartmentMembershipRequests).toHaveLength(1);
+    expect(fetchDepartmentMembershipRequests).toHaveLength(1); // page arg is optional
   });
 
   it('returns rows unchanged, including the response`s targetUserId name', async () => {
@@ -66,9 +74,9 @@ describe('membership request repository (§10)', () => {
         reason: null,
       },
     ];
-    get.mockResolvedValue({ data: rows });
+    get.mockResolvedValue({ data: { items: rows, nextCursor: null, hasMore: false } });
 
-    const result = await fetchPendingMembershipRequests();
+    const { items: result } = await fetchPendingMembershipRequests();
 
     // Not renamed to `userId` to match the POST body. The two names are
     // genuinely different in the contract, and papering over that here would
@@ -84,9 +92,9 @@ describe('membership request repository (§10)', () => {
       { id: 'r2', status: 'approved' },
       { id: 'r3', status: 'rejected' },
     ];
-    get.mockResolvedValue({ data: rows });
+    get.mockResolvedValue({ data: { items: rows, nextCursor: null, hasMore: false } });
 
-    await expect(fetchPendingMembershipRequests()).resolves.toHaveLength(3);
+    await expect(fetchPendingMembershipRequests().then((p) => p.items)).resolves.toHaveLength(3);
   });
 
   it('propagates 403 rather than returning an empty list', async () => {
@@ -102,20 +110,24 @@ describe('membership request repository (§10)', () => {
 describe('account invitation repository (§9)', () => {
   beforeEach(() => {
     get.mockReset();
-    get.mockResolvedValue({ data: [] });
+    get.mockResolvedValue({ data: { items: [], nextCursor: null, hasMore: false } });
   });
 
   it('reads one department queue, id on the PATH', async () => {
     await fetchDepartmentAccountInvitations(DEPARTMENT);
 
-    expect(get).toHaveBeenCalledWith(`/departments/${DEPARTMENT}/account-invitations`);
+    expect(get).toHaveBeenCalledWith(`/departments/${DEPARTMENT}/account-invitations`, {
+      params: { limit: undefined, cursor: undefined },
+    });
   });
 
   it('reads the global queue with no arguments', async () => {
     await fetchPendingAccountInvitations();
 
-    expect(get).toHaveBeenCalledWith('/account-invitations');
-    expect(fetchPendingAccountInvitations).toHaveLength(0);
+    expect(get).toHaveBeenCalledWith('/account-invitations', {
+      params: { limit: undefined, cursor: undefined },
+    });
+    expect(fetchPendingAccountInvitations).toHaveLength(0); // page arg is optional
   });
 
   it('returns rows unchanged, and no password field exists to leak (§13)', async () => {
@@ -133,9 +145,9 @@ describe('account invitation repository (§9)', () => {
         createdUserId: null,
       },
     ];
-    get.mockResolvedValue({ data: rows });
+    get.mockResolvedValue({ data: { items: rows, nextCursor: null, hasMore: false } });
 
-    const result = await fetchDepartmentAccountInvitations(DEPARTMENT);
+    const { items: result } = await fetchDepartmentAccountInvitations(DEPARTMENT);
 
     expect(result).toEqual(rows);
     // The temporary secret lives in the approval response only, and cannot be

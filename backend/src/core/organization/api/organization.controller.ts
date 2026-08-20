@@ -7,10 +7,13 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { pageQuerySchema, type PageQuery } from '../../../common/pagination/page-query.dto';
+import type { Page } from '../../../common/pagination/cursor';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
@@ -128,8 +131,11 @@ export class OrganizationController {
   @Get(':departmentId/members')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('unit.member.read', 'departmentId')
-  async members(@Param('departmentId', UuidParam) departmentId: string): Promise<DepartmentMembership[]> {
-    return this.memberships.listActiveMembers(departmentId);
+  async members(
+    @Param('departmentId', UuidParam) departmentId: string,
+    @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
+  ): Promise<Page<DepartmentMembership>> {
+    return this.memberships.listActiveMembers(departmentId, page);
   }
 
   /**

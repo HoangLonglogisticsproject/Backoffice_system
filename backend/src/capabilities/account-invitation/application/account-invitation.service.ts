@@ -9,6 +9,8 @@ import { AccountProvisioningService } from '../../../core/users/application/acco
 import { assertProvisionableEmail } from '../../../core/users/domain/email';
 import { LOCAL_PROVIDER } from '../../../core/users/domain/user.entity';
 import { AccountInvitation } from '../domain/account-invitation';
+import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
+import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import { AccountInvitationRepository } from '../persistence/account-invitation.repository';
 
 export interface ApprovedInvitation {
@@ -211,11 +213,22 @@ export class AccountInvitationService {
     });
   }
 
-  async listForDepartment(departmentId: string): Promise<AccountInvitation[]> {
-    return this.invitations.listForDepartment(departmentId);
+  /** One page of this department's history, newest first. */
+  async listForDepartment(
+    departmentId: string,
+    page: PageQuery,
+  ): Promise<Page<AccountInvitation>> {
+    const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
+    const rows = await this.invitations.listForDepartmentPage(departmentId, page.limit, cursor);
+
+    return toPage(rows, page.limit, (r) => ({ t: r.requestedAt.toISOString(), i: r.id }));
   }
 
-  async listPending(): Promise<AccountInvitation[]> {
-    return this.invitations.listPending();
+  /** One page of the global decision queue, oldest first. */
+  async listPending(page: PageQuery): Promise<Page<AccountInvitation>> {
+    const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
+    const rows = await this.invitations.listPendingPage(page.limit, cursor);
+
+    return toPage(rows, page.limit, (r) => ({ t: r.requestedAt.toISOString(), i: r.id }));
   }
 }

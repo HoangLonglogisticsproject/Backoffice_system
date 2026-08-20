@@ -1,5 +1,6 @@
 import { httpClient } from '../http/client';
 import type { MembershipChangeRequest } from '../type/approval';
+import type { Page, PageRequest } from '../type/pagination';
 
 /**
  * Reading membership change requests (contract §10). Read-only: proposing and
@@ -27,9 +28,11 @@ import type { MembershipChangeRequest } from '../type/approval';
  */
 export async function fetchDepartmentMembershipRequests(
   departmentId: string,
-): Promise<MembershipChangeRequest[]> {
-  const { data } = await httpClient.get<MembershipChangeRequest[]>(
+  page: PageRequest = {},
+): Promise<Page<MembershipChangeRequest>> {
+  const { data } = await httpClient.get<Page<MembershipChangeRequest>>(
     `/departments/${encodeURIComponent(departmentId)}/membership-requests`,
+    { params: { limit: page.limit, cursor: page.cursor } },
   );
   return data;
 }
@@ -39,7 +42,11 @@ export async function fetchDepartmentMembershipRequests(
  * 404, because "no pending requests" is a normal state rather than a missing
  * resource.
  */
-export async function fetchPendingMembershipRequests(): Promise<MembershipChangeRequest[]> {
-  const { data } = await httpClient.get<MembershipChangeRequest[]>('/membership-requests');
+export async function fetchPendingMembershipRequests(
+  page: PageRequest = {},
+): Promise<Page<MembershipChangeRequest>> {
+  const { data } = await httpClient.get<Page<MembershipChangeRequest>>('/membership-requests', {
+    params: { limit: page.limit, cursor: page.cursor },
+  });
   return data;
 }

@@ -73,15 +73,17 @@ describe('membership repository', () => {
   it('reads members by department, id on the PATH (§6, §15)', async () => {
     await fetchDepartmentMembers('7ce2630e-0000-4000-8000-000000000000');
 
-    expect(get).toHaveBeenCalledWith(
-      '/departments/7ce2630e-0000-4000-8000-000000000000/members',
-    );
+    // The page parameters are part of the call now; nothing else is. No body,
+    // no headers, no scope smuggled beside the path.
+    expect(get).toHaveBeenCalledWith('/departments/7ce2630e-0000-4000-8000-000000000000/members', {
+      params: { limit: undefined, cursor: undefined },
+    });
   });
 
   it('takes ONLY a department id — no sourceDepartmentId, no actor', async () => {
     // Scope is the route parameter and the actor is the session cookie. An
     // extra argument would be a value the client picks and the server ignores.
-    expect(fetchDepartmentMembers).toHaveLength(1);
+    expect(fetchDepartmentMembers).toHaveLength(1); // page arg is optional
   });
 
   it('returns every row the server sent, unfiltered (§0)', async () => {

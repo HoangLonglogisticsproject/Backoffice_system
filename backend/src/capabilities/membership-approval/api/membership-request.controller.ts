@@ -1,6 +1,18 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { pageQuerySchema, type PageQuery } from '../../../common/pagination/page-query.dto';
+import type { Page } from '../../../common/pagination/cursor';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import {
   HeadOfRouteDepartmentGuard,
@@ -67,16 +79,19 @@ export class MembershipRequestController {
   @UseGuards(AuthGuard, HeadOfRouteDepartmentGuard)
   async listForDepartment(
     @Param('departmentId', UuidParam) departmentId: string,
-  ): Promise<MembershipChangeRequest[]> {
-    return this.requests.listForDepartment(departmentId);
+    @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
+  ): Promise<Page<MembershipChangeRequest>> {
+    return this.requests.listForDepartment(departmentId, page);
   }
 
   /** The decision queue. Global only — there is one of these, not one per unit. */
   @Get('membership-requests')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('unit.member.write')
-  async listPending(): Promise<MembershipChangeRequest[]> {
-    return this.requests.listPending();
+  async listPending(
+    @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
+  ): Promise<Page<MembershipChangeRequest>> {
+    return this.requests.listPending(page);
   }
 
   /**

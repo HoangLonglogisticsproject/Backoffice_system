@@ -158,13 +158,13 @@ describe('authorization HTTP security', () => {
       expect(unit.status).toBe(200);
       expect(roster.status).toBe(200);
       expect(organization.require).toHaveBeenCalledWith(A);
-      expect(organization.listActiveMembers).toHaveBeenCalledWith(A);
+      expect(organization.listActiveMembers).toHaveBeenCalledWith(A, { limit: 50 });
     });
 
     it('is refused the SAME routes for another department — IDOR', async () => {
       await authed('get', `/departments/${B}`).expect(403);
       await authed('get', `/departments/${B}/members`).expect(403);
-      expect(organization.listActiveMembers).not.toHaveBeenCalledWith(B);
+      expect(organization.listActiveMembers).not.toHaveBeenCalledWith(B, { limit: 50 });
     });
 
     it('cannot create, rename or archive a department', async () => {
@@ -249,7 +249,7 @@ describe('authorization HTTP security', () => {
       // B is a department this caller has no membership of, which is the point:
       // GLOBAL is not scoped, so membership never enters the decision.
       expect(organization.require).toHaveBeenCalledWith(B);
-      expect(organization.listActiveMembers).toHaveBeenCalledWith(B);
+      expect(organization.listActiveMembers).toHaveBeenCalledWith(B, { limit: 50 });
     });
 
     it('creates, renames, archives and transfers directly', async () => {

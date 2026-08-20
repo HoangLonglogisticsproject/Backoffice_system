@@ -8,6 +8,8 @@ import { MembershipRepository } from '../../../core/organization/persistence/mem
 import { AccountLifecycleService } from '../../../core/users/application/account-lifecycle.service';
 import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { MembershipChangeRequest, RequestAction } from '../domain/membership-request';
+import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
+import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import { MembershipRequestRepository } from '../persistence/membership-request.repository';
 
 /**
@@ -257,11 +259,22 @@ export class MembershipRequestService {
     }
   }
 
-  async listForDepartment(departmentId: string): Promise<MembershipChangeRequest[]> {
-    return this.requests.listForDepartment(departmentId);
+  /** One page of this department's history, newest first. */
+  async listForDepartment(
+    departmentId: string,
+    page: PageQuery,
+  ): Promise<Page<MembershipChangeRequest>> {
+    const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
+    const rows = await this.requests.listForDepartmentPage(departmentId, page.limit, cursor);
+
+    return toPage(rows, page.limit, (r) => ({ t: r.requestedAt.toISOString(), i: r.id }));
   }
 
-  async listPending(): Promise<MembershipChangeRequest[]> {
-    return this.requests.listPending();
+  /** One page of the global decision queue, oldest first. */
+  async listPending(page: PageQuery): Promise<Page<MembershipChangeRequest>> {
+    const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
+    const rows = await this.requests.listPendingPage(page.limit, cursor);
+
+    return toPage(rows, page.limit, (r) => ({ t: r.requestedAt.toISOString(), i: r.id }));
   }
 }
