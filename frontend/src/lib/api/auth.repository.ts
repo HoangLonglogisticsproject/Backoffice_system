@@ -1,4 +1,5 @@
 import { httpClient } from '../http/client';
+import { ApiError } from '../http/apiError';
 import type { AuthorizationMe, Identity, LoginResult } from '../type/auth';
 
 /**
@@ -39,8 +40,53 @@ export async function fetchIdentity(): Promise<Identity> {
  * is the one place that reads them that way.
  */
 export async function fetchAuthorization(): Promise<AuthorizationMe> {
-  const { data } = await httpClient.get<AuthorizationMe>('/authorization/me');
+  const { data } = await httpClient.get<unknown>('/authorization/me');
+
+  // ★ A 200 IS NOT PROOF THE BODY IS OURS, and the generic on `get<T>` is a
+  // compile-time assertion that checks nothing at runtime.
+  //
+  // When `VITE_API_URL` is unset the client falls back to same-origin, which in
+  // development is the Vite dev server rather than the API. Vite answers an
+  // unknown path with `index.html` and a 200, so this function used to return a
+  // string of HTML typed as `AuthorizationMe`, `current()` wrapped it as a
+  // READY session, and the first screen to read `.username` off it crashed.
+  //
+  // Refusing here turns a misconfiguration into the session state it actually
+  // is — not signed in — so the normal login redirect happens instead of a
+  // half-rendered shell.
+  if (!isAuthorizationMe(data)) {
+    throw new ApiError(
+      0,
+      undefined,
+      'The authorization endpoint did not return a session. Check VITE_API_URL.',
+    );
+  }
+
   return data;
+}
+
+const ROLES = new Set<string>(['SUPERADMIN', 'DEPARTMENT_HEAD', 'MEMBER']);
+
+/**
+ * Is this actually the shape the contract promises?
+ *
+ * Deliberately checks the fields the app depends on rather than every field:
+ * the point is to reject a response that is not ours at all, not to re-specify
+ * the contract on the client.
+ */
+function isAuthorizationMe(value: unknown): value is AuthorizationMe {
+  if (typeof value !== 'object' || value === null) return false;
+
+  const candidate = value as Record<string, unknown>;
+
+  return (
+    typeof candidate.userId === 'string' &&
+    (typeof candidate.username === 'string' || candidate.username === null) &&
+    typeof candidate.role === 'string' &&
+    ROLES.has(candidate.role) &&
+    Array.isArray(candidate.departmentIds) &&
+    Array.isArray(candidate.permissions)
+  );
 }
 
 export async function logout(): Promise<void> {
