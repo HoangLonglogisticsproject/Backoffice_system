@@ -1,3 +1,5 @@
+import type { UserSummary } from '../../../common/types/user-summary';
+
 /**
  * An organizational unit. A row, never a name in code.
  *
@@ -41,6 +43,20 @@ export interface DepartmentMembership {
 }
 
 export type MembershipStatus = 'active' | 'ended';
+
+/**
+ * A membership as a LIST READ returns it: the row, plus the name of the person
+ * it points at.
+ *
+ * Separate from `DepartmentMembership` on purpose. The bare entity is what the
+ * write paths produce — `openMembership`, `lockActiveForUser`, the transfer
+ * inside a transaction — and none of them need a name or should pay for the
+ * join to get one. Making the projection part of the entity would push that
+ * cost onto every one of those callers to serve a display concern.
+ */
+export interface DepartmentMembershipWithUser extends DepartmentMembership {
+  user: UserSummary;
+}
 
 /**
  * Slugs are compared, not displayed, so they are stored normalised — the same

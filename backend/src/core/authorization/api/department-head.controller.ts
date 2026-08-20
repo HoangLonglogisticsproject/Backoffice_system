@@ -12,6 +12,7 @@ import {
 import { z } from 'zod';
 import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import type { UserSummary } from '../../../common/types/user-summary';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
@@ -54,6 +55,18 @@ interface DepartmentHeadResponse {
 }
 
 /**
+ * What the READ returns: the same assignment, plus the head's name.
+ *
+ * Only the read. `assign` and `revoke` confirm what changed and are answered
+ * from the write path, which has no join and needs none — the caller of those
+ * already knows which user they just named. Extending the read alone keeps the
+ * projection out of the authorization write paths entirely.
+ */
+interface DepartmentHeadWithUserResponse extends DepartmentHeadResponse {
+  user: UserSummary;
+}
+
+/**
  * A head assignment always names a department — `role_assignments_scope_shape`
  * and `role_assignments_role_scope_agree` both say so, and the three routes
  * here only ever produce head assignments.
@@ -91,11 +104,13 @@ export class DepartmentHeadController {
   @Get()
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('role.assign')
-  async current(@Param('departmentId', UuidParam) departmentId: string): Promise<DepartmentHeadResponse> {
-    const assignment = await this.authorization.findActiveHeadOfDepartment(departmentId);
+  async current(
+    @Param('departmentId', UuidParam) departmentId: string,
+  ): Promise<DepartmentHeadWithUserResponse> {
+    const assignment = await this.authorization.findActiveHeadOfDepartmentWithUser(departmentId);
     if (!assignment) throw new NotFoundError('That department has no active head.');
 
-    return asResponse(assignment);
+    return { ...asResponse(assignment), user: assignment.user };
   }
 
   /**

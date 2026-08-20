@@ -297,6 +297,76 @@ Archive một phòng còn người active → **409**. Chuyển hết người �
 
 ---
 
+## 5b. List envelope và identity projection
+
+Hai thay đổi đã ship, ảnh hưởng **mọi endpoint trả danh sách** dưới đây. Cả hai
+đều **additive** — không field cũ nào bị đổi tên hay bỏ đi.
+
+### Envelope phân trang (ADR-0002)
+
+Năm endpoint danh sách **không trả mảng trần nữa**. Chúng trả:
+
+```jsonc
+{
+  "items": [ /* … */ ],
+  "nextCursor": "eyJ0IjoiMjAyNi0wOC0yMC…",   // null ở trang cuối
+  "hasMore": true
+}
+```
+
+| Query param | Mặc định | Giới hạn |
+|---|---|---|
+| `limit` | 50 | 1–200. Ngoài khoảng → **422**, KHÔNG bị cắt xuống im lặng |
+| `cursor` | không có | lấy nguyên văn từ `nextCursor` của trang trước |
+
+- `cursor` là **opaque**. Client không được parse, sinh, sửa hay đoán nội dung.
+- Cursor **hỏng → 422** (`VALIDATION_FAILED`), **không** âm thầm trả về trang 1.
+- **KHÔNG có tổng số bản ghi.** `hasMore` được trả lời bằng một hàng thăm dò
+  `limit + 1`, không phải `COUNT(*)`. Đừng dựng phân trang kiểu "trang 1/N".
+- Đọc tiếp cho tới khi `hasMore` là `false`.
+- `GET /departments` **không** phân trang: nó sắp theo `name`, mà `name` đổi
+  được — một cursor trên cột đổi được thì không thể đúng.
+
+### `UserSummary` (ADR-0001)
+
+Mọi resource có tham chiếu tới một con người giờ kèm theo tên của người đó:
+
+```jsonc
+{ "id": "fab71f53-…", "displayName": "Head Person" }
+```
+
+**`displayName` và không gì khác.** Không `email` — email không phải tên hiển
+thị và tuyệt đối không được dùng thay. Không `username` — server không lưu, nó
+suy ra từ email, nên trả về là lộ phần local của địa chỉ email.
+
+| Resource | Field id (GIỮ NGUYÊN) | Sibling mới |
+|---|---|---|
+| members | `userId` | `user` |
+| membership request | `targetUserId` · `requestedBy` | `targetUser` · `requestedByUser` |
+| account invitation | `requestedBy` | `requestedByUser` |
+| department head (chỉ READ) | `userId` | `user` |
+
+**Không có `decidedByUser`, không có `createdUser`.** Hai field đó nullable và
+chưa màn hình nào hiển thị; thêm join cho field không ai đọc thì trả giá trên
+mọi hàng của mọi trang. Sibling là additive nên thêm sau lúc nào cũng được.
+
+### Projection KHÔNG phải một quyền mới
+
+`UserSummary` chỉ đi kèm bên trong một resource mà caller **đã được phép đọc**.
+Tên hiện ra đúng khi và chỉ khi hàng tham chiếu tới nó hiện ra.
+
+- **KHÔNG có `GET /users/:id`.** Không có bulk lookup. Không có cách nào biến
+  một user id bất kỳ thành một cái tên.
+- Thứ tự không đổi: authn → authz → scope → query → projection.
+- Caller **không** chọn được ai bị project. Không đọc user id từ query string
+  hay body cho việc này — chỉ những hàng mà query đã trả về mới có tên.
+- 403 thì không có hàng nào, nên cũng không có tên nào lọt ra.
+
+Frontend vì thế **không được** tự join phía client, không N+1 `GET /users/:id`,
+và không tự bịa một định nghĩa thứ hai về "người dùng là gì".
+
+---
+
 ## 6. Membership API
 
 | Endpoint | Ai gọi được |
@@ -308,12 +378,22 @@ Archive một phòng còn người active → **409**. Chuyển hết người �
 mình → 403. Đây là mặc định đã chốt, không phải thiếu sót.
 
 ```jsonc
-// GET /departments/:id/members — 200
-[
-  { "id": "d4b58fd3-…", "userId": "fab71f53-…", "departmentId": "7ce2630e-…",
-    "status": "active", "createdAt": "2026-08-18T08:34:04.975Z", "endedAt": null }
-]
+// GET /departments/:id/members?limit=50 — 200
+{
+  "items": [
+    { "id": "d4b58fd3-…",                     // ← id của MEMBERSHIP
+      "userId": "fab71f53-…",                 // ← id của NGƯỜI (giữ nguyên)
+      "user": { "id": "fab71f53-…", "displayName": "Head Person" },   // ← mới
+      "departmentId": "7ce2630e-…",
+      "status": "active", "createdAt": "2026-08-18T08:34:04.975Z", "endedAt": null }
+  ],
+  "nextCursor": "eyJ0IjoiMjAyNi0wOC0xOCAwODozNDowNC45NzUxODIrMDAi…",
+  "hasMore": true
+}
 ```
+
+⚠️ `id` là membership, `user.id` là con người. Hai thứ khác nhau — nhầm là có
+ngày xoá sai hàng.
 
 ---
 
@@ -409,7 +489,12 @@ không kèm body là hợp lệ.
 
 Người mới vào **đúng phòng của HEAD đã mời**.
 
-`GET /account-invitations` trả `[]` khi không có gì chờ duyệt.
+`GET /account-invitations` trả `{ "items": [], "nextCursor": null, "hasMore": false }`
+khi không có gì chờ duyệt — **rỗng là một trang, không phải lỗi**.
+
+Mỗi invitation trong `items` kèm `requestedByUser` (§5b) bên cạnh `requestedBy`.
+`email` vẫn là địa chỉ được mời và **không bao giờ** được dùng thay tên hiển thị.
+Không có `decidedByUser` hay `createdUser`.
 
 ---
 
@@ -440,19 +525,26 @@ nhất trong toàn bộ API.
 ```
 
 ```jsonc
-// 201 / GET /membership-requests — 200
-[{
+// POST → 201 trả THẲNG object dưới đây (không có envelope).
+// GET /membership-requests — 200 trả envelope { items, nextCursor, hasMore }.
+{
   "id": "f6d42eed-…",
   "departmentId": "60630e75-…",        // NGUỒN — server suy ra, không nhận từ client
   "targetDepartmentId": null,          // ĐÍCH — chỉ transfer mới có
   "targetUserId": "7d47b2ac-…",        // ← response dùng tên này
+  "targetUser":      { "id": "7d47b2ac-…", "displayName": "Moved Person" },  // ← mới
   "action": "REMOVE_MEMBER",
   "status": "pending",                 // pending | approved | rejected
   "requestedBy": "8b18fa79-…",
+  "requestedByUser": { "id": "8b18fa79-…", "displayName": "Head Person" },   // ← mới
   "requestedAt": "2026-08-18T08:34:23.633Z",
   "decidedBy": null, "decidedAt": null, "reason": null
-}]
+  // KHÔNG có decidedByUser — xem §5b
+}
 ```
+
+⚠️ Hai sibling chỉ có trên **danh sách**. `POST` tạo request trả shape cũ,
+không kèm tên: người gọi vừa tự đặt các id đó nên server không đi join lại.
 
 Ba giá trị, ba nguồn:
 
@@ -694,13 +786,17 @@ không gọi được route nào ở đây, kể cả route đọc.
 // POST /departments/:departmentId/head
 { "userId": "fab71f53-…" }        // CHỈ userId — phòng lấy từ URL
 
-// 201 · 200 (cả assign, revoke và read đều trả hình dạng này)
+// 201 · 200 — assign, revoke và read dùng chung hình dạng này
 {
   "assignmentId": "…",
   "departmentId": "7ce2630e-…",
   "userId": "fab71f53-…",
   "membershipId": "d4b58fd3-…",
-  "grantedAt": "2026-01-01T00:00:00.000Z"
+  "grantedAt": "2026-01-01T00:00:00.000Z",
+
+  // CHỈ trên GET. assign/revoke trả lời từ đường ghi và KHÔNG có field này:
+  // người gọi vừa tự nêu tên user đó, server không join lại để nói lại.
+  "user": { "id": "fab71f53-…", "displayName": "Head Person" }
 }
 ```
 

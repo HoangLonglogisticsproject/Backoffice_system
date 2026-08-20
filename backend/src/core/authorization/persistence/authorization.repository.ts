@@ -3,6 +3,7 @@ import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { AuthorizationContext } from '../domain/authorization.context';
 import type { AssignableRoleKey } from '../domain/permission';
+import type { UserSummary } from '../../../common/types/user-summary';
 
 /** SQLSTATE 23505 unique_violation / 23503 foreign_key_violation, read as data. */
 const sqlState = (error: unknown): string | undefined =>
@@ -24,6 +25,17 @@ export interface RoleAssignment {
   revokedVia: 'api' | 'bootstrap' | null;
   revokedBy: string | null;
   revokedAt: Date | null;
+}
+
+/**
+ * A head assignment as the DISPLAY read returns it: the assignment, plus the
+ * name of the person holding it.
+ *
+ * `user_id` is NOT NULL with a `NO ACTION` foreign key, so the join is INNER and
+ * cannot produce a null.
+ */
+export interface RoleAssignmentWithUser extends RoleAssignment {
+  user: UserSummary;
 }
 
 interface AssignmentRow {
@@ -161,6 +173,39 @@ export class AuthorizationRepository {
       [departmentId],
     );
     return rows[0] ? toAssignment(rows[0]) : null;
+  }
+
+  /**
+   * The same head, for the one caller that has to SHOW them.
+   *
+   * A separate method rather than a join added to `findActiveHeadOfDepartment`,
+   * because that one has three other callers — the approval services look the
+   * head up INSIDE a transaction to decide a workflow, and none of them display
+   * anything. Adding the join there would charge every one of them for a name
+   * only this route prints.
+   */
+  async findActiveHeadOfDepartmentWithUser(
+    departmentId: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<RoleAssignmentWithUser | null> {
+    const rows = await executor.query<AssignmentRow & { user_display_name: string }>(
+      `SELECT a.id, a.user_id, a.role_key, a.scope_type, a.scope_id, a.membership_id,
+              a.status, a.granted_via, a.granted_by, a.granted_at,
+              a.revoked_via, a.revoked_by, a.revoked_at,
+              u.display_name AS user_display_name
+         FROM role_assignments a
+         JOIN users u ON u.id = a.user_id
+        WHERE a.role_key = 'DEPARTMENT_HEAD' AND a.scope_id = $1 AND a.status = 'active'`,
+      [departmentId],
+    );
+
+    const row = rows[0];
+    if (!row) return null;
+
+    return {
+      ...toAssignment(row),
+      user: { id: row.user_id, displayName: row.user_display_name },
+    };
   }
 
   async listActiveAssignmentsForUser(

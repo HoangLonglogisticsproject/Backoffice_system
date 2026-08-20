@@ -1,3 +1,5 @@
+import type { UserSummary } from '../../../common/types/user-summary';
+
 /**
  * Hoàng Long's approval policy, as data.
  *
@@ -39,6 +41,21 @@ export interface MembershipChangeRequest {
   decidedBy: string | null;
   decidedAt: Date | null;
   reason: string | null;
+}
+
+/**
+ * A request as a LIST READ returns it: the row, plus the names of the two
+ * people it concerns.
+ *
+ * Separate from the entity because the write paths — raise, decide, the lookups
+ * inside a transaction — need neither name and should not pay for the joins
+ * that fetch them.
+ */
+export interface MembershipChangeRequestWithUsers extends MembershipChangeRequest {
+  /** Who the request is ABOUT. */
+  targetUser: UserSummary;
+  /** Who RAISED it. */
+  requestedByUser: UserSummary;
 }
 
 /**

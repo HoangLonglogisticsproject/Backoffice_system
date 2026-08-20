@@ -24,7 +24,7 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { AccountInvitationService, ApprovedInvitation } from '../application/account-invitation.service';
-import { AccountInvitation } from '../domain/account-invitation';
+import { AccountInvitation, AccountInvitationWithUser } from '../domain/account-invitation';
 
 /**
  * Inviting somebody who has no account yet.
@@ -84,7 +84,7 @@ export class AccountInvitationController {
   async listForDepartment(
     @Param('departmentId', UuidParam) departmentId: string,
     @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
-  ): Promise<Page<AccountInvitation>> {
+  ): Promise<Page<AccountInvitationWithUser>> {
     return this.invitations.listForDepartment(departmentId, page);
   }
 
@@ -93,7 +93,7 @@ export class AccountInvitationController {
   @RequirePermission('user.write')
   async listPending(
     @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
-  ): Promise<Page<AccountInvitation>> {
+  ): Promise<Page<AccountInvitationWithUser>> {
     return this.invitations.listPending(page);
   }
 

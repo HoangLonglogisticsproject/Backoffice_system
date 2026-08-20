@@ -24,7 +24,11 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { MembershipRequestService } from '../application/membership-request.service';
-import { MembershipChangeRequest, REQUEST_ACTIONS } from '../domain/membership-request';
+import {
+  MembershipChangeRequest,
+  MembershipChangeRequestWithUsers,
+  REQUEST_ACTIONS,
+} from '../domain/membership-request';
 
 /**
  * The two sides of the approval workflow, and they are guarded differently on
@@ -80,7 +84,7 @@ export class MembershipRequestController {
   async listForDepartment(
     @Param('departmentId', UuidParam) departmentId: string,
     @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
-  ): Promise<Page<MembershipChangeRequest>> {
+  ): Promise<Page<MembershipChangeRequestWithUsers>> {
     return this.requests.listForDepartment(departmentId, page);
   }
 
@@ -90,7 +94,7 @@ export class MembershipRequestController {
   @RequirePermission('unit.member.write')
   async listPending(
     @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
-  ): Promise<Page<MembershipChangeRequest>> {
+  ): Promise<Page<MembershipChangeRequestWithUsers>> {
     return this.requests.listPending(page);
   }
 

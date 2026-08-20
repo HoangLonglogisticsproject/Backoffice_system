@@ -5,7 +5,11 @@ import { DepartmentRepository } from '../../organization/persistence/department.
 import { MembershipRepository } from '../../organization/persistence/membership.repository';
 import { SessionService } from '../../identity/application/session.service';
 import type { AuthorizationContext } from '../domain/authorization.context';
-import { AuthorizationRepository, RoleAssignment } from '../persistence/authorization.repository';
+import {
+  AuthorizationRepository,
+  RoleAssignment,
+  RoleAssignmentWithUser,
+} from '../persistence/authorization.repository';
 
 /**
  * Granting and revoking authority.
@@ -229,6 +233,19 @@ export class AuthorizationService {
 
   async findActiveHeadOfDepartment(departmentId: string): Promise<RoleAssignment | null> {
     return this.repository.findActiveHeadOfDepartment(departmentId);
+  }
+
+  /**
+   * The same head, plus their name, for the route that displays one.
+   *
+   * Deliberately NOT folded into the method above: that one is called inside
+   * approval transactions to decide a workflow, and those callers display
+   * nothing and should not pay for a join.
+   */
+  async findActiveHeadOfDepartmentWithUser(
+    departmentId: string,
+  ): Promise<RoleAssignmentWithUser | null> {
+    return this.repository.findActiveHeadOfDepartmentWithUser(departmentId);
   }
 
   /**

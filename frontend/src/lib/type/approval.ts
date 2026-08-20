@@ -5,6 +5,8 @@
  * are read-only here — proposing and deciding are later phases.
  */
 
+import type { UserSummary } from './organization';
+
 /** §9, §10. Both workflows share the same three-valued decision state. */
 export type DecisionStatus = 'pending' | 'approved' | 'rejected';
 
@@ -36,10 +38,19 @@ export interface MembershipChangeRequest {
   /** Destination. `null` for `REMOVE_MEMBER`. */
   targetDepartmentId: string | null;
   targetUserId: string;
+  /** Who the request is ABOUT (ADR-0001). Always present. */
+  targetUser: UserSummary;
   action: MembershipRequestAction;
   status: DecisionStatus;
   requestedBy: string;
   requestedAt: string;
+  /** Who RAISED it (ADR-0001). Always present. */
+  requestedByUser: UserSummary;
+  /**
+   * Who decided it, as a bare id. There is deliberately NO `decidedByUser`:
+   * no screen shows a decider's name yet, and the server will not pay for a
+   * join nobody reads. It can be added additively when a screen needs it.
+   */
   decidedBy: string | null;
   decidedAt: string | null;
   reason: string | null;
@@ -63,13 +74,17 @@ export interface MembershipChangeRequest {
 export interface AccountInvitation {
   id: string;
   departmentId: string;
+  /** The INVITED address. Not a display name, and never a substitute for one. */
   email: string;
   status: DecisionStatus;
   requestedBy: string;
   requestedAt: string;
+  /** Who ASKED for this account (ADR-0001). Always present. */
+  requestedByUser: UserSummary;
+  /** No `decidedByUser` sibling, for the reason given on the request shape. */
   decidedBy: string | null;
   decidedAt: string | null;
   reason: string | null;
-  /** The account approval produced. `null` until then. */
+  /** The account approval produced. `null` until then. No projection sibling. */
   createdUserId: string | null;
 }

@@ -39,6 +39,7 @@ describe('department head HTTP security', () => {
     assignDepartmentHead: jest.Mock;
     revokeHeadOfDepartment: jest.Mock;
     findActiveHeadOfDepartment: jest.Mock;
+    findActiveHeadOfDepartmentWithUser: jest.Mock;
   };
   let context: AuthorizationContext;
 
@@ -81,6 +82,11 @@ describe('department head HTTP security', () => {
         .fn()
         .mockResolvedValue({ ...assignment, status: 'revoked', revokedBy: ACTOR }),
       findActiveHeadOfDepartment: jest.fn().mockResolvedValue(assignment),
+      // The READ goes through the projecting variant; the two write routes do
+      // not, which is the point of them being separate methods.
+      findActiveHeadOfDepartmentWithUser: jest
+        .fn()
+        .mockResolvedValue({ ...assignment, user: { id: TARGET, displayName: 'Head Person' } }),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -245,13 +251,15 @@ describe('department head HTTP security', () => {
       const response = await authed('get', `/departments/${B}/head`);
 
       expect(response.status).toBe(200);
-      expect(authorization.findActiveHeadOfDepartment).toHaveBeenCalledWith(B);
+      expect(authorization.findActiveHeadOfDepartmentWithUser).toHaveBeenCalledWith(B);
       expect(response.body.userId).toBe(TARGET);
+      // The scalar id stays exactly where it was; the name is a NEW sibling.
+      expect(response.body.user).toEqual({ id: TARGET, displayName: 'Head Person' });
     });
 
     it('gets 404, not an empty body, for a unit with no head', async () => {
       const { NotFoundError } = errors();
-      authorization.findActiveHeadOfDepartment.mockResolvedValue(null);
+      authorization.findActiveHeadOfDepartmentWithUser.mockResolvedValue(null);
 
       const response = await authed('get', `/departments/${A}/head`);
 
@@ -426,7 +434,7 @@ describe('department head HTTP security', () => {
         .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`);
 
       expect(response.status).toBe(200);
-      expect(authorization.findActiveHeadOfDepartment).toHaveBeenCalledWith(A);
+      expect(authorization.findActiveHeadOfDepartmentWithUser).toHaveBeenCalledWith(A);
     });
   });
 });

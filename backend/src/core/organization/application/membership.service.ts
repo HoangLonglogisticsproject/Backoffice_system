@@ -3,7 +3,10 @@ import { ConflictError, NotFoundError } from '../../../common/errors/domain.erro
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
 import type { PageQuery } from '../../../common/pagination/page-query.dto';
-import { DepartmentMembership } from '../domain/department.entity';
+import {
+  DepartmentMembership,
+  DepartmentMembershipWithUser,
+} from '../domain/department.entity';
 import { DepartmentRepository } from '../persistence/department.repository';
 import { MembershipRepository } from '../persistence/membership.repository';
 
@@ -135,7 +138,7 @@ export class MembershipService {
   async listActiveMembers(
     departmentId: string,
     page: PageQuery,
-  ): Promise<Page<DepartmentMembership>> {
+  ): Promise<Page<DepartmentMembershipWithUser>> {
     const department = await this.departments.findById(departmentId);
     if (!department) throw new NotFoundError('Department not found.');
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;

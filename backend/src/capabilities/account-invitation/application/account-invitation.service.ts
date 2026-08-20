@@ -8,7 +8,7 @@ import { DepartmentRepository } from '../../../core/organization/persistence/dep
 import { AccountProvisioningService } from '../../../core/users/application/account-provisioning.service';
 import { assertProvisionableEmail } from '../../../core/users/domain/email';
 import { LOCAL_PROVIDER } from '../../../core/users/domain/user.entity';
-import { AccountInvitation } from '../domain/account-invitation';
+import { AccountInvitation, AccountInvitationWithUser } from '../domain/account-invitation';
 import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
 import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import { AccountInvitationRepository } from '../persistence/account-invitation.repository';
@@ -217,7 +217,7 @@ export class AccountInvitationService {
   async listForDepartment(
     departmentId: string,
     page: PageQuery,
-  ): Promise<Page<AccountInvitation>> {
+  ): Promise<Page<AccountInvitationWithUser>> {
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await this.invitations.listForDepartmentPage(departmentId, page.limit, cursor);
 
@@ -225,7 +225,7 @@ export class AccountInvitationService {
   }
 
   /** One page of the global decision queue, oldest first. */
-  async listPending(page: PageQuery): Promise<Page<AccountInvitation>> {
+  async listPending(page: PageQuery): Promise<Page<AccountInvitationWithUser>> {
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await this.invitations.listPendingPage(page.limit, cursor);
 
