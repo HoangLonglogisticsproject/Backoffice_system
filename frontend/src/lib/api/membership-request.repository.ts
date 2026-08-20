@@ -1,5 +1,5 @@
 import { httpClient } from '../http/client';
-import type { MembershipChangeRequest } from '../type/approval';
+import type { MembershipChangeRequestWithUsers } from '../type/approval';
 import type { Page, PageRequest } from '../type/pagination';
 
 /**
@@ -29,8 +29,8 @@ import type { Page, PageRequest } from '../type/pagination';
 export async function fetchDepartmentMembershipRequests(
   departmentId: string,
   page: PageRequest = {},
-): Promise<Page<MembershipChangeRequest>> {
-  const { data } = await httpClient.get<Page<MembershipChangeRequest>>(
+): Promise<Page<MembershipChangeRequestWithUsers>> {
+  const { data } = await httpClient.get<Page<MembershipChangeRequestWithUsers>>(
     `/departments/${encodeURIComponent(departmentId)}/membership-requests`,
     { params: { limit: page.limit, cursor: page.cursor } },
   );
@@ -44,8 +44,8 @@ export async function fetchDepartmentMembershipRequests(
  */
 export async function fetchPendingMembershipRequests(
   page: PageRequest = {},
-): Promise<Page<MembershipChangeRequest>> {
-  const { data } = await httpClient.get<Page<MembershipChangeRequest>>('/membership-requests', {
+): Promise<Page<MembershipChangeRequestWithUsers>> {
+  const { data } = await httpClient.get<Page<MembershipChangeRequestWithUsers>>('/membership-requests', {
     params: { limit: page.limit, cursor: page.cursor },
   });
   return data;

@@ -24,13 +24,33 @@ export interface Department {
 export type MembershipStatus = 'active' | 'ended';
 
 /**
+ * The canonical way this API names a person (ADR-0001).
+ *
+ * It arrives INSIDE a resource the caller was already allowed to read, so it
+ * carries no authorization of its own: a name is visible exactly when the row
+ * referencing it is. There is deliberately no endpoint that turns an arbitrary
+ * user id into a name, and a screen must never try to build one.
+ *
+ * `displayName` and nothing else. Not `email` — an email is not a display name
+ * and must never be shown in place of one. Not `username` — the server does not
+ * store one; it derives it from the email, so returning it would leak the local
+ * part of somebody's address.
+ */
+export interface UserSummary {
+  id: string;
+  displayName: string;
+}
+
+/**
  * `GET /departments/:departmentId/members` (§6).
  *
- * ⚠ THIS IS A MEMBERSHIP, NOT A PERSON. It carries `userId` and no display
- * name, because the endpoint answers "who is in this unit" from the membership
- * table alone. There is no bulk user-lookup endpoint in the current contract,
- * so a screen that wants names cannot get them from here — see the integration
- * gaps in the phase report rather than inventing a join on the client.
+ * THIS IS STILL A MEMBERSHIP, NOT A PERSON — `id` is the membership's, and
+ * `user.id` is the person's. They are different things and a screen that mixes
+ * them up will delete the wrong row one day.
+ *
+ * `user` is the identity projection (ADR-0001), added by the server inside the
+ * same authorized query. `userId` is unchanged and stays: nothing that read the
+ * old shape breaks.
  */
 export interface DepartmentMembership {
   id: string;
@@ -40,6 +60,20 @@ export interface DepartmentMembership {
   createdAt: string;
   /** Set exactly when `status` is `ended`; the database enforces the pair. */
   endedAt: string | null;
+}
+
+/**
+ * The same membership as the LIST read returns it, with the member named.
+ *
+ * Separate from the base shape because the server only projects on the GET.
+ * `POST /departments/:id/members` answers from the write path and returns
+ * `DepartmentMembership` with no `user` — the caller of that just named the
+ * person themselves, so the server does not join to tell them what they sent.
+ * Declaring `user` on the base type would make it a promise the POST breaks.
+ */
+export interface DepartmentMembershipWithUser extends DepartmentMembership {
+  /** Who `userId` refers to. Always present — the join is INNER. */
+  user: UserSummary;
 }
 
 /**
@@ -62,4 +96,16 @@ export interface DepartmentHead {
   /** The membership that entitles this person to lead here (invariant #6). */
   membershipId: string;
   grantedAt: string;
+}
+
+/**
+ * What `GET /departments/:departmentId/head` returns: the assignment, named.
+ *
+ * The READ only. `assign` and `revoke` answer from the write path and return
+ * the base `DepartmentHead` without `user`, so the projection is a separate
+ * type rather than an optional field — optional would leave every caller
+ * guessing which of the three routes they are holding.
+ */
+export interface DepartmentHeadWithUser extends DepartmentHead {
+  user: UserSummary;
 }

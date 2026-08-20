@@ -1,5 +1,5 @@
 import { httpClient } from '../http/client';
-import type { AccountInvitation } from '../type/approval';
+import type { AccountInvitationWithUser } from '../type/approval';
 import type { Page, PageRequest } from '../type/pagination';
 
 /**
@@ -23,8 +23,8 @@ import type { Page, PageRequest } from '../type/pagination';
 export async function fetchDepartmentAccountInvitations(
   departmentId: string,
   page: PageRequest = {},
-): Promise<Page<AccountInvitation>> {
-  const { data } = await httpClient.get<Page<AccountInvitation>>(
+): Promise<Page<AccountInvitationWithUser>> {
+  const { data } = await httpClient.get<Page<AccountInvitationWithUser>>(
     `/departments/${encodeURIComponent(departmentId)}/account-invitations`,
     { params: { limit: page.limit, cursor: page.cursor } },
   );
@@ -34,8 +34,8 @@ export async function fetchDepartmentAccountInvitations(
 /** The global approval queue. `[]` when nothing is waiting (§9). */
 export async function fetchPendingAccountInvitations(
   page: PageRequest = {},
-): Promise<Page<AccountInvitation>> {
-  const { data } = await httpClient.get<Page<AccountInvitation>>('/account-invitations', {
+): Promise<Page<AccountInvitationWithUser>> {
+  const { data } = await httpClient.get<Page<AccountInvitationWithUser>>('/account-invitations', {
     params: { limit: page.limit, cursor: page.cursor },
   });
   return data;

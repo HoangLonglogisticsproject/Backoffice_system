@@ -215,8 +215,37 @@ describe('organization read paths (§5, §6)', () => {
         status: 'active',
         createdAt: expect.any(String),
       });
-      // Memberships, not people: no display name is available from here.
+      // A membership is still not a person: the name lives under `user`, never
+      // flattened onto the membership itself.
       expect(response.data.items[0]).not.toHaveProperty('displayName');
+    });
+
+    it('★ each member arrives NAMED, over real HTTP (ADR-0001)', async () => {
+      const response = await headOfA.get(`/departments/${departmentA}/members`);
+
+      expect(response.status).toBe(200);
+      for (const item of response.data.items) {
+        // The scalar id is untouched, and the projection belongs to it.
+        expect(item.user.id).toBe(item.userId);
+        expect(typeof item.user.displayName).toBe('string');
+        expect(item.user.displayName.length).toBeGreaterThan(0);
+        // displayName ONLY. An email is not a display name.
+        expect(Object.keys(item.user).sort()).toEqual(['displayName', 'id']);
+      }
+      // The head provisioned into A is named, so the join really read `users`.
+      const names = response.data.items.map((m: { user: { displayName: string } }) => m.user.displayName);
+      expect(names).toContain('Head of A');
+    });
+
+    it('★ there is no way to turn an arbitrary user id into a name', async () => {
+      // ADR-0001 rejected a bulk/arbitrary lookup: a bare user id belongs to no
+      // department, so the permission model has no answer for it. The absence
+      // of the route IS the security property.
+      const someUserId = (await headOfA.get(`/departments/${departmentA}/members`)).data.items[0]
+        .userId;
+
+      const direct = await boss.get(`/users/${someUserId}`);
+      expect([403, 404]).toContain(direct.status);
     });
 
     it('SUPERADMIN reads any department members', async () => {

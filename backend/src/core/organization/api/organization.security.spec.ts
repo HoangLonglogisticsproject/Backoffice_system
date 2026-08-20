@@ -64,9 +64,19 @@ describe('organization HTTP security', () => {
       archive: jest.fn().mockResolvedValue({ ...department, status: 'archived' }),
     };
     memberships = {
-      listActiveMembers: jest
-        .fn()
-        .mockResolvedValue([{ id: 'm1', userId: TARGET, departmentId: A, status: 'active' }]),
+      listActiveMembers: jest.fn().mockResolvedValue({
+        items: [
+          {
+            id: 'm1',
+            userId: TARGET,
+            user: { id: TARGET, displayName: 'Target Person' },
+            departmentId: A,
+            status: 'active',
+          },
+        ],
+        nextCursor: null,
+        hasMore: false,
+      }),
       transfer: jest
         .fn()
         .mockResolvedValue({ id: 'm2', userId: TARGET, departmentId: A, status: 'active' }),
@@ -201,16 +211,39 @@ describe('organization HTTP security', () => {
       await authed('get', `/departments/${A}`).expect(200);
       const roster = await authed('get', `/departments/${A}/members`).expect(200);
 
-      expect(roster.body).toHaveLength(1);
+      expect(roster.body.items).toHaveLength(1);
+      expect(memberships.listActiveMembers).toHaveBeenCalledWith(A, { limit: 50 });
+    });
+
+    it('gets each member named, and the scalar id it always had', async () => {
+      // The projection rides inside a resource this caller was ALREADY allowed
+      // to read. It adds a field, not a permission.
+      const roster = await authed('get', `/departments/${A}/members`).expect(200);
+
+      expect(roster.body.items[0].userId).toBe(TARGET);
+      expect(roster.body.items[0].user).toEqual({
+        id: TARGET,
+        displayName: 'Target Person',
+      });
+    });
+
+    it('cannot ask for a different user to be projected', async () => {
+      // Projection targets come from the rows the query returned, never from
+      // the caller. A user id in the query string changes nothing.
+      await authed('get', `/departments/${A}/members?userId=${ACTOR}`).expect(200);
+
       expect(memberships.listActiveMembers).toHaveBeenCalledWith(A, { limit: 50 });
     });
 
     it('cannot read another unit’s roster — IDOR on the route parameter', async () => {
-      await authed('get', `/departments/${B}/members`).expect(403);
+      const refused = await authed('get', `/departments/${B}/members`).expect(403);
       await authed('get', `/departments/${B}`).expect(403);
 
       expect(memberships.listActiveMembers).not.toHaveBeenCalled();
       expect(departments.require).not.toHaveBeenCalled();
+      // Refused BEFORE any query runs, so there is no row and therefore no name
+      // to leak. The projection cannot outlive the authorization decision.
+      expect(JSON.stringify(refused.body)).not.toContain('Target Person');
     });
 
     it('cannot list every unit', async () => {

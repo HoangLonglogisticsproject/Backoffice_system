@@ -1,5 +1,5 @@
 import { httpClient } from '../http/client';
-import type { DepartmentMembership } from '../type/organization';
+import type { DepartmentMembershipWithUser } from '../type/organization';
 import type { Page, PageRequest } from '../type/pagination';
 
 /**
@@ -28,8 +28,8 @@ import type { Page, PageRequest } from '../type/pagination';
 export async function fetchDepartmentMembers(
   departmentId: string,
   page: PageRequest = {},
-): Promise<Page<DepartmentMembership>> {
-  const { data } = await httpClient.get<Page<DepartmentMembership>>(
+): Promise<Page<DepartmentMembershipWithUser>> {
+  const { data } = await httpClient.get<Page<DepartmentMembershipWithUser>>(
     `/departments/${encodeURIComponent(departmentId)}/members`,
     { params: { limit: page.limit, cursor: page.cursor } },
   );

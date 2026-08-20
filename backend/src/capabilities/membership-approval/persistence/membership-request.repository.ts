@@ -4,6 +4,7 @@ import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
   MembershipChangeRequest,
+  MembershipChangeRequestWithUsers,
   RequestAction,
   RequestStatus,
 } from '../domain/membership-request';
@@ -26,7 +27,39 @@ interface RequestRow {
 }
 
 /** A request plus its cursor anchor — `requested_at` at full precision. */
-export interface RequestPageRow extends MembershipChangeRequest, CursorAnchored {}
+export interface RequestPageRow extends MembershipChangeRequestWithUsers, CursorAnchored {}
+
+/**
+ * A request, with the names of the two people it is about and the cursor anchor.
+ *
+ * TWO joins to the SAME table, aliased apart: a request names who it is FOR and
+ * who RAISED it, and those are usually different people. Both columns are NOT
+ * NULL with a `NO ACTION` foreign key, so both are INNER, neither can be null,
+ * and each is 1:1 on a primary key - a list row cannot be multiplied.
+ *
+ * `decided_by` deliberately gets NO projection: it is nullable, no screen shows
+ * it, and a LEFT JOIN for an unread field would be paid on every row of every
+ * page. Siblings are additive, so it can be added the day something needs it.
+ *
+ * Columns are listed rather than starred, and every keyset column is qualified
+ * `r.` - including `r.requested_at::text` for the anchor. Three tables here
+ * carry an `id`, and an unqualified one is both ambiguous and wrong.
+ */
+const REQUESTS_WITH_USERS = `
+  SELECT r.id, r.department_id, r.target_department_id, r.target_user_id, r.action,
+         r.status, r.requested_by, r.requested_at, r.decided_by, r.decided_at, r.reason,
+         r.requested_at::text AS cursor_at,
+         tu.display_name AS target_user_display_name,
+         ru.display_name AS requested_by_display_name
+    FROM membership_change_requests r
+    JOIN users tu ON tu.id = r.target_user_id
+    JOIN users ru ON ru.id = r.requested_by`;
+
+type RequestJoinedRow = RequestRow & {
+  cursor_at: string;
+  target_user_display_name: string;
+  requested_by_display_name: string;
+};
 
 const toRequest = (row: RequestRow): MembershipChangeRequest => ({
   id: row.id,
@@ -40,6 +73,13 @@ const toRequest = (row: RequestRow): MembershipChangeRequest => ({
   decidedBy: row.decided_by,
   decidedAt: row.decided_at,
   reason: row.reason,
+});
+
+const toRequestPageRow = (row: RequestJoinedRow): RequestPageRow => ({
+  ...toRequest(row),
+  targetUser: { id: row.target_user_id, displayName: row.target_user_display_name },
+  requestedByUser: { id: row.requested_by, displayName: row.requested_by_display_name },
+  cursorAt: row.cursor_at,
 });
 
 /** SQL for approval requests. Opens no transaction; decides nothing. */
@@ -144,19 +184,19 @@ export class MembershipRequestRepository {
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
   ): Promise<RequestPageRow[]> {
-    const rows = await executor.query<RequestRow & { cursor_at: string }>(
+    const rows = await executor.query<RequestJoinedRow>(
       cursor
-        ? `SELECT *, requested_at::text AS cursor_at FROM membership_change_requests
-            WHERE department_id = $1 AND (requested_at, id) < ($2::timestamptz, $3)
-            ORDER BY requested_at DESC, id DESC
+        ? `${REQUESTS_WITH_USERS}
+            WHERE r.department_id = $1 AND (r.requested_at, r.id) < ($2::timestamptz, $3)
+            ORDER BY r.requested_at DESC, r.id DESC
             LIMIT $4`
-        : `SELECT *, requested_at::text AS cursor_at FROM membership_change_requests
-            WHERE department_id = $1
-            ORDER BY requested_at DESC, id DESC
+        : `${REQUESTS_WITH_USERS}
+            WHERE r.department_id = $1
+            ORDER BY r.requested_at DESC, r.id DESC
             LIMIT $2`,
       cursor ? [departmentId, cursor.t, cursor.i, limit + 1] : [departmentId, limit + 1],
     );
-    return rows.map((row) => ({ ...toRequest(row), cursorAt: row.cursor_at }));
+    return rows.map(toRequestPageRow);
   }
 
   /**
@@ -168,19 +208,19 @@ export class MembershipRequestRepository {
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
   ): Promise<RequestPageRow[]> {
-    const rows = await executor.query<RequestRow & { cursor_at: string }>(
+    const rows = await executor.query<RequestJoinedRow>(
       cursor
-        ? `SELECT *, requested_at::text AS cursor_at FROM membership_change_requests
-            WHERE status = 'pending' AND (requested_at, id) > ($1::timestamptz, $2)
-            ORDER BY requested_at ASC, id ASC
+        ? `${REQUESTS_WITH_USERS}
+            WHERE r.status = 'pending' AND (r.requested_at, r.id) > ($1::timestamptz, $2)
+            ORDER BY r.requested_at ASC, r.id ASC
             LIMIT $3`
-        : `SELECT *, requested_at::text AS cursor_at FROM membership_change_requests
-            WHERE status = 'pending'
-            ORDER BY requested_at ASC, id ASC
+        : `${REQUESTS_WITH_USERS}
+            WHERE r.status = 'pending'
+            ORDER BY r.requested_at ASC, r.id ASC
             LIMIT $1`,
       cursor ? [cursor.t, cursor.i, limit + 1] : [limit + 1],
     );
-    return rows.map((row) => ({ ...toRequest(row), cursorAt: row.cursor_at }));
+    return rows.map(toRequestPageRow);
   }
 
   /**

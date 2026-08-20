@@ -716,6 +716,115 @@ describeIntegration('Membership approval against real PostgreSQL', () => {
     });
   });
 
+  // ------------------------------------------------ identity projection --
+
+  describe('identity projection on the request lists (ADR-0001)', () => {
+    /** Two DIFFERENT people, so a join that mixes them up cannot pass. */
+    const seedNamedRequest = async (
+      target: string,
+      requester: string,
+    ): Promise<{ departmentId: string; targetId: string; requesterId: string }> => {
+      const { rows: dept } = await pool.query<{ id: string }>(
+        "INSERT INTO departments (slug, name) VALUES ('proj', 'Projection') RETURNING id",
+      );
+      const { rows: t } = await pool.query<{ id: string }>(
+        'INSERT INTO users (display_name) VALUES ($1) RETURNING id',
+        [target],
+      );
+      const { rows: r } = await pool.query<{ id: string }>(
+        'INSERT INTO users (display_name) VALUES ($1) RETURNING id',
+        [requester],
+      );
+      await pool.query(
+        `INSERT INTO membership_change_requests
+           (department_id, target_user_id, requested_by, action, status)
+         VALUES ($1, $2, $3, 'REMOVE_MEMBER', 'pending')`,
+        [dept[0]!.id, t[0]!.id, r[0]!.id],
+      );
+      return { departmentId: dept[0]!.id, targetId: t[0]!.id, requesterId: r[0]!.id };
+    };
+
+    it('names the target and the requester, without confusing the two', async () => {
+      const { departmentId, targetId, requesterId } = await seedNamedRequest(
+        'Target Person',
+        'Requesting Person',
+      );
+
+      const page = await requests.listForDepartment(departmentId, { limit: 10 });
+      const row = page.items[0]!;
+
+      // The scalar ids are exactly where they always were.
+      expect(row.targetUserId).toBe(targetId);
+      expect(row.requestedBy).toBe(requesterId);
+      // And each name belongs to its own id, not the other one's.
+      expect(row.targetUser).toEqual({ id: targetId, displayName: 'Target Person' });
+      expect(row.requestedByUser).toEqual({ id: requesterId, displayName: 'Requesting Person' });
+    });
+
+    it('projects the same way on the global queue', async () => {
+      const { targetId } = await seedNamedRequest('Queued Person', 'Queue Requester');
+
+      const page = await requests.listPending({ limit: 10 });
+
+      expect(page.items[0]!.targetUser).toEqual({ id: targetId, displayName: 'Queued Person' });
+      expect(page.items[0]!.requestedByUser.displayName).toBe('Queue Requester');
+    });
+
+    it('adds no rows: two joins to `users` stay 1:1', async () => {
+      const { departmentId } = await seedNamedRequest('Solo Target', 'Solo Requester');
+
+      const page = await requests.listForDepartment(departmentId, { limit: 10 });
+      const { rows } = await pool.query<{ n: string }>(
+        'SELECT count(*) AS n FROM membership_change_requests WHERE department_id = $1',
+        [departmentId],
+      );
+
+      // A join on a non-unique key would silently multiply the list.
+      expect(page.items).toHaveLength(Number(rows[0]!.n));
+      expect(page.items).toHaveLength(1);
+    });
+
+    it('carries no decidedBy projection, because nothing displays one', async () => {
+      const { departmentId } = await seedNamedRequest('Undecided Target', 'Undecided Asker');
+
+      const page = await requests.listForDepartment(departmentId, { limit: 10 });
+
+      expect(page.items[0]!.decidedBy).toBeNull();
+      expect(page.items[0]).not.toHaveProperty('decidedByUser');
+    });
+
+    it('still pages correctly with the joins attached', async () => {
+      const { rows: dept } = await pool.query<{ id: string }>(
+        "INSERT INTO departments (slug, name) VALUES ('pagejoin', 'Page Join') RETURNING id",
+      );
+      for (let n = 0; n < 25; n++) {
+        await pool.query(
+          `WITH u AS (INSERT INTO users (display_name) VALUES ($2) RETURNING id)
+           INSERT INTO membership_change_requests
+             (department_id, target_user_id, requested_by, action, status)
+           SELECT $1, id, id, 'REMOVE_MEMBER', 'pending' FROM u`,
+          [dept[0]!.id, `Paged ${n}`],
+        );
+      }
+
+      const sizes: number[] = [];
+      const ids: string[] = [];
+      let cursor: string | undefined;
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await requests.listForDepartment(dept[0]!.id, { limit: 10, cursor });
+        sizes.push(page.items.length);
+        ids.push(...page.items.map((r) => r.id));
+        // Every row on every page is named, not just the first page.
+        for (const row of page.items) expect(row.targetUser.id).toBe(row.targetUserId);
+        if (!page.hasMore) break;
+        cursor = page.nextCursor as string;
+      }
+
+      expect(sizes).toEqual([10, 10, 5]);
+      expect(new Set(ids).size).toBe(25);
+    });
+  });
+
   describe('database constraints', () => {
     it('refuses a hybrid decision state', async () => {
       const { a, headId, memberId } = await scenario();

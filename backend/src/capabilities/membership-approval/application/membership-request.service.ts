@@ -7,7 +7,11 @@ import { DepartmentRepository } from '../../../core/organization/persistence/dep
 import { MembershipRepository } from '../../../core/organization/persistence/membership.repository';
 import { AccountLifecycleService } from '../../../core/users/application/account-lifecycle.service';
 import { UserRepository } from '../../../core/users/persistence/user.repository';
-import { MembershipChangeRequest, RequestAction } from '../domain/membership-request';
+import {
+  MembershipChangeRequest,
+  MembershipChangeRequestWithUsers,
+  RequestAction,
+} from '../domain/membership-request';
 import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
 import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import { MembershipRequestRepository } from '../persistence/membership-request.repository';
@@ -263,7 +267,7 @@ export class MembershipRequestService {
   async listForDepartment(
     departmentId: string,
     page: PageQuery,
-  ): Promise<Page<MembershipChangeRequest>> {
+  ): Promise<Page<MembershipChangeRequestWithUsers>> {
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await this.requests.listForDepartmentPage(departmentId, page.limit, cursor);
 
@@ -271,7 +275,7 @@ export class MembershipRequestService {
   }
 
   /** One page of the global decision queue, oldest first. */
-  async listPending(page: PageQuery): Promise<Page<MembershipChangeRequest>> {
+  async listPending(page: PageQuery): Promise<Page<MembershipChangeRequestWithUsers>> {
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await this.requests.listPendingPage(page.limit, cursor);
 

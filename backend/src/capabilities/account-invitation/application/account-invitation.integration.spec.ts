@@ -629,6 +629,102 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
     });
   });
 
+  // ------------------------------------------------ identity projection --
+
+  describe('identity projection on the invitation lists (ADR-0001)', () => {
+    const seedNamedInvitation = async (
+      requester: string,
+    ): Promise<{ departmentId: string; requesterId: string }> => {
+      const { rows: dept } = await pool.query<{ id: string }>(
+        "INSERT INTO departments (slug, name) VALUES ('proj', 'Projection') RETURNING id",
+      );
+      const { rows: r } = await pool.query<{ id: string }>(
+        'INSERT INTO users (display_name) VALUES ($1) RETURNING id',
+        [requester],
+      );
+      await pool.query(
+        `INSERT INTO account_invitations (department_id, email, requested_by, status)
+         VALUES ($1, 'invited@hoanglong.test', $2, 'pending')`,
+        [dept[0]!.id, r[0]!.id],
+      );
+      return { departmentId: dept[0]!.id, requesterId: r[0]!.id };
+    };
+
+    it('names whoever asked, alongside the scalar id', async () => {
+      const { departmentId, requesterId } = await seedNamedInvitation('Asking Person');
+
+      const page = await invitations.listForDepartment(departmentId, { limit: 10 });
+
+      expect(page.items[0]!.requestedBy).toBe(requesterId);
+      expect(page.items[0]!.requestedByUser).toEqual({
+        id: requesterId,
+        displayName: 'Asking Person',
+      });
+    });
+
+    it('projects the same way on the global queue', async () => {
+      const { requesterId } = await seedNamedInvitation('Queue Asker');
+
+      const page = await invitations.listPending({ limit: 10 });
+
+      expect(page.items[0]!.requestedByUser).toEqual({
+        id: requesterId,
+        displayName: 'Queue Asker',
+      });
+    });
+
+    it('never offers the invited email as a display name', async () => {
+      const { departmentId } = await seedNamedInvitation('Real Name');
+
+      const page = await invitations.listForDepartment(departmentId, { limit: 10 });
+
+      // `email` is the invitation's own field and stays. It is NOT a person's
+      // name and must never be substituted for one.
+      expect(page.items[0]!.email).toBe('invited@hoanglong.test');
+      expect(page.items[0]!.requestedByUser.displayName).toBe('Real Name');
+    });
+
+    it('adds no rows, and projects nothing for the undecided fields', async () => {
+      const { departmentId } = await seedNamedInvitation('Solo Asker');
+
+      const page = await invitations.listForDepartment(departmentId, { limit: 10 });
+
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]!.decidedBy).toBeNull();
+      expect(page.items[0]).not.toHaveProperty('decidedByUser');
+      expect(page.items[0]).not.toHaveProperty('createdUser');
+    });
+
+    it('still pages correctly with the join attached', async () => {
+      const { rows: dept } = await pool.query<{ id: string }>(
+        "INSERT INTO departments (slug, name) VALUES ('pagejoin', 'Page Join') RETURNING id",
+      );
+      for (let n = 0; n < 25; n++) {
+        await pool.query(
+          `WITH u AS (INSERT INTO users (display_name) VALUES ($2) RETURNING id)
+           INSERT INTO account_invitations (department_id, email, requested_by, status)
+           SELECT $1, $3, id, 'pending' FROM u`,
+          [dept[0]!.id, `Paged ${n}`, `paged${n}@hoanglong.test`],
+        );
+      }
+
+      const sizes: number[] = [];
+      const ids: string[] = [];
+      let cursor: string | undefined;
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await invitations.listForDepartment(dept[0]!.id, { limit: 10, cursor });
+        sizes.push(page.items.length);
+        ids.push(...page.items.map((i) => i.id));
+        for (const row of page.items) expect(row.requestedByUser.id).toBe(row.requestedBy);
+        if (!page.hasMore) break;
+        cursor = page.nextCursor as string;
+      }
+
+      expect(sizes).toEqual([10, 10, 5]);
+      expect(new Set(ids).size).toBe(25);
+    });
+  });
+
   describe('database constraints', () => {
     it('refuses approved with no account, and pending with one', async () => {
       const { a, adminId, headAId } = await scenario();

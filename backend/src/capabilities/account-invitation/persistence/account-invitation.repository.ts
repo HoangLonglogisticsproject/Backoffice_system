@@ -2,7 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import { AccountInvitation, InvitationStatus } from '../domain/account-invitation';
+import {
+  AccountInvitation,
+  AccountInvitationWithUser,
+  InvitationStatus,
+} from '../domain/account-invitation';
 
 const isUniqueViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '23505';
@@ -21,7 +25,33 @@ interface InvitationRow {
 }
 
 /** An invitation plus its cursor anchor — `requested_at` at full precision. */
-export interface InvitationPageRow extends AccountInvitation, CursorAnchored {}
+export interface InvitationPageRow extends AccountInvitationWithUser, CursorAnchored {}
+
+/**
+ * An invitation, with the name of whoever asked for it and the cursor anchor.
+ *
+ * ONE join, not three. `requested_by` is the only user reference on this row a
+ * screen shows; `decided_by` and `created_user_id` are nullable and unread, so
+ * projecting them would mean two LEFT JOINs paid on every row for nothing.
+ *
+ * `requested_by` is NOT NULL with a `NO ACTION` foreign key: the user is
+ * guaranteed to exist, the join is INNER, and it is 1:1 on a primary key.
+ *
+ * There is deliberately no projection of `email` either - an email is not a
+ * display name and must never be substituted for one.
+ */
+const INVITATIONS_WITH_USER = `
+  SELECT i.id, i.department_id, i.email, i.status, i.requested_by, i.requested_at,
+         i.decided_by, i.decided_at, i.reason, i.created_user_id,
+         i.requested_at::text AS cursor_at,
+         ru.display_name AS requested_by_display_name
+    FROM account_invitations i
+    JOIN users ru ON ru.id = i.requested_by`;
+
+type InvitationJoinedRow = InvitationRow & {
+  cursor_at: string;
+  requested_by_display_name: string;
+};
 
 const toInvitation = (row: InvitationRow): AccountInvitation => ({
   id: row.id,
@@ -34,6 +64,12 @@ const toInvitation = (row: InvitationRow): AccountInvitation => ({
   decidedAt: row.decided_at,
   reason: row.reason,
   createdUserId: row.created_user_id,
+});
+
+const toInvitationPageRow = (row: InvitationJoinedRow): InvitationPageRow => ({
+  ...toInvitation(row),
+  requestedByUser: { id: row.requested_by, displayName: row.requested_by_display_name },
+  cursorAt: row.cursor_at,
 });
 
 /** SQL for invitations. Opens no transaction; decides nothing. */
@@ -114,19 +150,19 @@ export class AccountInvitationRepository {
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
   ): Promise<InvitationPageRow[]> {
-    const rows = await executor.query<InvitationRow & { cursor_at: string }>(
+    const rows = await executor.query<InvitationJoinedRow>(
       cursor
-        ? `SELECT *, requested_at::text AS cursor_at FROM account_invitations
-            WHERE department_id = $1 AND (requested_at, id) < ($2::timestamptz, $3)
-            ORDER BY requested_at DESC, id DESC
+        ? `${INVITATIONS_WITH_USER}
+            WHERE i.department_id = $1 AND (i.requested_at, i.id) < ($2::timestamptz, $3)
+            ORDER BY i.requested_at DESC, i.id DESC
             LIMIT $4`
-        : `SELECT *, requested_at::text AS cursor_at FROM account_invitations
-            WHERE department_id = $1
-            ORDER BY requested_at DESC, id DESC
+        : `${INVITATIONS_WITH_USER}
+            WHERE i.department_id = $1
+            ORDER BY i.requested_at DESC, i.id DESC
             LIMIT $2`,
       cursor ? [departmentId, cursor.t, cursor.i, limit + 1] : [departmentId, limit + 1],
     );
-    return rows.map((row) => ({ ...toInvitation(row), cursorAt: row.cursor_at }));
+    return rows.map(toInvitationPageRow);
   }
 
   /**
@@ -138,19 +174,19 @@ export class AccountInvitationRepository {
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
   ): Promise<InvitationPageRow[]> {
-    const rows = await executor.query<InvitationRow & { cursor_at: string }>(
+    const rows = await executor.query<InvitationJoinedRow>(
       cursor
-        ? `SELECT *, requested_at::text AS cursor_at FROM account_invitations
-            WHERE status = 'pending' AND (requested_at, id) > ($1::timestamptz, $2)
-            ORDER BY requested_at ASC, id ASC
+        ? `${INVITATIONS_WITH_USER}
+            WHERE i.status = 'pending' AND (i.requested_at, i.id) > ($1::timestamptz, $2)
+            ORDER BY i.requested_at ASC, i.id ASC
             LIMIT $3`
-        : `SELECT *, requested_at::text AS cursor_at FROM account_invitations
-            WHERE status = 'pending'
-            ORDER BY requested_at ASC, id ASC
+        : `${INVITATIONS_WITH_USER}
+            WHERE i.status = 'pending'
+            ORDER BY i.requested_at ASC, i.id ASC
             LIMIT $1`,
       cursor ? [cursor.t, cursor.i, limit + 1] : [limit + 1],
     );
-    return rows.map((row) => ({ ...toInvitation(row), cursorAt: row.cursor_at }));
+    return rows.map(toInvitationPageRow);
   }
 
   async decide(

@@ -18,7 +18,11 @@ import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
 import { PermissionGuard, RequirePermission } from '../../authorization/api/permission.guard';
-import { Department, DepartmentMembership } from '../domain/department.entity';
+import {
+  Department,
+  DepartmentMembership,
+  DepartmentMembershipWithUser,
+} from '../domain/department.entity';
 import { DepartmentService } from '../application/department.service';
 import { MembershipService } from '../application/membership.service';
 
@@ -134,7 +138,7 @@ export class OrganizationController {
   async members(
     @Param('departmentId', UuidParam) departmentId: string,
     @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
-  ): Promise<Page<DepartmentMembership>> {
+  ): Promise<Page<DepartmentMembershipWithUser>> {
     return this.memberships.listActiveMembers(departmentId, page);
   }
 

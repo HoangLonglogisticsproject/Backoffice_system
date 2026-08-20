@@ -1,3 +1,5 @@
+import type { UserSummary } from '../../../common/types/user-summary';
+
 /**
  * Hoàng Long's onboarding policy, as data.
  *
@@ -22,6 +24,18 @@ export interface AccountInvitation {
   reason: string | null;
   /** Set exactly when approved; the database enforces the pair. */
   createdUserId: string | null;
+}
+
+/**
+ * An invitation as a LIST READ returns it: the row, plus the name of whoever
+ * asked for it.
+ *
+ * Separate from the entity so the write paths — raise, decide, provision —
+ * carry no join they do not need.
+ */
+export interface AccountInvitationWithUser extends AccountInvitation {
+  /** Who ASKED for this account. */
+  requestedByUser: UserSummary;
 }
 
 /**

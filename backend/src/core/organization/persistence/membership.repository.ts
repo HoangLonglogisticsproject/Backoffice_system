@@ -2,7 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
-import { DepartmentMembership, MembershipStatus } from '../domain/department.entity';
+import {
+  DepartmentMembership,
+  DepartmentMembershipWithUser,
+  MembershipStatus,
+} from '../domain/department.entity';
 
 const isUniqueViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '23505';
@@ -23,7 +27,31 @@ interface MembershipRow {
  * the same instant parsed into a `Date` for display, and it has already lost the
  * microseconds — which is exactly why the cursor cannot be built from it.
  */
-export interface MembershipPageRow extends DepartmentMembership, CursorAnchored {}
+export interface MembershipPageRow extends DepartmentMembershipWithUser, CursorAnchored {}
+
+/**
+ * The member list, with the name of each member and the cursor anchor.
+ *
+ * ★ COLUMNS ARE LISTED, not `SELECT *`. Once `users` is in the query, a star
+ * would let ITS `id`, `created_at` and `status` overwrite the membership's own,
+ * so the mapper would read a user id as a membership id — and the cursor would
+ * then encode the wrong row entirely.
+ *
+ * ★ EVERY KEYSET COLUMN IS QUALIFIED `m.`, including `m.created_at::text` for
+ * the anchor. Unqualified they are ambiguous, and ordering by anything but the
+ * membership's own columns would cost the ordered index a sort.
+ *
+ * INNER, not LEFT. `user_id` is NOT NULL and its foreign key is `NO ACTION`, so
+ * PostgreSQL physically refuses to delete a user who still holds a membership.
+ * The row on the other side is guaranteed to exist, and the join is 1:1 on a
+ * primary key, so it cannot multiply a list row either.
+ */
+const MEMBERS_WITH_USER = `
+  SELECT m.id, m.user_id, m.department_id, m.status, m.created_at, m.ended_at,
+         m.created_at::text AS cursor_at,
+         u.display_name AS user_display_name
+    FROM department_memberships m
+    JOIN users u ON u.id = m.user_id`;
 
 const toMembership = (row: MembershipRow): DepartmentMembership => ({
   id: row.id,
@@ -107,24 +135,29 @@ export class MembershipRepository {
     // back out of the parsed `Date` would round it to milliseconds and hand the
     // next page a position EARLIER than the row it names, which returns that row
     // a second time. The text never goes near a `Date`, so nothing is rounded.
+    type Row = MembershipRow & { cursor_at: string; user_display_name: string };
     const rows = cursor
-      ? await executor.query<MembershipRow & { cursor_at: string }>(
-          `SELECT *, created_at::text AS cursor_at FROM department_memberships
-            WHERE department_id = $1 AND status = 'active'
-              AND (created_at, id) > ($2::timestamptz, $3)
-            ORDER BY created_at ASC, id ASC
+      ? await executor.query<Row>(
+          `${MEMBERS_WITH_USER}
+            WHERE m.department_id = $1 AND m.status = 'active'
+              AND (m.created_at, m.id) > ($2::timestamptz, $3)
+            ORDER BY m.created_at ASC, m.id ASC
             LIMIT $4`,
           [departmentId, cursor.t, cursor.i, limit + 1],
         )
-      : await executor.query<MembershipRow & { cursor_at: string }>(
-          `SELECT *, created_at::text AS cursor_at FROM department_memberships
-            WHERE department_id = $1 AND status = 'active'
-            ORDER BY created_at ASC, id ASC
+      : await executor.query<Row>(
+          `${MEMBERS_WITH_USER}
+            WHERE m.department_id = $1 AND m.status = 'active'
+            ORDER BY m.created_at ASC, m.id ASC
             LIMIT $2`,
           [departmentId, limit + 1],
         );
 
-    return rows.map((row) => ({ ...toMembership(row), cursorAt: row.cursor_at }));
+    return rows.map((row) => ({
+      ...toMembership(row),
+      user: { id: row.user_id, displayName: row.user_display_name },
+      cursorAt: row.cursor_at,
+    }));
   }
 
   async countActiveInDepartment(
