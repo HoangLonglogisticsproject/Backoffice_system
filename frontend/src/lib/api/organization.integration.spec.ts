@@ -203,10 +203,12 @@ describe('organization read paths (§5, §6)', () => {
       const response = await headOfA.get(`/departments/${departmentA}/members`);
 
       expect(response.status).toBe(200);
-      expect(Array.isArray(response.data)).toBe(true);
+      expect(Array.isArray(response.data.items)).toBe(true);
+      expect(response.data).toHaveProperty('hasMore');
+      expect(response.data).toHaveProperty('nextCursor');
       // The head and the member provisioned into A.
-      expect(response.data.length).toBeGreaterThanOrEqual(2);
-      expect(response.data[0]).toMatchObject({
+      expect(response.data.items.length).toBeGreaterThanOrEqual(2);
+      expect(response.data.items[0]).toMatchObject({
         id: expect.any(String),
         userId: expect.any(String),
         departmentId: departmentA,
@@ -214,14 +216,14 @@ describe('organization read paths (§5, §6)', () => {
         createdAt: expect.any(String),
       });
       // Memberships, not people: no display name is available from here.
-      expect(response.data[0]).not.toHaveProperty('displayName');
+      expect(response.data.items[0]).not.toHaveProperty('displayName');
     });
 
     it('SUPERADMIN reads any department members', async () => {
       const response = await boss.get(`/departments/${departmentB}/members`);
 
       expect(response.status).toBe(200);
-      expect(response.data.every((m: { departmentId: string }) => m.departmentId === departmentB))
+      expect(response.data.items.every((m: { departmentId: string }) => m.departmentId === departmentB))
         .toBe(true);
     });
 

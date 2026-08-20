@@ -1,5 +1,6 @@
 import { httpClient } from '../http/client';
 import type { DepartmentMembership } from '../type/organization';
+import type { Page, PageRequest } from '../type/pagination';
 
 /**
  * Reading who is in a department (contract §6).
@@ -26,9 +27,11 @@ import type { DepartmentMembership } from '../type/organization';
  */
 export async function fetchDepartmentMembers(
   departmentId: string,
-): Promise<DepartmentMembership[]> {
-  const { data } = await httpClient.get<DepartmentMembership[]>(
+  page: PageRequest = {},
+): Promise<Page<DepartmentMembership>> {
+  const { data } = await httpClient.get<Page<DepartmentMembership>>(
     `/departments/${encodeURIComponent(departmentId)}/members`,
+    { params: { limit: page.limit, cursor: page.cursor } },
   );
   return data;
 }

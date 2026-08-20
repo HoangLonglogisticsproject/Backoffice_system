@@ -202,7 +202,7 @@ describe('organization HTTP security', () => {
       const roster = await authed('get', `/departments/${A}/members`).expect(200);
 
       expect(roster.body).toHaveLength(1);
-      expect(memberships.listActiveMembers).toHaveBeenCalledWith(A);
+      expect(memberships.listActiveMembers).toHaveBeenCalledWith(A, { limit: 50 });
     });
 
     it('cannot read another unit’s roster — IDOR on the route parameter', async () => {
@@ -246,7 +246,7 @@ describe('organization HTTP security', () => {
       await authed('get', `/departments/${B}`).expect(200);
       await authed('get', `/departments/${B}/members`).expect(200);
 
-      expect(memberships.listActiveMembers).toHaveBeenCalledWith(B);
+      expect(memberships.listActiveMembers).toHaveBeenCalledWith(B, { limit: 50 });
     });
 
     it('creates, renames and archives', async () => {

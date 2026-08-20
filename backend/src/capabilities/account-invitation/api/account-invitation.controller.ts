@@ -1,6 +1,18 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { pageQuerySchema, type PageQuery } from '../../../common/pagination/page-query.dto';
+import type { Page } from '../../../common/pagination/cursor';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import {
   HeadOfRouteDepartmentGuard,
@@ -71,15 +83,18 @@ export class AccountInvitationController {
   @UseGuards(AuthGuard, HeadOfRouteDepartmentGuard)
   async listForDepartment(
     @Param('departmentId', UuidParam) departmentId: string,
-  ): Promise<AccountInvitation[]> {
-    return this.invitations.listForDepartment(departmentId);
+    @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
+  ): Promise<Page<AccountInvitation>> {
+    return this.invitations.listForDepartment(departmentId, page);
   }
 
   @Get('account-invitations')
   @UseGuards(AuthGuard, PermissionGuard)
   @RequirePermission('user.write')
-  async listPending(): Promise<AccountInvitation[]> {
-    return this.invitations.listPending();
+  async listPending(
+    @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
+  ): Promise<Page<AccountInvitation>> {
+    return this.invitations.listPending(page);
   }
 
   @Post('account-invitations/:invitationId/approve')

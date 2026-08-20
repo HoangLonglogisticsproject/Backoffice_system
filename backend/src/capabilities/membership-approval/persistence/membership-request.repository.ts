@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
+import type { Cursor } from '../../../common/pagination/cursor';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
   MembershipChangeRequest,
@@ -125,20 +126,56 @@ export class MembershipRequestRepository {
     return rows[0] ? toRequest(rows[0]) : null;
   }
 
-  async listForDepartment(
+  /**
+   * One page of this department's history, NEWEST first — the order a queue is
+   * read in. Keyset on `(requested_at, id)`; see `common/pagination/cursor` for
+   * why the id is not optional.
+   *
+   * No status filter, deliberately: this list is the department's whole record,
+   * decided rows included. That is also why it needs pagination most — it grows
+   * with the deployment's age and nothing ever leaves it.
+   */
+  async listForDepartmentPage(
     departmentId: string,
+    limit: number,
+    cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
   ): Promise<MembershipChangeRequest[]> {
     const rows = await executor.query<RequestRow>(
-      'SELECT * FROM membership_change_requests WHERE department_id = $1 ORDER BY requested_at DESC',
-      [departmentId],
+      cursor
+        ? `SELECT * FROM membership_change_requests
+            WHERE department_id = $1 AND (requested_at, id) < ($2, $3)
+            ORDER BY requested_at DESC, id DESC
+            LIMIT $4`
+        : `SELECT * FROM membership_change_requests
+            WHERE department_id = $1
+            ORDER BY requested_at DESC, id DESC
+            LIMIT $2`,
+      cursor ? [departmentId, cursor.t, cursor.i, limit + 1] : [departmentId, limit + 1],
     );
     return rows.map(toRequest);
   }
 
-  async listPending(executor: DatabaseQuery = this.db): Promise<MembershipChangeRequest[]> {
+  /**
+   * One page of the global decision queue, OLDEST first: the thing waiting
+   * longest is the thing to decide next.
+   */
+  async listPendingPage(
+    limit: number,
+    cursor: Cursor | undefined,
+    executor: DatabaseQuery = this.db,
+  ): Promise<MembershipChangeRequest[]> {
     const rows = await executor.query<RequestRow>(
-      "SELECT * FROM membership_change_requests WHERE status = 'pending' ORDER BY requested_at ASC",
+      cursor
+        ? `SELECT * FROM membership_change_requests
+            WHERE status = 'pending' AND (requested_at, id) > ($1, $2)
+            ORDER BY requested_at ASC, id ASC
+            LIMIT $3`
+        : `SELECT * FROM membership_change_requests
+            WHERE status = 'pending'
+            ORDER BY requested_at ASC, id ASC
+            LIMIT $1`,
+      cursor ? [cursor.t, cursor.i, limit + 1] : [limit + 1],
     );
     return rows.map(toRequest);
   }

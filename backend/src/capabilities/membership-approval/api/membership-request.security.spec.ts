@@ -180,7 +180,7 @@ describe('membership-request HTTP security', () => {
       await authed('get', `/departments/${B}/membership-requests`).expect(403);
 
       expect(requests.listForDepartment).toHaveBeenCalledTimes(1);
-      expect(requests.listForDepartment).toHaveBeenCalledWith(A);
+      expect(requests.listForDepartment).toHaveBeenCalledWith(A, { limit: 50 });
     });
 
     it('cannot see the global decision queue', async () => {
@@ -244,7 +244,7 @@ describe('membership-request HTTP security', () => {
       expect(requests.listPending).toHaveBeenCalled();
       // B is a department this caller has no membership of — GLOBAL is not
       // scoped, so no membership is consulted.
-      expect(requests.listForDepartment).toHaveBeenCalledWith(B);
+      expect(requests.listForDepartment).toHaveBeenCalledWith(B, { limit: 50 });
     });
 
     it('approves and rejects', async () => {

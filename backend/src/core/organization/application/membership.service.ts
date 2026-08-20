@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
+import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
+import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import { DepartmentMembership } from '../domain/department.entity';
 import { DepartmentRepository } from '../persistence/department.repository';
 import { MembershipRepository } from '../persistence/membership.repository';
@@ -122,10 +124,28 @@ export class MembershipService {
     return tx ? run(tx) : this.db.transaction(run);
   }
 
-  async listActiveMembers(departmentId: string): Promise<DepartmentMembership[]> {
+  /**
+   * One page of a department's active members.
+   *
+   * The service still asserts the department exists before reading, so an
+   * unknown id is a 404 rather than an empty page — "no such unit" and "a unit
+   * with nobody in it" are different answers and a client renders them
+   * differently.
+   */
+  async listActiveMembers(
+    departmentId: string,
+    page: PageQuery,
+  ): Promise<Page<DepartmentMembership>> {
     const department = await this.departments.findById(departmentId);
     if (!department) throw new NotFoundError('Department not found.');
-    return this.memberships.listActiveInDepartment(departmentId);
+    const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
+    const rows = await this.memberships.listActiveInDepartmentPage(
+      departmentId,
+      page.limit,
+      cursor,
+    );
+
+    return toPage(rows, page.limit, (m) => ({ t: m.createdAt.toISOString(), i: m.id }));
   }
 
   async findActive(userId: string): Promise<DepartmentMembership | null> {

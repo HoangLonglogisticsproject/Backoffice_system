@@ -157,7 +157,9 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       const response = await headOfA.get(`/departments/${departmentA}/membership-requests`);
 
       expect(response.status).toBe(200);
-      expect(Array.isArray(response.data)).toBe(true);
+      expect(Array.isArray(response.data.items)).toBe(true);
+      expect(response.data).toHaveProperty('hasMore');
+      expect(response.data).toHaveProperty('nextCursor');
     });
 
     it('GLOBAL reads any department queue', async () => {
@@ -210,7 +212,9 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       const response = await boss.get('/membership-requests');
 
       expect(response.status).toBe(200);
-      expect(Array.isArray(response.data)).toBe(true);
+      expect(Array.isArray(response.data.items)).toBe(true);
+      expect(response.data).toHaveProperty('hasMore');
+      expect(response.data).toHaveProperty('nextCursor');
     });
 
     it('★ HEAD is REFUSED — a head proposes and never decides', async () => {
@@ -251,7 +255,9 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       const response = await headOfA.get(`/departments/${departmentA}/account-invitations`);
 
       expect(response.status).toBe(200);
-      expect(Array.isArray(response.data)).toBe(true);
+      expect(Array.isArray(response.data.items)).toBe(true);
+      expect(response.data).toHaveProperty('hasMore');
+      expect(response.data).toHaveProperty('nextCursor');
     });
 
     it('GLOBAL reads any department invitations', async () => {
@@ -289,7 +295,9 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       const response = await boss.get('/account-invitations');
 
       expect(response.status).toBe(200);
-      expect(Array.isArray(response.data)).toBe(true);
+      expect(Array.isArray(response.data.items)).toBe(true);
+      expect(response.data).toHaveProperty('hasMore');
+      expect(response.data).toHaveProperty('nextCursor');
     });
 
     it('HEAD is REFUSED', async () => {
@@ -320,9 +328,9 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
 
       const response = await boss.get('/account-invitations');
       expect(response.status).toBe(200);
-      expect(response.data.length).toBeGreaterThan(0);
+      expect(response.data.items.length).toBeGreaterThan(0);
 
-      const row = response.data.find(
+      const row = response.data.items.find(
         (i: { email: string }) => i.email === `apr-invitee-${unique}@hoanglong.test`,
       );
       expect(row).toMatchObject({

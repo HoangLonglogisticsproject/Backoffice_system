@@ -179,7 +179,7 @@ describe('account-invitation HTTP security', () => {
       await authed('get', `/departments/${B}/account-invitations`).expect(403);
 
       expect(invitations.listForDepartment).toHaveBeenCalledTimes(1);
-      expect(invitations.listForDepartment).toHaveBeenCalledWith(A);
+      expect(invitations.listForDepartment).toHaveBeenCalledWith(A, { limit: 50 });
     });
 
     it('cannot see the global decision queue', async () => {
@@ -228,7 +228,7 @@ describe('account-invitation HTTP security', () => {
       expect([queue.status, scoped.status]).toEqual([200, 200]);
       expect(invitations.listPending).toHaveBeenCalled();
       // B is a department this caller neither leads nor belongs to.
-      expect(invitations.listForDepartment).toHaveBeenCalledWith(B);
+      expect(invitations.listForDepartment).toHaveBeenCalledWith(B, { limit: 50 });
     });
 
     it('approves, and receives the temporary password exactly here', async () => {
