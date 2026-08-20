@@ -113,6 +113,14 @@ const PHRASES = {
 
   colJoinedAt: { vi: 'Ngày vào phòng', en: 'Joined' },
 
+  // Accessible names. Screen readers read these, so they are translated
+  // like everything else a person can perceive.
+  closeLabel: { vi: 'Đóng', en: 'Close' },
+  toggleNavigation: { vi: 'Ẩn/hiện điều hướng', en: 'Toggle navigation' },
+  pageSizeLabel: { vi: 'Số dòng mỗi trang', en: 'Rows per page' },
+  languageLabel: { vi: 'Ngôn ngữ', en: 'Language' },
+  copyFailed: { vi: 'Không sao chép được', en: 'Copy failed' },
+
   // Pagination — cursor based, so there is no total and no page number
   loading: { vi: 'Đang tải…', en: 'Loading…' },
   showingRows: { vi: 'Đang hiển thị', en: 'Showing' },

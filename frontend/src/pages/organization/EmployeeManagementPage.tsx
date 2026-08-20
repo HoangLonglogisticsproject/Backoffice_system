@@ -22,6 +22,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { CursorPagination } from '@/components/ui/pagination';
 import { AddEmployeeModal } from './components/AddEmployeeModal';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { formatDate } from '@/lib/format/datetime';
 import { useCursorPages } from '@/lib/api/useCursorPages';
 import { fetchDepartmentMembers } from '@/lib/api/membership.repository';
 import { useSession } from '@/lib/session/SessionProvider';
@@ -45,7 +46,7 @@ import type { DepartmentMembershipWithUser, MembershipStatus } from '@/lib/type/
  */
 export default function EmployeeManagementPage() {
   const { departmentId } = useParams<{ departmentId: string }>();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { can } = useSession();
   const [isAddOpen, setIsAddOpen] = useState(false);
   // Bumped after a create so the list re-reads. A full page reload would
@@ -53,7 +54,15 @@ export default function EmployeeManagementPage() {
   const [refresh, setRefresh] = useState(0);
 
   const page = useCursorPages<DepartmentMembershipWithUser>(
-    (request) => fetchDepartmentMembers(departmentId as string, request),
+    // Hooks cannot be called conditionally, so this runs before the guard
+    // below. Rejecting is the honest answer: casting `undefined` to a string
+    // would send a request to `/departments/undefined/members`, and returning
+    // an empty page would dress a routing bug up as "this department has no
+    // members".
+    (request) =>
+      departmentId
+        ? fetchDepartmentMembers(departmentId, request)
+        : Promise.reject(new Error('No department on the route.')),
     [departmentId, refresh],
   );
 
@@ -161,7 +170,7 @@ export default function EmployeeManagementPage() {
                     <MembershipStatusBadge status={membership.status} />
                   </TableCell>
                   <TableCell className="text-gray-600">
-                    {new Date(membership.createdAt).toLocaleDateString()}
+                    {formatDate(membership.createdAt, language)}
                   </TableCell>
                 </TableRow>
               ))}

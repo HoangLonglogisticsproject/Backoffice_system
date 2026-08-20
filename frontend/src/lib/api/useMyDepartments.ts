@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchDepartment } from './department.repository';
 import { useSession } from '../session/SessionProvider';
 import type { Department } from '../type/organization';
@@ -19,7 +19,17 @@ import type { Department } from '../type/organization';
 export function useMyDepartments(): { departments: Department[]; loading: boolean } {
   const { state } = useSession();
   const ids = state?.status === 'ready' ? state.authorization.departmentIds : undefined;
+  // The identity of the array changes every render, so it cannot be a
+  // dependency. Its CONTENTS are what matters, and this is their stable
+  // serialisation.
   const key = ids?.join(',') ?? '';
+
+  // The real array, read inside the effect. Rebuilding it from `key.split(',')`
+  // would work only for as long as no id ever contains a comma — a property of
+  // the data rather than of the code, and not one worth depending on. A ref is
+  // exempt from the dependency rule, so this needs no suppression.
+  const idsRef = useRef<string[]>([]);
+  idsRef.current = ids ?? [];
 
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,11 +43,7 @@ export function useMyDepartments(): { departments: Department[]; loading: boolea
     let current = true;
     setLoading(true);
 
-    Promise.all(
-      key.split(',').map((id) =>
-        fetchDepartment(id).catch(() => null),
-      ),
-    )
+    Promise.all(idsRef.current.map((id) => fetchDepartment(id).catch(() => null)))
       .then((results) => {
         if (!current) return;
         setDepartments(results.filter((d): d is Department => d !== null));

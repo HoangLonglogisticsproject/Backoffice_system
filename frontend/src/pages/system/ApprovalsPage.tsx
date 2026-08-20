@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import clsx from 'clsx';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,6 +12,7 @@ import {
 import { Modal } from '@/components/ui/modal';
 import { CursorPagination } from '@/components/ui/pagination';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { formatDateTime } from '@/lib/format/datetime';
 import { useCursorPages } from '@/lib/api/useCursorPages';
 import {
   approveMembershipRequest,
@@ -118,7 +119,7 @@ function QueueStates({
 }
 
 function MembershipRequestQueue() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [refresh, setRefresh] = useState(0);
   const [pending, setPending] = useState<{
     row: MembershipChangeRequestWithUsers;
@@ -156,7 +157,7 @@ function MembershipRequestQueue() {
                 <TableCell className="text-gray-600">{row.requestedByUser.displayName}</TableCell>
                 <TableCell className="text-gray-600">{row.action}</TableCell>
                 <TableCell className="text-gray-600">
-                  {new Date(row.requestedAt).toLocaleString()}
+                  {formatDateTime(row.requestedAt, language)}
                 </TableCell>
                 <TableCell className="text-right pr-4">
                   <div className="flex items-center justify-end gap-2">
@@ -223,7 +224,7 @@ function MembershipRequestQueue() {
 }
 
 function InvitationQueue() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [refresh, setRefresh] = useState(0);
   const [pending, setPending] = useState<{
     row: AccountInvitationWithUser;
@@ -258,7 +259,7 @@ function InvitationQueue() {
                 <TableCell className="font-medium text-gray-900">{row.email}</TableCell>
                 <TableCell className="text-gray-600">{row.requestedByUser.displayName}</TableCell>
                 <TableCell className="text-gray-600">
-                  {new Date(row.requestedAt).toLocaleString()}
+                  {formatDateTime(row.requestedAt, language)}
                 </TableCell>
                 <TableCell className="text-right pr-4">
                   <div className="flex items-center justify-end gap-2">
@@ -431,8 +432,39 @@ function TemporaryPasswordDialog({
 }: Readonly<{ result: ApprovedInvitation | null; onClose: () => void }>) {
   const { t } = useLanguage();
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+
+  // ★ RESET WHEN THE CREDENTIAL CHANGES. Without this, approving a second
+  // invitation opens a dialog already reading "Copied" — for a value nobody has
+  // copied. On a secret that cannot be recovered, that is the worst possible
+  // thing to be wrong about.
+  const shownFor = useRef<string | null>(null);
+  if (result && shownFor.current !== result.temporaryPassword) {
+    shownFor.current = result.temporaryPassword;
+    if (copied) setCopied(false);
+    if (copyFailed) setCopyFailed(false);
+  }
+  if (!result) {
+    if (shownFor.current !== null) shownFor.current = null;
+  }
 
   if (!result) return null;
+
+  const copy = async () => {
+    // `navigator.clipboard` is absent outside a secure context, and `writeText`
+    // rejects when permission is refused. Either way the value is NOT on the
+    // clipboard, and saying "Copied" would send somebody away believing they
+    // have a credential they cannot get back.
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable.');
+      await navigator.clipboard.writeText(result.temporaryPassword);
+      setCopied(true);
+      setCopyFailed(false);
+    } catch {
+      setCopied(false);
+      setCopyFailed(true);
+    }
+  };
 
   return (
     <Modal
@@ -459,17 +491,15 @@ function TemporaryPasswordDialog({
             <code className="flex-1 rounded-md bg-gray-100 px-3 py-2 font-mono text-sm text-gray-900 break-all">
               {result.temporaryPassword}
             </code>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                void navigator.clipboard?.writeText(result.temporaryPassword);
-                setCopied(true);
-              }}
-            >
+            <Button variant="outline" size="sm" onClick={() => void copy()}>
               {copied ? t('copied') : t('copy')}
             </Button>
           </div>
+          {copyFailed && (
+            <p role="alert" className="text-sm text-red-600">
+              {t('copyFailed')}
+            </p>
+          )}
         </div>
       </div>
     </Modal>

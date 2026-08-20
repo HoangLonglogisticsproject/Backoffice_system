@@ -58,6 +58,17 @@ const INVITATION = {
 
 const page = <T,>(items: T[]) => ({ items, nextCursor: null, hasMore: false });
 
+/** Every key AND value the store actually holds, via the Storage API. */
+const storageEntries = (store: Storage): string[] => {
+  const out: string[] = [];
+  for (let i = 0; i < store.length; i++) {
+    const key = store.key(i);
+    if (key === null) continue;
+    out.push(key, store.getItem(key) ?? '');
+  }
+  return out;
+};
+
 const lastConfirmButton = (): HTMLElement => {
   const buttons = screen.getAllByRole('button', { name: /^duyệt$|^approve$/i });
   // The row button and the dialog button share a label; the dialog is last.
@@ -73,7 +84,7 @@ const renderPage = () =>
 
 const openInvitations = async () => {
   fireEvent.click(screen.getByRole('button', { name: /lời mời|invitation/i }));
-  await waitFor(() => expect(screen.getByText('newcomer@hoanglong.test')).toBeInTheDocument());
+  await screen.findByText('newcomer@hoanglong.test');
 };
 
 describe('ApprovalsPage', () => {
@@ -93,14 +104,14 @@ describe('ApprovalsPage', () => {
   it('shows people by name, never by UUID', async () => {
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('Moved Person')).toBeInTheDocument());
+    expect(await screen.findByText('Moved Person')).toBeInTheDocument();
     expect(screen.getByText('Head Person')).toBeInTheDocument();
     expect(screen.queryByText(REQUEST.targetUserId)).not.toBeInTheDocument();
   });
 
   it('confirms before deciding, and sends no actor', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByText('Moved Person')).toBeInTheDocument());
+    await screen.findByText('Moved Person');
 
     fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
     // A decision is not one misplaced click away.
@@ -133,7 +144,7 @@ describe('ApprovalsPage', () => {
       fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
       fireEvent.click(lastConfirmButton());
 
-      await waitFor(() => expect(screen.getByText(SECRET)).toBeInTheDocument());
+      expect(await screen.findByText(SECRET)).toBeInTheDocument();
       expect(screen.getByText('newcomer')).toBeInTheDocument();
       // And it says plainly that this is the only showing.
       expect(screen.getByText(/không có cách nào đọc lại|nothing can read it back/i)).toBeInTheDocument();
@@ -147,7 +158,7 @@ describe('ApprovalsPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
       fireEvent.click(lastConfirmButton());
-      await waitFor(() => expect(screen.getByText(SECRET)).toBeInTheDocument());
+      await screen.findByText(SECRET);
 
       fireEvent.click(screen.getByRole('button', { name: /xong|done/i }));
 
@@ -164,12 +175,91 @@ describe('ApprovalsPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
       fireEvent.click(lastConfirmButton());
-      await waitFor(() => expect(screen.getByText(SECRET)).toBeInTheDocument());
+      await screen.findByText(SECRET);
 
-      expect(JSON.stringify(localStorage)).not.toContain(SECRET);
-      expect(JSON.stringify(sessionStorage)).not.toContain(SECRET);
+      // Enumerated, not stringified: `JSON.stringify(localStorage)` serialises
+      // own enumerable properties, which is NOT how the Storage API exposes
+      // entries — it can return `{}` for a populated store and pass whatever
+      // was written.
+      expect(storageEntries(localStorage)).not.toContain(SECRET);
+      expect(storageEntries(sessionStorage)).not.toContain(SECRET);
       expect(window.location.href).not.toContain(SECRET);
       expect(document.title).not.toContain(SECRET);
+    });
+  });
+
+  describe('copying the credential', () => {
+    const revealSecret = async () => {
+      renderPage();
+      await openInvitations();
+      fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+      fireEvent.click(lastConfirmButton());
+      await screen.findByText(SECRET);
+    };
+
+    const setClipboard = (value: unknown) =>
+      Object.defineProperty(navigator, 'clipboard', {
+        value,
+        configurable: true,
+        writable: true,
+      });
+
+    it('says Copied only after the write actually resolves', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard({ writeText });
+      await revealSecret();
+
+      fireEvent.click(screen.getByRole('button', { name: /sao chép|^copy$/i }));
+
+      expect(await screen.findByRole('button', { name: /đã sao chép|copied/i })).toBeInTheDocument();
+      expect(writeText).toHaveBeenCalledWith(SECRET);
+    });
+
+    it('does NOT say Copied when the write rejects', async () => {
+      setClipboard({ writeText: vi.fn().mockRejectedValue(new Error('denied')) });
+      await revealSecret();
+
+      fireEvent.click(screen.getByRole('button', { name: /sao chép|^copy$/i }));
+
+      // Telling somebody they hold a credential they do not is the worst
+      // possible thing to be wrong about here — it cannot be recovered.
+      expect(await screen.findByRole('alert')).toHaveTextContent(/không sao chép được|copy failed/i);
+      expect(screen.queryByRole('button', { name: /đã sao chép|copied/i })).not.toBeInTheDocument();
+    });
+
+    it('does NOT say Copied when the Clipboard API is absent', async () => {
+      setClipboard(undefined);
+      await revealSecret();
+
+      fireEvent.click(screen.getByRole('button', { name: /sao chép|^copy$/i }));
+
+      await screen.findByRole('alert');
+      expect(screen.queryByRole('button', { name: /đã sao chép|copied/i })).not.toBeInTheDocument();
+    });
+
+    it('does not carry Copied over to the NEXT credential', async () => {
+      setClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
+      await revealSecret();
+
+      fireEvent.click(screen.getByRole('button', { name: /sao chép|^copy$/i }));
+      await screen.findByRole('button', { name: /đã sao chép|copied/i });
+      fireEvent.click(screen.getByRole('button', { name: /xong|done/i }));
+
+      // A second approval issues a different secret. The button must not open
+      // already claiming it was copied.
+      const NEXT = 'a-completely-different-secret';
+      approveAccountInvitation.mockResolvedValue({
+        invitation: { ...INVITATION, status: 'approved' },
+        username: 'second',
+        temporaryPassword: NEXT,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+      fireEvent.click(lastConfirmButton());
+      await screen.findByText(NEXT);
+
+      expect(screen.getByRole('button', { name: /sao chép|^copy$/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /đã sao chép|copied/i })).not.toBeInTheDocument();
     });
   });
 

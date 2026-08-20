@@ -120,12 +120,32 @@ describe('MainLayout', () => {
     expect(screen.getAllByText(/sắp có|coming soon/i).length).toBeGreaterThanOrEqual(4);
   });
 
-  it('switches language without touching the session', () => {
-    renderLayout();
+  describe('language', () => {
+    beforeEach(() => localStorage.clear());
 
-    expect(screen.getByText(/đăng xuất/i)).toBeInTheDocument();
-    // The choice is a UI preference; nothing about it is sent to the server.
-    expect(useSession).toHaveBeenCalled();
-    expect(signOut).not.toHaveBeenCalled();
+    it('starts in Vietnamese', () => {
+      renderLayout();
+      expect(screen.getByText('Đăng xuất')).toBeInTheDocument();
+    });
+
+    it('renders English once English is chosen, and signs nobody out', async () => {
+      // Driven through the provider's own persistence rather than by fighting
+      // the Select's pointer behaviour in jsdom — the assertion that matters is
+      // that the whole shell re-renders translated.
+      localStorage.setItem('language', 'en');
+      renderLayout();
+
+      expect(await screen.findByText('Logout')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Toggle navigation' })).toBeInTheDocument();
+      expect(screen.queryByText('Đăng xuất')).not.toBeInTheDocument();
+
+      // A language change is a UI preference. It must never end the session.
+      expect(signOut).not.toHaveBeenCalled();
+    });
+
+    it('labels the language control for a screen reader', () => {
+      renderLayout();
+      expect(screen.getByRole('combobox', { name: 'Ngôn ngữ' })).toBeInTheDocument();
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useSessionResource, type SessionResource } from '../session/useSessionResource';
 import type { Page, PageRequest } from '../type/pagination';
 
@@ -42,29 +42,44 @@ export function useCursorPages<T>(
   const [pageSize, setSize] = useState(initialPageSize);
   // Page one is "no cursor". Every entry after it is a cursor the server gave.
   const [visited, setVisited] = useState<(string | undefined)[]>([undefined]);
-  const cursor = visited[visited.length - 1];
 
   // A different department — or a different page size — is a different walk, so
-  // the history from the old one would send meaningless cursors at it.
-  //
-  // The deps are collapsed into one string rather than spread into the array:
-  // a spread makes the dependency list variable-length, which the exhaustive-deps
-  // rule cannot verify and which would otherwise need a suppression comment.
+  // the history from the old one holds cursors that mean nothing to it.
   const walk = `${pageSize}:${JSON.stringify(deps)}`;
-  useEffect(() => {
+  const [currentWalk, setCurrentWalk] = useState(walk);
+
+  // ★ RESET DURING RENDER, NOT IN AN EFFECT. An effect runs AFTER the render
+  // that changed the page size, so this hook would first render the new size
+  // holding the OLD cursor — firing a request for "50 rows after the cursor
+  // from a walk of 20" — and only then reset and fire the real one. Two
+  // requests, the first of them wrong. Adjusting the state while rendering is
+  // React's documented answer: the stale render never reaches the read.
+  let history = visited;
+  if (currentWalk !== walk) {
+    setCurrentWalk(walk);
     setVisited([undefined]);
-  }, [walk]);
+    history = [undefined];
+  }
+
+  const cursor = history[history.length - 1];
 
   const resource = useSessionResource<Page<T>>(
     () => read({ limit: pageSize, cursor }),
     [...deps, cursor, pageSize],
   );
 
+  const forward = resource.data?.nextCursor;
+
   const next = useCallback(() => {
-    const forward = resource.data?.nextCursor;
     if (!forward) return;
-    setVisited((stack) => [...stack, forward]);
-  }, [resource.data?.nextCursor]);
+    setVisited((stack) => {
+      // A second click before the next page arrives would push the SAME cursor
+      // again, leaving a duplicate entry that `previous()` then has to walk
+      // through twice to get anywhere.
+      if (stack[stack.length - 1] === forward) return stack;
+      return [...stack, forward];
+    });
+  }, [forward]);
 
   const previous = useCallback(() => {
     setVisited((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
@@ -78,7 +93,7 @@ export function useCursorPages<T>(
     ...resource,
     items: resource.data?.items ?? [],
     hasMore: resource.data?.hasMore ?? false,
-    canGoBack: visited.length > 1,
+    canGoBack: history.length > 1,
     next,
     previous,
     pageSize,

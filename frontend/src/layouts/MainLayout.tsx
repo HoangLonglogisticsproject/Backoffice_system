@@ -15,6 +15,7 @@ import {
   Users,
 } from 'lucide-react';
 import clsx from 'clsx';
+import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -112,7 +113,7 @@ function SidebarSection({
   title,
   isSidebarOpen,
   children,
-}: Readonly<{ title: string; isSidebarOpen: boolean; children: React.ReactNode }>) {
+}: Readonly<{ title: string; isSidebarOpen: boolean; children: ReactNode }>) {
   return (
     <div className="mb-6">
       <div className={clsx('px-3 mb-2 flex items-center', !isSidebarOpen && 'justify-center')}>
@@ -162,7 +163,7 @@ export default function MainLayout() {
             variant="ghost"
             size="icon"
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            aria-label="Toggle navigation"
+            aria-label={t('toggleNavigation')}
           >
             <Menu className="h-5 w-5" />
           </Button>
@@ -173,7 +174,10 @@ export default function MainLayout() {
 
         <div className="flex items-center gap-4">
           <Select value={language} onValueChange={(value) => setLanguage(value as 'vi' | 'en')}>
-            <SelectTrigger className="w-[85px] h-9 bg-gray-50/50 border-gray-200 px-2.5">
+            <SelectTrigger
+              aria-label={t('languageLabel')}
+              className="w-[85px] h-9 bg-gray-50/50 border-gray-200 px-2.5"
+            >
               <span className="flex items-center gap-2">
                 {language === 'vi' ? <VNFlag /> : <USFlag />}
                 {language === 'vi' ? 'VN' : 'US'}

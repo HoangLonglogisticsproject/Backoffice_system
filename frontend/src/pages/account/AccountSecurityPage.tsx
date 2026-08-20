@@ -116,6 +116,14 @@ function ChangePasswordForm() {
 
   const mismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
 
+  const clear = () => {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setVisible({});
+    setError(null);
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (mismatch) return;
@@ -197,7 +205,16 @@ function ChangePasswordForm() {
         )}
 
         <div className="pt-6 border-t border-gray-100 flex justify-end gap-3">
-          <Button variant="outline" type="button" className="w-24 border-gray-200" disabled={busy}>
+          {/* Clears the form rather than navigating: this screen is reached
+              from the avatar menu and has nowhere obvious to go back to, and a
+              button that does nothing at all is worse than either. */}
+          <Button
+            variant="outline"
+            type="button"
+            onClick={clear}
+            className="w-24 border-gray-200"
+            disabled={busy}
+          >
             {t('cancel')}
           </Button>
           <Button

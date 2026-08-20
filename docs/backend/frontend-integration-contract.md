@@ -741,13 +741,18 @@ endpoint "xem lại".
 **Hạn chế đã biết:** plaintext đi qua browser của người duyệt. Deployment này cố
 ý chưa có email adapter, nên người duyệt là kênh giao duy nhất.
 
-### Hai chính sách mật khẩu
+### Ba chính sách mật khẩu
 
-| | Tối thiểu | Ai đặt | Ở luồng nào |
+| | Độ dài | Ai đặt | Ở luồng nào |
 |---|---|---|---|
-| **tạm — do người đặt** | 8 ký tự | SUPERADMIN gõ vào `initialPassword` | `POST /users` (tạo trực tiếp) |
-| **tạm — do máy sinh** | 24 byte CSPRNG | **máy chủ**, người duyệt không gõ gì | `POST /account-invitations/:id/approve` |
-| **vĩnh viễn** | 12 ký tự | chính người dùng | `POST /auth/password` |
+| **tạm — người đặt** | tối thiểu **8 ký tự** | SUPERADMIN gõ vào `initialPassword` | `POST /users` |
+| **tạm — máy sinh** | cố định **24 byte CSPRNG → 32 ký tự base64url** | **máy chủ sinh**; người duyệt không gõ gì | `POST /account-invitations/:id/approve` |
+| **vĩnh viễn** | tối thiểu **12 ký tự** | chính người dùng | `POST /auth/password` |
+
+⚠️ **"24 byte CSPRNG" là HÀNH VI SINH Ở MÁY CHỦ, KHÔNG PHẢI NGƯỠNG VALIDATE Ở
+FRONTEND.** Không form nào được bắt người dùng nhập 32 ký tự. Ngưỡng duy nhất
+frontend cần kiểm là hai dòng còn lại: **8** ở form tạo nhân sự và **12** ở form
+đổi mật khẩu.
 
 Hai dòng đầu đều là **temporary credential**: chúng chỉ dùng để bàn giao, đi kèm
 `must_change_secret = true`, và không mở được gì ngoài màn đổi mật khẩu. Chúng

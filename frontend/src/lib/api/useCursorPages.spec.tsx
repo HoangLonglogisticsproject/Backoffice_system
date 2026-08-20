@@ -116,6 +116,46 @@ describe('useCursorPages', () => {
     expect(screen.getByTestId('canGoBack')).toHaveTextContent('false');
   });
 
+  it('changing the page size issues ONE request, and it carries no cursor', async () => {
+    const { read, seen } = makePages(PAGES);
+    render(<Harness read={read} />);
+    await waitFor(() => expect(screen.getByTestId('ids')).toHaveTextContent('a,b'));
+
+    act(() => screen.getByText('next').click());
+    await waitFor(() => expect(screen.getByTestId('ids')).toHaveTextContent('c,d'));
+
+    const before = read.mock.calls.length;
+    act(() => screen.getByText('resize').click());
+    await waitFor(() => expect(screen.getByTestId('canGoBack')).toHaveTextContent('false'));
+
+    // ★ Resetting in an effect would render the NEW page size still holding the
+    // OLD cursor, firing "50 rows after a cursor from a walk of 20" before
+    // correcting itself. Exactly one request, and it starts from the top.
+    const after = read.mock.calls.slice(before);
+    expect(after).toHaveLength(1);
+    expect(after[0][0].cursor).toBeUndefined();
+    expect(after[0][0].limit).toBe(50);
+    expect(seen[seen.length - 1]).toBeUndefined();
+  });
+
+  it('ignores a second next() before the page arrives', async () => {
+    const { read } = makePages(PAGES);
+    render(<Harness read={read} />);
+    await waitFor(() => expect(screen.getByTestId('ids')).toHaveTextContent('a,b'));
+
+    // Two clicks, one cursor: the stack must not gain a duplicate entry that
+    // `previous()` then has to walk through twice.
+    act(() => {
+      screen.getByText('next').click();
+      screen.getByText('next').click();
+    });
+    await waitFor(() => expect(screen.getByTestId('ids')).toHaveTextContent('c,d'));
+
+    act(() => screen.getByText('previous').click());
+    await waitFor(() => expect(screen.getByTestId('ids')).toHaveTextContent('a,b'));
+    expect(screen.getByTestId('canGoBack')).toHaveTextContent('false');
+  });
+
   it('starts the walk over when the page size changes', async () => {
     const { read } = makePages(PAGES);
     render(<Harness read={read} />);

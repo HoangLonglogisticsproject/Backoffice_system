@@ -100,7 +100,7 @@ export function CursorPagination({
             value={pageSize.toString()}
             onValueChange={(value) => onPageSizeChange(Number(value))}
           >
-            <SelectTrigger className="h-8 w-[110px] text-sm">
+            <SelectTrigger aria-label={t('pageSizeLabel')} className="h-8 w-[110px] text-sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

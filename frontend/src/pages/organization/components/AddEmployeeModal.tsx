@@ -155,6 +155,14 @@ export function AddEmployeeModal({
               type="password"
               value={initialPassword}
               onChange={(event) => setInitialPassword(event.target.value)}
+              // The TEMPORARY floor (8), not the permanent one (12) an employee
+              // chooses for themselves — requiring 12 here would reject values
+              // the server accepts. This reports early; the server still
+              // decides, and still answers 422.
+              minLength={8}
+              // Stops a password manager offering the ADMINISTRATOR's own saved
+              // credential for somebody else's new account.
+              autoComplete="new-password"
               required
             />
             <p className="text-xs text-gray-500">{t('initialPasswordHint')}</p>

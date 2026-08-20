@@ -54,7 +54,12 @@ describe('AddEmployeeModal', () => {
 
       expect(screen.getByLabelText('Họ và tên *')).toBeInTheDocument();
       expect(screen.getByLabelText('Email *')).toBeInTheDocument();
-      expect(screen.getByLabelText('Mật khẩu khởi tạo')).toBeInTheDocument();
+      const password = screen.getByLabelText('Mật khẩu khởi tạo');
+      expect(password).toBeInTheDocument();
+      // The TEMPORARY floor, not the permanent 12 — and never the browser's
+      // saved credential for the administrator themselves.
+      expect(password).toHaveAttribute('minLength', '8');
+      expect(password).toHaveAttribute('autoComplete', 'new-password');
       // The department comes from the route, so there is nothing to choose.
       expect(screen.queryByLabelText(/phòng ban|department/i)).not.toBeInTheDocument();
     });
@@ -97,6 +102,19 @@ describe('AddEmployeeModal', () => {
       );
       expect(requestAccountInvitation).not.toHaveBeenCalled();
     });
+  });
+
+  it('chooses the workflow from `can("user.write")`, not from anything local', () => {
+    can.mockReturnValue(true);
+    const { unmount } = renderModal();
+    expect(can).toHaveBeenCalledWith('user.write');
+    unmount();
+
+    can.mockClear().mockReturnValue(false);
+    renderModal();
+    expect(can).toHaveBeenCalledWith('user.write');
+    // The capability is the ONLY input: same props, different form.
+    expect(screen.queryByLabelText('Mật khẩu khởi tạo')).not.toBeInTheDocument();
   });
 
   describe('a head proposing a colleague', () => {
