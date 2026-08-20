@@ -490,6 +490,32 @@ Khi `pending`: **chưa có** user, identity, credential, membership nào.
 Duyệt trả **201** (không phải 200) vì nó **tạo ra một account**. Gọi approve
 không kèm body là hợp lệ.
 
+### ★ MÁY CHỦ SINH MẬT KHẨU TẠM — NGƯỜI DUYỆT KHÔNG NHẬP
+
+Đây là điểm dễ hiểu sai nhất của luồng này. Body của approve nhận **duy nhất**
+`displayName`, và nó là tuỳ chọn. **Không có trường mật khẩu.** Người duyệt
+không chọn, không gõ, và không đề xuất được mật khẩu — máy chủ sinh ra bằng
+CSPRNG rồi trả về đúng một lần.
+
+Toàn bộ vòng đời:
+
+```text
+HEAD gửi email
+  → invitation ở trạng thái pending
+  → SUPERADMIN duyệt
+  → MÁY CHỦ sinh temporary credential (24 byte CSPRNG)
+  → trả về ĐÚNG MỘT LẦN trong response 201
+  → frontend hiện một lần, cho copy, rồi mất
+  → nhân viên đăng nhập lần đầu bằng credential đó
+  → mọi endpoint khác trả 403 PASSWORD_CHANGE_REQUIRED
+  → nhân viên đổi mật khẩu ở POST /auth/password
+  → mọi session cũ bị huỷ, kể cả session vừa dùng
+```
+
+Frontend **không được** dựng ô nhập mật khẩu ở màn duyệt. Ô đó sẽ gợi ý cho
+người duyệt rằng họ đang đặt credential, trong khi giá trị họ gõ bị API bỏ qua
+hoàn toàn.
+
 Người mới vào **đúng phòng của HEAD đã mời**.
 
 `GET /account-invitations` trả `{ "items": [], "nextCursor": null, "hasMore": false }`
@@ -715,12 +741,25 @@ endpoint "xem lại".
 **Hạn chế đã biết:** plaintext đi qua browser của người duyệt. Deployment này cố
 ý chưa có email adapter, nên người duyệt là kênh giao duy nhất.
 
-### Hai chính sách mật khẩu
+### Ba chính sách mật khẩu
 
-| | Tối thiểu | Ai đặt | Khi nào |
+| | Độ dài | Ai đặt | Ở luồng nào |
 |---|---|---|---|
-| **tạm** | 8 ký tự | SUPERADMIN, hoặc server sinh ra | lúc tạo account / duyệt invitation |
-| **vĩnh viễn** | 12 ký tự | chính người dùng | ở `POST /auth/password` |
+| **tạm — người đặt** | tối thiểu **8 ký tự** | SUPERADMIN gõ vào `initialPassword` | `POST /users` |
+| **tạm — máy sinh** | cố định **24 byte CSPRNG → 32 ký tự base64url** | **máy chủ sinh**; người duyệt không gõ gì | `POST /account-invitations/:id/approve` |
+| **vĩnh viễn** | tối thiểu **12 ký tự** | chính người dùng | `POST /auth/password` |
+
+⚠️ **"24 byte CSPRNG" là HÀNH VI SINH Ở MÁY CHỦ, KHÔNG PHẢI NGƯỠNG VALIDATE Ở
+FRONTEND.** Không form nào được bắt người dùng nhập 32 ký tự. Ngưỡng duy nhất
+frontend cần kiểm là hai dòng còn lại: **8** ở form tạo nhân sự và **12** ở form
+đổi mật khẩu.
+
+Hai dòng đầu đều là **temporary credential**: chúng chỉ dùng để bàn giao, đi kèm
+`must_change_secret = true`, và không mở được gì ngoài màn đổi mật khẩu. Chúng
+**không phải** mật khẩu lâu dài của nhân viên.
+
+Chỉ luồng thứ hai mới trả `temporaryPassword`. `POST /users` **không** trả —
+người gọi vừa tự chọn giá trị đó nên không có gì để trả lại.
 
 Ngưỡng tạm thấp hơn là **cố ý**: mật khẩu tạm được đọc cho nhau nghe, mỗi người
 một cái khác nhau, và nó không mở được gì ngoài màn đổi mật khẩu. Frontend phải
@@ -871,6 +910,16 @@ Frontend không có màn hình nào cho việc này, và không nên có.
 
 **Đã có endpoint** — xem §15b. Frontend dựng được màn hình bổ nhiệm trưởng
 phòng cho SUPERADMIN.
+
+⚠️ **BỔ NHIỆM LÀ MỘT THAO TÁC RIÊNG, KHÔNG PHẢI MỘT TRƯỜNG LÚC TẠO ACCOUNT.**
+`POST /users` nhận đúng bốn trường — `displayName`, `email`, `initialPassword`,
+`departmentId` — và **không có `role`**. Tạo account xong, muốn người đó làm
+trưởng phòng thì gọi tiếp `POST /departments/:departmentId/head`.
+
+Thứ tự đó là bắt buộc chứ không phải quy ước: invariant #6 đòi người được bổ
+nhiệm phải đang là member active của đúng phòng đó, nên membership phải tồn tại
+trước. Form tạo nhân sự vì thế **không được** có ô chọn role — không có chỗ nào
+trong contract nhận nó.
 
 ### Chuyển SUPERADMIN — **chưa có endpoint**
 

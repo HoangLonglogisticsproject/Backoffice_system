@@ -1,5 +1,8 @@
 import { httpClient } from '../http/client';
-import type { MembershipChangeRequestWithUsers } from '../type/approval';
+import type {
+  MembershipChangeRequest,
+  MembershipChangeRequestWithUsers,
+} from '../type/approval';
 import type { Page, PageRequest } from '../type/pagination';
 
 /**
@@ -48,5 +51,38 @@ export async function fetchPendingMembershipRequests(
   const { data } = await httpClient.get<Page<MembershipChangeRequestWithUsers>>('/membership-requests', {
     params: { limit: page.limit, cursor: page.cursor },
   });
+  return data;
+}
+
+/**
+ * Deciding a request (contract §10). GLOBAL only.
+ *
+ * ★ THE DECIDER IS NEVER SENT. Who is deciding comes from the session cookie,
+ * and the server refuses a self-approval with a database constraint, not a
+ * client-side check. Passing an actor here would be a field the server ignores
+ * at best and trusts at worst.
+ *
+ * Both answers return the BARE request — the identity projection is on the two
+ * GET lists only, because the caller of this already knows who they just acted
+ * on.
+ */
+export async function approveMembershipRequest(
+  requestId: string,
+): Promise<MembershipChangeRequest> {
+  const { data } = await httpClient.post<MembershipChangeRequest>(
+    `/membership-requests/${encodeURIComponent(requestId)}/approve`,
+  );
+  return data;
+}
+
+/** Rejecting takes an optional reason, which is stored and shown on the row. */
+export async function rejectMembershipRequest(
+  requestId: string,
+  reason?: string,
+): Promise<MembershipChangeRequest> {
+  const { data } = await httpClient.post<MembershipChangeRequest>(
+    `/membership-requests/${encodeURIComponent(requestId)}/reject`,
+    reason ? { reason } : {},
+  );
   return data;
 }
