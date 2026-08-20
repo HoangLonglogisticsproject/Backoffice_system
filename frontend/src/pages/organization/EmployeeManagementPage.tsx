@@ -47,7 +47,7 @@ import type { DepartmentMembershipWithUser, MembershipStatus } from '@/lib/type/
 export default function EmployeeManagementPage() {
   const { departmentId } = useParams<{ departmentId: string }>();
   const { t, language } = useLanguage();
-  const { can } = useSession();
+  const { state, can } = useSession();
   const [isAddOpen, setIsAddOpen] = useState(false);
   // Bumped after a create so the list re-reads. A full page reload would
   // throw away the session context and the language choice with it.
@@ -68,18 +68,42 @@ export default function EmployeeManagementPage() {
 
   if (!departmentId) return null;
 
+  // ★ TWO WAYS IN, AND ONLY ONE OF THEM IS A PERMISSION.
+  //
+  // Direct creation is gated by `user.write`, which is GLOBAL-only. Raising an
+  // invitation is not gated by any permission at all — the server uses
+  // `HeadOfRouteDepartmentGuard`, which asks a RELATIONAL question: are you the
+  // head of the department on this route? There is no permission key for that,
+  // so `can()` cannot answer it and gating the button on `user.write` alone hid
+  // the head's workflow entirely.
+  //
+  // The closest the session can say is role plus membership. It is exact in
+  // practice: a head must be an active member of the department they lead
+  // (invariant #6) and may hold only one active membership, so their
+  // `departmentIds` is precisely the department they head.
+  //
+  // ⚠ STILL ONLY A RENDER HINT. The server re-decides on every request and
+  // answers 403 regardless of what was drawn here (§13).
+  const canCreateDirectly = can('user.write');
+  const isHeadOfThisDepartment =
+    state?.status === 'ready' &&
+    state.authorization.role === 'DEPARTMENT_HEAD' &&
+    state.authorization.departmentIds.includes(departmentId);
+  const canAddSomeone = canCreateDirectly || isHeadOfThisDepartment;
+  // Same button, same modal; the wording says which workflow it starts.
+  const addLabel = canCreateDirectly ? t('addEmployee') : t('requestAccountTitle');
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
         <h1 className="text-xl font-bold text-gray-900">{t('employeeList')}</h1>
-        {/* Render hint only. The server decides on every request (§13). */}
-        {can('user.write') && (
+        {canAddSomeone && (
           <Button
             onClick={() => setIsAddOpen(true)}
             className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
           >
             <Plus className="h-4 w-4" />
-            {t('addEmployee')}
+            {addLabel}
           </Button>
         )}
       </div>
