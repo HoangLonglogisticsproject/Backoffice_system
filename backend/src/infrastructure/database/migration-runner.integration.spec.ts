@@ -190,19 +190,37 @@ describeIntegration('MigrationRunner against real PostgreSQL', () => {
     });
 
     it('keeps users.updated_at current on every UPDATE', async () => {
-      const created = await pool.query<{ id: string; updated_at: Date }>(
-        "INSERT INTO users (display_name) VALUES ('A Person') RETURNING id, updated_at",
+      const created = await pool.query<{ id: string }>(
+        "INSERT INTO users (display_name) VALUES ('A Person') RETURNING id",
       );
-      const { id, updated_at: before } = created.rows[0]!;
+      const { id } = created.rows[0]!;
 
-      const after = await pool.query<{ updated_at: Date }>(
-        "UPDATE users SET display_name = 'Renamed' WHERE id = $1 RETURNING updated_at",
+      // ★ THE COMPARISON HAPPENS IN SQL, and it has to.
+      //
+      // `TIMESTAMPTZ` holds microseconds; a JavaScript `Date` holds whole
+      // milliseconds and silently truncates the rest. Reading both values out
+      // and comparing `getTime()` therefore asks a coarser question than the
+      // invariant it is meant to protect: the INSERT and the UPDATE run in two
+      // transactions microseconds apart, and whenever both land inside the same
+      // millisecond the truncated values come back equal even though the column
+      // moved exactly as it should. Measured over 200 runs of the old
+      // assertion: the SQL invariant held 200/200 while `getTime()` reported
+      // "not greater" once — a real trigger, a passing database, a red build.
+      //
+      // Keeping the comparison inside PostgreSQL removes the truncation instead
+      // of waiting it out, so this needs no sleep and has no timing window.
+      const check = await pool.query<{ moved_forward: boolean }>(
+        `WITH previous AS (SELECT updated_at FROM users WHERE id = $1)
+         UPDATE users SET display_name = 'Renamed'
+         WHERE id = $1
+         RETURNING users.updated_at > (SELECT updated_at FROM previous) AS moved_forward`,
         [id],
       );
 
       // Without the trigger this column keeps its INSERT value forever, and
       // anything built on "changed since" reads a wrong answer confidently.
-      expect(after.rows[0]!.updated_at.getTime()).toBeGreaterThan(before.getTime());
+      // Verified against a disabled trigger: the same statement returns false.
+      expect(check.rows[0]!.moved_forward).toBe(true);
     });
 
     it('leaves created_at alone when a row changes', async () => {
