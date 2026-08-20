@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App.tsx'
 import { SessionProvider } from './lib/session/SessionProvider'
+import { LanguageProvider } from './contexts/LanguageContext'
 import './index.css'
 
 const rootElement = document.getElementById('root')
@@ -14,9 +15,11 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <BrowserRouter>
-      <SessionProvider>
-        <App />
-      </SessionProvider>
+      <LanguageProvider>
+        <SessionProvider>
+          <App />
+        </SessionProvider>
+      </LanguageProvider>
     </BrowserRouter>
   </StrictMode>,
 )

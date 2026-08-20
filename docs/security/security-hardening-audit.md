@@ -306,6 +306,47 @@ sees zero rows rather than making a second decision. **No new tests were needed 
 | Bootstrap CLI password | Read from prompt or `BOOTSTRAP_PASSWORD`, **never argv** — argv is visible in `ps` and lands in shell history |
 | Debug logging of request bodies | **None** |
 
+### 10b. Temporary credential generation — audited
+
+Audited at the source rather than inferred from behaviour. What each column
+below rests on is stated, because "we saw two different passwords" proves
+nothing about a generator.
+
+| Property | Value | Evidence |
+|---|---|---|
+| Where | `account-provisioning.service.ts`, `provision()` | source |
+| Primitive | `randomBytes(24).toString('base64url')` | source |
+| Random source | `node:crypto.randomBytes` — the platform CSPRNG | source |
+| Length | 24 bytes → **32 characters** (base64url, unpadded) | source |
+| Alphabet | base64url: `A–Z a–z 0–9 - _` (64 symbols) | source |
+| Entropy | **192 bits** — 24 bytes in, and base64url is lossless | source |
+| Collision risk | Birthday bound ≈ 2⁹⁶. Not a risk that needs managing. | arithmetic |
+| Generated when | **Only** when no `initialPassword` was supplied — i.e. the invitation-approval path. `POST /users` always supplies one. | source |
+| Persistence | scrypt hash only (`N=2¹⁶, r=8, p=1`, 16-byte salt, 64-byte key). Plaintext is never written. | source + test |
+| Plaintext lifetime | One process, one response. Held in a local, returned, never stored, never re-derivable. | source |
+| Returned again? | **No.** The value lives on no entity: `AccountInvitation` has no such column, so list/detail/reject/409 cannot carry it. A second approve is 409. | source + schema |
+| In logs? | **No** — no logger or `console.*` call touches it. The bootstrap CLI prints only the created user's id and name. | source |
+| Marked temporary | `must_change_secret = true`, set in the same transaction | source |
+
+**What the tests actually prove** — narrower than the table above, and worth
+separating:
+
+- the approval response carries a string, and it is ≥ 12 characters
+- the stored `secret_hash` does not contain the plaintext
+- `JSON.stringify` of the stored invitation row does not contain the plaintext
+- nothing is returned when `initialPassword` was supplied
+
+**What no test asserts:** the randomness source, the entropy, the alphabet, or
+that two calls differ. Those are established by reading `provision()`, not by
+the suite. A regression that swapped `randomBytes` for `Math.random` would keep
+every existing assertion green — the length and non-persistence checks would
+still pass. That is a real gap in coverage, not a claim of weakness: the shipped
+primitive is sound.
+
+**What UAT can observe:** that the reveal appears once, that copying works, and
+that a second approve is refused. UAT cannot observe entropy, and should not be
+cited as evidence of it.
+
 ## 11. Database security
 
 | Check | Result |

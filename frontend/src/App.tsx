@@ -18,6 +18,9 @@ import NoAccessPage from './pages/system/NoAccessPage'
 import PlaceholderPage from './pages/system/PlaceholderPage'
 import LoginPage from './pages/system/LoginPage'
 import ChangePasswordPage from './pages/system/ChangePasswordPage'
+import ApprovalsPage from './pages/system/ApprovalsPage'
+import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
+import AccountSecurityPage from './pages/account/AccountSecurityPage'
 import { RequireSession } from './lib/session/RequireSession'
 
 function App() {
@@ -47,6 +50,14 @@ function App() {
         <Route path="/organization/department/:id/workspace" element={<DepartmentWorkspacePage />} />
         <Route path="/organization/department-control-center" element={<DepartmentControlCenterPage />} />
         <Route path="/organization/personal-desk" element={<PersonalWorkDeskPage />} />
+        {/* Harvested from the UI branch, on real data. */}
+        <Route
+          path="/organization/department/:departmentId/members"
+          element={<EmployeeManagementPage />}
+        />
+
+        <Route path="/account/security" element={<AccountSecurityPage />} />
+        <Route path="/system/approvals" element={<ApprovalsPage />} />
         
         <Route path="/worklist/my-work" element={<MyWorkPage />} />
         <Route path="/worklist/all" element={<WorkListPage />} />

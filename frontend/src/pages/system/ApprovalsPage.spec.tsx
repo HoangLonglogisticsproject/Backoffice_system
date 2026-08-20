@@ -1,0 +1,187 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import ApprovalsPage from './ApprovalsPage';
+import { LanguageProvider } from '@/contexts/LanguageContext';
+
+const fetchPendingMembershipRequests = vi.fn();
+const approveMembershipRequest = vi.fn();
+const rejectMembershipRequest = vi.fn();
+const fetchPendingAccountInvitations = vi.fn();
+const approveAccountInvitation = vi.fn();
+const rejectAccountInvitation = vi.fn();
+
+vi.mock('@/lib/api/membership-request.repository', () => ({
+  fetchPendingMembershipRequests: (...a: unknown[]) => fetchPendingMembershipRequests(...a),
+  approveMembershipRequest: (...a: unknown[]) => approveMembershipRequest(...a),
+  rejectMembershipRequest: (...a: unknown[]) => rejectMembershipRequest(...a),
+}));
+vi.mock('@/lib/api/account-invitation.repository', () => ({
+  fetchPendingAccountInvitations: (...a: unknown[]) => fetchPendingAccountInvitations(...a),
+  approveAccountInvitation: (...a: unknown[]) => approveAccountInvitation(...a),
+  rejectAccountInvitation: (...a: unknown[]) => rejectAccountInvitation(...a),
+}));
+vi.mock('@/lib/session/SessionProvider', () => ({
+  useSession: () => ({ state: { status: 'ready' }, loading: false }),
+}));
+
+const SECRET = 'Xy7-generated_by_the_server-9Za';
+
+const REQUEST = {
+  id: 'f6d42eed-0000-4000-8000-000000000000',
+  departmentId: 'dep',
+  targetDepartmentId: null,
+  targetUserId: 'u1',
+  targetUser: { id: 'u1', displayName: 'Moved Person' },
+  action: 'REMOVE_MEMBER',
+  status: 'pending',
+  requestedBy: 'u2',
+  requestedByUser: { id: 'u2', displayName: 'Head Person' },
+  requestedAt: '2026-08-18T08:34:23.633Z',
+  decidedBy: null,
+  decidedAt: null,
+  reason: null,
+};
+
+const INVITATION = {
+  id: 'a1b2c3d4-0000-4000-8000-000000000000',
+  departmentId: 'dep',
+  email: 'newcomer@hoanglong.test',
+  status: 'pending',
+  requestedBy: 'u2',
+  requestedByUser: { id: 'u2', displayName: 'Head Person' },
+  requestedAt: '2026-08-18T08:34:23.633Z',
+  decidedBy: null,
+  decidedAt: null,
+  reason: null,
+  createdUserId: null,
+};
+
+const page = <T,>(items: T[]) => ({ items, nextCursor: null, hasMore: false });
+
+const lastConfirmButton = (): HTMLElement => {
+  const buttons = screen.getAllByRole('button', { name: /^duyệt$|^approve$/i });
+  // The row button and the dialog button share a label; the dialog is last.
+  return buttons[buttons.length - 1];
+};
+
+const renderPage = () =>
+  render(
+    <LanguageProvider>
+      <ApprovalsPage />
+    </LanguageProvider>,
+  );
+
+const openInvitations = async () => {
+  fireEvent.click(screen.getByRole('button', { name: /lời mời|invitation/i }));
+  await waitFor(() => expect(screen.getByText('newcomer@hoanglong.test')).toBeInTheDocument());
+};
+
+describe('ApprovalsPage', () => {
+  beforeEach(() => {
+    fetchPendingMembershipRequests.mockReset().mockResolvedValue(page([REQUEST]));
+    fetchPendingAccountInvitations.mockReset().mockResolvedValue(page([INVITATION]));
+    approveMembershipRequest.mockReset().mockResolvedValue({});
+    rejectMembershipRequest.mockReset().mockResolvedValue({});
+    approveAccountInvitation.mockReset().mockResolvedValue({
+      invitation: { ...INVITATION, status: 'approved' },
+      username: 'newcomer',
+      temporaryPassword: SECRET,
+    });
+    rejectAccountInvitation.mockReset().mockResolvedValue({});
+  });
+
+  it('shows people by name, never by UUID', async () => {
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Moved Person')).toBeInTheDocument());
+    expect(screen.getByText('Head Person')).toBeInTheDocument();
+    expect(screen.queryByText(REQUEST.targetUserId)).not.toBeInTheDocument();
+  });
+
+  it('confirms before deciding, and sends no actor', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Moved Person')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+    // A decision is not one misplaced click away.
+    expect(screen.getByText(/xác nhận duyệt|confirm approval/i)).toBeInTheDocument();
+
+    fireEvent.click(lastConfirmButton());
+
+    await waitFor(() => expect(approveMembershipRequest).toHaveBeenCalledWith(REQUEST.id));
+    // Who decided comes from the cookie. Nothing here names an actor.
+    expect(approveMembershipRequest.mock.calls[0]).toHaveLength(1);
+  });
+
+  describe('the one-time temporary credential', () => {
+    it('NEVER offers a password field on the approval form', async () => {
+      renderPage();
+      await openInvitations();
+
+      fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+
+      // ★ The server generates the credential. A field here would imply the
+      // approver sets it, and whatever they typed would be discarded.
+      expect(screen.queryByLabelText(/mật khẩu|password/i)).not.toBeInTheDocument();
+      expect(document.querySelector('input[type="password"]')).toBeNull();
+    });
+
+    it('reveals what the server generated, exactly once', async () => {
+      renderPage();
+      await openInvitations();
+
+      fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+      fireEvent.click(lastConfirmButton());
+
+      await waitFor(() => expect(screen.getByText(SECRET)).toBeInTheDocument());
+      expect(screen.getByText('newcomer')).toBeInTheDocument();
+      // And it says plainly that this is the only showing.
+      expect(screen.getByText(/không có cách nào đọc lại|nothing can read it back/i)).toBeInTheDocument();
+      // The approver sent no password of their own.
+      expect(approveAccountInvitation).toHaveBeenCalledWith(INVITATION.id);
+    });
+
+    it('CANNOT be revealed a second time once dismissed', async () => {
+      renderPage();
+      await openInvitations();
+
+      fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+      fireEvent.click(lastConfirmButton());
+      await waitFor(() => expect(screen.getByText(SECRET)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /xong|done/i }));
+
+      // Gone from the document, and there is no control anywhere that brings
+      // it back — the value exists nowhere else, on either side of the wire.
+      await waitFor(() => expect(screen.queryByText(SECRET)).not.toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /xem lại|reveal|show again/i })).toBeNull();
+      expect(document.body.innerHTML).not.toContain(SECRET);
+    });
+
+    it('does not persist the credential anywhere the browser keeps things', async () => {
+      renderPage();
+      await openInvitations();
+
+      fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+      fireEvent.click(lastConfirmButton());
+      await waitFor(() => expect(screen.getByText(SECRET)).toBeInTheDocument());
+
+      expect(JSON.stringify(localStorage)).not.toContain(SECRET);
+      expect(JSON.stringify(sessionStorage)).not.toContain(SECRET);
+      expect(window.location.href).not.toContain(SECRET);
+      expect(document.title).not.toContain(SECRET);
+    });
+  });
+
+  it('renders a 403 as a normal answer rather than an error', async () => {
+    const { ApiError } = await import('@/lib/http/apiError');
+    fetchPendingMembershipRequests.mockRejectedValue(new ApiError(403, 'FORBIDDEN', 'no'));
+
+    renderPage();
+
+    // A head reaching the global queue is refused by design.
+    await waitFor(() =>
+      expect(screen.getByText(/không có quyền|not permitted/i)).toBeInTheDocument(),
+    );
+  });
+});
