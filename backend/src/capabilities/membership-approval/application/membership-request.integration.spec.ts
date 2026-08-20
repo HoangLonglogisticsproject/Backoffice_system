@@ -19,6 +19,7 @@ import { AccountProvisioningService } from '../../../core/users/application/acco
 import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { MembershipRequestRepository } from '../persistence/membership-request.repository';
 import { MembershipRequestService } from './membership-request.service';
+import { decodeCursor } from '../../../common/pagination/cursor';
 
 /**
  * The approval workflow against a REAL PostgreSQL.
@@ -604,6 +605,116 @@ describeIntegration('Membership approval against real PostgreSQL', () => {
   });
 
   // -------------------------------------------------------------- DB CHECKs --
+
+  // ------------------------------------------------- cursor precision --
+
+  describe('cursor precision on the request lists', () => {
+    /**
+     * Raises `count` requests, one statement each so every row gets its own
+     * `transaction_timestamp()` — MICROSECONDS, exactly as production writes
+     * them. A cursor rounded to milliseconds names a position earlier than the
+     * row it points at, and that row is then served twice.
+     */
+    const seedRequests = async (count: number, status: string): Promise<string> => {
+      const { rows: dept } = await pool.query<{ id: string }>(
+        "INSERT INTO departments (slug, name) VALUES ('prec', 'Precision') RETURNING id",
+      );
+      const departmentId = dept[0]!.id;
+
+      for (let n = 0; n < count; n++) {
+        await pool.query(
+          `WITH u AS (INSERT INTO users (display_name) VALUES ($2) RETURNING id)
+           INSERT INTO membership_change_requests
+             (department_id, target_user_id, requested_by, action, status)
+           SELECT $1, id, id, 'REMOVE_MEMBER', $3 FROM u`,
+          [departmentId, `Requester ${n}`, status],
+        );
+      }
+      return departmentId;
+    };
+
+    const walk = async (
+      list: (cursor?: string) => Promise<{ items: { id: string }[]; hasMore: boolean; nextCursor: string | null }>,
+    ): Promise<{ sizes: number[]; ids: string[] }> => {
+      const sizes: number[] = [];
+      const ids: string[] = [];
+      let cursor: string | undefined;
+
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await list(cursor);
+        sizes.push(page.items.length);
+        ids.push(...page.items.map((r) => r.id));
+        if (!page.hasMore) break;
+        cursor = page.nextCursor as string;
+      }
+      return { sizes, ids };
+    };
+
+    it('a department list of 25 pages as 10 + 10 + 5, with nothing repeated', async () => {
+      const departmentId = await seedRequests(25, 'pending');
+
+      const { sizes, ids } = await walk((cursor) =>
+        requests.listForDepartment(departmentId, { limit: 10, cursor }),
+      );
+
+      expect(sizes).toEqual([10, 10, 5]);
+      expect(ids).toHaveLength(25);
+      expect(new Set(ids).size).toBe(25);
+    });
+
+    it('the global pending queue pages the same way, ascending', async () => {
+      await seedRequests(25, 'pending');
+
+      const { sizes, ids } = await walk((cursor) =>
+        requests.listPending({ limit: 10, cursor }),
+      );
+
+      expect(sizes).toEqual([10, 10, 5]);
+      expect(new Set(ids).size).toBe(25);
+    });
+
+    it('the cursor names the row exactly, not a rounded instant', async () => {
+      const departmentId = await seedRequests(3, 'pending');
+
+      const page = await requests.listForDepartment(departmentId, { limit: 2 });
+      const { t, i } = decodeCursor(page.nextCursor as string);
+
+      const { rows } = await pool.query<{ exact: boolean }>(
+        'SELECT requested_at = $2::timestamptz AS exact FROM membership_change_requests WHERE id = $1',
+        [i, t],
+      );
+      expect(rows[0]!.exact).toBe(true);
+    });
+
+    it('refuses a malformed cursor rather than silently restarting', async () => {
+      const departmentId = await seedRequests(3, 'pending');
+
+      await expect(
+        requests.listForDepartment(departmentId, { limit: 2, cursor: 'not-a-cursor' }),
+      ).rejects.toThrow(/Malformed cursor/);
+    });
+
+    it('a cursor from one department does not pull in another department’s rows', async () => {
+      const first = await seedRequests(12, 'pending');
+      const { rows: other } = await pool.query<{ id: string }>(
+        "INSERT INTO departments (slug, name) VALUES ('other', 'Other') RETURNING id",
+      );
+      await pool.query(
+        `WITH u AS (INSERT INTO users (display_name) VALUES ('Outsider') RETURNING id)
+         INSERT INTO membership_change_requests
+           (department_id, target_user_id, requested_by, action, status)
+         SELECT $1, id, id, 'REMOVE_MEMBER', 'pending' FROM u`,
+        [other[0]!.id],
+      );
+
+      const { ids } = await walk((cursor) =>
+        requests.listForDepartment(first, { limit: 10, cursor }),
+      );
+
+      // Scope comes from the route, never from the cursor.
+      expect(ids).toHaveLength(12);
+    });
+  });
 
   describe('database constraints', () => {
     it('refuses a hybrid decision state', async () => {

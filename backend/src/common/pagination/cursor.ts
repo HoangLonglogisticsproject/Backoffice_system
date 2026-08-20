@@ -122,26 +122,65 @@ export function decodeCursor(raw: string): Cursor {
 }
 
 /**
+ * A fetched row that knows its own position in the sort order.
+ *
+ * ★ `cursorAt` IS A STRING, AND THAT IS THE WHOLE POINT. It is the sort
+ * timestamp exactly as PostgreSQL rendered it — `created_at::text` — and it must
+ * never be produced from a JavaScript `Date`.
+ *
+ * `TIMESTAMPTZ` holds MICROSECONDS. A JavaScript `Date` holds whole
+ * MILLISECONDS. The moment a sort key is read into a `Date` the last three
+ * digits are gone, and `date.toISOString()` hands back a value STRICTLY EARLIER
+ * than the row it names. Feed that to `WHERE (created_at, id) > ($t, $i)` and
+ * the comparison resolves on its first component — `created_at > $t` is true for
+ * the very row the cursor points at — so the `id` tiebreaker is never consulted
+ * and THE LAST ROW OF EVERY PAGE COMES BACK AS THE FIRST ROW OF THE NEXT.
+ *
+ * That defect shipped. Measured on 25 rows at `limit` 10: pages of 10, 10 and 7,
+ * twenty-seven rows for twenty-five members, with rows 9 and 18 each returned
+ * twice. It hid because every proof of the pagination used timestamps seeded at
+ * whole minutes, where truncating to milliseconds loses nothing — while
+ * `DEFAULT now()` puts sub-millisecond digits on 100% of real rows.
+ *
+ * Keeping the key as text end to end means it is never parsed and never
+ * rounded: the exact bytes PostgreSQL sorted by are the exact bytes that come
+ * back in the cursor.
+ */
+export interface CursorAnchored {
+  id: string;
+  /** `created_at::text` / `requested_at::text` — full precision, never a Date. */
+  cursorAt: string;
+}
+
+/**
  * Turns `limit + 1` fetched rows into a page.
  *
  * The extra row is the whole `hasMore` mechanism: if it came back, another page
  * exists. It is dropped rather than returned, so a caller always receives at
  * most `limit` items.
+ *
+ * `cursorAt` is stripped from every item on the way out. It is how the page
+ * finds its own end, not something a client should see or send back — the
+ * cursor is the only thing that travels, and it stays opaque.
+ *
+ * There is deliberately NO `cursorOf` callback any more. Each call site used to
+ * supply `(row) => ({ t: row.someDate.toISOString(), i: row.id })`, and that
+ * lambda WAS the bug — five copies of it, each one silently truncating. Reading
+ * the anchor off the row instead leaves nowhere for a `Date` to enter.
  */
-export function toPage<T>(
+export function toPage<T extends CursorAnchored>(
   rows: T[],
   limit: number,
-  cursorOf: (row: T) => Cursor,
-): Page<T> {
+): Page<Omit<T, 'cursorAt'>> {
   const hasMore = rows.length > limit;
-  const items = hasMore ? rows.slice(0, limit) : rows;
-  const last = items.at(-1);
+  const kept = hasMore ? rows.slice(0, limit) : rows;
+  const last = kept.at(-1);
 
   return {
-    items,
+    items: kept.map(({ cursorAt: _cursorAt, ...item }) => item),
     // Null on the last page, and null for an empty result — there is no
     // position to resume from in either case.
-    nextCursor: hasMore && last ? encodeCursor(cursorOf(last)) : null,
+    nextCursor: hasMore && last ? encodeCursor({ t: last.cursorAt, i: last.id }) : null,
     hasMore,
   };
 }

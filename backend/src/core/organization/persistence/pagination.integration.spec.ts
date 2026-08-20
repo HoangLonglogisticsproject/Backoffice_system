@@ -168,6 +168,153 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     return seen;
   };
 
+  /**
+   * Seeds `count` members letting `created_at` DEFAULT to `now()`.
+   *
+   * ★ THIS IS THE CASE THE REST OF THIS SUITE CANNOT SEE. `seedMembers` above
+   * writes whole-minute timestamps, where rounding to milliseconds loses
+   * nothing — so it agreed with a cursor that truncated. `now()` puts
+   * MICROSECONDS on every row, which is what production does 100% of the time,
+   * and what the shipped cursor got wrong.
+   *
+   * One statement per row so each lands in its own transaction and gets its own
+   * `transaction_timestamp()`.
+   */
+  const seedMembersWithRealClock = async (count: number): Promise<void> => {
+    for (let n = 0; n < count; n++) {
+      await pool.query(
+        `WITH inserted AS (
+           INSERT INTO users (display_name) VALUES ($2) RETURNING id
+         )
+         INSERT INTO department_memberships (user_id, department_id)
+         SELECT id, $1 FROM inserted`,
+        [departmentId, `Person ${n}`],
+      );
+    }
+  };
+
+  // ------------------------------------------------- timestamp precision --
+
+  describe('cursor precision against real clock timestamps', () => {
+    it('the seeded rows really do carry sub-millisecond digits', async () => {
+      // If this ever fails the rest of this block proves nothing, so it is
+      // asserted rather than assumed.
+      await seedMembersWithRealClock(5);
+
+      const { rows } = await pool.query<{ n: string }>(
+        `SELECT count(*) AS n FROM department_memberships
+          WHERE date_trunc('milliseconds', created_at) <> created_at`,
+      );
+
+      expect(Number(rows[0]!.n)).toBeGreaterThan(0);
+    });
+
+    it('25 rows at limit 10 come back as 10 + 10 + 5, not 10 + 10 + 7', async () => {
+      // The exact shipped defect. Truncating the cursor to milliseconds made
+      // page 2 restart ON the last row of page 1, so 25 members were served as
+      // 27 rows with two of them duplicated.
+      await seedMembersWithRealClock(25);
+
+      const sizes: number[] = [];
+      const seen: string[] = [];
+      let cursor: string | undefined;
+
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await memberships.listActiveMembers(departmentId, { limit: 10, cursor });
+        sizes.push(page.items.length);
+        seen.push(...page.items.map((m) => m.id));
+        if (!page.hasMore) break;
+        cursor = page.nextCursor as string;
+      }
+
+      expect(sizes).toEqual([10, 10, 5]);
+      expect(seen).toHaveLength(25);
+      expect(new Set(seen).size).toBe(25);
+    });
+
+    it('serves no row twice and drops none, walking the whole list', async () => {
+      await seedMembersWithRealClock(25);
+
+      const seen = await walkAll(10);
+      const { rows } = await pool.query<{ id: string }>(
+        "SELECT id FROM department_memberships WHERE status = 'active'",
+      );
+
+      expect(seen).toHaveLength(rows.length);
+      expect(new Set(seen).size).toBe(rows.length);
+      expect(new Set(seen)).toEqual(new Set(rows.map((r) => r.id)));
+    });
+
+    it('page 2 begins AFTER page 1 ends, with no shared row', async () => {
+      await seedMembersWithRealClock(25);
+
+      const first = await memberships.listActiveMembers(departmentId, { limit: 10 });
+      const second = await memberships.listActiveMembers(departmentId, {
+        limit: 10,
+        cursor: first.nextCursor as string,
+      });
+      const third = await memberships.listActiveMembers(departmentId, {
+        limit: 10,
+        cursor: second.nextCursor as string,
+      });
+
+      const firstIds = new Set(first.items.map((m) => m.id));
+      const secondIds = new Set(second.items.map((m) => m.id));
+
+      expect(second.items.filter((m) => firstIds.has(m.id))).toEqual([]);
+      expect(third.items.filter((m) => secondIds.has(m.id))).toEqual([]);
+      expect(third.items).toHaveLength(5);
+      expect(third.hasMore).toBe(false);
+    });
+
+    it('round-trips the exact PostgreSQL sort key, microseconds and all', async () => {
+      await seedMembersWithRealClock(3);
+
+      const page = await memberships.listActiveMembers(departmentId, { limit: 2 });
+      const { t, i } = decodeCursor(page.nextCursor as string);
+
+      // The cursor must name the row it points at EXACTLY — not a rounded
+      // instant that sorts before it.
+      const { rows } = await pool.query<{ exact: boolean; digits: string }>(
+        `SELECT created_at = $2::timestamptz AS exact, created_at::text AS digits
+           FROM department_memberships WHERE id = $1`,
+        [i, t],
+      );
+
+      expect(rows[0]!.exact).toBe(true);
+      expect(t).toBe(rows[0]!.digits);
+    });
+
+    it('ties on a real clock still resolve by id', async () => {
+      // Same timestamp for all five: the cursor's first component cannot
+      // separate them, so only the tiebreaker can.
+      await pool.query(
+        `WITH inserted AS (
+           INSERT INTO users (display_name)
+           SELECT 'Tied ' || g FROM generate_series(1, 5) g RETURNING id
+         )
+         INSERT INTO department_memberships (user_id, department_id, created_at)
+         SELECT id, $1, now() FROM inserted`,
+        [departmentId],
+      );
+
+      const seen = await walkAll(2);
+
+      expect(seen).toHaveLength(5);
+      expect(new Set(seen).size).toBe(5);
+    });
+
+    it('does not put the raw sort key in the payload', async () => {
+      await seedMembersWithRealClock(2);
+
+      const page = await memberships.listActiveMembers(departmentId, { limit: 10 });
+
+      // The anchor is internal. A client gets the opaque cursor, nothing else.
+      expect(page.items[0]).not.toHaveProperty('cursorAt');
+      expect(page.items[0]).not.toHaveProperty('cursor_at');
+    });
+  });
+
   // ------------------------------------------------------------ paging --
 
   it('returns the first page and a cursor when more rows exist', async () => {

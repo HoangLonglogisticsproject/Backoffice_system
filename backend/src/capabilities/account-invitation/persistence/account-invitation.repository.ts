@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
-import type { Cursor } from '../../../common/pagination/cursor';
+import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import { AccountInvitation, InvitationStatus } from '../domain/account-invitation';
 
@@ -19,6 +19,9 @@ interface InvitationRow {
   reason: string | null;
   created_user_id: string | null;
 }
+
+/** An invitation plus its cursor anchor — `requested_at` at full precision. */
+export interface InvitationPageRow extends AccountInvitation, CursorAnchored {}
 
 const toInvitation = (row: InvitationRow): AccountInvitation => ({
   id: row.id,
@@ -110,20 +113,20 @@ export class AccountInvitationRepository {
     limit: number,
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
-  ): Promise<AccountInvitation[]> {
-    const rows = await executor.query<InvitationRow>(
+  ): Promise<InvitationPageRow[]> {
+    const rows = await executor.query<InvitationRow & { cursor_at: string }>(
       cursor
-        ? `SELECT * FROM account_invitations
-            WHERE department_id = $1 AND (requested_at, id) < ($2, $3)
+        ? `SELECT *, requested_at::text AS cursor_at FROM account_invitations
+            WHERE department_id = $1 AND (requested_at, id) < ($2::timestamptz, $3)
             ORDER BY requested_at DESC, id DESC
             LIMIT $4`
-        : `SELECT * FROM account_invitations
+        : `SELECT *, requested_at::text AS cursor_at FROM account_invitations
             WHERE department_id = $1
             ORDER BY requested_at DESC, id DESC
             LIMIT $2`,
       cursor ? [departmentId, cursor.t, cursor.i, limit + 1] : [departmentId, limit + 1],
     );
-    return rows.map(toInvitation);
+    return rows.map((row) => ({ ...toInvitation(row), cursorAt: row.cursor_at }));
   }
 
   /**
@@ -134,20 +137,20 @@ export class AccountInvitationRepository {
     limit: number,
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
-  ): Promise<AccountInvitation[]> {
-    const rows = await executor.query<InvitationRow>(
+  ): Promise<InvitationPageRow[]> {
+    const rows = await executor.query<InvitationRow & { cursor_at: string }>(
       cursor
-        ? `SELECT * FROM account_invitations
-            WHERE status = 'pending' AND (requested_at, id) > ($1, $2)
+        ? `SELECT *, requested_at::text AS cursor_at FROM account_invitations
+            WHERE status = 'pending' AND (requested_at, id) > ($1::timestamptz, $2)
             ORDER BY requested_at ASC, id ASC
             LIMIT $3`
-        : `SELECT * FROM account_invitations
+        : `SELECT *, requested_at::text AS cursor_at FROM account_invitations
             WHERE status = 'pending'
             ORDER BY requested_at ASC, id ASC
             LIMIT $1`,
       cursor ? [cursor.t, cursor.i, limit + 1] : [limit + 1],
     );
-    return rows.map(toInvitation);
+    return rows.map((row) => ({ ...toInvitation(row), cursorAt: row.cursor_at }));
   }
 
   async decide(

@@ -57,16 +57,20 @@ describe('cursor', () => {
 describe('toPage', () => {
   // Real UUIDs, because `decodeCursor` validates the tiebreaker — a fixture
   // with `id-9` in it would be testing the fixture, not the page.
+  //
+  // `cursorAt` carries MICROSECONDS, as `created_at::text` does. A fixture with
+  // millisecond timestamps would agree with a truncating implementation and
+  // prove nothing.
   const rows = Array.from({ length: 11 }, (_, n) => ({
     id: `1111111e-1111-4111-8111-11111111111${n.toString(16)}`,
-    at: '2026-01-01T00:00:00.000Z',
+    name: `Person ${n}`,
+    cursorAt: `2026-01-01 00:00:00.00012${n}+00`,
   }));
-  const cursorOf = (r: { id: string; at: string }) => ({ t: r.at, i: r.id });
 
   it('drops the probe row and reports more', () => {
     // 11 rows came back for a limit of 10: the extra one exists only to answer
     // `hasMore`, and must never be handed to the caller.
-    const page = toPage(rows, 10, cursorOf);
+    const page = toPage(rows, 10);
 
     expect(page.items).toHaveLength(10);
     expect(page.hasMore).toBe(true);
@@ -74,13 +78,32 @@ describe('toPage', () => {
   });
 
   it('the cursor points at the LAST returned row, not the probe', () => {
-    const page = toPage(rows, 10, cursorOf);
+    const page = toPage(rows, 10);
 
     expect(decodeCursor(page.nextCursor as string).i).toBe(rows[9]!.id);
   });
 
+  it('the cursor keeps every digit of the sort key', () => {
+    // The defect this replaced rounded the key to milliseconds, which names a
+    // position EARLIER than the row it points at — so that row is served again
+    // at the top of the next page.
+    const page = toPage(rows, 10);
+
+    expect(decodeCursor(page.nextCursor as string).t).toBe(rows[9]!.cursorAt);
+    expect(decodeCursor(page.nextCursor as string).t).toContain('.000129');
+  });
+
+  it('does not leak the anchor into the payload', () => {
+    // `cursorAt` is how the page finds its own end. The client gets the opaque
+    // cursor instead, and never a raw sort key it might try to send back.
+    const page = toPage(rows, 10);
+
+    expect(page.items[0]).not.toHaveProperty('cursorAt');
+    expect(page.items[0]).toEqual({ id: rows[0]!.id, name: 'Person 0' });
+  });
+
   it('ends cleanly when the probe row does not come back', () => {
-    const page = toPage(rows.slice(0, 10), 10, cursorOf);
+    const page = toPage(rows.slice(0, 10), 10);
 
     expect(page.items).toHaveLength(10);
     expect(page.hasMore).toBe(false);
@@ -88,7 +111,7 @@ describe('toPage', () => {
   });
 
   it('an empty result is a page, not an error', () => {
-    expect(toPage([], 10, cursorOf)).toEqual({ items: [], nextCursor: null, hasMore: false });
+    expect(toPage([], 10)).toEqual({ items: [], nextCursor: null, hasMore: false });
   });
 });
 

@@ -145,7 +145,7 @@ export class MembershipService {
       cursor,
     );
 
-    return toPage(rows, page.limit, (m) => ({ t: m.createdAt.toISOString(), i: m.id }));
+    return toPage(rows, page.limit);
   }
 
   async findActive(userId: string): Promise<DepartmentMembership | null> {

@@ -267,7 +267,7 @@ export class MembershipRequestService {
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await this.requests.listForDepartmentPage(departmentId, page.limit, cursor);
 
-    return toPage(rows, page.limit, (r) => ({ t: r.requestedAt.toISOString(), i: r.id }));
+    return toPage(rows, page.limit);
   }
 
   /** One page of the global decision queue, oldest first. */
@@ -275,6 +275,6 @@ export class MembershipRequestService {
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await this.requests.listPendingPage(page.limit, cursor);
 
-    return toPage(rows, page.limit, (r) => ({ t: r.requestedAt.toISOString(), i: r.id }));
+    return toPage(rows, page.limit);
   }
 }
