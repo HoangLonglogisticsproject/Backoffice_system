@@ -34,6 +34,8 @@ export interface Identity {
   subject: string;
   /** Present for `local` only — providers that verify elsewhere store nothing. */
   secretHash: string | null;
+  /** Temporary credentials must be replaced before normal use. */
+  mustChangeSecret: boolean;
   createdAt: Date;
 }
 
