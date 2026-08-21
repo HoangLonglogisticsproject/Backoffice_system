@@ -1,8 +1,8 @@
 -- 0010_canonical_email_identity.sql — case-insensitive identity, at the database.
 --
--- BUSINESS RULE: `uyen@hoanglongti.com` and `Uyen@hoanglongti.com` are ONE
--- account identity and must not exist side by side. `uyen@hoanglongti.com` and
--- `phuonguyen@hoanglongti.com` are two different people and both are valid —
+-- BUSINESS RULE: `uyen@hoanglonglti.com` and `Uyen@hoanglonglti.com` are ONE
+-- account identity and must not exist side by side. `uyen@hoanglonglti.com` and
+-- `phuonguyen@hoanglonglti.com` are two different people and both are valid —
 -- this constrains case and surrounding whitespace, never the local part.
 --
 -- WHAT WAS ALREADY TRUE, AND WHY IT WAS NOT ENOUGH.
@@ -12,10 +12,10 @@
 -- `IdentityRepository` applies the first on every read and every write. Measured
 -- over HTTP before this file existed, the API answered correctly at every turn:
 --
---   POST .../account-invitations  test01@hoanglongti.com       201
---   POST .../account-invitations  Test01@hoanglongti.com       409 CONFLICT
---   POST .../account-invitations  "  TEST01@HoangLongTI.com  " 409 CONFLICT
---   POST /users                   USR01@HoangLongTI.com        409 CONFLICT
+--   POST .../account-invitations  test01@hoanglonglti.com       201
+--   POST .../account-invitations  Test01@hoanglonglti.com       409 CONFLICT
+--   POST .../account-invitations  "  TEST01@HoangLongLTI.com  " 409 CONFLICT
+--   POST /users                   USR01@HoangLongLTI.com        409 CONFLICT
 --
 -- The gap was WHERE that guarantee lived. Both unique constraints indexed the
 -- RAW column, so they enforced a case-SENSITIVE rule and the case-insensitive
@@ -316,7 +316,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_local_identity_subject_canonical
 --
 -- ★ THE UNIQUE INDEXES ABOVE DO NOT MAKE A ROW CANONICAL. They make two rows
 -- that canonicalise alike collide — nothing stops a SINGLE row being stored as
--- `  Uyen@HoangLongTI.com  `. Measured on the schema as it stood one commit
+-- `  Uyen@HoangLongLTI.com  `. Measured on the schema as it stood one commit
 -- ago: that INSERT succeeded, and both indexes stayed quiet, because
 -- `canonical_identity('  Uyen@… ')` was unique among one row.
 --

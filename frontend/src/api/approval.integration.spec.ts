@@ -145,9 +145,9 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
     departmentB = await make(`apr-b-${unique}`);
     departmentHeadless = await make(`apr-none-${unique}`);
 
-    const a = await provision(`apr-head-a-${unique}@hoanglongti.com`, departmentA, 'Head of A');
-    const m = await provision(`apr-member-a-${unique}@hoanglongti.com`, departmentA, 'Member of A');
-    const b = await provision(`apr-head-b-${unique}@hoanglongti.com`, departmentB, 'Head of B');
+    const a = await provision(`apr-head-a-${unique}@hoanglonglti.com`, departmentA, 'Head of A');
+    const m = await provision(`apr-member-a-${unique}@hoanglonglti.com`, departmentA, 'Member of A');
+    const b = await provision(`apr-head-b-${unique}@hoanglonglti.com`, departmentB, 'Head of B');
 
     headOfA = a.client;
     memberOfA = m.client;
@@ -159,7 +159,7 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       .toBe(201);
 
     // Provisioned and signed in, but never changed the password.
-    const freshEmail = `apr-fresh-${unique}@hoanglongti.com`;
+    const freshEmail = `apr-fresh-${unique}@hoanglonglti.com`;
     expect(
       (
         await boss.post('/users', {
@@ -346,7 +346,7 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
     it('carries no password field, for a real pending invitation (§13)', async () => {
       // Raise one through the head so the list is not empty.
       const invited = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `apr-invitee-${unique}@hoanglongti.com`,
+        email: `apr-invitee-${unique}@hoanglonglti.com`,
       });
       expect(invited.status).toBe(201);
 
@@ -355,7 +355,7 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       expect(response.data.items.length).toBeGreaterThan(0);
 
       const row = response.data.items.find(
-        (i: { email: string }) => i.email === `apr-invitee-${unique}@hoanglongti.com`,
+        (i: { email: string }) => i.email === `apr-invitee-${unique}@hoanglonglti.com`,
       );
       expect(row).toMatchObject({
         departmentId: departmentA,

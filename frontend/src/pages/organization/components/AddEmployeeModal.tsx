@@ -40,7 +40,7 @@ interface AddEmployeeModalProps {
  * typed is worse than a field that does not exist.
  *
  * ★ THE EMAIL FIELD TAKES A LOCAL PART, NOT AN ADDRESS. Every employee account
- * is `<local-part>@hoanglongti.com`, so the domain is drawn beside the input
+ * is `<local-part>@hoanglonglti.com`, so the domain is drawn beside the input
  * instead of being typed into it — one company, one domain, nothing to choose.
  * A pasted full company address is unwrapped rather than refused; see
  * `lib/companyEmail`. The server enforces the domain either way (§13), so this

@@ -157,7 +157,7 @@ export const envSchema = z.object({
    * This used to default to empty, meaning "no restriction", so a clone of this
    * foundation could boot without first learning about a variable only one
    * customer needed. Hoàng Long has since made the domain a product rule: every
-   * employee account is `<local-part>@hoanglongti.com`. A rule that lives only
+   * employee account is `<local-part>@hoanglonglti.com`. A rule that lives only
    * in a `.env` is not a rule — `.env` is gitignored, so a forgotten variable
    * fails OPEN and the deployment silently accepts `someone@gmail.com`.
    *
@@ -175,7 +175,7 @@ export const envSchema = z.object({
    */
   ALLOWED_EMAIL_DOMAINS: z
     .string()
-    .default('hoanglongti.com')
+    .default('hoanglonglti.com')
     .transform((value) =>
       value
         .split(',')

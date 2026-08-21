@@ -39,7 +39,7 @@ docker compose run --rm --no-deps backend npm run migrate
 # 4. the first SuperAdmin. Password is typed here and stored nowhere
 read -rsp 'Bootstrap password: ' BOOTSTRAP_PASSWORD && echo
 docker compose run --rm --no-deps -e BOOTSTRAP_PASSWORD backend \
-  npm run user:create -- --email 'admin@hoanglongti.com' --name 'Tong Giam Doc' --superadmin
+  npm run user:create -- --email 'admin@hoanglonglti.com' --name 'Tong Giam Doc' --superadmin
 unset BOOTSTRAP_PASSWORD
 ```
 

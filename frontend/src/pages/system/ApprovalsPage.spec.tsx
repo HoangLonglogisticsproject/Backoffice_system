@@ -45,7 +45,7 @@ const REQUEST = {
 const INVITATION = {
   id: 'a1b2c3d4-0000-4000-8000-000000000000',
   departmentId: 'dep',
-  email: 'newcomer@hoanglongti.com',
+  email: 'newcomer@hoanglonglti.com',
   status: 'pending',
   requestedBy: 'u2',
   requestedByUser: { id: 'u2', displayName: 'Head Person' },
@@ -84,7 +84,7 @@ const renderPage = () =>
 
 const openInvitations = async () => {
   fireEvent.click(screen.getByRole('button', { name: /lời mời|invitation/i }));
-  await screen.findByText('newcomer@hoanglongti.com');
+  await screen.findByText('newcomer@hoanglonglti.com');
 };
 
 describe('ApprovalsPage', () => {
@@ -151,7 +151,7 @@ describe('ApprovalsPage', () => {
       // only fail. Scoped to the dialog: the address is also in the table
       // behind it, and an unscoped query would pass on the wrong element.
       const dialog = within(screen.getByRole('dialog'));
-      expect(dialog.getByText('newcomer@hoanglongti.com')).toBeInTheDocument();
+      expect(dialog.getByText('newcomer@hoanglonglti.com')).toBeInTheDocument();
       expect(dialog.getByText('Email đăng nhập')).toBeInTheDocument();
       // And it says plainly that this is the only showing.
       expect(screen.getByText(/không có cách nào đọc lại|nothing can read it back/i)).toBeInTheDocument();

@@ -6,8 +6,8 @@ import { normalizeEmail } from '../src/core/users/domain/email';
 /**
  * The canonical-identity invariant, enforced by REAL PostgreSQL.
  *
- * BUSINESS RULE: `uyen@hoanglongti.com` and `Uyen@hoanglongti.com` are ONE
- * account identity. `uyen@hoanglongti.com` and `phuonguyen@hoanglongti.com` are
+ * BUSINESS RULE: `uyen@hoanglonglti.com` and `Uyen@hoanglonglti.com` are ONE
+ * account identity. `uyen@hoanglonglti.com` and `phuonguyen@hoanglonglti.com` are
  * two different people, and both are valid.
  *
  * ★ EVERY STATEMENT HERE GOES STRAIGHT TO THE DATABASE, with no service, no
@@ -192,19 +192,19 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       'agrees on an address padded with U+%s',
       async (_label, point) => {
         const pad = String.fromCodePoint(point);
-        const padded = `${pad}Uyen@HoangLongTI.com${pad}`;
+        const padded = `${pad}Uyen@HoangLongLTI.com${pad}`;
 
         expect(await canonicalInSql(padded)).toBe(normalizeEmail(padded));
         // …and both actually canonicalise, rather than agreeing on a no-op.
-        expect(normalizeEmail(padded)).toBe('uyen@hoanglongti.com');
+        expect(normalizeEmail(padded)).toBe('uyen@hoanglonglti.com');
       },
     );
 
     it.each([
-      ['uyen@hoanglongti.com', 'already canonical'],
-      ['UYEN@HOANGLONGTI.COM', 'upper case'],
-      ['Uyen.Sales@HoangLongTI.com', 'a dotted local part'],
-      ['phuonguyen@hoanglongti.com', 'a different person'],
+      ['uyen@hoanglonglti.com', 'already canonical'],
+      ['UYEN@HOANGLONGLTI.COM', 'upper case'],
+      ['Uyen.Sales@HoangLongLTI.com', 'a dotted local part'],
+      ['phuonguyen@hoanglonglti.com', 'a different person'],
       ['', 'the empty string'],
     ])('agrees on %s — %s', async (value) => {
       expect(await canonicalInSql(value)).toBe(normalizeEmail(value));
@@ -214,7 +214,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       // Trimming is about the ENDS. A rule that collapsed interior characters
       // would be a different rule, and would merge addresses that are not the
       // same person.
-      const inner = `a${String.fromCodePoint(0x00a0)}b@hoanglongti.com`;
+      const inner = `a${String.fromCodePoint(0x00a0)}b@hoanglonglti.com`;
 
       expect(await canonicalInSql(inner)).toBe(normalizeEmail(inner));
       expect(normalizeEmail(inner)).toContain(String.fromCodePoint(0x00a0));
@@ -225,7 +225,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
 
   describe('identities, provider = local', () => {
     beforeAll(async () => {
-      expect(await insertLocalIdentity('uyen@hoanglongti.com')).toBeNull();
+      expect(await insertLocalIdentity('uyen@hoanglonglti.com')).toBeNull();
     });
 
     /**
@@ -243,12 +243,12 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
      * these would fall through to 23505 and still look like they passed.
      */
     it.each([
-      ['Uyen@hoanglongti.com', 'a capitalised local part'],
-      ['UYEN@HOANGLONGTI.COM', 'all upper case'],
-      ['uyen@HoangLongTI.com', 'a mixed-case domain'],
-      ['  uyen@hoanglongti.com  ', 'surrounding whitespace'],
-      ['  Uyen@HoangLongTI.com  ', 'both at once'],
-      [`${String.fromCodePoint(0x00a0)}uyen@hoanglongti.com`, 'a leading NBSP'],
+      ['Uyen@hoanglonglti.com', 'a capitalised local part'],
+      ['UYEN@HOANGLONGLTI.COM', 'all upper case'],
+      ['uyen@HoangLongLTI.com', 'a mixed-case domain'],
+      ['  uyen@hoanglonglti.com  ', 'surrounding whitespace'],
+      ['  Uyen@HoangLongLTI.com  ', 'both at once'],
+      [`${String.fromCodePoint(0x00a0)}uyen@hoanglonglti.com`, 'a leading NBSP'],
     ])('★ the CHECK refuses %s — %s', async (variant) => {
       expect(await insertLocalIdentity(variant)).toBe(CHECK_VIOLATION);
     });
@@ -257,14 +257,14 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       // The other half. This row passes the CHECK — it is already canonical —
       // so it reaches the index, which is the layer that answers "one person,
       // one identity".
-      expect(await insertLocalIdentity('uyen@hoanglongti.com')).toBe(UNIQUE_VIOLATION);
+      expect(await insertLocalIdentity('uyen@hoanglonglti.com')).toBe(UNIQUE_VIOLATION);
     });
 
     it('★ still allows a DIFFERENT person whose address merely looks similar', async () => {
       // The rule constrains case and whitespace. It must not constrain the
       // local part itself, or two colleagues would collide.
-      expect(await insertLocalIdentity('phuonguyen@hoanglongti.com')).toBeNull();
-      expect(await insertLocalIdentity('uyen.sales@hoanglongti.com')).toBeNull();
+      expect(await insertLocalIdentity('phuonguyen@hoanglonglti.com')).toBeNull();
+      expect(await insertLocalIdentity('uyen.sales@hoanglonglti.com')).toBeNull();
     });
   });
 
@@ -315,26 +315,26 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
 
   describe('account_invitations awaiting a decision', () => {
     beforeAll(async () => {
-      expect(await insertPendingInvitation('newjoiner@hoanglongti.com')).toBeNull();
+      expect(await insertPendingInvitation('newjoiner@hoanglonglti.com')).toBeNull();
     });
 
     // Same two layers as identities: non-canonical never reaches uniqueness.
     it.each([
-      ['NewJoiner@hoanglongti.com', 'a capitalised local part'],
-      ['NEWJOINER@HOANGLONGTI.COM', 'all upper case'],
-      ['  newjoiner@hoanglongti.com  ', 'surrounding whitespace'],
+      ['NewJoiner@hoanglonglti.com', 'a capitalised local part'],
+      ['NEWJOINER@HOANGLONGLTI.COM', 'all upper case'],
+      ['  newjoiner@hoanglonglti.com  ', 'surrounding whitespace'],
     ])('★ the CHECK refuses a pending invitation as %s — %s', async (variant) => {
       expect(await insertPendingInvitation(variant)).toBe(CHECK_VIOLATION);
     });
 
     it('★ and the UNIQUE INDEX refuses an exact canonical duplicate', async () => {
-      expect(await insertPendingInvitation('newjoiner@hoanglongti.com')).toBe(
+      expect(await insertPendingInvitation('newjoiner@hoanglonglti.com')).toBe(
         UNIQUE_VIOLATION,
       );
     });
 
     it('allows a different address', async () => {
-      expect(await insertPendingInvitation('nuna@hoanglongti.com')).toBeNull();
+      expect(await insertPendingInvitation('nuna@hoanglonglti.com')).toBeNull();
     });
 
     it('constrains PENDING rows only — a decided one stops reserving the address', async () => {
@@ -344,7 +344,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       await pool.query(
         `UPDATE account_invitations
             SET status = 'rejected', decided_by = $1, decided_at = now()
-          WHERE canonical_identity(email) = 'nuna@hoanglongti.com'`,
+          WHERE canonical_identity(email) = 'nuna@hoanglonglti.com'`,
         [deciderId],
       );
 
@@ -352,7 +352,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       // scope, not the CHECK. `NUNA@…` would now be refused by the CHECK before
       // uniqueness was consulted, which would pass this test for the wrong
       // reason — it would prove nothing about `status = 'pending'`.
-      expect(await insertPendingInvitation('nuna@hoanglongti.com')).toBeNull();
+      expect(await insertPendingInvitation('nuna@hoanglonglti.com')).toBeNull();
     });
   });
 
@@ -422,8 +422,8 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
         const id = await seedUser(t);
         await t.query(
           `INSERT INTO identities (user_id, provider, subject, secret_hash)
-           VALUES ($1, 'local', 'uyen@hoanglongti.com', 'h'),
-                  ($1, 'local', 'Uyen@hoanglongti.com', 'h')`,
+           VALUES ($1, 'local', 'uyen@hoanglonglti.com', 'h'),
+                  ($1, 'local', 'Uyen@hoanglonglti.com', 'h')`,
           [id],
         );
       });
@@ -431,8 +431,8 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       expect(message).toContain('local identities collide once canonicalised');
       expect(message).toContain('Colliding identity row ids');
       // Same redaction on this side — an email is personal data wherever it appears.
-      expect(message).not.toContain('uyen@hoanglongti.com');
-      expect(message).not.toContain('Uyen@hoanglongti.com');
+      expect(message).not.toContain('uyen@hoanglonglti.com');
+      expect(message).not.toContain('Uyen@hoanglonglti.com');
       // ★ AND BOTH ROWS SURVIVE. The operator decides which account keeps its
       // history; a migration that merged them would make that choice silently.
       expect(identityRows).toBe(2);
@@ -443,7 +443,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
         const id = await seedUser(t);
         await t.query(
           `INSERT INTO identities (user_id, provider, subject, secret_hash)
-           VALUES ($1, 'local', 'Uyen@hoanglongti.com', 'h')`,
+           VALUES ($1, 'local', 'Uyen@hoanglonglti.com', 'h')`,
           [id],
         );
       });
@@ -471,8 +471,8 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
 
           await t.query(
             `INSERT INTO account_invitations (department_id, email, requested_by)
-             VALUES ($1, 'newjoiner@hoanglongti.com', $2),
-                    ($1, 'NewJoiner@hoanglongti.com', $2)`,
+             VALUES ($1, 'newjoiner@hoanglonglti.com', $2),
+                    ($1, 'NewJoiner@hoanglonglti.com', $2)`,
             [departmentSeed, id],
           );
         },
@@ -482,7 +482,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       // ★ IDS, NOT THE ADDRESS. This text lands in a deploy log; the row id is
       // what the operator acts on and it identifies exactly one row.
       expect(message).toContain('Colliding row ids');
-      expect(message).not.toContain('newjoiner@hoanglongti.com');
+      expect(message).not.toContain('newjoiner@hoanglonglti.com');
       expect(message).not.toContain('NewJoiner');
       // ★ Both survive: rejecting one is a decision, and it is not this file's.
       expect(invitationRows).toBe(2);
@@ -499,7 +499,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
           );
           await t.query(
             `INSERT INTO account_invitations (department_id, email, requested_by)
-             VALUES ($1, 'NewJoiner@hoanglongti.com', $2)`,
+             VALUES ($1, 'NewJoiner@hoanglonglti.com', $2)`,
             [one(department.rows, 'INSERT INTO departments').id, id],
           );
         },
@@ -521,7 +521,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
         await t.query(
           `INSERT INTO account_invitations
              (department_id, email, requested_by, status, decided_by, decided_at)
-           VALUES ($1, 'OldJoiner@hoanglongti.com', $2, 'rejected', $3, now())`,
+           VALUES ($1, 'OldJoiner@hoanglonglti.com', $2, 'rejected', $3, now())`,
           [one(department.rows, 'INSERT INTO departments').id, id, other],
         );
       });
@@ -534,7 +534,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
         const id = await seedUser(t);
         await t.query(
           `INSERT INTO identities (user_id, provider, subject, secret_hash)
-           VALUES ($1, 'local', 'uyen@hoanglongti.com', 'h')`,
+           VALUES ($1, 'local', 'uyen@hoanglonglti.com', 'h')`,
           [id],
         );
       });

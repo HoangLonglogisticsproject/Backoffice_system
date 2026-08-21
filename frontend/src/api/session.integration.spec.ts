@@ -228,7 +228,7 @@ describe('frontend ↔ backend integration', () => {
     // state that breaks naive interceptors, so it is exercised for real:
     // provision, sign in, get 403, change the password, sign in again.
     const unique = Date.now();
-    const email = `joiner${unique}@hoanglongti.com`;
+    const email = `joiner${unique}@hoanglonglti.com`;
     const temporaryPassword = TEMPORARY_A;
     const chosenPassword = CHOSEN_A;
 
@@ -322,7 +322,7 @@ describe('frontend ↔ backend integration', () => {
   describe('403 FORBIDDEN is not a session problem (§11)', () => {
     it('a MEMBER is refused a global route, with a session that still works', async () => {
       const unique = Date.now();
-      const email = `member${unique}@hoanglongti.com`;
+      const email = `member${unique}@hoanglonglti.com`;
 
       const department = await boss.post('/departments', {
         slug: `plain-${unique}`,
