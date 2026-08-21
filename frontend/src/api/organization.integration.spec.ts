@@ -142,9 +142,9 @@ describe('organization read paths (§5, §6)', () => {
     departmentA = a.data.id;
     departmentB = b.data.id;
 
-    const head = await provision(`head-a-${unique}@hoanglongti.com`, departmentA, 'Head of A');
-    const member = await provision(`member-a-${unique}@hoanglongti.com`, departmentA, 'Member of A');
-    const otherHead = await provision(`head-b-${unique}@hoanglongti.com`, departmentB, 'Head of B');
+    const head = await provision(`head-a-${unique}@hoanglonglti.com`, departmentA, 'Head of A');
+    const member = await provision(`member-a-${unique}@hoanglonglti.com`, departmentA, 'Member of A');
+    const otherHead = await provision(`head-b-${unique}@hoanglonglti.com`, departmentB, 'Head of B');
 
     headOfA = head.client;
     memberOfA = member.client;
@@ -331,7 +331,7 @@ describe('organization read paths (§5, §6)', () => {
       // Provisioning is unfinished, so this is a different refusal from "not
       // allowed" — and it routes to a different screen. Asserting the CODE is
       // what keeps those two 403s apart.
-      const email = `fresh-${unique}@hoanglongti.com`;
+      const email = `fresh-${unique}@hoanglonglti.com`;
       const created = await boss.post('/users', {
         displayName: 'Fresh Joiner',
         email,

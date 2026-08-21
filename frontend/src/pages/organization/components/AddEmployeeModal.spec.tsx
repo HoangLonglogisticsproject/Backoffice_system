@@ -94,7 +94,7 @@ describe('AddEmployeeModal', () => {
         expect(createUser).toHaveBeenCalledWith({
           displayName: 'New Comer',
           // The local part typed, the company domain appended.
-          email: 'uyen@hoanglongti.com',
+          email: 'uyen@hoanglonglti.com',
           initialPassword: 'a temporary handover',
           departmentId: DEPARTMENT,
         }),
@@ -137,7 +137,7 @@ describe('AddEmployeeModal', () => {
       fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị|submit request/i }));
 
       await waitFor(() =>
-        expect(requestAccountInvitation).toHaveBeenCalledWith(DEPARTMENT, 'nuna@hoanglongti.com'),
+        expect(requestAccountInvitation).toHaveBeenCalledWith(DEPARTMENT, 'nuna@hoanglonglti.com'),
       );
       expect(createUser).not.toHaveBeenCalled();
     });
@@ -163,7 +163,7 @@ describe('AddEmployeeModal', () => {
   /**
    * THE COMPANY DOMAIN IS THE FIELD, not something anybody types.
    *
-   * Every employee account is `<local-part>@hoanglongti.com`. What is asserted
+   * Every employee account is `<local-part>@hoanglonglti.com`. What is asserted
    * here is that the form asks for the local part, shows the domain, and builds
    * the address — and that the server still gets to refuse whatever it builds.
    */
@@ -172,10 +172,10 @@ describe('AddEmployeeModal', () => {
       can.mockReturnValue(true);
       renderModal();
 
-      expect(screen.getByText('@hoanglongti.com')).toBeInTheDocument();
+      expect(screen.getByText('@hoanglonglti.com')).toBeInTheDocument();
       // Drawn, not editable: a control whose only legal value is fixed is not a
       // choice, it is decoration that can go wrong.
-      expect(screen.getByText('@hoanglongti.com').tagName).toBe('SPAN');
+      expect(screen.getByText('@hoanglonglti.com').tagName).toBe('SPAN');
       expect(screen.queryByDisplayValue(/hoanglongti\.com/)).not.toBeInTheDocument();
     });
 
@@ -183,7 +183,7 @@ describe('AddEmployeeModal', () => {
       can.mockReturnValue(false);
       renderModal();
 
-      expect(screen.getByText('@hoanglongti.com')).toBeInTheDocument();
+      expect(screen.getByText('@hoanglonglti.com')).toBeInTheDocument();
     });
 
     it('unwraps a pasted full address rather than doubling the domain', async () => {
@@ -191,12 +191,12 @@ describe('AddEmployeeModal', () => {
       renderModal();
 
       fireEvent.change(screen.getByLabelText('Email *'), {
-        target: { value: 'uyen@hoanglongti.com' },
+        target: { value: 'uyen@hoanglonglti.com' },
       });
       fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị|submit request/i }));
 
       await waitFor(() =>
-        expect(requestAccountInvitation).toHaveBeenCalledWith(DEPARTMENT, 'uyen@hoanglongti.com'),
+        expect(requestAccountInvitation).toHaveBeenCalledWith(DEPARTMENT, 'uyen@hoanglonglti.com'),
       );
     });
 

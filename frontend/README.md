@@ -45,7 +45,7 @@ Passwords for the accounts a spec provisions itself are generated per run — se
 
 ```bash
 # 0. the two required variables, plus an admin connection to create the database
-export BOSS_EMAIL='boss@hoanglongti.com'
+export BOSS_EMAIL='boss@hoanglonglti.com'
 export BOSS_PASSWORD="$(openssl rand -base64 24)"   # yours, not written down
 export ADMIN_URL='postgres://backoffice:backoffice@localhost:5432/postgres'
 

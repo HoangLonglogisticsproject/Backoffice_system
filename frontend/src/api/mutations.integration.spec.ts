@@ -145,9 +145,9 @@ describe('approval write paths (§9, §10, §13)', () => {
     departmentA = a.data.id;
     departmentB = b.data.id;
 
-    const head = await provision(`wr-head-a-${unique}@hoanglongti.com`, departmentA, 'Head of A');
-    const other = await provision(`wr-head-b-${unique}@hoanglongti.com`, departmentB, 'Head of B');
-    const member = await provision(`wr-mem-a-${unique}@hoanglongti.com`, departmentA, 'Member of A');
+    const head = await provision(`wr-head-a-${unique}@hoanglonglti.com`, departmentA, 'Head of A');
+    const other = await provision(`wr-head-b-${unique}@hoanglonglti.com`, departmentB, 'Head of B');
+    const member = await provision(`wr-mem-a-${unique}@hoanglonglti.com`, departmentA, 'Member of A');
 
     headOfA = head.client;
     headOfB = other.client;
@@ -167,14 +167,14 @@ describe('approval write paths (§9, §10, §13)', () => {
   describe('POST /departments/:departmentId/account-invitations (§9)', () => {
     it('a HEAD invites into their OWN department — 201, pending, nobody decided yet', async () => {
       const response = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `invitee-ok-${unique}@hoanglongti.com`,
+        email: `invitee-ok-${unique}@hoanglonglti.com`,
       });
 
       expect(response.status).toBe(201);
       expect(response.data).toMatchObject({
         id: expect.any(String),
         departmentId: departmentA,
-        email: `invitee-ok-${unique}@hoanglongti.com`,
+        email: `invitee-ok-${unique}@hoanglonglti.com`,
         status: 'pending',
         decidedBy: null,
         decidedAt: null,
@@ -183,7 +183,7 @@ describe('approval write paths (§9, §10, §13)', () => {
 
     it('★ EMAIL ONLY — no password reaches the server, and none comes back', async () => {
       const response = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `invitee-bare-${unique}@hoanglongti.com`,
+        email: `invitee-bare-${unique}@hoanglonglti.com`,
       });
 
       expect(response.status).toBe(201);
@@ -193,7 +193,7 @@ describe('approval write paths (§9, §10, §13)', () => {
 
     it('the HEAD of B is REFUSED department A — scope is the route (§15)', async () => {
       const response = await headOfB.post(`/departments/${departmentA}/account-invitations`, {
-        email: `invitee-cross-${unique}@hoanglongti.com`,
+        email: `invitee-cross-${unique}@hoanglonglti.com`,
       });
 
       expect(response.status).toBe(403);
@@ -202,7 +202,7 @@ describe('approval write paths (§9, §10, §13)', () => {
 
     it('an ordinary MEMBER cannot invite at all', async () => {
       const response = await memberOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `invitee-member-${unique}@hoanglongti.com`,
+        email: `invitee-member-${unique}@hoanglonglti.com`,
       });
 
       expect(response.status).toBe(403);
@@ -236,7 +236,7 @@ describe('approval write paths (§9, §10, §13)', () => {
     /** Raised fresh per test: an invitation can be decided exactly once. */
     const raise = async (localPart: string) => {
       const created = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `${localPart}-${unique}@hoanglongti.com`,
+        email: `${localPart}-${unique}@hoanglonglti.com`,
       });
       expect(created.status).toBe(201);
       return { id: created.data.id as string, email: created.data.email as string };
@@ -465,7 +465,7 @@ describe('approval write paths (§9, §10, §13)', () => {
       // test moves into B. A test that passes only because an earlier one ran
       // reports the wrong thing the day somebody runs it on its own.
       const leaver = await provision(
-        `wr-leaver-b-${unique}@hoanglongti.com`,
+        `wr-leaver-b-${unique}@hoanglonglti.com`,
         departmentB,
         'Leaver of B',
       );
@@ -502,7 +502,7 @@ describe('approval write paths (§9, §10, §13)', () => {
      */
     it('a SUPERADMIN cannot raise an account invitation — 403, not a stuck row', async () => {
       const response = await boss.post(`/departments/${departmentA}/account-invitations`, {
-        email: `ceo-raised-${unique}@hoanglongti.com`,
+        email: `ceo-raised-${unique}@hoanglonglti.com`,
       });
 
       expect(response.status).toBe(403);
@@ -527,7 +527,7 @@ describe('approval write paths (§9, §10, §13)', () => {
       // This is what makes the two refusals above correct rather than merely
       // safe: the SUPERADMIN never needed the proposal route. They create the
       // account directly, with no proposal and nothing left to decide.
-      const email = `ceo-direct-${unique}@hoanglongti.com`;
+      const email = `ceo-direct-${unique}@hoanglonglti.com`;
       const created = await boss.post('/users', {
         displayName: 'Hired Directly',
         email,
@@ -546,7 +546,7 @@ describe('approval write paths (§9, §10, §13)', () => {
 
     it('a HEAD raises it instead, and the SUPERADMIN can then decide — the loop closes', async () => {
       const raised = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `loop-closes-${unique}@hoanglongti.com`,
+        email: `loop-closes-${unique}@hoanglonglti.com`,
       });
       expect(raised.status).toBe(201);
 
@@ -570,7 +570,7 @@ describe('approval write paths (§9, §10, §13)', () => {
     beforeAll(async () => {
       for (const localPart of ['page-one', 'page-two']) {
         const created = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-          email: `${localPart}-${unique}@hoanglongti.com`,
+          email: `${localPart}-${unique}@hoanglonglti.com`,
         });
         expect(created.status).toBe(201);
       }

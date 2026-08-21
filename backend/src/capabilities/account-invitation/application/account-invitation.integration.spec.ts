@@ -289,31 +289,31 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
      * The company policy on the deployment's real domain — the schema default,
      * so this is what a deployment that configures nothing gets.
      *
-     * The head's form appends `@hoanglongti.com` and cannot produce anything
+     * The head's form appends `@hoanglonglti.com` and cannot produce anything
      * else. None of that reaches here: these call the service directly, which
      * is the shape of a head who skips the form and posts to the endpoint.
      */
     describe('the company email policy', () => {
       it('accepts the company domain, and stores the full address', async () => {
         const { a, headAId } = await scenario();
-        allowedDomains = ['hoanglongti.com'];
+        allowedDomains = ['hoanglonglti.com'];
 
         const invitation = await invitations.create({
           departmentId: a.id,
           requestedBy: headAId,
-          email: 'nuna@hoanglongti.com',
+          email: 'nuna@hoanglonglti.com',
         });
 
-        expect(invitation.email).toBe('nuna@hoanglongti.com');
+        expect(invitation.email).toBe('nuna@hoanglonglti.com');
       });
 
       it.each([
         ['an outside domain', 'nuna@gmail.com', /domain is not permitted/],
         ['a bare local part', 'hlt58', /not a valid address/],
-        ['nothing before the @', '@hoanglongti.com', /not a valid address/],
+        ['nothing before the @', '@hoanglonglti.com', /not a valid address/],
       ])('refuses %s', async (_label, email, message) => {
         const { a, headAId } = await scenario();
-        allowedDomains = ['hoanglongti.com'];
+        allowedDomains = ['hoanglonglti.com'];
 
         await expect(
           invitations.create({ departmentId: a.id, requestedBy: headAId, email }),

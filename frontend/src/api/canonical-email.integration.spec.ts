@@ -31,9 +31,9 @@ const CHOSEN_A = fixturePassword('chosen-a');
  * One person, one identity — over real HTTP, against a real backend and a real
  * PostgreSQL.
  *
- * BUSINESS RULE: `uyen@hoanglongti.com` and `Uyen@hoanglongti.com` are the SAME
- * account and must not exist side by side. `uyen@hoanglongti.com` and
- * `phuonguyen@hoanglongti.com` are two different people, and both are valid —
+ * BUSINESS RULE: `uyen@hoanglonglti.com` and `Uyen@hoanglonglti.com` are the SAME
+ * account and must not exist side by side. `uyen@hoanglonglti.com` and
+ * `phuonguyen@hoanglonglti.com` are two different people, and both are valid —
  * the rule folds case and whitespace, never the local part.
  *
  * The form is not what enforces this. `toCompanyEmail` deliberately does not
@@ -118,7 +118,7 @@ describe('canonical email identity (§1, §4, §9)', () => {
 
     const temporary = TEMPORARY_A;
     const chosen = CHOSEN_A;
-    const headEmail = `canon-head-${unique}@hoanglongti.com`;
+    const headEmail = `canon-head-${unique}@hoanglonglti.com`;
 
     const created = await boss.post('/users', {
       displayName: 'Head of Canon',
@@ -151,7 +151,7 @@ describe('canonical email identity (§1, §4, §9)', () => {
     it('accepts the address the first time', async () => {
       const response = await boss.post('/users', {
         displayName: 'Uyen',
-        email: `${local}@hoanglongti.com`,
+        email: `${local}@hoanglonglti.com`,
         initialPassword: TEMPORARY_A,
         departmentId: departmentA,
       });
@@ -160,10 +160,10 @@ describe('canonical email identity (§1, §4, §9)', () => {
     });
 
     it.each([
-      [`${local.charAt(0).toUpperCase()}${local.slice(1)}@hoanglongti.com`, 'capitalised'],
-      [`${local.toUpperCase()}@HOANGLONGTI.COM`, 'all upper case'],
-      [`${local}@HoangLongTI.com`, 'a mixed-case domain'],
-      [`  ${local}@hoanglongti.com  `, 'surrounding whitespace'],
+      [`${local.charAt(0).toUpperCase()}${local.slice(1)}@hoanglonglti.com`, 'capitalised'],
+      [`${local.toUpperCase()}@HOANGLONGLTI.COM`, 'all upper case'],
+      [`${local}@HoangLongLTI.com`, 'a mixed-case domain'],
+      [`  ${local}@hoanglonglti.com  `, 'surrounding whitespace'],
     ])('★ REFUSES %s — %s — as the same person', async (variant) => {
       const response = await boss.post('/users', {
         displayName: 'Uyen again',
@@ -181,7 +181,7 @@ describe('canonical email identity (§1, §4, §9)', () => {
       // `uyen`, and a rule that confused them would refuse a real hire.
       const response = await boss.post('/users', {
         displayName: 'Phuong Uyen',
-        email: `phuong${local}@hoanglongti.com`,
+        email: `phuong${local}@hoanglonglti.com`,
         initialPassword: TEMPORARY_A,
         departmentId: departmentA,
       });
@@ -196,11 +196,11 @@ describe('canonical email identity (§1, §4, §9)', () => {
      * capital.
      */
     it.each([
-      [() => `${local.toUpperCase()}@HOANGLONGTI.COM`, 'all upper case'],
-      [() => `  ${local}@hoanglongti.com  `, 'surrounding whitespace'],
-      [() => `  ${local.toUpperCase()}@HoangLongTI.com  `, 'both at once'],
+      [() => `${local.toUpperCase()}@HOANGLONGLTI.COM`, 'all upper case'],
+      [() => `  ${local}@hoanglonglti.com  `, 'surrounding whitespace'],
+      [() => `  ${local.toUpperCase()}@HoangLongLTI.com  `, 'both at once'],
       [
-        () => `${String.fromCodePoint(0x00a0)}${local}@hoanglongti.com`,
+        () => `${String.fromCodePoint(0x00a0)}${local}@hoanglonglti.com`,
         'a leading NBSP, which `btrim` alone would not strip',
       ],
     ])('signs in with %#: %s — the server canonicalises', async (spelling) => {
@@ -219,18 +219,18 @@ describe('canonical email identity (§1, §4, §9)', () => {
 
     it('accepts the address the first time', async () => {
       const response = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `${local}@hoanglongti.com`,
+        email: `${local}@hoanglonglti.com`,
       });
 
       expect(response.status).toBe(201);
       // Stored canonical, so the dashboard never shows two spellings of one person.
-      expect(response.data.email).toBe(`${local}@hoanglongti.com`);
+      expect(response.data.email).toBe(`${local}@hoanglonglti.com`);
     });
 
     it.each([
-      [`${local.charAt(0).toUpperCase()}${local.slice(1)}@hoanglongti.com`, 'capitalised'],
-      [`${local.toUpperCase()}@HOANGLONGTI.COM`, 'all upper case'],
-      [`  ${local}@HoangLongTI.com  `, 'whitespace and mixed case'],
+      [`${local.charAt(0).toUpperCase()}${local.slice(1)}@hoanglonglti.com`, 'capitalised'],
+      [`${local.toUpperCase()}@HOANGLONGLTI.COM`, 'all upper case'],
+      [`  ${local}@HoangLongLTI.com  `, 'whitespace and mixed case'],
     ])('★ REFUSES a second pending invitation as %s — %s', async (variant) => {
       const response = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
         email: variant,
@@ -242,7 +242,7 @@ describe('canonical email identity (§1, §4, §9)', () => {
 
     it('still accepts a different address', async () => {
       const response = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `nuna-${unique}@hoanglongti.com`,
+        email: `nuna-${unique}@hoanglonglti.com`,
       });
 
       expect(response.status).toBe(201);
@@ -271,7 +271,7 @@ describe('canonical email identity (§1, §4, §9)', () => {
         .map((row) => row.email)
         .filter((email) => email.toLowerCase().includes(local));
 
-      expect(spellings).toEqual([`${local}@hoanglongti.com`]);
+      expect(spellings).toEqual([`${local}@hoanglonglti.com`]);
     });
   });
 });
