@@ -624,6 +624,36 @@ Mọi giá trị được **đọc lại lúc duyệt**. Request tạo thứ Hai
 Sáu, và trong khoảng đó target có thể đã chuyển phòng, đã bị disable, hoặc người
 đề xuất đã thôi làm HEAD → **409**.
 
+### TRANSFER thiếu đích → **409**, KHÔNG phải 422
+
+`targetDepartmentId` là optional trong schema — REMOVE cấm mang nó — nên
+"TRANSFER phải có đích" là **quy tắc nghiệp vụ** mà service kiểm, không phải quy
+tắc hình dạng mà pipe kiểm. Nghiệp vụ trả `CONFLICT`.
+
+Client rẽ nhánh theo 422 để tô đỏ một field sẽ **không bao giờ** tô được field
+này. Được ghim trong `mutations.integration.spec.ts`.
+
+### ⚠️ NỢ ĐÃ BIẾT — `reason` lúc từ chối KHÔNG được lưu
+
+Cột `reason` thuộc về **người ĐỀ XUẤT**, ghi một lần lúc tạo. Không có khái niệm
+"lý do từ chối" trong schema, và **cả hai** endpoint reject —
+`/membership-requests/:id/reject` và `/account-invitations/:id/reject` — không
+đọc body.
+
+Frontend hiện tại vẫn gửi `{ reason }`, và màn hình Approvals vẫn thu nó bằng một
+textarea "Lý do (tuỳ chọn)". Request thành công 200, **text bị bỏ đi im lặng**.
+
+Trạng thái: **nợ sản phẩm đã ghi nhận, cố ý chưa xử lý.** Backend đúng như thiết
+kế; UI hứa nhiều hơn API có. Hai hướng xử lý, và chọn hướng nào là quyết định sản
+phẩm chứ không phải sửa lỗi:
+
+1. bỏ textarea khỏi dialog reject, hoặc
+2. thêm cột `decision_reason` + migration + đọc body ở hai endpoint reject.
+
+Hành vi thật được ghim bằng test trong `mutations.integration.spec.ts`
+(`reason` gửi lên, response trả về `reason` của người đề xuất, không đổi) — để
+suite mô tả API như nó đang là, không như UI tưởng.
+
 ---
 
 ## 11. Error codes
