@@ -527,7 +527,7 @@ describe('approval write paths (§9, §10, §13)', () => {
       expect(raised.status).toBe(201);
 
       // Different actors, which is the whole invariant.
-      expect(raised.data.requestedBy).not.toBe(null);
+      expect(raised.data.requestedBy).not.toBeNull();
 
       const decided = await boss.post(`/account-invitations/${raised.data.id}/reject`, {});
       expect(decided.status).toBe(200);
