@@ -152,16 +152,22 @@ export const envSchema = z.object({
   /**
    * Email domains an account may be provisioned under, comma-separated.
    *
-   * EMPTY MEANS NO RESTRICTION, and that is a deliberate choice rather than an
-   * oversight. This foundation has to be clonable: a different deployment must
-   * boot and create its first account without first learning about a variable
-   * that only one customer needed. The opposite default — empty refuses
-   * everything — turns a forgotten variable into "no account can be created",
-   * and that symptom points nowhere near its cause.
+   * DEFAULTS TO THE COMPANY DOMAIN, and that default is the enforcement.
    *
-   * The accepted cost: a deployment that MEANT to restrict and forgot will
-   * accept outside addresses. Which is why the value belongs in `.env.example`
-   * and in the deployment checklist, not in a default here.
+   * This used to default to empty, meaning "no restriction", so a clone of this
+   * foundation could boot without first learning about a variable only one
+   * customer needed. Hoàng Long has since made the domain a product rule: every
+   * employee account is `<local-part>@hoanglongti.com`. A rule that lives only
+   * in a `.env` is not a rule — `.env` is gitignored, so a forgotten variable
+   * fails OPEN and the deployment silently accepts `someone@gmail.com`.
+   *
+   * Putting the domain here inverts that: forget the variable and the policy
+   * still holds. Another deployment overrides it by setting the variable, which
+   * is one line of environment rather than a code change.
+   *
+   * ⚠ NOT a mailbox check. Nothing here talks to Google Workspace, resolves MX
+   * records or proves the address receives mail — see `docs/backend/company-email-policy.md`.
+   * This is an application-level rule about which addresses may become accounts.
    *
    * Applied ONLY when provisioning an account. Never at login — see
    * `authentication.service`: refusing a login for a domain reason would tell
@@ -169,7 +175,7 @@ export const envSchema = z.object({
    */
   ALLOWED_EMAIL_DOMAINS: z
     .string()
-    .default('')
+    .default('hoanglongti.com')
     .transform((value) =>
       value
         .split(',')

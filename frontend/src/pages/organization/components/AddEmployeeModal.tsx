@@ -7,6 +7,7 @@ import { useSession } from '@/lib/session/SessionProvider';
 import { createUser } from '@/lib/api/users.repository';
 import { requestAccountInvitation } from '@/lib/api/account-invitation.repository';
 import { isApiError } from '@/lib/http/apiError';
+import { COMPANY_EMAIL_DOMAIN, toCompanyEmail } from '@/lib/companyEmail';
 
 interface AddEmployeeModalProps {
   isOpen: boolean;
@@ -37,6 +38,13 @@ interface AddEmployeeModalProps {
  * Phú's mock had employee code and job title fields. The backend stores
  * neither, so they are not here: a field that silently discards what somebody
  * typed is worse than a field that does not exist.
+ *
+ * ★ THE EMAIL FIELD TAKES A LOCAL PART, NOT AN ADDRESS. Every employee account
+ * is `<local-part>@hoanglongti.com`, so the domain is drawn beside the input
+ * instead of being typed into it — one company, one domain, nothing to choose.
+ * A pasted full company address is unwrapped rather than refused; see
+ * `lib/companyEmail`. The server enforces the domain either way (§13), so this
+ * is a shorter field and an earlier error, never the rule itself.
  */
 export function AddEmployeeModal({
   isOpen,
@@ -49,14 +57,15 @@ export function AddEmployeeModal({
   const isGlobal = can('user.write');
 
   const [displayName, setDisplayName] = useState('');
-  const [email, setEmail] = useState('');
+  // The LOCAL PART. `email` is built from it at submit, and only there.
+  const [localPart, setLocalPart] = useState('');
   const [initialPassword, setInitialPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
     setDisplayName('');
-    setEmail('');
+    setLocalPart('');
     setInitialPassword('');
     setError(null);
   };
@@ -68,8 +77,17 @@ export function AddEmployeeModal({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setBusy(true);
     setError(null);
+
+    // Before anything is sent, because the address this form builds is the one
+    // thing it CAN check without asking. The server checks it again regardless.
+    const email = toCompanyEmail(localPart);
+    if (email === null) {
+      setError(t('invalidCompanyEmail'));
+      return;
+    }
+
+    setBusy(true);
 
     try {
       if (isGlobal) {
@@ -147,14 +165,34 @@ export function AddEmployeeModal({
           <label htmlFor="employee-email" className="text-sm font-medium text-gray-700">
             {t('emailLabel')}
           </label>
-          <Input
-            id="employee-email"
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="email@hoanglong.com"
-            required
-          />
+          {/*
+            One control to the eye, two elements to the DOM: the label points at
+            the input, so `getByLabelText` and a screen reader both land on the
+            part that is actually editable, and the ring is drawn on the wrapper
+            so focusing the input still lights the whole thing.
+          */}
+          <div className="flex items-stretch rounded-lg border border-input focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+            <Input
+              id="employee-email"
+              value={localPart}
+              onChange={(event) => setLocalPart(event.target.value)}
+              placeholder={t('emailLocalPartPlaceholder')}
+              // Not `type="email"`: this is a local part, and the browser would
+              // refuse to submit `uyen` as an address.
+              autoComplete="off"
+              aria-describedby="employee-email-domain"
+              className="rounded-r-none border-0 focus-visible:ring-0"
+              required
+            />
+            <span
+              id="employee-email-domain"
+              // Rendered, never an input — there is no second domain to pick, so
+              // offering one would be a field whose only legal value is fixed.
+              className="flex items-center rounded-r-lg border-l border-input bg-gray-50 px-2.5 text-sm text-gray-500 whitespace-nowrap"
+            >
+              @{COMPANY_EMAIL_DOMAIN}
+            </span>
+          </div>
         </div>
 
         {isGlobal && (

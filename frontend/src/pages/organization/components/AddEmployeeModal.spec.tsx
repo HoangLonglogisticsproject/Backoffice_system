@@ -84,9 +84,7 @@ describe('AddEmployeeModal', () => {
       fireEvent.change(screen.getByLabelText('Họ và tên *'), {
         target: { value: 'New Comer' },
       });
-      fireEvent.change(screen.getByLabelText('Email *'), {
-        target: { value: 'new@hoanglong.test' },
-      });
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'uyen' } });
       fireEvent.change(screen.getByLabelText('Mật khẩu khởi tạo'), {
         target: { value: 'a temporary handover' },
       });
@@ -95,7 +93,8 @@ describe('AddEmployeeModal', () => {
       await waitFor(() =>
         expect(createUser).toHaveBeenCalledWith({
           displayName: 'New Comer',
-          email: 'new@hoanglong.test',
+          // The local part typed, the company domain appended.
+          email: 'uyen@hoanglongti.com',
           initialPassword: 'a temporary handover',
           departmentId: DEPARTMENT,
         }),
@@ -134,16 +133,11 @@ describe('AddEmployeeModal', () => {
     it('raises an invitation rather than creating an account', async () => {
       renderModal();
 
-      fireEvent.change(screen.getByLabelText('Email *'), {
-        target: { value: 'colleague@hoanglong.test' },
-      });
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'nuna' } });
       fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị|submit request/i }));
 
       await waitFor(() =>
-        expect(requestAccountInvitation).toHaveBeenCalledWith(
-          DEPARTMENT,
-          'colleague@hoanglong.test',
-        ),
+        expect(requestAccountInvitation).toHaveBeenCalledWith(DEPARTMENT, 'nuna@hoanglongti.com'),
       );
       expect(createUser).not.toHaveBeenCalled();
     });
@@ -157,14 +151,92 @@ describe('AddEmployeeModal', () => {
     );
 
     renderModal();
-    fireEvent.change(screen.getByLabelText('Email *'), {
-      target: { value: 'taken@hoanglong.test' },
-    });
+    fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'taken' } });
     fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị|submit request/i }));
 
     // The server knows about duplicates and domain allowlists; this form does not.
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('That address already has an account.'),
     );
+  });
+
+  /**
+   * THE COMPANY DOMAIN IS THE FIELD, not something anybody types.
+   *
+   * Every employee account is `<local-part>@hoanglongti.com`. What is asserted
+   * here is that the form asks for the local part, shows the domain, and builds
+   * the address — and that the server still gets to refuse whatever it builds.
+   */
+  describe('the company email field', () => {
+    it('shows the fixed domain beside the input, and offers no way to change it', () => {
+      can.mockReturnValue(true);
+      renderModal();
+
+      expect(screen.getByText('@hoanglongti.com')).toBeInTheDocument();
+      // Drawn, not editable: a control whose only legal value is fixed is not a
+      // choice, it is decoration that can go wrong.
+      expect(screen.getByText('@hoanglongti.com').tagName).toBe('SPAN');
+      expect(screen.queryByDisplayValue(/hoanglongti\.com/)).not.toBeInTheDocument();
+    });
+
+    it('shows the domain in the head workflow too', () => {
+      can.mockReturnValue(false);
+      renderModal();
+
+      expect(screen.getByText('@hoanglongti.com')).toBeInTheDocument();
+    });
+
+    it('unwraps a pasted full address rather than doubling the domain', async () => {
+      can.mockReturnValue(false);
+      renderModal();
+
+      fireEvent.change(screen.getByLabelText('Email *'), {
+        target: { value: 'uyen@hoanglongti.com' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị|submit request/i }));
+
+      await waitFor(() =>
+        expect(requestAccountInvitation).toHaveBeenCalledWith(DEPARTMENT, 'uyen@hoanglongti.com'),
+      );
+    });
+
+    it('refuses an outside domain without asking the server', async () => {
+      can.mockReturnValue(false);
+      renderModal();
+
+      fireEvent.change(screen.getByLabelText('Email *'), {
+        target: { value: 'uyen@gmail.com' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị|submit request/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Vui lòng nhập email công ty hợp lệ.',
+      );
+      expect(requestAccountInvitation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['whitespace only', '   '],
+      ['a space inside', 'uyen sales'],
+      ['a stray @', 'uy@en'],
+    ])('refuses %s and sends nothing', async (_label, typed) => {
+      can.mockReturnValue(false);
+      renderModal();
+
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: typed } });
+      fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị|submit request/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Vui lòng nhập email công ty hợp lệ.',
+      );
+      expect(requestAccountInvitation).not.toHaveBeenCalled();
+    });
+
+    it('leaves the empty case to the browser, which is what `required` is for', () => {
+      can.mockReturnValue(false);
+      renderModal();
+
+      expect(screen.getByLabelText('Email *')).toBeRequired();
+    });
   });
 });

@@ -17,7 +17,7 @@ import { CSRF_HEADER, CSRF_HEADER_VALUE } from '../http/client';
  */
 
 const BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
-const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglong.test';
+const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglongti.com';
 const BOSS_PASSWORD = process.env.BOSS_PASSWORD ?? 'correct horse battery staple';
 
 type Client = AxiosInstance & { cookie: string | null };
@@ -121,9 +121,9 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
     departmentB = await make(`apr-b-${unique}`);
     departmentHeadless = await make(`apr-none-${unique}`);
 
-    const a = await provision(`apr-head-a-${unique}@hoanglong.test`, departmentA, 'Head of A');
-    const m = await provision(`apr-member-a-${unique}@hoanglong.test`, departmentA, 'Member of A');
-    const b = await provision(`apr-head-b-${unique}@hoanglong.test`, departmentB, 'Head of B');
+    const a = await provision(`apr-head-a-${unique}@hoanglongti.com`, departmentA, 'Head of A');
+    const m = await provision(`apr-member-a-${unique}@hoanglongti.com`, departmentA, 'Member of A');
+    const b = await provision(`apr-head-b-${unique}@hoanglongti.com`, departmentB, 'Head of B');
 
     headOfA = a.client;
     memberOfA = m.client;
@@ -135,7 +135,7 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       .toBe(201);
 
     // Provisioned and signed in, but never changed the password.
-    const freshEmail = `apr-fresh-${unique}@hoanglong.test`;
+    const freshEmail = `apr-fresh-${unique}@hoanglongti.com`;
     expect(
       (
         await boss.post('/users', {
@@ -322,7 +322,7 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
     it('carries no password field, for a real pending invitation (§13)', async () => {
       // Raise one through the head so the list is not empty.
       const invited = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
-        email: `apr-invitee-${unique}@hoanglong.test`,
+        email: `apr-invitee-${unique}@hoanglongti.com`,
       });
       expect(invited.status).toBe(201);
 
@@ -331,7 +331,7 @@ describe('approval + department head read paths (§9, §10, §15b)', () => {
       expect(response.data.items.length).toBeGreaterThan(0);
 
       const row = response.data.items.find(
-        (i: { email: string }) => i.email === `apr-invitee-${unique}@hoanglong.test`,
+        (i: { email: string }) => i.email === `apr-invitee-${unique}@hoanglongti.com`,
       );
       expect(row).toMatchObject({
         departmentId: departmentA,

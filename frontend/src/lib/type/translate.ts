@@ -215,6 +215,14 @@ const PHRASES = {
     en: 'A head submits the email only. An administrator approves and the system issues the password.',
   },
   submitRequest: { vi: 'Gửi đề nghị', en: 'Submit request' },
+
+  // Add employee — the company email field. The user types the local part; the
+  // domain is drawn beside it and cannot be edited.
+  emailLocalPartPlaceholder: { vi: 'uyen', en: 'uyen' },
+  invalidCompanyEmail: {
+    vi: 'Vui lòng nhập email công ty hợp lệ.',
+    en: 'Please enter a valid company email.',
+  },
 } as const satisfies Record<string, Phrase>;
 
 export type TranslationKey = keyof typeof PHRASES;

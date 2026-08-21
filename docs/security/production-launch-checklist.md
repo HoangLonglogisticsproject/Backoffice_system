@@ -119,9 +119,12 @@ Owned by ops. `bo_ops` exists for exactly this and can do nothing else.
 - [ ] `NODE_ENV=production` — this is what makes the session cookie `Secure`.
 - [ ] `CORS_ORIGINS` — the real frontend origin, or **empty** if the client is served from
       the same origin. Never `*`; the schema refuses it.
-- [ ] `ALLOWED_EMAIL_DOMAINS` — set it if provisioning should be restricted. Empty means no
-      restriction, which is a deliberate default for a reusable foundation and a silent
-      surprise for a deployment that meant to restrict.
+- [ ] `ALLOWED_EMAIL_DOMAINS` — **leave it unset** for Hoàng Long: the schema defaults to
+      `hoanglongti.com`, so the company policy holds without anyone remembering a variable.
+      Set it only to point a different deployment at a different domain. Setting it to an
+      EXPLICIT empty value means no restriction at all — see
+      `docs/backend/company-email-policy.md`.
+      Not a mailbox check: nothing verifies the address receives mail.
 - [ ] Confirm no secret is passed on a command line: the bootstrap CLI reads
       `BOOTSTRAP_PASSWORD` from the environment or a prompt, never `argv`.
 

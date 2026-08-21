@@ -911,6 +911,27 @@ Frontend không có màn hình nào cho việc này, và không nên có.
 **Đã có endpoint** — xem §15b. Frontend dựng được màn hình bổ nhiệm trưởng
 phòng cho SUPERADMIN.
 
+### Email công ty — `@hoanglongti.com`
+
+**Mọi email tài khoản nhân viên phải thuộc `@hoanglongti.com`.** Backend từ chối
+mọi domain khác trên cả `POST /users` lẫn `POST /departments/:id/account-invitations`
+(422), kể cả khi gọi thẳng API không qua form.
+
+Trong UI, người dùng **chỉ gõ local part**; domain hiển thị cố định bên cạnh ô
+nhập và không sửa được. Frontend ghép trước khi gửi:
+
+```
+gõ:  uyen         →  gửi:  { "email": "uyen@hoanglongti.com" }
+gõ:  nuna         →  gửi:  { "email": "nuna@hoanglongti.com" }
+```
+
+Dán cả địa chỉ `uyen@hoanglongti.com` được chấp nhận và bóc đuôi — không bao giờ
+sinh ra `uyen@hoanglongti.com@hoanglongti.com`. Dán `uyen@gmail.com` bị từ chối
+ngay tại form.
+
+Body gửi lên **luôn là địa chỉ đầy đủ**, không bao giờ là local part. Chưa có
+tích hợp Google Workspace / mailbox — xem `docs/backend/company-email-policy.md`.
+
 ⚠️ **BỔ NHIỆM LÀ MỘT THAO TÁC RIÊNG, KHÔNG PHẢI MỘT TRƯỜNG LÚC TẠO ACCOUNT.**
 `POST /users` nhận đúng bốn trường — `displayName`, `email`, `initialPassword`,
 `departmentId` — và **không có `role`**. Tạo account xong, muốn người đó làm
@@ -937,6 +958,8 @@ Danh sách những điều **sai**, kèm chuyện gì thật sự xảy ra:
 |---|---|
 | "ẩn nút là đủ" | server vẫn là chỗ duy nhất từ chối |
 | "login dùng field `email`" | field là **`subject`** → gửi `email` nhận 422 |
+| "gửi local part `uyen` cho `POST /users`" | 422 — body luôn là địa chỉ đầy đủ; form ghép domain, không phải server |
+| "form đã cố định domain nên API không cần kiểm tra" | API kiểm tra độc lập; gọi thẳng với `@gmail.com` nhận 422 |
 | "membership request dùng `targetUserId`" | request dùng **`userId`**; response mới là `targetUserId` |
 | "approve luôn trả 200" | invitation approve trả **201** |
 | "`GET /departments` ai cũng gọi được" | **GLOBAL only**, HEAD nhận 403 |
