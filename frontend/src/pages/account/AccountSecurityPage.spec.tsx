@@ -6,11 +6,11 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 
 const changePassword = vi.fn();
 
-vi.mock('@/lib/api/auth.repository', () => ({
+vi.mock('@/api/auth', () => ({
   changePassword: (...args: unknown[]) => changePassword(...args),
 }));
 
-vi.mock('@/lib/session/SessionProvider', () => ({
+vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => ({ signOut: vi.fn() }),
 }));
 

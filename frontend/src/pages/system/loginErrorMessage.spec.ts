@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError } from '@/lib/http/apiError';
+import { ApiError } from '@/utils/errors';
 import { loginErrorMessage } from './loginErrorMessage';
 
 /**

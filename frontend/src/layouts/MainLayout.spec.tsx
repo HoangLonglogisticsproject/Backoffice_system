@@ -9,7 +9,7 @@ const useSession = vi.fn();
 const useMyDepartments = vi.fn();
 const navigate = vi.fn();
 
-vi.mock('@/lib/session/SessionProvider', () => ({
+vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
 }));
 vi.mock('@/lib/api/useMyDepartments', () => ({

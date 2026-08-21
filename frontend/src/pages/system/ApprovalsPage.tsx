@@ -13,22 +13,22 @@ import {
 import { Modal } from '@/components/ui/modal';
 import { CursorPagination } from '@/components/ui/pagination';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { formatDateTime } from '@/lib/format/datetime';
-import { useCursorPages } from '@/lib/api/useCursorPages';
-import type { Page, PageRequest } from '@/lib/type/pagination';
+import { formatDateTime } from '@/utils/format/datetime';
+import { useCursorPages } from '@/hooks/useCursorPages';
+import type { Page, PageRequest } from '@/types/pagination';
 import {
   approveMembershipRequest,
   fetchPendingMembershipRequests,
   rejectMembershipRequest,
-} from '@/lib/api/membership-request.repository';
+} from '@/api/membership-request';
 import {
   approveAccountInvitation,
   fetchPendingAccountInvitations,
   rejectAccountInvitation,
   type ApprovedInvitation,
-} from '@/lib/api/account-invitation.repository';
-import { isApiError } from '@/lib/http/apiError';
-import type { AccountInvitationWithUser, MembershipChangeRequestWithUsers } from '@/lib/type/approval';
+} from '@/api/account-invitation';
+import { isApiError } from '@/utils/errors';
+import type { AccountInvitationWithUser, MembershipChangeRequestWithUsers } from '@/types/approval';
 
 /**
  * The global decision queues.

@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import logo from '@/assets/img/LOGO.png'
 import bgImage from '@/assets/img/bg-login.png'
-import { useSession } from '@/lib/session/SessionProvider'
+import { useSession } from '@/contexts/SessionProvider'
 import { loginErrorMessage } from './loginErrorMessage'
 
 /**

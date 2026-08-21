@@ -6,9 +6,9 @@ import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { changePassword } from '@/lib/api/auth.repository';
-import { useSession } from '@/lib/session/SessionProvider';
-import { isApiError } from '@/lib/http/apiError';
+import { changePassword } from '@/api/auth';
+import { useSession } from '@/contexts/SessionProvider';
+import { isApiError } from '@/utils/errors';
 
 /**
  * Account security.
@@ -115,6 +115,7 @@ function ChangePasswordForm() {
   const [error, setError] = useState<string | null>(null);
 
   const mismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
+  const passwordsMatch = newPassword.length > 0 && newPassword === confirmPassword;
 
   const clear = () => {
     setCurrentPassword('');
@@ -126,7 +127,7 @@ function ChangePasswordForm() {
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (mismatch) return;
+    if (!passwordsMatch) return;
 
     setBusy(true);
     setError(null);
@@ -164,6 +165,9 @@ function ChangePasswordForm() {
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={t(placeholderKey)}
+          autoComplete={id === 'current-password' ? 'current-password' : 'new-password'}
+          aria-invalid={id === 'confirm-password' && mismatch}
+          aria-describedby={id === 'confirm-password' && mismatch ? 'password-mismatch' : undefined}
           className="pl-10 pr-10"
           required
         />
@@ -194,7 +198,7 @@ function ChangePasswordForm() {
         {field('confirm-password', 'confirmPasswordLabel', 'confirmPasswordPlaceholder', confirmPassword, setConfirmPassword)}
 
         {mismatch && (
-          <p role="alert" className="text-sm text-red-600">
+          <p id="password-mismatch" role="alert" className="text-sm text-red-600">
             {t('passwordMismatch')}
           </p>
         )}
@@ -219,7 +223,7 @@ function ChangePasswordForm() {
           </Button>
           <Button
             type="submit"
-            disabled={busy || mismatch}
+            disabled={busy || !passwordsMatch}
             className="bg-blue-600 hover:bg-blue-700 gap-2"
           >
             <Lock className="h-4 w-4" />

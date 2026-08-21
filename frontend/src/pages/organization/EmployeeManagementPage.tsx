@@ -22,11 +22,11 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { CursorPagination } from '@/components/ui/pagination';
 import { AddEmployeeModal } from './components/AddEmployeeModal';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { formatDate } from '@/lib/format/datetime';
-import { useCursorPages } from '@/lib/api/useCursorPages';
-import { fetchDepartmentMembers } from '@/lib/api/membership.repository';
-import { useSession } from '@/lib/session/SessionProvider';
-import type { DepartmentMembershipWithUser, MembershipStatus } from '@/lib/type/organization';
+import { formatDate } from '@/utils/format/datetime';
+import { useCursorPages } from '@/hooks/useCursorPages';
+import { fetchDepartmentMembers } from '@/api/membership';
+import { useSession } from '@/contexts/SessionProvider';
+import type { DepartmentMembershipWithUser, MembershipStatus } from '@/types/organization';
 
 /**
  * Who is in a department.

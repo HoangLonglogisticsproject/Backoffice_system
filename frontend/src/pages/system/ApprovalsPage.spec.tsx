@@ -20,7 +20,7 @@ vi.mock('@/lib/api/account-invitation.repository', () => ({
   approveAccountInvitation: (...a: unknown[]) => approveAccountInvitation(...a),
   rejectAccountInvitation: (...a: unknown[]) => rejectAccountInvitation(...a),
 }));
-vi.mock('@/lib/session/SessionProvider', () => ({
+vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => ({ state: { status: 'ready' }, loading: false }),
 }));
 
@@ -370,7 +370,7 @@ describe('ApprovalsPage', () => {
   });
 
   it('renders a 403 as a normal answer rather than an error', async () => {
-    const { ApiError } = await import('@/lib/http/apiError');
+    const { ApiError } = await import('@/utils/errors');
     fetchPendingMembershipRequests.mockRejectedValue(new ApiError(403, 'FORBIDDEN', 'no'));
 
     renderPage();

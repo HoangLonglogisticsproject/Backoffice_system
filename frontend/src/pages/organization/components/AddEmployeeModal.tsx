@@ -3,11 +3,11 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useSession } from '@/lib/session/SessionProvider';
-import { createUser } from '@/lib/api/users.repository';
-import { requestAccountInvitation } from '@/lib/api/account-invitation.repository';
-import { isApiError } from '@/lib/http/apiError';
-import { COMPANY_EMAIL_DOMAIN, toCompanyEmail } from '@/lib/companyEmail';
+import { useSession } from '@/contexts/SessionProvider';
+import { createUser } from '@/api/users';
+import { requestAccountInvitation } from '@/api/account-invitation';
+import { isApiError } from '@/utils/errors';
+import { COMPANY_EMAIL_DOMAIN, toCompanyEmail } from '@/utils/validation/companyEmail';
 
 interface AddEmployeeModalProps {
   isOpen: boolean;

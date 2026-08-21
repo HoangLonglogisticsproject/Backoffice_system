@@ -21,8 +21,8 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useSession } from '@/lib/session/SessionProvider';
-import { useMyDepartments } from '@/lib/api/useMyDepartments';
+import { useSession } from '@/contexts/SessionProvider';
+import { useMyDepartments } from '@/hooks/useMyDepartments';
 
 /**
  * The application shell.

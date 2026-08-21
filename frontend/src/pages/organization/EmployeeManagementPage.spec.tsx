@@ -18,7 +18,7 @@ vi.mock('@/lib/api/users.repository', () => ({
 vi.mock('@/lib/api/account-invitation.repository', () => ({
   requestAccountInvitation: (...a: unknown[]) => requestAccountInvitation(...a),
 }));
-vi.mock('@/lib/session/SessionProvider', () => ({
+vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
 }));
 
