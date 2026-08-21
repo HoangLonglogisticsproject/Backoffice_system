@@ -67,12 +67,27 @@ export async function fetchAuthorization(): Promise<AuthorizationMe> {
 
 const ROLES = new Set<string>(['SUPERADMIN', 'DEPARTMENT_HEAD', 'MEMBER']);
 
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+
 /**
  * Is this actually the shape the contract promises?
  *
  * Deliberately checks the fields the app depends on rather than every field:
  * the point is to reject a response that is not ours at all, not to re-specify
  * the contract on the client.
+ *
+ * ★ MEMBERS, NOT JUST CONTAINERS. `Array.isArray` alone let `[123]` through as
+ * `string[]`, and a numeric department id then goes into a URL path as a real
+ * request for a department that cannot exist.
+ *
+ * ★ THE PERMISSION VALUES ARE NOT CHECKED AGAINST THE KNOWN SET, on purpose.
+ * `permissions` is additive by nature — the day the server grants a key this
+ * build has never heard of, an allowlist here would reject the WHOLE session
+ * and sign everybody out on what is meant to be a backwards-compatible change.
+ * An unknown string is already harmless: `can()` compares against a literal
+ * `PermissionKey`, so a value nothing asks for grants nothing. Rejecting the
+ * type (a number is not a permission) is the part that has to be strict.
  */
 function isAuthorizationMe(value: unknown): value is AuthorizationMe {
   if (typeof value !== 'object' || value === null) return false;
@@ -84,8 +99,8 @@ function isAuthorizationMe(value: unknown): value is AuthorizationMe {
     (typeof candidate.username === 'string' || candidate.username === null) &&
     typeof candidate.role === 'string' &&
     ROLES.has(candidate.role) &&
-    Array.isArray(candidate.departmentIds) &&
-    Array.isArray(candidate.permissions)
+    isStringArray(candidate.departmentIds) &&
+    isStringArray(candidate.permissions)
   );
 }
 

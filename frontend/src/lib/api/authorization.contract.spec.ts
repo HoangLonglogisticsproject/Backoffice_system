@@ -47,6 +47,49 @@ describe('fetchAuthorization — the body has to actually be a session', () => {
     expect(me.username).toBeNull();
   });
 
+  describe('array MEMBERS, not just the containers', () => {
+    // `Array.isArray` alone let `[123]` through as `string[]`. A numeric
+    // department id then goes into a URL path as a real request.
+    it.each([
+      ['a numeric department id', { departmentIds: [123] }],
+      ['a null department id', { departmentIds: [null] }],
+      ['an object in departmentIds', { departmentIds: [{}] }],
+      ['a numeric permission', { permissions: [1] }],
+      ['a null permission', { permissions: [null] }],
+    ])('refuses %s', async (_label, override) => {
+      get.mockResolvedValue({ data: { ...VALID, ...override } });
+      await expect(fetchAuthorization()).rejects.toThrow(/did not return a session/);
+    });
+
+    it('refuses a non-array where an array belongs', async () => {
+      get.mockResolvedValue({ data: { ...VALID, permissions: 'user.write' } });
+      await expect(fetchAuthorization()).rejects.toThrow(/did not return a session/);
+    });
+
+    /**
+     * ★ AN UNKNOWN PERMISSION STRING IS ACCEPTED, and that is the deliberate
+     * half of this rule.
+     *
+     * `permissions` grows over time. Checking the values against the set this
+     * build knows would turn "the server granted a new key" into "every stale
+     * client rejects the whole session and signs its user out" — a far worse
+     * failure than the one it prevents. It grants nothing either way: `can()`
+     * compares against a literal `PermissionKey`, so a value nothing asks for
+     * can never match. The TYPE is what has to be strict here, not the value.
+     */
+    it('accepts a permission this build has never heard of', async () => {
+      get.mockResolvedValue({ data: { ...VALID, permissions: ['report.read'] } });
+
+      const me = await fetchAuthorization();
+      expect(me.permissions).toEqual(['report.read']);
+    });
+
+    it('accepts the empty arrays a MEMBER legitimately has', async () => {
+      get.mockResolvedValue({ data: { ...VALID, departmentIds: [], permissions: [] } });
+      await expect(fetchAuthorization()).resolves.toBeTruthy();
+    });
+  });
+
   it('★ REFUSES the Vite index.html that a missing VITE_API_URL produces', async () => {
     // The exact failure: HTTP 200, wrong origin, HTML body.
     get.mockResolvedValue({
