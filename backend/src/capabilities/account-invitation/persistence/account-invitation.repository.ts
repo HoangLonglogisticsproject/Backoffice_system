@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
+import { normalizeEmail } from '../../../core/users/domain/email';
 import {
   AccountInvitation,
   AccountInvitationWithUser,
@@ -86,7 +87,14 @@ export class AccountInvitationRepository {
         `INSERT INTO account_invitations (department_id, email, requested_by, reason)
          VALUES ($1, $2, $3, $4)
          RETURNING *`,
-        [input.departmentId, input.email, input.requestedBy, input.reason],
+        // Canonicalised HERE, not left to the caller. The service already does
+        // it as part of validating the address, but this is the only statement
+        // that writes the column — so doing it here is what makes "stored
+        // canonical" true of every caller rather than of the current one.
+        // `IdentityRepository` treats `subject` the same way, for the same
+        // reason, and `uq_pending_invitation_email_canonical` is the third layer
+        // behind both.
+        [input.departmentId, normalizeEmail(input.email), input.requestedBy, input.reason],
       );
 
       const row = rows[0];
@@ -128,9 +136,21 @@ export class AccountInvitationRepository {
     email: string,
     executor: DatabaseQuery = this.db,
   ): Promise<AccountInvitation | null> {
+    // ★ CALLS THE INDEX'S OWN EXPRESSION, not the raw column and not a copy of
+    // it. 0010 replaced the raw-column unique index with one over
+    // `canonical_identity(email)`, so `email = $1` would now be a sequential
+    // scan AND would test a different predicate than the constraint enforces —
+    // a pre-check that can pass where the insert then fails.
+    //
+    // The parameter goes through `normalizeEmail`, which is what
+    // `canonical_identity` was written to mirror: JS-trim, then lowercase.
+    // `canonical-identity.integration.spec.ts` asserts the two agree on every
+    // code point JavaScript's `trim` removes, because "mirrors" is a claim that
+    // stops being true quietly.
     const rows = await executor.query<InvitationRow>(
-      "SELECT * FROM account_invitations WHERE email = $1 AND status = 'pending'",
-      [email],
+      `SELECT * FROM account_invitations
+        WHERE canonical_identity(email) = $1 AND status = 'pending'`,
+      [normalizeEmail(email)],
     );
     return rows[0] ? toInvitation(rows[0]) : null;
   }

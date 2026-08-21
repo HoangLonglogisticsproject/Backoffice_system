@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import type { Database, DatabaseQuery } from '../../../common/types/database.port';
@@ -73,17 +73,14 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
 
+    // READ, not listed. This spec wants the schema a deployment actually runs —
+    // it exercises the real repository, and `findPendingByEmail` calls
+    // `canonical_identity()`, which only exists from 0010. A hand-kept list
+    // silently tests a stale schema the day somebody adds a migration and
+    // forgets this file; it already did, between 0008 and 0010.
     const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
-    for (const file of [
-      '0001_identity.sql',
-      '0002_users_updated_at.sql',
-      '0003_organization.sql',
-      '0004_authorization.sql',
-      '0005_identity_credential_state.sql',
-      '0006_membership_change_requests.sql',
-      '0007_account_invitations.sql',
-      '0008_role_assignment_membership_fk_index.sql',
-    ]) {
+    const files = (await readdir(migrations)).filter((f) => f.endsWith('.sql')).sort();
+    for (const file of files) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
 

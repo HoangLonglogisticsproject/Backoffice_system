@@ -2,6 +2,31 @@ import axios, { AxiosHeaders, type AxiosInstance } from 'axios';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { toApiError } from '@/utils/errors';
 import { CSRF_HEADER, CSRF_HEADER_VALUE } from './client';
+import {
+  BASE_URL,
+  fixturePassword,
+  requireBossCredentials,
+  type BossCredentials,
+} from '@/test/integration-credentials';
+
+/**
+ * The bootstrap credential, read in `beforeAll` — which is also where a
+ * missing variable is reported, by name, before any request is made.
+ */
+let credentials: BossCredentials;
+
+/**
+ * Fixture passwords, generated per run.
+ *
+ * These belong to accounts this file provisions seconds earlier in a
+ * disposable database, so they authenticate nothing that outlives the run —
+ * but written as literals they were indistinguishable from a real credential
+ * to anything grepping this repository. One constant each, kept DISTINCT:
+ * two values that differ today must go on differing.
+ */
+const TEMPORARY_A = fixturePassword('temporary-a');
+const CHOSEN_A = fixturePassword('chosen-a');
+const CHOSEN_C = fixturePassword('chosen-c');
 
 /**
  * The WRITE half of the approval workflow, against a REAL backend and a REAL
@@ -22,9 +47,6 @@ import { CSRF_HEADER, CSRF_HEADER_VALUE } from './client';
  * http://localhost:3000) and a bootstrapped SuperAdmin.
  */
 
-const BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
-const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglongti.com';
-const BOSS_PASSWORD = process.env.BOSS_PASSWORD ?? 'correct horse battery staple';
 
 type Client = AxiosInstance & { cookie: string | null };
 
@@ -81,8 +103,8 @@ describe('approval write paths (§9, §10, §13)', () => {
 
   /** Provisions an account, clears its temporary credential, returns a client. */
   const provision = async (email: string, departmentId: string, displayName: string) => {
-    const temporary = 'temp pass 1';
-    const chosen = 'a properly long passphrase';
+    const temporary = TEMPORARY_A;
+    const chosen = CHOSEN_A;
 
     const created = await boss.post('/users', {
       displayName,
@@ -105,14 +127,16 @@ describe('approval write paths (§9, §10, §13)', () => {
   };
 
   beforeAll(async () => {
+    credentials = requireBossCredentials();
+
     const health = await axios.get(`${BASE_URL}/health`, { validateStatus: () => true });
     if (health.status !== 200) {
       throw new Error(`No backend at ${BASE_URL} (health ${health.status}).`);
     }
 
     boss = makeClient();
-    if ((await login(boss, BOSS_EMAIL, BOSS_PASSWORD)).status !== 200) {
-      throw new Error(`Could not sign in as ${BOSS_EMAIL}. Bootstrap a SuperAdmin first.`);
+    if ((await login(boss, credentials.email, credentials.password)).status !== 200) {
+      throw new Error(`Could not sign in as ${credentials.email}. Bootstrap a SuperAdmin first.`);
     }
 
     const a = await boss.post('/departments', { slug: `wr-a-${unique}`, name: `Write A ${unique}` });
@@ -276,7 +300,7 @@ describe('approval write paths (§9, §10, §13)', () => {
         'PASSWORD_CHANGE_REQUIRED',
       );
 
-      const chosen = 'yet another long passphrase';
+      const chosen = CHOSEN_C;
       expect(
         (
           await joiner.post('/auth/password', {
@@ -507,7 +531,7 @@ describe('approval write paths (§9, §10, §13)', () => {
       const created = await boss.post('/users', {
         displayName: 'Hired Directly',
         email,
-        initialPassword: 'temp pass 1',
+        initialPassword: TEMPORARY_A,
         departmentId: departmentA,
       });
 
