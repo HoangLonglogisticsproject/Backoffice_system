@@ -251,6 +251,50 @@ describe('account-invitation HTTP security', () => {
       expect(response.body.status).toBe('rejected');
       expect(response.body.createdUserId).toBeNull();
     });
+
+    /**
+     * ★ AND MAY NOT INVITE, which is the one thing GLOBAL does not open.
+     *
+     * Deciding is global-only and refuses `requestedBy === decidedBy`, and the
+     * database allows exactly one active SuperAdmin. So an invitation raised
+     * here would have no actor left who could approve OR reject it: it would
+     * sit pending forever, and the duplicate check would then refuse the
+     * address to everybody else too.
+     *
+     * Refused at the guard, so the service never sees it.
+     */
+    it('★ cannot invite — it would raise an invitation nobody could decide', async () => {
+      const response = await authed('post', `/departments/${A}/account-invitations`)
+        .send(inviteBody)
+        .expect(403);
+
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(invitations.create).not.toHaveBeenCalled();
+    });
+
+    it('is refused even for a department it happens to lead', async () => {
+      // Nothing stops one person holding both assignments. For them the head
+      // check would pass, and the invitation would be just as undecidable — so
+      // GLOBAL is disqualifying here rather than merely insufficient.
+      context = asContext({ global: true, headOf: [A], memberOf: [A] });
+
+      await authed('post', `/departments/${A}/account-invitations`)
+        .send(inviteBody)
+        .expect(403);
+
+      expect(invitations.create).not.toHaveBeenCalled();
+    });
+
+    it('still has its own direct path — this capability does not gate POST /users', async () => {
+      // Asserted in full by the users security spec; what matters here is that
+      // refusing the proposal route leaves the SuperAdmin a way to create an
+      // account, so the refusal above costs them nothing.
+      const response = await authed('post', `/departments/${A}/account-invitations`)
+        .send(inviteBody);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.message).toMatch(/direct route/i);
+    });
   });
 
   // ------------------------------------------------- the temporary secret --
@@ -475,18 +519,25 @@ describe('account-invitation HTTP security', () => {
     // A caller the guards ADMIT: they compare the parameter as a string, so a
     // scoped caller is refused 403 before the pipe runs and never saw the 500.
     // Only a caller authorized for the route reached PostgreSQL with it.
-    beforeEach(() => {
-      context = asContext({ global: true });
-    });
-
+    //
+    // The context differs PER ROUTE, and has to. Reading is open to GLOBAL;
+    // raising is open to the head and refuses GLOBAL outright; deciding is
+    // GLOBAL-only. One shared fixture would be refused by one of the three at
+    // the guard and never reach the pipe this block is about.
     it.each([
-      ['get', '/departments/not-a-uuid/account-invitations'],
-      ['post', '/departments/not-a-uuid/account-invitations'],
-      ['post', '/account-invitations/not-a-uuid/approve'],
-      ['post', '/account-invitations/not-a-uuid/reject'],
+      ['get', '/departments/not-a-uuid/account-invitations', () => asContext({ global: true })],
+      [
+        'post',
+        '/departments/not-a-uuid/account-invitations',
+        () => asContext({ headOf: ['not-a-uuid'], memberOf: ['not-a-uuid'] }),
+      ],
+      ['post', '/account-invitations/not-a-uuid/approve', () => asContext({ global: true })],
+      ['post', '/account-invitations/not-a-uuid/reject', () => asContext({ global: true })],
     ] as const)(
       'answers 422 for %s %s, without reaching the service',
-      async (method, path) => {
+      async (method, path, build) => {
+        context = build();
+
         await authed(method, path).expect(422);
         expect(invitations.approve).not.toHaveBeenCalled();
       },

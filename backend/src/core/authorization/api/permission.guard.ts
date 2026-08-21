@@ -101,8 +101,30 @@ export const authorizationOf = (request: Request): AuthorizationContext | undefi
 
 /** Names the route parameter holding the department a head must lead. */
 export const HEAD_SCOPE_PARAM = 'boHeadScopeParam';
-export const RequireHeadOfRouteDepartment = (routeParam = 'departmentId') =>
-  SetMetadata(HEAD_SCOPE_PARAM, routeParam);
+
+export interface HeadScopeMetadata {
+  /** Route parameter holding the target department. */
+  routeParam: string;
+  /**
+   * May a global administrator satisfy this guard by being global?
+   *
+   * TRUE for reads: a global administrator is above departments and may look
+   * into any of them.
+   *
+   * FALSE for the two PROPOSAL routes, and there it does not merely stop
+   * counting — it DISQUALIFIES. See the guard below for why.
+   */
+  allowGlobal: boolean;
+}
+
+export const RequireHeadOfRouteDepartment = (
+  routeParam = 'departmentId',
+  options: { allowGlobal?: boolean } = {},
+): MethodDecorator & ClassDecorator =>
+  SetMetadata<string, HeadScopeMetadata>(HEAD_SCOPE_PARAM, {
+    routeParam,
+    allowGlobal: options.allowGlobal ?? true,
+  });
 
 /**
  * Refuses anybody who is not the active head of the department named on the
@@ -117,6 +139,25 @@ export const RequireHeadOfRouteDepartment = (routeParam = 'departmentId') =>
  *
  * Reads the department from the ROUTE. A body that named it could name any of
  * them.
+ *
+ * ★ ON A PROPOSAL ROUTE, GLOBAL IS DISQUALIFYING RATHER THAN SUFFICIENT.
+ *
+ * Deciding a proposal needs `user.write`, which is GLOBAL-only, and both
+ * services refuse a decision where `requestedBy === decidedBy`. The database
+ * allows exactly one active SuperAdmin (`uq_single_active_superadmin`). So a
+ * proposal raised BY the global administrator has no actor left in the
+ * deployment who may decide it: approve and reject both answer 409 forever, and
+ * the duplicate check then refuses re-raising it. The row is undecidable.
+ *
+ * Hence `allowGlobal: false` refuses a global caller OUTRIGHT instead of
+ * falling through to the head check. Falling through would leave the hole open
+ * for the one caller who is global AND head of the route's department — nothing
+ * stops one person holding both assignments, and for them the head check would
+ * pass and the proposal would be just as undecidable.
+ *
+ * A global administrator does not need this route: `POST /users` creates an
+ * account directly, and `POST /departments/:id/members` moves somebody
+ * directly. Proposing to oneself was never the workflow.
  */
 @Injectable()
 export class HeadOfRouteDepartmentGuard implements CanActivate {
@@ -126,11 +167,14 @@ export class HeadOfRouteDepartmentGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const routeParam =
-      this.reflector.getAllAndOverride<string | undefined>(HEAD_SCOPE_PARAM, [
-        context.getHandler(),
-        context.getClass(),
-      ]) ?? 'departmentId';
+    const metadata = this.reflector.getAllAndOverride<HeadScopeMetadata | undefined>(
+      HEAD_SCOPE_PARAM,
+      [context.getHandler(), context.getClass()],
+    );
+    const routeParam = metadata?.routeParam ?? 'departmentId';
+    // Absent metadata keeps the original behaviour: this guard's older use is
+    // the read routes, and they are the ones that may omit the decorator.
+    const allowGlobal = metadata?.allowGlobal ?? true;
 
     const request = context.switchToHttp().getRequest<Request>();
     const user = (request as unknown as Record<string, unknown>)[REQUEST_USER] as
@@ -151,8 +195,18 @@ export class HeadOfRouteDepartmentGuard implements CanActivate {
     const departmentId = (request.params as Record<string, string | undefined>)[routeParam];
     if (!departmentId) throw new ForbiddenError('You are not allowed to do that.');
 
+    // Checked BEFORE the head check, not folded into it: see the note above.
+    // A message of its own because the caller is not under-privileged, they are
+    // the wrong actor for this route, and the fix is a different endpoint.
+    if (!allowGlobal && authorization.global) {
+      throw new ForbiddenError(
+        'A global administrator cannot raise a proposal that only they could decide. ' +
+          'Use the direct route instead.',
+      );
+    }
+
     const allowed =
-      authorization.global || authorization.headOf.includes(departmentId);
+      (allowGlobal && authorization.global) || authorization.headOf.includes(departmentId);
 
     if (!allowed) throw new ForbiddenError('You are not allowed to do that.');
 

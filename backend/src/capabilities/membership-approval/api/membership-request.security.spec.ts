@@ -255,20 +255,42 @@ describe('membership-request HTTP security', () => {
       expect(requests.reject).toHaveBeenCalledWith({ requestId: REQUEST_ID, decidedBy: ACTOR });
     });
 
-    it('is never forced through the approval workflow — the direct path exists', async () => {
-      // A global caller may raise a request (the guard allows it), but nothing
-      // requires it: `POST /departments/:id/members` and
-      // `PATCH /users/:id/status` are their direct paths, guarded by
-      // `unit.member.write` and `user.write` respectively. Those are asserted in
-      // the organization and users security specs; what matters here is that
-      // this capability does not gate them.
+    /**
+     * ★ AND IS REFUSED THE PROPOSAL ROUTE, which it must never need.
+     *
+     * This used to assert 201, on the reading that a global caller "may raise a
+     * request, but nothing requires it". Raising one was not harmless: deciding
+     * needs `unit.member.write` (global only), both decisions refuse
+     * `requestedBy === decidedBy`, and the database allows exactly one active
+     * SuperAdmin — so the request they raised could never be approved OR
+     * rejected, and the duplicate check then refused re-raising it.
+     *
+     * The original point still holds and is what the second half asserts: the
+     * direct paths are `POST /departments/:id/members` and
+     * `PATCH /users/:id/status`, asserted in the organization and users
+     * security specs. This capability does not gate either, so being refused
+     * here costs the SuperAdmin nothing.
+     */
+    it('★ cannot raise a request — nobody would be left to decide it', async () => {
       const response = await authed('post', `/departments/${A}/membership-requests`)
         .send(transferBody);
 
-      expect(response.status).toBe(201);
-      expect(requests.create).toHaveBeenCalledWith(
-        expect.objectContaining({ requestedBy: ACTOR, routeDepartmentId: A }),
-      );
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(response.body.error.message).toMatch(/direct route/i);
+      expect(requests.create).not.toHaveBeenCalled();
+    });
+
+    it('is refused even for a department it happens to lead', async () => {
+      // One person may hold both assignments; for them the head check would
+      // pass and the request would be just as undecidable.
+      context = asContext({ global: true, headOf: [A], memberOf: [A] });
+
+      await authed('post', `/departments/${A}/membership-requests`)
+        .send(transferBody)
+        .expect(403);
+
+      expect(requests.create).not.toHaveBeenCalled();
     });
   });
 
@@ -452,18 +474,25 @@ describe('membership-request HTTP security', () => {
     // A caller the guards ADMIT: they compare the parameter as a string, so a
     // scoped caller is refused 403 before the pipe runs and never saw the 500.
     // Only a caller authorized for the route reached PostgreSQL with it.
-    beforeEach(() => {
-      context = asContext({ global: true });
-    });
-
+    //
+    // The context differs PER ROUTE, and has to. Reading is open to GLOBAL;
+    // raising is open to the head and refuses GLOBAL outright; deciding is
+    // GLOBAL-only. One shared fixture would be refused by one of the three at
+    // the guard and never reach the pipe this block is about.
     it.each([
-      ['get', '/departments/not-a-uuid/membership-requests'],
-      ['post', '/departments/not-a-uuid/membership-requests'],
-      ['post', '/membership-requests/not-a-uuid/approve'],
-      ['post', '/membership-requests/not-a-uuid/reject'],
+      ['get', '/departments/not-a-uuid/membership-requests', () => asContext({ global: true })],
+      [
+        'post',
+        '/departments/not-a-uuid/membership-requests',
+        () => asContext({ headOf: ['not-a-uuid'], memberOf: ['not-a-uuid'] }),
+      ],
+      ['post', '/membership-requests/not-a-uuid/approve', () => asContext({ global: true })],
+      ['post', '/membership-requests/not-a-uuid/reject', () => asContext({ global: true })],
     ] as const)(
       'answers 422 for %s %s, without reaching the service',
-      async (method, path) => {
+      async (method, path, build) => {
+        context = build();
+
         await authed(method, path).expect(422);
         expect(requests.approve).not.toHaveBeenCalled();
       },
