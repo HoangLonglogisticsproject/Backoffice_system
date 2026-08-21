@@ -73,6 +73,19 @@ describe('auth repository', () => {
     await fetchIdentity();
     expect(get).toHaveBeenCalledWith('/auth/me');
 
+    // `fetchAuthorization` now checks that the body is actually a session, so
+    // the blanket `{}` stub the other cases share is no longer enough here —
+    // see `authorization.contract.spec.ts` for why that check exists.
+    get.mockResolvedValue({
+      data: {
+        userId: 'fab71f53-0000-4000-8000-000000000000',
+        username: 'boss',
+        role: 'SUPERADMIN',
+        departmentIds: [],
+        permissions: [],
+      },
+    });
+
     await fetchAuthorization();
     expect(get).toHaveBeenCalledWith('/authorization/me');
   });

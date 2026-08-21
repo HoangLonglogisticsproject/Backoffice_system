@@ -74,6 +74,55 @@ describe('MainLayout', () => {
     expect(navigate).toHaveBeenCalledWith('/login', { replace: true });
   });
 
+  describe('★ REGRESSION: the header must not crash on a session without a name', () => {
+    // `username` is the local part of a login email. An account with no local
+    // subject has none, and the server sends `null` — which the frontend type
+    // used to deny, so nothing forced anyone to handle it. The first component
+    // to read it crashed:
+    //
+    //   TypeError: Cannot read properties of undefined (reading 'split')
+    //     at initialsOf (MainLayout.tsx:136)
+    it('renders with username = null instead of throwing', () => {
+      useSession.mockReturnValue({
+        state: {
+          status: 'ready',
+          authorization: { userId: 'u1', username: null, role: 'MEMBER', departmentIds: [] },
+        },
+        signOut,
+      });
+
+      expect(() => renderLayout()).not.toThrow();
+      // The absence is shown as an absence: a neutral marker, and no name.
+      expect(screen.getByText('?')).toBeInTheDocument();
+    });
+
+    it('invents no identity when there is no name', () => {
+      useSession.mockReturnValue({
+        state: {
+          status: 'ready',
+          authorization: { userId: 'u1', username: null, role: 'MEMBER', departmentIds: [] },
+        },
+        signOut,
+      });
+      renderLayout();
+
+      // No stand-in, no placeholder person, no echo of the raw user id.
+      expect(screen.queryByText(/admin user/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('u1')).not.toBeInTheDocument();
+      // The rest of the shell still works — sign-out is still reachable.
+      expect(screen.getByRole('button', { name: /đăng xuất|logout/i })).toBeInTheDocument();
+    });
+
+    it('still renders while the session is not ready', () => {
+      // `RequireSession` routes this case, but the shell must not be the thing
+      // that explodes on the way there.
+      useSession.mockReturnValue({ state: null, signOut });
+
+      expect(() => renderLayout()).not.toThrow();
+      expect(screen.getByText('?')).toBeInTheDocument();
+    });
+  });
+
   describe('department navigation comes from the session', () => {
     it('lists only the departments this account may reach', () => {
       useMyDepartments.mockReturnValue({

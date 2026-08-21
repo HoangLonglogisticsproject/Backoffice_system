@@ -42,8 +42,16 @@ export interface LoginResult {
  */
 export interface AuthorizationMe {
   userId: string;
-  /** Server-derived; never parse this out of an email (§0). */
-  username: string;
+  /**
+   * Local part of the login email, derived by the server. Display only — never
+   * an authorization input (§0), and never parsed out of an email here.
+   *
+   * ★ NULLABLE, because the server says so. `AuthorizationMeResponse` declares
+   * `string | null` and returns null whenever the account has no local subject.
+   * This type used to claim `string`, so TypeScript never made anyone handle
+   * the null — and the first thing to read it crashed on `undefined`.
+   */
+  username: string | null;
   role: Role;
   departmentIds: string[];
   permissions: PermissionKey[];

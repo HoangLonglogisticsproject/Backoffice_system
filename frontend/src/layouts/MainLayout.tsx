@@ -130,9 +130,15 @@ function SidebarSection({
   );
 }
 
-/** Initials from whatever the server calls this person. */
-const initialsOf = (name: string): string =>
-  name
+/**
+ * Initials from whatever the server calls this person.
+ *
+ * `null` is a real answer, not a missing one: `username` is the local part of a
+ * login email, and an account with no local subject has none. `?` marks the
+ * absence — it is not a stand-in identity, and nothing here invents a name.
+ */
+const initialsOf = (name: string | null): string =>
+  (name ?? '')
     .split(/[\s._-]+/)
     .filter(Boolean)
     .slice(0, 2)
@@ -147,8 +153,10 @@ export default function MainLayout() {
   const navigate = useNavigate();
 
   // `RequireSession` guarantees a ready session above this component, so the
-  // fallback is defensive rather than a state a user can actually see.
-  const username = state?.status === 'ready' ? state.authorization.username : '';
+  // non-ready branch is defensive rather than a state a user can actually see.
+  // The `null` inside a ready session is NOT defensive — the server returns it
+  // for an account with no local subject, and it has to render as an absence.
+  const username = state?.status === 'ready' ? state.authorization.username : null;
 
   const handleSignOut = async () => {
     await signOut();
@@ -206,7 +214,11 @@ export default function MainLayout() {
                 {initialsOf(username)}
               </AvatarFallback>
             </Avatar>
-            <span className="text-sm font-medium hidden sm:block">{username}</span>
+            {/* No name to show is shown as no name. Anything else here would
+                be an identity the server did not give. */}
+            {username && (
+              <span className="text-sm font-medium hidden sm:block">{username}</span>
+            )}
           </Link>
 
           <div className="h-6 w-px bg-gray-200 hidden sm:block" />
