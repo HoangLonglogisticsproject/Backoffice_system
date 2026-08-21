@@ -189,9 +189,23 @@ describe('canonical email identity (§1, §4, §9)', () => {
       expect(response.status).toBe(201);
     });
 
-    it('signs in with ANY spelling of the address — the server canonicalises', async () => {
+    /**
+     * Case AND surrounding whitespace, because `normalizeEmail` folds both and
+     * the login path is where a user actually produces them — a pasted address
+     * carries the space either side far more often than a typo carries a
+     * capital.
+     */
+    it.each([
+      [() => `${local.toUpperCase()}@HOANGLONGTI.COM`, 'all upper case'],
+      [() => `  ${local}@hoanglongti.com  `, 'surrounding whitespace'],
+      [() => `  ${local.toUpperCase()}@HoangLongTI.com  `, 'both at once'],
+      [
+        () => `${String.fromCodePoint(0x00a0)}${local}@hoanglongti.com`,
+        'a leading NBSP, which `btrim` alone would not strip',
+      ],
+    ])('signs in with %#: %s — the server canonicalises', async (spelling) => {
       const client = makeClient();
-      const response = await login(client, `${local.toUpperCase()}@HOANGLONGTI.COM`, TEMPORARY_A);
+      const response = await login(client, spelling(), TEMPORARY_A);
 
       expect(response.status).toBe(200);
       expect(response.data.user.displayName).toBe('Uyen');

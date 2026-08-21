@@ -49,6 +49,35 @@
 -- FORWARD ONLY. Undoing this is `DROP INDEX` plus recreating the raw index from
 -- 0007; nothing here holds data of its own.
 
+-- --------------------------------------------------- preconditions ----
+--
+-- ★ REQUIRES server_encoding = UTF8. `canonical_identity` below is written with
+-- `E'\uXXXX'` escapes, and PostgreSQL only accepts those in a UTF8 database —
+-- elsewhere they raise "unsafe use of \u", from inside a function body, which
+-- reads like a syntax error rather than like a deployment that cannot host this
+-- rule. Checked here so the failure names the actual problem.
+--
+-- `lock_timeout` because this file takes ACCESS EXCLUSIVE twice: DROP INDEX and
+-- ADD CONSTRAINT both do. Without it, a migration that lands behind one long
+-- transaction waits forever AND queues every other query behind itself — a
+-- deploy that quietly takes the site down. Five seconds, then fail and retry
+-- when the database is quieter. SET LOCAL, so it reverts with the transaction
+-- the runner already wraps this file in.
+SET LOCAL lock_timeout = '5s';
+
+DO $$
+BEGIN
+  IF current_setting('server_encoding') <> 'UTF8' THEN
+    RAISE EXCEPTION
+      'Migration 0010 requires server_encoding = UTF8, found %.',
+      current_setting('server_encoding')
+      USING HINT =
+        'The canonical form folds Unicode whitespace (NBSP, BOM, the U+2000 '
+        'block). A non-UTF8 database cannot represent those code points, so the '
+        'rule cannot be enforced there. Recreate the database with UTF8.';
+  END IF;
+END $$;
+
 -- ----------------------------------------------- the canonical form ----
 --
 -- ONE DEFINITION, used by both indexes, by both audits below, and by
@@ -108,9 +137,31 @@ AS $$
   );
 $$;
 
+-- ★ CHANGING THIS FUNCTION DOES NOT REBUILD THE INDEXES THAT CALL IT.
+--
+-- `CREATE OR REPLACE FUNCTION` swaps the definition; the two expression indexes
+-- below keep the values computed under the OLD one. PostgreSQL does not detect
+-- that — it trusts IMMUTABLE — so the index silently stops agreeing with the
+-- function: lookups miss rows that are there, and the unique index stops
+-- catching collisions it exists to catch. Nothing errors, at any point.
+--
+-- Any future change to this definition MUST rebuild both, in the same
+-- transaction as the change:
+--
+--   REINDEX INDEX uq_pending_invitation_email_canonical;
+--   REINDEX INDEX uq_local_identity_subject_canonical;
+--
+-- …and revalidate the two CHECK constraints, which are expressions over this
+-- same function and are just as stale-able:
+--
+--   ALTER TABLE identities          VALIDATE CONSTRAINT identities_local_subject_canonical;
+--   ALTER TABLE account_invitations VALIDATE CONSTRAINT invitations_pending_email_canonical;
 COMMENT ON FUNCTION canonical_identity(text) IS
   'Mirrors normalizeEmail/normalizeSubject: JS-trim then lowercase. '
-  'Changing this changes what two rows have to be to collide — see 0010.';
+  'Changing this changes what two rows have to be to collide, and REQUIRES '
+  'REINDEX of uq_pending_invitation_email_canonical and '
+  'uq_local_identity_subject_canonical plus revalidation of the two canonical '
+  'CHECK constraints - see 0010.';
 
 -- ---------------------------------------------------------------- audit ----
 --
@@ -136,12 +187,15 @@ DECLARE
   stray_locals    bigint;
 BEGIN
   -- 1. Pending invitations that become one row once canonicalised.
-  SELECT string_agg(format('%s (%s rows: %s)', canonical, n, variants), '; ')
+  --
+  -- ★ IDS, NEVER ADDRESSES. This message goes to a migration log, a CI job
+  -- output and whatever ships those onward. An email is personal data and a
+  -- deploy log is the wrong place to copy it into — the row id is what the
+  -- operator needs to act anyway, and it identifies exactly one row.
+  SELECT string_agg(format('[%s]', ids), '; ')
     INTO colliding
     FROM (
-      SELECT canonical_identity(email) AS canonical,
-             count(*)                  AS n,
-             string_agg(quote_literal(email), ', ') AS variants
+      SELECT string_agg(id::text, ', ' ORDER BY requested_at) AS ids
         FROM account_invitations
        WHERE status = pending_status
        GROUP BY canonical_identity(email)
@@ -150,21 +204,21 @@ BEGIN
 
   IF colliding IS NOT NULL THEN
     RAISE EXCEPTION
-      'Migration 0010 stopped: pending invitations collide once canonicalised — %',
-      colliding
+      'Migration 0010 stopped: pending invitations collide once canonicalised. '
+      'Colliding row ids, grouped: %', colliding
       USING HINT =
-        'Decide which invitation stands and reject the others through the API '
+        'Each group is one person invited under more than one spelling. Decide '
+        'which invitation stands and reject the others through the API '
         '(POST /account-invitations/:id/reject), then run this migration again. '
         'Do not delete rows.';
   END IF;
 
   -- 2. Local identities that become one row once canonicalised.
-  SELECT string_agg(format('%s (%s rows: %s)', canonical, n, variants), '; ')
+  -- Same redaction as above, and for the same reason.
+  SELECT string_agg(format('[%s]', ids), '; ')
     INTO colliding
     FROM (
-      SELECT canonical_identity(subject) AS canonical,
-             count(*)                    AS n,
-             string_agg(quote_literal(subject), ', ') AS variants
+      SELECT string_agg(id::text, ', ' ORDER BY created_at) AS ids
         FROM identities
        WHERE provider = local_provider
        GROUP BY canonical_identity(subject)
@@ -173,12 +227,13 @@ BEGIN
 
   IF colliding IS NOT NULL THEN
     RAISE EXCEPTION
-      'Migration 0010 stopped: local identities collide once canonicalised — %',
-      colliding
+      'Migration 0010 stopped: local identities collide once canonicalised. '
+      'Colliding identity row ids, grouped: %', colliding
       USING HINT =
-        'Two accounts are the same person. Decide which one keeps its history, '
-        'disable the other (PATCH /users/:userId/status), and re-run. '
-        'Do not delete accounts — memberships and audit rows point at them.';
+        'Each group is one person holding more than one account. Decide which '
+        'keeps its history, disable the other (PATCH /users/:userId/status), '
+        'and re-run. Do not delete accounts — memberships and audit rows point '
+        'at them.';
   END IF;
 
   -- 3. Non-canonical but NOT colliding. The indexes below would accept these,
@@ -232,3 +287,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_invitation_email_canonical
 CREATE UNIQUE INDEX IF NOT EXISTS uq_local_identity_subject_canonical
   ON identities (canonical_identity(subject))
   WHERE provider = 'local';
+
+-- --------------------------------------- canonical FORM, not just uniqueness ----
+--
+-- ★ THE UNIQUE INDEXES ABOVE DO NOT MAKE A ROW CANONICAL. They make two rows
+-- that canonicalise alike collide — nothing stops a SINGLE row being stored as
+-- `  Uyen@HoangLongTI.com  `. Measured on the schema as it stood one commit
+-- ago: that INSERT succeeded, and both indexes stayed quiet, because
+-- `canonical_identity('  Uyen@… ')` was unique among one row.
+--
+-- For `identities` that is not cosmetic, it is an unreachable account.
+-- `findWithUserBySubject` canonicalises the input and compares it to the RAW
+-- column, so a non-canonical row can never be matched by anybody — the account
+-- exists, nobody can sign in to it, and no error is raised anywhere. Verified:
+-- 401, forever.
+--
+-- The application already writes canonical values at both call sites. These
+-- constraints are what makes that true of writes the application did not make —
+-- a repair script, a support fix applied by hand, a future repository that
+-- forgets. Same reason the unique indexes exist rather than trusting the
+-- pre-check.
+--
+-- ★ SCOPED EXACTLY LIKE THE INDEX ABOVE IT, and for the same reason. An OIDC
+-- `sub` is opaque and case-sensitive, so `provider <> 'local'` short-circuits
+-- and a federated row is never canonicalised. Same shape on invitations:
+-- `status <> 'pending'` leaves decided history alone, so a row that predates
+-- this rule stays readable after it is decided.
+ALTER TABLE identities
+  ADD CONSTRAINT identities_local_subject_canonical
+  CHECK (provider <> 'local' OR subject = canonical_identity(subject));
+
+ALTER TABLE account_invitations
+  ADD CONSTRAINT invitations_pending_email_canonical
+  CHECK (status <> 'pending' OR email = canonical_identity(email));

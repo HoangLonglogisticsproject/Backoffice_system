@@ -120,6 +120,52 @@ describe('0010_canonical_email_identity.sql', () => {
     }
   });
 
+  it('★ requires UTF8 before defining a function full of unicode escapes', () => {
+    // The escapes are only legal in a UTF8 database. Without this guard the
+    // failure arrives from inside a function body and reads like a syntax
+    // error rather than like a deployment that cannot host the rule.
+    const body = code();
+    expect(body).toContain("current_setting('server_encoding') <> 'UTF8'");
+    expect(body.indexOf('server_encoding')).toBeLessThan(
+      body.indexOf('CREATE OR REPLACE FUNCTION'),
+    );
+  });
+
+  it('★ bounds how long it will wait for a lock', () => {
+    // DROP INDEX and ADD CONSTRAINT both take ACCESS EXCLUSIVE. Unbounded, this
+    // file queues behind one long transaction and every other query queues
+    // behind it. SET LOCAL, so it reverts with the runner's transaction.
+    expect(code()).toContain("SET LOCAL lock_timeout = '5s'");
+  });
+
+  it('★ constrains the FORM of a local subject, not only its uniqueness', () => {
+    // The unique index makes two rows collide; it does not stop ONE row being
+    // stored non-canonical, and such an identity can never be signed in to.
+    expect(code()).toContain(
+      "ADD CONSTRAINT identities_local_subject_canonical CHECK (provider <> 'local' OR subject = canonical_identity(subject))",
+    );
+    expect(code()).toContain(
+      "ADD CONSTRAINT invitations_pending_email_canonical CHECK (status <> 'pending' OR email = canonical_identity(email))",
+    );
+  });
+
+  it('names the REINDEX obligation where somebody editing the function will see it', () => {
+    // CREATE OR REPLACE swaps the definition and leaves both expression indexes
+    // computed under the old one. Nothing errors; the index simply stops
+    // agreeing with the function.
+    expect(sql).toContain('REINDEX INDEX uq_pending_invitation_email_canonical');
+    expect(sql).toContain('REINDEX INDEX uq_local_identity_subject_canonical');
+  });
+
+  it('★ reports colliding ROW IDS, never the address itself', () => {
+    // This text lands in a deploy log. An email is personal data; the row id is
+    // what the operator acts on and identifies exactly one row.
+    const body = code();
+    expect(body).not.toContain('quote_literal(email)');
+    expect(body).not.toContain('quote_literal(subject)');
+    expect(body).toContain('string_agg(id::text');
+  });
+
   it('★ REFUSES to apply on conflicting data instead of repairing it', () => {
     // Merging two accounts means choosing which keeps its history, and
     // lowercasing a subject changes who can sign in. Neither is a migration's

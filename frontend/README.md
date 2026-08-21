@@ -34,7 +34,7 @@ file becomes a real password the moment `API_BASE_URL` points at a real
 deployment, and it is one that lives in git forever. The suite refuses to start
 without both variables and names the ones that are missing:
 
-```
+```text
 Missing required environment variable(s): BOSS_EMAIL, BOSS_PASSWORD.
 ```
 
@@ -44,6 +44,11 @@ Passwords for the accounts a spec provisions itself are generated per run — se
 ### From scratch
 
 ```bash
+# 0. the two required variables, plus an admin connection to create the database
+export BOSS_EMAIL='boss@hoanglongti.com'
+export BOSS_PASSWORD="$(openssl rand -base64 24)"   # yours, not written down
+export ADMIN_URL='postgres://backoffice:backoffice@localhost:5432/postgres'
+
 # 1. a database that is NAMED as a test database — the specs wipe schemas
 cd ../backend && docker compose up -d
 psql "$ADMIN_URL" -c 'CREATE DATABASE backoffice_itest;'

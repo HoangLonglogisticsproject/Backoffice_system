@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import { normalizeEmail } from '../src/core/users/domain/email';
@@ -49,6 +49,16 @@ const CANONICAL = '0010_canonical_email_identity.sql';
 const MIGRATIONS = [...PRE_CANONICAL, CANONICAL];
 
 const UNIQUE_VIOLATION = '23505';
+const CHECK_VIOLATION = '23514';
+
+/**
+ * What `withPreCanonicalSchema` reports when 0010 applied without raising.
+ *
+ * Neutral on purpose: two of the cases below WANT it to apply, and a sentinel
+ * that reads "which it should not have" made those tests assert success by
+ * matching a string that says the opposite.
+ */
+const APPLIED = 'APPLIED';
 
 /**
  * The first row, or a failure that names the query.
@@ -77,6 +87,18 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       await target.query(await readFile(join(__dirname, file), 'utf8'));
     }
   };
+
+  it('applies EVERY migration in the directory — the list above is not stale', async () => {
+    // ponytail: an assertion, not a loader. The two lists here are the test's
+    // subject (everything before 0010, then 0010), so reading the directory
+    // instead would erase the distinction this file is built on. What was
+    // actually missing is a failure when a new migration lands and nobody
+    // updates the list — silence, until the spec quietly tests a stale schema.
+    const onDisk = (await readdir(__dirname)).filter((f) => f.endsWith('.sql')).sort();
+
+    expect(MIGRATIONS).toEqual(onDisk);
+    expect(CANONICAL).toBe(onDisk[onDisk.length - 1]);
+  });
 
   beforeAll(async () => {
     assertLooksLikeATestDatabase(TEST_URL as string);
@@ -206,14 +228,36 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       expect(await insertLocalIdentity('uyen@hoanglongti.com')).toBeNull();
     });
 
+    /**
+     * ★ TWO LAYERS, AND THEY CATCH DIFFERENT THINGS.
+     *
+     * The unique index makes two rows that canonicalise alike collide. It does
+     * NOT make a row canonical — a single `  Uyen@… ` was legal until 0010 grew
+     * its CHECK, and for `identities` that is not cosmetic: every lookup
+     * canonicalises the input and compares it to the RAW column, so the account
+     * exists and nobody can ever sign in to it.
+     *
+     * So a NON-CANONICAL write is refused by the CHECK, before uniqueness is
+     * ever consulted — 23514, not 23505. Asserting the code rather than "it
+     * threw" is what keeps the two layers honest: if the CHECK were dropped,
+     * these would fall through to 23505 and still look like they passed.
+     */
     it.each([
       ['Uyen@hoanglongti.com', 'a capitalised local part'],
       ['UYEN@HOANGLONGTI.COM', 'all upper case'],
       ['uyen@HoangLongTI.com', 'a mixed-case domain'],
       ['  uyen@hoanglongti.com  ', 'surrounding whitespace'],
       ['  Uyen@HoangLongTI.com  ', 'both at once'],
-    ])('★ REFUSES %s — %s', async (variant) => {
-      expect(await insertLocalIdentity(variant)).toBe(UNIQUE_VIOLATION);
+      [`${String.fromCodePoint(0x00a0)}uyen@hoanglongti.com`, 'a leading NBSP'],
+    ])('★ the CHECK refuses %s — %s', async (variant) => {
+      expect(await insertLocalIdentity(variant)).toBe(CHECK_VIOLATION);
+    });
+
+    it('★ and the UNIQUE INDEX refuses an exact canonical duplicate', async () => {
+      // The other half. This row passes the CHECK — it is already canonical —
+      // so it reaches the index, which is the layer that answers "one person,
+      // one identity".
+      expect(await insertLocalIdentity('uyen@hoanglongti.com')).toBe(UNIQUE_VIOLATION);
     });
 
     it('★ still allows a DIFFERENT person whose address merely looks similar', async () => {
@@ -235,29 +279,35 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
      * This is why `uq_local_identity_subject_canonical` is partial. Delete the
      * `WHERE provider = 'local'` and this spec is what fails.
      */
-    it('accepts two subjects that differ only by case', async () => {
-      expect(
-        await sqlstateOf(
-          "INSERT INTO identities (user_id, provider, subject) VALUES ($1, 'oidc', 'AbC123XyZ')",
-          [userId],
-        ),
-      ).toBeNull();
+    /** A subject nothing else in this file uses, so each case owns its rows. */
+    const federated = (suffix: string) =>
+      sqlstateOf(
+        "INSERT INTO identities (user_id, provider, subject) VALUES ($1, 'oidc', $2)",
+        [userId, suffix],
+      );
 
-      expect(
-        await sqlstateOf(
-          "INSERT INTO identities (user_id, provider, subject) VALUES ($1, 'oidc', 'abc123xyz')",
-          [userId],
-        ),
-      ).toBeNull();
+    it('accepts two subjects that differ only by case', async () => {
+      const base = `Fed${Date.now()}Case`;
+
+      expect(await federated(base)).toBeNull();
+      expect(await federated(base.toLowerCase())).toBeNull();
     });
 
     it('still refuses a genuinely identical subject — 0001 covers every provider', async () => {
-      expect(
-        await sqlstateOf(
-          "INSERT INTO identities (user_id, provider, subject) VALUES ($1, 'oidc', 'AbC123XyZ')",
-          [userId],
-        ),
-      ).toBe(UNIQUE_VIOLATION);
+      // Inserts its own row first rather than leaning on the case above having
+      // run: a test that only passes in file order reports the wrong thing the
+      // day somebody runs it alone, or vitest reorders.
+      const subject = `Fed${Date.now()}Exact`;
+
+      expect(await federated(subject)).toBeNull();
+      expect(await federated(subject)).toBe(UNIQUE_VIOLATION);
+    });
+
+    it('★ is not forced to be canonical either — the CHECK is local-only', async () => {
+      // The constraint 0010 adds short-circuits on `provider <> 'local'`. An
+      // opaque subject with surrounding whitespace is a legal `sub`, and folding
+      // it would be this rule reaching somewhere it was told not to.
+      expect(await federated(`  Fed${Date.now()}Padded  `)).toBeNull();
     });
   });
 
@@ -268,12 +318,19 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       expect(await insertPendingInvitation('newjoiner@hoanglongti.com')).toBeNull();
     });
 
+    // Same two layers as identities: non-canonical never reaches uniqueness.
     it.each([
       ['NewJoiner@hoanglongti.com', 'a capitalised local part'],
       ['NEWJOINER@HOANGLONGTI.COM', 'all upper case'],
       ['  newjoiner@hoanglongti.com  ', 'surrounding whitespace'],
-    ])('★ REFUSES a second pending invitation as %s — %s', async (variant) => {
-      expect(await insertPendingInvitation(variant)).toBe(UNIQUE_VIOLATION);
+    ])('★ the CHECK refuses a pending invitation as %s — %s', async (variant) => {
+      expect(await insertPendingInvitation(variant)).toBe(CHECK_VIOLATION);
+    });
+
+    it('★ and the UNIQUE INDEX refuses an exact canonical duplicate', async () => {
+      expect(await insertPendingInvitation('newjoiner@hoanglongti.com')).toBe(
+        UNIQUE_VIOLATION,
+      );
     });
 
     it('allows a different address', async () => {
@@ -287,11 +344,15 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       await pool.query(
         `UPDATE account_invitations
             SET status = 'rejected', decided_by = $1, decided_at = now()
-          WHERE lower(btrim(email)) = 'nuna@hoanglongti.com'`,
+          WHERE canonical_identity(email) = 'nuna@hoanglongti.com'`,
         [deciderId],
       );
 
-      expect(await insertPendingInvitation('NUNA@hoanglongti.com')).toBeNull();
+      // The CANONICAL spelling: what is being tested is the index's partial
+      // scope, not the CHECK. `NUNA@…` would now be refused by the CHECK before
+      // uniqueness was consulted, which would pass this test for the wrong
+      // reason — it would prove nothing about `status = 'pending'`.
+      expect(await insertPendingInvitation('nuna@hoanglongti.com')).toBeNull();
     });
   });
 
@@ -325,7 +386,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
         let message = '';
         try {
           await applyMigrations(scoped, [CANONICAL]);
-          message = '(0010 applied, which it should not have)';
+          message = APPLIED;
         } catch (error) {
           message = (error as Error).message;
         }
@@ -368,6 +429,10 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       });
 
       expect(message).toContain('local identities collide once canonicalised');
+      expect(message).toContain('Colliding identity row ids');
+      // Same redaction on this side — an email is personal data wherever it appears.
+      expect(message).not.toContain('uyen@hoanglongti.com');
+      expect(message).not.toContain('Uyen@hoanglongti.com');
       // ★ AND BOTH ROWS SURVIVE. The operator decides which account keeps its
       // history; a migration that merged them would make that choice silently.
       expect(identityRows).toBe(2);
@@ -414,8 +479,11 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
       );
 
       expect(message).toContain('pending invitations collide once canonicalised');
-      // Named in the message, so the operator knows which address to look at.
-      expect(message).toContain('newjoiner@hoanglongti.com');
+      // ★ IDS, NOT THE ADDRESS. This text lands in a deploy log; the row id is
+      // what the operator acts on and it identifies exactly one row.
+      expect(message).toContain('Colliding row ids');
+      expect(message).not.toContain('newjoiner@hoanglongti.com');
+      expect(message).not.toContain('NewJoiner');
       // ★ Both survive: rejecting one is a decision, and it is not this file's.
       expect(invitationRows).toBe(2);
       expect(identityRows).toBe(0);
@@ -458,7 +526,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
         );
       });
 
-      expect(message).toBe('(0010 applied, which it should not have)');
+      expect(message).toBe(APPLIED);
     });
 
     it('applies cleanly when the data is already canonical', async () => {
@@ -471,7 +539,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
         );
       });
 
-      expect(message).toBe('(0010 applied, which it should not have)');
+      expect(message).toBe(APPLIED);
       expect(identityRows).toBe(1);
     });
   });
