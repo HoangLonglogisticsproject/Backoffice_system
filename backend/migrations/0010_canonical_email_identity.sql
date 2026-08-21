@@ -178,6 +178,30 @@ COMMENT ON FUNCTION canonical_identity(text) IS
 -- One block rather than three, with the two status/provider values named once
 -- as constants: they are predicates of this migration, not incidental strings,
 -- and repeating them invites one copy to be edited without the others.
+--
+-- ★ 'pending' AND 'local' STILL APPEAR THREE TIMES EACH, AND THAT IS THE FLOOR.
+--
+-- Once here, once in the partial index predicate, once in the CHECK. A static
+-- analyser reads that as a duplicated literal and asks for a constant. There is
+-- no constant to reach for: an index predicate and a CHECK expression are DDL,
+-- evaluated with no PL/pgSQL scope around them. Measured, not assumed:
+--
+--   WHERE status = s                      ERROR: column "s" does not exist
+--   WHERE status = current_setting(...)   ERROR: functions in index predicate
+--                                                must be marked IMMUTABLE
+--
+-- What DOES compile is an IMMUTABLE function returning the literal — and it is
+-- the worst of the three. It hides the predicate from anyone reading the index,
+-- and it recreates exactly the hazard documented above `canonical_identity`:
+-- CREATE OR REPLACE on that function would leave both indexes built against the
+-- old value, silently. Trading a real correctness trap for a lint count is a bad
+-- deal at any price.
+--
+-- So the repetition stays. These are two enum values already fixed by the schema
+-- (`CHECK (status IN ('pending','approved','rejected'))` in 0007, and `'local'`
+-- as LOCAL_PROVIDER in the application), and the three sites are three different
+-- languages that cannot share a binding. If this is flagged again, resolve it in
+-- the analyser as intended-by-design; do not add a function to make it go away.
 DO $$
 DECLARE
   pending_status  CONSTANT text := 'pending';
