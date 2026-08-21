@@ -311,6 +311,8 @@ jobs:
 
       - name: Integration tests (no mocks)
         working-directory: frontend
+        env:
+          BOSS_PASSWORD: ${{ env.BOSS_PASSWORD }}
         run: npm run test:integration -- --reporter=json --outputFile=vitest-integration.json
 
       # ★ The integration suite throws in `beforeAll` when the backend is
