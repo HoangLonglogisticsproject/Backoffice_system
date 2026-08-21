@@ -148,7 +148,17 @@ khi viết interceptor.
 | `role` | nhãn, layout | quyết định cho phép |
 | `departmentIds` | biết gọi `/departments/:id` nào | suy quyền trên phòng khác |
 | `permissions` | ẩn/hiện nút | thay cho kiểm ở server |
-| `username` | hiển thị | parse lại từ email |
+| `username` | hiển thị | parse lại từ email · đăng nhập · phân quyền |
+
+**`username` là `string | null`, và `null` là một câu trả lời thật.** Server trả
+`null` khi tài khoản không có local identity. Chính sách email công ty không làm
+điều đó biến mất — nó quyết định *địa chỉ nào hợp lệ*, không phải *có địa chỉ hay
+không*. Hiển thị sự vắng mặt đúng như nó là; **không bịa** `Admin User`,
+`Unknown`, hay in `userId` ra thay.
+
+**Đăng nhập bằng địa chỉ đầy đủ**, không bao giờ bằng `username`. `phuongle` là
+giá trị trình bày; `phuongle@hoanglongti.com` là credential. Xem
+`docs/backend/company-email-policy.md` cho mô hình định danh đầy đủ.
 
 `departmentIds` có **tối đa một phần tử**: một người active thuộc đúng một phòng.
 Đừng dựng UI nhiều phòng cho một người — trạng thái đó không tồn tại được.
@@ -761,6 +771,13 @@ Hai dòng đầu đều là **temporary credential**: chúng chỉ dùng để b
 Chỉ luồng thứ hai mới trả `temporaryPassword`. `POST /users` **không** trả —
 người gọi vừa tự chọn giá trị đó nên không có gì để trả lại.
 
+⚠️ **MÀN HÌNH BÀN GIAO PHẢI HIỆN ĐỊA CHỈ ĐẦY ĐỦ, KHÔNG PHẢI `username`.**
+Response của approve có cả `username` (`nuna`) lẫn `invitation.email`
+(`nuna@hoanglongti.com`). Chỉ cái thứ hai đăng nhập được: `POST /auth/login` nhận
+`subject` là địa chỉ đầy đủ. Dán nhãn "Tên đăng nhập" lên `nuna` là đưa cho người
+ta một thứ không dùng được — frontend hiện `Email đăng nhập: nuna@hoanglongti.com`.
+`username` vẫn là projection hiển thị và không có việc gì trên màn hình này.
+
 Ngưỡng tạm thấp hơn là **cố ý**: mật khẩu tạm được đọc cho nhau nghe, mỗi người
 một cái khác nhau, và nó không mở được gì ngoài màn đổi mật khẩu. Frontend phải
 dùng đúng ngưỡng ở đúng form — bắt 12 ký tự ở form tạo nhân sự sẽ chặn những giá
@@ -911,6 +928,27 @@ Frontend không có màn hình nào cho việc này, và không nên có.
 **Đã có endpoint** — xem §15b. Frontend dựng được màn hình bổ nhiệm trưởng
 phòng cho SUPERADMIN.
 
+### Email công ty — `@hoanglongti.com`
+
+**Mọi email tài khoản nhân viên phải thuộc `@hoanglongti.com`.** Backend từ chối
+mọi domain khác trên cả `POST /users` lẫn `POST /departments/:id/account-invitations`
+(422), kể cả khi gọi thẳng API không qua form.
+
+Trong UI, người dùng **chỉ gõ local part**; domain hiển thị cố định bên cạnh ô
+nhập và không sửa được. Frontend ghép trước khi gửi:
+
+```
+gõ:  uyen         →  gửi:  { "email": "uyen@hoanglongti.com" }
+gõ:  nuna         →  gửi:  { "email": "nuna@hoanglongti.com" }
+```
+
+Dán cả địa chỉ `uyen@hoanglongti.com` được chấp nhận và bóc đuôi — không bao giờ
+sinh ra `uyen@hoanglongti.com@hoanglongti.com`. Dán `uyen@gmail.com` bị từ chối
+ngay tại form.
+
+Body gửi lên **luôn là địa chỉ đầy đủ**, không bao giờ là local part. Chưa có
+tích hợp Google Workspace / mailbox — xem `docs/backend/company-email-policy.md`.
+
 ⚠️ **BỔ NHIỆM LÀ MỘT THAO TÁC RIÊNG, KHÔNG PHẢI MỘT TRƯỜNG LÚC TẠO ACCOUNT.**
 `POST /users` nhận đúng bốn trường — `displayName`, `email`, `initialPassword`,
 `departmentId` — và **không có `role`**. Tạo account xong, muốn người đó làm
@@ -937,6 +975,8 @@ Danh sách những điều **sai**, kèm chuyện gì thật sự xảy ra:
 |---|---|
 | "ẩn nút là đủ" | server vẫn là chỗ duy nhất từ chối |
 | "login dùng field `email`" | field là **`subject`** → gửi `email` nhận 422 |
+| "gửi local part `uyen` cho `POST /users`" | 422 — body luôn là địa chỉ đầy đủ; form ghép domain, không phải server |
+| "form đã cố định domain nên API không cần kiểm tra" | API kiểm tra độc lập; gọi thẳng với `@gmail.com` nhận 422 |
 | "membership request dùng `targetUserId`" | request dùng **`userId`**; response mới là `targetUserId` |
 | "approve luôn trả 200" | invitation approve trả **201** |
 | "`GET /departments` ai cũng gọi được" | **GLOBAL only**, HEAD nhận 403 |

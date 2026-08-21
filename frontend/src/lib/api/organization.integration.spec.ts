@@ -17,7 +17,7 @@ import { CSRF_HEADER, CSRF_HEADER_VALUE } from '../http/client';
  */
 
 const BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
-const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglong.test';
+const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglongti.com';
 const BOSS_PASSWORD = process.env.BOSS_PASSWORD ?? 'correct horse battery staple';
 
 type Client = AxiosInstance & { cookie: string | null };
@@ -118,9 +118,9 @@ describe('organization read paths (§5, §6)', () => {
     departmentA = a.data.id;
     departmentB = b.data.id;
 
-    const head = await provision(`head-a-${unique}@hoanglong.test`, departmentA, 'Head of A');
-    const member = await provision(`member-a-${unique}@hoanglong.test`, departmentA, 'Member of A');
-    const otherHead = await provision(`head-b-${unique}@hoanglong.test`, departmentB, 'Head of B');
+    const head = await provision(`head-a-${unique}@hoanglongti.com`, departmentA, 'Head of A');
+    const member = await provision(`member-a-${unique}@hoanglongti.com`, departmentA, 'Member of A');
+    const otherHead = await provision(`head-b-${unique}@hoanglongti.com`, departmentB, 'Head of B');
 
     headOfA = head.client;
     memberOfA = member.client;
@@ -307,7 +307,7 @@ describe('organization read paths (§5, §6)', () => {
       // Provisioning is unfinished, so this is a different refusal from "not
       // allowed" — and it routes to a different screen. Asserting the CODE is
       // what keeps those two 403s apart.
-      const email = `fresh-${unique}@hoanglong.test`;
+      const email = `fresh-${unique}@hoanglongti.com`;
       const created = await boss.post('/users', {
         displayName: 'Fresh Joiner',
         email,

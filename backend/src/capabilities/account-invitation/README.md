@@ -80,7 +80,7 @@ không có account mồ côi.
 | Tình huống | Kết quả |
 |---|---|
 | Email đã có account (kể cả disabled) | 409 |
-| Email ngoài `ALLOWED_EMAIL_DOMAINS` | 422 |
+| Email ngoài `ALLOWED_EMAIL_DOMAINS` (mặc định `hoanglongti.com`) | 422 |
 | Pending trùng email | 409 |
 | Tự duyệt invitation của mình | 409 (+ CHECK ở DB) |
 | Department bị archive trước khi duyệt | 409 |

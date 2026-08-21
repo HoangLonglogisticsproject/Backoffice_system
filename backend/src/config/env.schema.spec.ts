@@ -115,6 +115,37 @@ describe('validateEnv', () => {
     });
   });
 
+  describe('ALLOWED_EMAIL_DOMAINS', () => {
+    /**
+     * The company email policy, and the reason it is a default rather than a
+     * line in `.env`: `.env` is gitignored, so a policy that lives only there
+     * fails OPEN on any deployment that forgets it.
+     */
+    it('defaults to the company domain, so forgetting the variable still enforces it', () => {
+      expect(validateEnv(valid).ALLOWED_EMAIL_DOMAINS).toEqual(['hoanglongti.com']);
+    });
+
+    it('is overridable by a deployment that is not this one', () => {
+      expect(
+        validateEnv({ ...valid, ALLOWED_EMAIL_DOMAINS: 'a.example, b.example' })
+          .ALLOWED_EMAIL_DOMAINS,
+      ).toEqual(['a.example', 'b.example']);
+    });
+
+    it('lowercases, because the address it is compared against is normalised', () => {
+      expect(
+        validateEnv({ ...valid, ALLOWED_EMAIL_DOMAINS: 'HoangLongTI.com' })
+          .ALLOWED_EMAIL_DOMAINS,
+      ).toEqual(['hoanglongti.com']);
+    });
+
+    it('treats an EXPLICIT empty value as "no restriction" — the documented escape hatch', () => {
+      expect(validateEnv({ ...valid, ALLOWED_EMAIL_DOMAINS: '' }).ALLOWED_EMAIL_DOMAINS).toEqual(
+        [],
+      );
+    });
+  });
+
   it('reports every problem at once, not one per restart', () => {
     // Three separate mistakes: an invalid enum, an uncoercible number, and a
     // missing required value. Someone setting this up for the first time should

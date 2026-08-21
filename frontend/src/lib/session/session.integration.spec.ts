@@ -22,7 +22,7 @@ import { CSRF_HEADER, CSRF_HEADER_VALUE } from '../http/client';
  */
 
 const BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
-const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglong.test';
+const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglongti.com';
 const BOSS_PASSWORD = process.env.BOSS_PASSWORD ?? 'correct horse battery staple';
 
 /** A client that mirrors the app's real transport rules, plus a cookie jar. */
@@ -197,7 +197,7 @@ describe('frontend ↔ backend integration', () => {
     // state that breaks naive interceptors, so it is exercised for real:
     // provision, sign in, get 403, change the password, sign in again.
     const unique = Date.now();
-    const email = `joiner${unique}@hoanglong.test`;
+    const email = `joiner${unique}@hoanglongti.com`;
     const temporaryPassword = 'temp pass 1';
     const chosenPassword = 'a properly long passphrase';
 
@@ -287,7 +287,7 @@ describe('frontend ↔ backend integration', () => {
   describe('403 FORBIDDEN is not a session problem (§11)', () => {
     it('a MEMBER is refused a global route, with a session that still works', async () => {
       const unique = Date.now();
-      const email = `member${unique}@hoanglong.test`;
+      const email = `member${unique}@hoanglongti.com`;
 
       const department = await boss.post('/departments', {
         slug: `plain-${unique}`,

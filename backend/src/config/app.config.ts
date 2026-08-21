@@ -37,8 +37,9 @@ export class AppConfig {
   }
 
   /**
-   * Empty means any domain may be provisioned — see the schema for why that is
-   * the safe default for a reusable foundation rather than a lax one.
+   * Defaults to the company domain, so the policy holds even when nothing sets
+   * the variable — see the schema. Setting it explicitly empty is the documented
+   * escape hatch and means any domain may be provisioned.
    */
   get allowedEmailDomains(): readonly string[] {
     return this.config.get('ALLOWED_EMAIL_DOMAINS', { infer: true });

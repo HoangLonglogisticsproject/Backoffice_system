@@ -287,6 +287,66 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       expect(account.user.status).toBe('active');
     });
 
+    /**
+     * The company policy itself, on the deployment's real domain — the two
+     * above prove the allowlist is a mechanism, these prove which value it is
+     * pointed at. `hoanglongti.com` is the schema default, so this is what a
+     * deployment that configures nothing at all gets.
+     *
+     * ★ FRONTEND CONSTRUCTION IS NOT A CONTROL. The form appends the domain, so
+     * the UI path cannot produce anything else — and none of that reaches here.
+     * These call the service directly, which is the shape of an attacker who
+     * skips the form and posts to `/users`.
+     */
+    describe('the company email policy', () => {
+      beforeEach(() => {
+        allowedDomains = ['hoanglongti.com'];
+      });
+
+      it('stores and returns the FULL canonical address, not the local part', async () => {
+        const dept = await departments.create({ slug: 'a', name: 'A' });
+
+        const account = await provisioning.provision({
+          displayName: 'Uyen',
+          email: 'uyen@hoanglongti.com',
+          departmentId: dept.id,
+          initialPassword: 'a valid passphrase',
+        });
+
+        // `username` is the DERIVED display value; the stored subject is whole.
+        expect(account.username).toBe('uyen');
+        const { rows } = await pool.query<{ subject: string }>(
+          'SELECT subject FROM identities WHERE user_id = $1',
+          [account.user.id],
+        );
+        expect(rows[0]!.subject).toBe('uyen@hoanglongti.com');
+      });
+
+      it.each([
+        ['an outside domain', 'uyen@gmail.com', /domain is not permitted/],
+        ['another outside domain', 'nuna@yahoo.com', /domain is not permitted/],
+        // What the form would have built if it had no validation at all, and
+        // what a direct caller can simply type.
+        ['a bare local part with no domain', 'hlt58', /not a valid address/],
+        ['nothing before the @', '@hoanglongti.com', /not a valid address/],
+        ['nothing after the @', 'uyen@', /not a valid address/],
+      ])('refuses %s, and creates nothing', async (_label, email, message) => {
+        const dept = await departments.create({ slug: 'a', name: 'A' });
+
+        await expect(
+          provisioning.provision({
+            displayName: 'A',
+            email,
+            departmentId: dept.id,
+            initialPassword: 'a valid passphrase',
+          }),
+        ).rejects.toThrow(message);
+
+        const { rows } = await pool.query<{ count: string }>('SELECT count(*) AS count FROM users');
+        expect(Number(rows[0]!.count)).toBe(0);
+      });
+    });
+
     it('generates a temporary password when none is supplied, and returns it once', async () => {
       const dept = await departments.create({ slug: 'a', name: 'A' });
 

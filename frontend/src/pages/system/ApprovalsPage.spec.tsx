@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ApprovalsPage from './ApprovalsPage';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 
@@ -45,7 +45,7 @@ const REQUEST = {
 const INVITATION = {
   id: 'a1b2c3d4-0000-4000-8000-000000000000',
   departmentId: 'dep',
-  email: 'newcomer@hoanglong.test',
+  email: 'newcomer@hoanglongti.com',
   status: 'pending',
   requestedBy: 'u2',
   requestedByUser: { id: 'u2', displayName: 'Head Person' },
@@ -84,7 +84,7 @@ const renderPage = () =>
 
 const openInvitations = async () => {
   fireEvent.click(screen.getByRole('button', { name: /lời mời|invitation/i }));
-  await screen.findByText('newcomer@hoanglong.test');
+  await screen.findByText('newcomer@hoanglongti.com');
 };
 
 describe('ApprovalsPage', () => {
@@ -145,11 +145,34 @@ describe('ApprovalsPage', () => {
       fireEvent.click(lastConfirmButton());
 
       expect(await screen.findByText(SECRET)).toBeInTheDocument();
-      expect(screen.getByText('newcomer')).toBeInTheDocument();
+      // ★ THE FULL ADDRESS, because that is what `POST /auth/login` takes as
+      // `subject`. It used to show the local part under "Tên đăng nhập", and
+      // an approver reading that out loud sent people to a login that could
+      // only fail. Scoped to the dialog: the address is also in the table
+      // behind it, and an unscoped query would pass on the wrong element.
+      const dialog = within(screen.getByRole('dialog'));
+      expect(dialog.getByText('newcomer@hoanglongti.com')).toBeInTheDocument();
+      expect(dialog.getByText('Email đăng nhập')).toBeInTheDocument();
       // And it says plainly that this is the only showing.
       expect(screen.getByText(/không có cách nào đọc lại|nothing can read it back/i)).toBeInTheDocument();
       // The approver sent no password of their own.
       expect(approveAccountInvitation).toHaveBeenCalledWith(INVITATION.id);
+    });
+
+    it('never hands over the bare local part as if it were the credential', async () => {
+      renderPage();
+      await openInvitations();
+
+      fireEvent.click(screen.getByRole('button', { name: /^duyệt$|^approve$/i }));
+      fireEvent.click(lastConfirmButton());
+      await screen.findByText(SECRET);
+
+      // `username` is still in the response — it is the DISPLAY projection —
+      // but `newcomer` alone signs nobody in, so this screen must not offer it
+      // as something to type. And the old label must not come back.
+      const dialog = within(screen.getByRole('dialog'));
+      expect(dialog.queryByText('newcomer')).not.toBeInTheDocument();
+      expect(dialog.queryByText(/tên đăng nhập|^username$/i)).not.toBeInTheDocument();
     });
 
     it('CANNOT be revealed a second time once dismissed', async () => {

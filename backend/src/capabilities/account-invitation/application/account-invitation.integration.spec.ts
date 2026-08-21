@@ -288,6 +288,42 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
       ).rejects.toThrow(/domain is not permitted/);
     });
 
+    /**
+     * The company policy on the deployment's real domain — the schema default,
+     * so this is what a deployment that configures nothing gets.
+     *
+     * The head's form appends `@hoanglongti.com` and cannot produce anything
+     * else. None of that reaches here: these call the service directly, which
+     * is the shape of a head who skips the form and posts to the endpoint.
+     */
+    describe('the company email policy', () => {
+      it('accepts the company domain, and stores the full address', async () => {
+        const { a, headAId } = await scenario();
+        allowedDomains = ['hoanglongti.com'];
+
+        const invitation = await invitations.create({
+          departmentId: a.id,
+          requestedBy: headAId,
+          email: 'nuna@hoanglongti.com',
+        });
+
+        expect(invitation.email).toBe('nuna@hoanglongti.com');
+      });
+
+      it.each([
+        ['an outside domain', 'nuna@gmail.com', /domain is not permitted/],
+        ['a bare local part', 'hlt58', /not a valid address/],
+        ['nothing before the @', '@hoanglongti.com', /not a valid address/],
+      ])('refuses %s', async (_label, email, message) => {
+        const { a, headAId } = await scenario();
+        allowedDomains = ['hoanglongti.com'];
+
+        await expect(
+          invitations.create({ departmentId: a.id, requestedBy: headAId, email }),
+        ).rejects.toThrow(message);
+      });
+    });
+
     it('refuses a second pending invitation for the same email, from ANY department', async () => {
       const { a, b, headAId, headBId } = await scenario();
       await invitations.create({
