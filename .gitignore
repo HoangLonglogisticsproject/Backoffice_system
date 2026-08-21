@@ -37,6 +37,12 @@ yarn-error.log
 .sass-cache/
 /connect.lock
 **/coverage
+
+# Test reports written by the CI commands (`--outputFile`). Ephemeral on a
+# runner, but they land here whenever those same commands are run locally.
+jest-results.json
+vitest-results.json
+vitest-integration.json
 /libpeerconnection.log
 testem.log
 /typings
