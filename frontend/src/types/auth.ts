@@ -31,6 +31,14 @@ export interface Identity {
 export interface LoginResult {
   user: Identity;
   expiresAt: string;
+  /**
+   * True when the credential just used is the temporary one provisioning hands
+   * out (§12). Declared because the server returns it — NOT what the app routes
+   * on: `/authorization/me` answering 403 PASSWORD_CHANGE_REQUIRED is the
+   * authority, and that answer stays true on every later request rather than
+   * only on the one that signed in.
+   */
+  mustChangePassword: boolean;
 }
 
 /**
