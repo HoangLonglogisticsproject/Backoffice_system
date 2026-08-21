@@ -11,35 +11,45 @@ Cloudflare (DNS, proxy, TLS)  →  nginx :443 (host)  →  /        static files
 
 ## Layout on the VPS
 
+The repository is cloned whole and compose is run from `deploy/`, because that
+is what the relative paths in `docker-compose.yml` already resolve against:
+
 ```
-/opt/hoanglong-bo/
-├── docker-compose.yml     from deploy/
-├── backend.Dockerfile     from deploy/
-├── .env                   from deploy/env.example — NEVER committed
-├── postgres-data/         bind mount, the database lives here
-└── backend/               the backend source, for the build context
-/var/www/opsystem/         frontend dist/, copied from a build machine
+/opt/hoanglong-bo/            ← git clone of this repository
+├── backend/                  ← build context
+├── frontend/
+└── deploy/                   ← RUN COMPOSE FROM HERE
+    ├── docker-compose.yml
+    ├── backend.Dockerfile
+    ├── .env                  ← created on the VPS, never committed
+    └── postgres-data/        ← the database (gitignored)
+
+/var/www/opsystem/            ← frontend dist/, uploaded from a build machine
+/etc/ssl/cloudflare/          ← origin certificate
 ```
+
+Redeploying is `git pull` in `/opt/hoanglong-bo`, which is the reason for
+cloning rather than copying files around.
 
 ## First deploy
 
 ```bash
-# 1. secrets, on the VPS, once
-install -d -m 750 /opt/hoanglong-bo && cd /opt/hoanglong-bo
+git clone <repo-url> /opt/hoanglong-bo
+cd /opt/hoanglong-bo/deploy
+
+# secrets, once. Generated here and stored nowhere else
 cp env.example .env
 sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 24)|" .env
 chmod 600 .env
 
-# 2. bring up the database and the app
 docker compose up -d --build
 
-# 3. schema. Refuses rather than repairs — read the error, do not force it
+# schema. Refuses rather than repairs — read the error, do not force it
 docker compose run --rm --no-deps backend npm run migrate
 
-# 4. the first SuperAdmin. Password is typed here and stored nowhere
+# the first SuperAdmin. Password is typed here and stored nowhere
 read -rsp 'Bootstrap password: ' BOOTSTRAP_PASSWORD && echo
-docker compose run --rm --no-deps -e BOOTSTRAP_PASSWORD backend \
-  npm run user:create -- --email 'admin@hoanglonglti.com' --name 'Tong Giam Doc' --superadmin
+docker compose run --rm --no-deps -e BOOTSTRAP_PASSWORD backend   npm run user:create -- --email 'admin@hoanglonglti.com' --name 'Tong Giam Doc' --superadmin
 unset BOOTSTRAP_PASSWORD
 ```
 
@@ -84,11 +94,11 @@ ss -lntp        # 5432 and 3000 must NOT appear on 0.0.0.0
 ## Day to day
 
 ```bash
-cd /opt/hoanglong-bo
+cd /opt/hoanglong-bo/deploy
 docker compose ps                      # health
 docker compose logs -f --tail=100 backend
 docker compose restart backend         # restart app only
-docker compose up -d --build           # redeploy backend after a code change
+git -C .. pull && docker compose up -d --build   # redeploy after a code change
 docker compose run --rm --no-deps backend npm run migrate   # after new migrations
 systemctl reload nginx                 # after an nginx.conf change
 ```

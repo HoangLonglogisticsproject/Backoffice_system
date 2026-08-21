@@ -4,6 +4,10 @@
 # ★ NOTHING IS PUBLISHED TO THE INTERNET. Postgres publishes no port at all and
 # is reachable only over the compose network; the backend binds 127.0.0.1 so
 # only nginx on this host can reach it. UFW is the second layer, not the first.
+# Fixed, so containers are `hoanglong-bo-postgres-1` rather than named after
+# whatever directory this file happens to sit in.
+name: hoanglong-bo
+
 services:
   postgres:
     image: postgres:17-alpine
