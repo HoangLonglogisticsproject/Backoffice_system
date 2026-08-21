@@ -33,6 +33,7 @@ const toIdentity = (row: IdentityRow): Identity => ({
   provider: row.provider,
   subject: row.subject,
   secretHash: row.secret_hash,
+  mustChangeSecret: row.must_change_secret,
   createdAt: row.created_at,
 });
 

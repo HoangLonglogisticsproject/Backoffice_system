@@ -37,6 +37,7 @@ export class TooManyAttemptsError extends DomainError {
 export interface LoginResult {
   session: IssuedSession;
   user: SessionUser;
+  mustChangePassword: boolean;
 }
 
 @Injectable()
@@ -95,6 +96,7 @@ export class AuthenticationService {
     return {
       session: await this.sessions.issue(user.id),
       user: toSessionUser(user),
+      mustChangePassword: identity.mustChangeSecret,
     };
   }
 

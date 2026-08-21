@@ -1,4 +1,4 @@
-import { isApiError } from '@/lib/http/apiError'
+import { isApiError } from '@/utils/errors'
 
 /**
  * How long to wait, phrased for a person (§11: 429 carries `Retry-After`).

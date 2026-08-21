@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { translate, type Language, type TranslationKey } from '@/lib/type/translate';
+import { translate, type Language, type TranslationKey } from '@/types/translate';
 
 /**
  * Which language the interface speaks, and the lookup every screen uses.

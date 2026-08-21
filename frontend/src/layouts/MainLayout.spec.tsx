@@ -9,10 +9,10 @@ const useSession = vi.fn();
 const useMyDepartments = vi.fn();
 const navigate = vi.fn();
 
-vi.mock('@/lib/session/SessionProvider', () => ({
+vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
 }));
-vi.mock('@/lib/api/useMyDepartments', () => ({
+vi.mock('@/hooks/useMyDepartments', () => ({
   useMyDepartments: () => useMyDepartments(),
 }));
 vi.mock('react-router-dom', async () => ({

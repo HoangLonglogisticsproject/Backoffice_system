@@ -5,9 +5,9 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { Lock } from 'lucide-react'
 import logo from '@/assets/img/LOGO.png'
-import { useSession } from '@/lib/session/SessionProvider'
-import { changePassword } from '@/lib/api/auth.repository'
-import { isApiError } from '@/lib/http/apiError'
+import { useSession } from '@/contexts/SessionProvider'
+import { changePassword } from '@/api/auth'
+import { isApiError } from '@/utils/errors'
 
 /** Contract §13: a password the USER chooses must be at least 12 characters. */
 const MIN_PERMANENT_PASSWORD_LENGTH = 12
@@ -125,6 +125,28 @@ export default function ChangePasswordPage() {
             <div className="space-y-2">
               <label htmlFor="newPassword" className="text-[13px] font-bold text-gray-700 ml-1">
                 Mật khẩu mới
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
+                  <Lock className="h-[18px] w-[18px]" />
+                </div>
+                <Input
+                  id="newPassword"
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                  minLength={MIN_PERMANENT_PASSWORD_LENGTH}
+                  placeholder={`Ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự`}
+                  className="pl-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="newPassword" className="text-[13px] font-bold text-gray-700 ml-1">
+                Nhập lại mật khẩu mới
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">

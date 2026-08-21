@@ -52,8 +52,12 @@ export class AuthController {
     @Body() body: LoginInput,
     @Ip() ip: string,
     @Res({ passthrough: true }) response: Response,
-  ): Promise<{ user: SessionUser; expiresAt: string }> {
-    const { session, user } = await this.auth.login(body.subject, body.password, ip);
+  ): Promise<{ user: SessionUser; expiresAt: string; mustChangePassword: boolean }> {
+    const { session, user, mustChangePassword } = await this.auth.login(
+      body.subject,
+      body.password,
+      ip,
+    );
 
     response.cookie(
       SESSION_COOKIE,
@@ -63,7 +67,7 @@ export class AuthController {
 
     // Expiry is returned so a client can warn before it lapses. The token is
     // not, and must not be.
-    return { user, expiresAt: session.expiresAt.toISOString() };
+    return { user, expiresAt: session.expiresAt.toISOString(), mustChangePassword };
   }
 
   @Post('logout')

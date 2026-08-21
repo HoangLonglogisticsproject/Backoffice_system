@@ -7,13 +7,13 @@ const createUser = vi.fn();
 const requestAccountInvitation = vi.fn();
 const can = vi.fn();
 
-vi.mock('@/lib/api/users.repository', () => ({
+vi.mock('@/api/users', () => ({
   createUser: (...args: unknown[]) => createUser(...args),
 }));
-vi.mock('@/lib/api/account-invitation.repository', () => ({
+vi.mock('@/api/account-invitation', () => ({
   requestAccountInvitation: (...args: unknown[]) => requestAccountInvitation(...args),
 }));
-vi.mock('@/lib/session/SessionProvider', () => ({
+vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => ({ can }),
 }));
 
@@ -145,7 +145,7 @@ describe('AddEmployeeModal', () => {
 
   it('shows the server’s refusal rather than guessing at one', async () => {
     can.mockReturnValue(false);
-    const { ApiError } = await import('@/lib/http/apiError');
+    const { ApiError } = await import('@/utils/errors');
     requestAccountInvitation.mockRejectedValue(
       new ApiError(409, 'CONFLICT', 'That address already has an account.'),
     );

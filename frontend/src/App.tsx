@@ -21,7 +21,7 @@ import ChangePasswordPage from './pages/system/ChangePasswordPage'
 import ApprovalsPage from './pages/system/ApprovalsPage'
 import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
 import AccountSecurityPage from './pages/account/AccountSecurityPage'
-import { RequireSession } from './lib/session/RequireSession'
+import { RequireSession } from './components/common/SessionGuard'
 
 function App() {
   return (
