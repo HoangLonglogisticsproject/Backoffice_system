@@ -460,6 +460,82 @@ describe('approval write paths (§9, §10, §13)', () => {
     });
   });
 
+  // ------------------- the proposer is never the decider (§9, §10, §13) --
+
+  describe('★ every proposal has somebody who can decide it (§9, §10)', () => {
+    /**
+     * The invariant, end to end.
+     *
+     * Deciding is GLOBAL-only and both services refuse `requestedBy ===
+     * decidedBy`, and `uq_single_active_superadmin` allows exactly one active
+     * global administrator. So a proposal raised BY that administrator would
+     * have no actor left in the deployment who could approve or reject it — it
+     * would sit pending forever, and the duplicate check would then refuse the
+     * address to everybody else too.
+     *
+     * The route therefore refuses them, and these ask the real server whether
+     * it does.
+     */
+    it('a SUPERADMIN cannot raise an account invitation — 403, not a stuck row', async () => {
+      const response = await boss.post(`/departments/${departmentA}/account-invitations`, {
+        email: `ceo-raised-${unique}@hoanglongti.com`,
+      });
+
+      expect(response.status).toBe(403);
+      expect(toApiError(response.status, response.data).code).toBe('FORBIDDEN');
+      // The refusal names the way out, because the caller is not
+      // under-privileged — they are the wrong actor for this route.
+      expect(response.data.error.message).toMatch(/direct route/i);
+    });
+
+    it('a SUPERADMIN cannot raise a membership request either — same reason', async () => {
+      const response = await boss.post(`/departments/${departmentA}/membership-requests`, {
+        userId: memberOfAId,
+        action: 'TRANSFER_MEMBER',
+        targetDepartmentId: departmentB,
+      });
+
+      expect(response.status).toBe(403);
+      expect(toApiError(response.status, response.data).code).toBe('FORBIDDEN');
+    });
+
+    it('★ and the refusal costs them nothing — POST /users still creates outright', async () => {
+      // This is what makes the two refusals above correct rather than merely
+      // safe: the SUPERADMIN never needed the proposal route. They create the
+      // account directly, with no proposal and nothing left to decide.
+      const email = `ceo-direct-${unique}@hoanglongti.com`;
+      const created = await boss.post('/users', {
+        displayName: 'Hired Directly',
+        email,
+        initialPassword: 'temp pass 1',
+        departmentId: departmentA,
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.data.id).toEqual(expect.any(String));
+
+      // And no invitation was involved, so nothing is waiting on anybody.
+      const queue = await boss.get('/account-invitations', { params: { limit: 200 } });
+      expect(queue.status).toBe(200);
+      expect(queue.data.items.some((row: { email: string }) => row.email === email)).toBe(false);
+    });
+
+    it('a HEAD raises it instead, and the SUPERADMIN can then decide — the loop closes', async () => {
+      const raised = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
+        email: `loop-closes-${unique}@hoanglongti.com`,
+      });
+      expect(raised.status).toBe(201);
+
+      // Different actors, which is the whole invariant.
+      expect(raised.data.requestedBy).not.toBe(null);
+
+      const decided = await boss.post(`/account-invitations/${raised.data.id}/reject`, {});
+      expect(decided.status).toBe(200);
+      expect(decided.data.status).toBe('rejected');
+      expect(decided.data.decidedBy).not.toBe(raised.data.requestedBy);
+    });
+  });
+
   // ------------------------------------------------ cursor pagination (§8) --
 
   describe('cursor pagination on a real list (§8)', () => {
