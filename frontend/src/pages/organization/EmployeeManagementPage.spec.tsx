@@ -9,13 +9,13 @@ const createUser = vi.fn();
 const requestAccountInvitation = vi.fn();
 const useSession = vi.fn();
 
-vi.mock('@/lib/api/membership.repository', () => ({
+vi.mock('@/api/membership', () => ({
   fetchDepartmentMembers: (...a: unknown[]) => fetchDepartmentMembers(...a),
 }));
-vi.mock('@/lib/api/users.repository', () => ({
+vi.mock('@/api/users', () => ({
   createUser: (...a: unknown[]) => createUser(...a),
 }));
-vi.mock('@/lib/api/account-invitation.repository', () => ({
+vi.mock('@/api/account-invitation', () => ({
   requestAccountInvitation: (...a: unknown[]) => requestAccountInvitation(...a),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({

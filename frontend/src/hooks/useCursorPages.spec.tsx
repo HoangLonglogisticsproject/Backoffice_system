@@ -5,7 +5,7 @@ import type { Page, PageRequest } from '@/types/pagination';
 
 // A session that is always `ready`, so the hook under test is the only thing
 // deciding anything. `useSessionResource` gates on this by design.
-vi.mock('../session/SessionProvider', () => ({
+vi.mock('../contexts/SessionProvider', () => ({
   useSession: () => ({ state: { status: 'ready' }, loading: false }),
 }));
 

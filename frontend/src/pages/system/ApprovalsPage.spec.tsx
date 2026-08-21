@@ -10,12 +10,12 @@ const fetchPendingAccountInvitations = vi.fn();
 const approveAccountInvitation = vi.fn();
 const rejectAccountInvitation = vi.fn();
 
-vi.mock('@/lib/api/membership-request.repository', () => ({
+vi.mock('@/api/membership-request', () => ({
   fetchPendingMembershipRequests: (...a: unknown[]) => fetchPendingMembershipRequests(...a),
   approveMembershipRequest: (...a: unknown[]) => approveMembershipRequest(...a),
   rejectMembershipRequest: (...a: unknown[]) => rejectMembershipRequest(...a),
 }));
-vi.mock('@/lib/api/account-invitation.repository', () => ({
+vi.mock('@/api/account-invitation', () => ({
   fetchPendingAccountInvitations: (...a: unknown[]) => fetchPendingAccountInvitations(...a),
   approveAccountInvitation: (...a: unknown[]) => approveAccountInvitation(...a),
   rejectAccountInvitation: (...a: unknown[]) => rejectAccountInvitation(...a),

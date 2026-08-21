@@ -12,7 +12,7 @@ const navigate = vi.fn();
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
 }));
-vi.mock('@/lib/api/useMyDepartments', () => ({
+vi.mock('@/hooks/useMyDepartments', () => ({
   useMyDepartments: () => useMyDepartments(),
 }));
 vi.mock('react-router-dom', async () => ({

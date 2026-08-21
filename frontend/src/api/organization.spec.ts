@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const get = vi.fn();
 
-vi.mock('../http/client', () => ({
+vi.mock('./client', () => ({
   httpClient: { get: (...args: unknown[]) => get(...args) },
 }));
 

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const post = vi.fn();
 const patch = vi.fn();
 
-vi.mock('../http/client', () => ({
+vi.mock('./client', () => ({
   httpClient: {
     post: (...args: unknown[]) => post(...args),
     patch: (...args: unknown[]) => patch(...args),

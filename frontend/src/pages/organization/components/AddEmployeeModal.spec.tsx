@@ -7,10 +7,10 @@ const createUser = vi.fn();
 const requestAccountInvitation = vi.fn();
 const can = vi.fn();
 
-vi.mock('@/lib/api/users.repository', () => ({
+vi.mock('@/api/users', () => ({
   createUser: (...args: unknown[]) => createUser(...args),
 }));
-vi.mock('@/lib/api/account-invitation.repository', () => ({
+vi.mock('@/api/account-invitation', () => ({
   requestAccountInvitation: (...args: unknown[]) => requestAccountInvitation(...args),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
