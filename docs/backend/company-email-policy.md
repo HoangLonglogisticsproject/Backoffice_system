@@ -29,9 +29,68 @@ uyen@                 không có domain
 ```
 
 **Email lưu và trả về luôn là địa chỉ đầy đủ.** Không bao giờ lưu `uyen` một
-mình. `username` mà API trả về là giá trị **suy ra** từ local part để hiển thị —
-không có cột `username`, không có credential `username`, không có đường đăng nhập
-bằng `username`. Xem `core/authorization/domain/username.ts`.
+mình.
+
+## Mô hình định danh — bốn giá trị, một nguồn sự thật
+
+Đây là toàn bộ mô hình. Không có giá trị thứ năm, và **không có nguồn username
+thứ hai được lưu trữ.**
+
+| | Giá trị | Ai sở hữu | Lưu ở đâu |
+|---|---|---|---|
+| **Định danh chuẩn (canonical)** | `phuongle@hoanglongti.com` | backend | `identities.subject` |
+| **Credential đăng nhập** | `phuongle@hoanglongti.com` | backend | cùng cột trên |
+| **Username hiển thị trên dashboard** | `phuongle` | backend suy ra | **không lưu ở đâu cả** |
+| **Định danh phân quyền nội bộ** | `userId` (UUID) | backend | `users.id` |
+
+```
+identities.subject = "phuongle@hoanglongti.com"   ← lưu, normalize, unique
+        │
+        │  localPartOf()  — mỗi request, KHÔNG bao giờ lưu lại
+        ▼
+GET /authorization/me → username: "phuongle"
+        ▼
+MainLayout hiển thị "phuongle"
+```
+
+### Username hiển thị
+
+`username` mà API trả về là giá trị **suy ra** từ local part để hiển thị.
+Không có cột `username`, không có credential `username`, không có đường đăng
+nhập bằng `username`. Xem `core/authorization/domain/username.ts`.
+
+Nó **là**: một giá trị trình bày.
+
+Nó **không phải**:
+
+- không phải role
+- không phải permission
+- không phải mật khẩu
+- không phải `userId` nội bộ
+- không phải thứ dùng để đăng nhập
+
+`localPartOf()` chạy ở **backend**, không phải frontend. Frontend nhận thẳng
+`username` đã suy ra sẵn và **không tự tách `@`**, không gọi thêm API nào để lấy
+giá trị này, và không truy vấn cơ sở dữ liệu.
+
+### `username` có thể là `null`
+
+`GET /authorization/me` khai báo `username: string | null` và trả `null` khi tài
+khoản **không có local identity** (`findLocalSubject` trả null). Điều này độc lập
+với chính sách domain: chính sách quyết định *địa chỉ nào hợp lệ*, còn `null`
+nghĩa là *chưa có địa chỉ nội bộ nào cả*. Chính sách email công ty **không** làm
+cho `null` biến mất, nên kiểu dữ liệu ở frontend giữ nguyên `string | null`.
+
+Frontend hiển thị sự vắng mặt đúng như nó là: avatar hiện `?`, phần tên không
+render. **Không bịa ra danh tính thay thế** — không `Admin User`, không
+`Unknown`, không in `userId` ra màn hình.
+
+### Đăng nhập dùng địa chỉ đầy đủ
+
+⚠️ Màn hình duyệt invitation trả mật khẩu tạm thời **hiển thị `Email đăng nhập:
+nuna@hoanglongti.com`**, không phải `Tên đăng nhập: nuna`. `POST /auth/login`
+nhận `subject` là **địa chỉ đầy đủ**; đưa cho người ta local part là đưa một thứ
+không đăng nhập được. Mật khẩu tạm thời vẫn chỉ hiện **đúng một lần**.
 
 ## UI — người dùng chỉ gõ local part
 

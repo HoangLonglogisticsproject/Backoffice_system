@@ -25,7 +25,6 @@ type Phrase = Record<Language, string>;
 
 const PHRASES = {
   backofficeSystem: { vi: 'Backoffice System', en: 'Backoffice System' },
-  adminUser: { vi: 'Admin User', en: 'Admin User' },
   logout: { vi: 'Đăng xuất', en: 'Logout' },
   common: { vi: 'CHUNG', en: 'GENERAL' },
   overview: { vi: 'Tổng quan', en: 'Overview' },
@@ -199,7 +198,9 @@ const PHRASES = {
   copy: { vi: 'Sao chép', en: 'Copy' },
   copied: { vi: 'Đã sao chép', en: 'Copied' },
   done: { vi: 'Xong', en: 'Done' },
-  usernameLabel: { vi: 'Tên đăng nhập', en: 'Username' },
+  // The FULL address. `username` is the display projection and is never what
+  // somebody signs in with — see the approval modal.
+  loginEmailLabel: { vi: 'Email đăng nhập', en: 'Login email' },
 
   // Add employee — SUPERADMIN direct create
   initialPasswordLabel: { vi: 'Mật khẩu khởi tạo', en: 'Initial password' },

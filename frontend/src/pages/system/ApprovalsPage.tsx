@@ -461,9 +461,18 @@ function TemporaryPasswordDialog({
       <div className="space-y-4">
         <p className="text-sm text-gray-600">{t('temporaryPasswordBody')}</p>
 
+        {/*
+          ★ THE FULL ADDRESS, NOT THE LOCAL PART. This used to read
+          "Tên đăng nhập: nuna", and `nuna` is not what anybody signs in with —
+          `POST /auth/login` takes the whole address as `subject`. An approver
+          reading that label out loud sent people to a login that could only
+          fail. `result.username` is the DISPLAY projection and is still in the
+          response; it just has no business on the one screen whose entire job
+          is handing over working credentials.
+        */}
         <div className="space-y-1">
-          <span className="text-xs font-medium text-gray-500">{t('usernameLabel')}</span>
-          <p className="font-mono text-sm text-gray-900">{result.username}</p>
+          <span className="text-xs font-medium text-gray-500">{t('loginEmailLabel')}</span>
+          <p className="font-mono text-sm text-gray-900">{result.invitation.email}</p>
         </div>
 
         <div className="space-y-1">

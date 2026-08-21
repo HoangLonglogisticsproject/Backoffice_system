@@ -148,7 +148,17 @@ khi viết interceptor.
 | `role` | nhãn, layout | quyết định cho phép |
 | `departmentIds` | biết gọi `/departments/:id` nào | suy quyền trên phòng khác |
 | `permissions` | ẩn/hiện nút | thay cho kiểm ở server |
-| `username` | hiển thị | parse lại từ email |
+| `username` | hiển thị | parse lại từ email · đăng nhập · phân quyền |
+
+**`username` là `string | null`, và `null` là một câu trả lời thật.** Server trả
+`null` khi tài khoản không có local identity. Chính sách email công ty không làm
+điều đó biến mất — nó quyết định *địa chỉ nào hợp lệ*, không phải *có địa chỉ hay
+không*. Hiển thị sự vắng mặt đúng như nó là; **không bịa** `Admin User`,
+`Unknown`, hay in `userId` ra thay.
+
+**Đăng nhập bằng địa chỉ đầy đủ**, không bao giờ bằng `username`. `phuongle` là
+giá trị trình bày; `phuongle@hoanglongti.com` là credential. Xem
+`docs/backend/company-email-policy.md` cho mô hình định danh đầy đủ.
 
 `departmentIds` có **tối đa một phần tử**: một người active thuộc đúng một phòng.
 Đừng dựng UI nhiều phòng cho một người — trạng thái đó không tồn tại được.
@@ -760,6 +770,13 @@ Hai dòng đầu đều là **temporary credential**: chúng chỉ dùng để b
 
 Chỉ luồng thứ hai mới trả `temporaryPassword`. `POST /users` **không** trả —
 người gọi vừa tự chọn giá trị đó nên không có gì để trả lại.
+
+⚠️ **MÀN HÌNH BÀN GIAO PHẢI HIỆN ĐỊA CHỈ ĐẦY ĐỦ, KHÔNG PHẢI `username`.**
+Response của approve có cả `username` (`nuna`) lẫn `invitation.email`
+(`nuna@hoanglongti.com`). Chỉ cái thứ hai đăng nhập được: `POST /auth/login` nhận
+`subject` là địa chỉ đầy đủ. Dán nhãn "Tên đăng nhập" lên `nuna` là đưa cho người
+ta một thứ không dùng được — frontend hiện `Email đăng nhập: nuna@hoanglongti.com`.
+`username` vẫn là projection hiển thị và không có việc gì trên màn hình này.
 
 Ngưỡng tạm thấp hơn là **cố ý**: mật khẩu tạm được đọc cho nhau nghe, mỗi người
 một cái khác nhau, và nó không mở được gì ngoài màn đổi mật khẩu. Frontend phải
