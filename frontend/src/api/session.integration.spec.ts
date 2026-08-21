@@ -53,7 +53,9 @@ function makeClient(): AxiosInstance & { cookie: string | null } {
       const session = setCookie.find((c) => c.startsWith('bo_session='));
       if (session) {
         const value = session.split(';')[0];
-        // An expiry in the past is the server clearing it (logout, password change).
+        // An EMPTY value is the server clearing it (logout, password change).
+        // The real cookie also carries an expiry in the past, but this checks
+        // the value rather than the date — so drop the jar when it is blank.
         client.cookie = value.endsWith('=') ? null : value;
       }
     }

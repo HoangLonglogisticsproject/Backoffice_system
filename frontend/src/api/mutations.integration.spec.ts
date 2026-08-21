@@ -437,12 +437,17 @@ describe('approval write paths (§9, §10, §13)', () => {
     });
 
     it('deciding it a second time is 409, not a silent no-op', async () => {
-      // The request approved above is settled; deciding it again must conflict.
-      const settled = await boss.get('/membership-requests', { params: { limit: 200 } });
-      expect(settled.status).toBe(200);
+      // Provisioned HERE, into B, rather than reusing the member the transfer
+      // test moves into B. A test that passes only because an earlier one ran
+      // reports the wrong thing the day somebody runs it on its own.
+      const leaver = await provision(
+        `wr-leaver-b-${unique}@hoanglongti.com`,
+        departmentB,
+        'Leaver of B',
+      );
 
       const created = await headOfB.post(`/departments/${departmentB}/membership-requests`, {
-        userId: memberOfAId,
+        userId: leaver.userId,
         action: 'REMOVE_MEMBER',
       });
       expect(created.status).toBe(201);
@@ -458,6 +463,19 @@ describe('approval write paths (§9, §10, §13)', () => {
   // ------------------------------------------------ cursor pagination (§8) --
 
   describe('cursor pagination on a real list (§8)', () => {
+    // Two rows minimum, seeded here: "there is a next page" and "the next page
+    // is not the first one again" are both claims about a list with something
+    // in it. The tests above happen to leave enough behind, but depending on
+    // that makes this block's result a function of what ran before it.
+    beforeAll(async () => {
+      for (const localPart of ['page-one', 'page-two']) {
+        const created = await headOfA.post(`/departments/${departmentA}/account-invitations`, {
+          email: `${localPart}-${unique}@hoanglongti.com`,
+        });
+        expect(created.status).toBe(201);
+      }
+    });
+
     it('★ KEYSET, NOT OFFSET — a page carries an opaque cursor and no total', async () => {
       const response = await boss.get(`/departments/${departmentA}/account-invitations`, {
         params: { limit: 1 },
