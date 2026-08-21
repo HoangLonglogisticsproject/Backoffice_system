@@ -2,6 +2,32 @@ import axios, { AxiosHeaders, type AxiosInstance } from 'axios';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { toApiError } from '@/utils/errors';
 import { CSRF_HEADER, CSRF_HEADER_VALUE } from './client';
+import {
+  BASE_URL,
+  fixturePassword,
+  requireBossCredentials,
+  type BossCredentials,
+} from '@/test/integration-credentials';
+
+/**
+ * The bootstrap credential, read in `beforeAll` — which is also where a
+ * missing variable is reported, by name, before any request is made.
+ */
+let credentials: BossCredentials;
+
+/**
+ * Fixture passwords, generated per run.
+ *
+ * These belong to accounts this file provisions seconds earlier in a
+ * disposable database, so they authenticate nothing that outlives the run —
+ * but written as literals they were indistinguishable from a real credential
+ * to anything grepping this repository. One constant each, kept DISTINCT:
+ * two values that differ today must go on differing.
+ */
+const TEMPORARY_A = fixturePassword('temporary-a');
+const TEMPORARY_B = fixturePassword('temporary-b');
+const CHOSEN_A = fixturePassword('chosen-a');
+const CHOSEN_B = fixturePassword('chosen-b');
 
 /**
  * The integration contract, against a REAL backend and a REAL PostgreSQL.
@@ -14,16 +40,13 @@ import { CSRF_HEADER, CSRF_HEADER_VALUE } from './client';
  * Requires, and deliberately fails rather than skips if absent:
  *
  *   API_BASE_URL   a running backend (default http://localhost:3000)
- *   BOSS_EMAIL / BOSS_PASSWORD   a bootstrapped SuperAdmin
+ *   credentials.email / credentials.password   a bootstrapped SuperAdmin
  *
  * Cookies are handled by hand. Node's axios has no cookie jar, and doing it
  * explicitly is the point: these tests are ABOUT the cookie, so the mechanics
  * should be visible rather than delegated to a library.
  */
 
-const BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
-const BOSS_EMAIL = process.env.BOSS_EMAIL ?? 'boss@hoanglongti.com';
-const BOSS_PASSWORD = process.env.BOSS_PASSWORD ?? 'correct horse battery staple';
 
 /** A client that mirrors the app's real transport rules, plus a cookie jar. */
 function makeClient(): AxiosInstance & { cookie: string | null } {
@@ -72,6 +95,8 @@ describe('frontend ↔ backend integration', () => {
   let boss: ReturnType<typeof makeClient>;
 
   beforeAll(async () => {
+    credentials = requireBossCredentials();
+
     boss = makeClient();
 
     const health = await axios.get(`${BASE_URL}/health`, { validateStatus: () => true });
@@ -81,10 +106,10 @@ describe('frontend ↔ backend integration', () => {
       );
     }
 
-    const response = await login(boss, BOSS_EMAIL, BOSS_PASSWORD);
+    const response = await login(boss, credentials.email, credentials.password);
     if (response.status !== 200) {
       throw new Error(
-        `Could not sign in as ${BOSS_EMAIL} (${response.status}). Bootstrap a SuperAdmin first.`,
+        `Could not sign in as ${credentials.email} (${response.status}). Bootstrap a SuperAdmin first.`,
       );
     }
   });
@@ -94,7 +119,7 @@ describe('frontend ↔ backend integration', () => {
   describe('login (§1)', () => {
     it('accepts `subject` and sets an HttpOnly session cookie', async () => {
       const client = makeClient();
-      const response = await login(client, BOSS_EMAIL, BOSS_PASSWORD);
+      const response = await login(client, credentials.email, credentials.password);
 
       expect(response.status).toBe(200);
 
@@ -110,8 +135,8 @@ describe('frontend ↔ backend integration', () => {
     it('REFUSES `email` as the field name — 422 (§1)', async () => {
       const client = makeClient();
       const response = await client.post('/auth/login', {
-        email: BOSS_EMAIL,
-        password: BOSS_PASSWORD,
+        email: credentials.email,
+        password: credentials.password,
       });
 
       expect(response.status).toBe(422);
@@ -120,7 +145,7 @@ describe('frontend ↔ backend integration', () => {
 
     it('never returns a token in the body (§1)', async () => {
       const client = makeClient();
-      const response = await login(client, BOSS_EMAIL, BOSS_PASSWORD);
+      const response = await login(client, credentials.email, credentials.password);
 
       expect(response.data).toHaveProperty('user');
       expect(response.data).toHaveProperty('expiresAt');
@@ -133,7 +158,7 @@ describe('frontend ↔ backend integration', () => {
 
     it('answers 401 for a wrong password, saying nothing about the account', async () => {
       const client = makeClient();
-      const response = await login(client, BOSS_EMAIL, 'definitely the wrong one');
+      const response = await login(client, credentials.email, 'definitely the wrong one');
 
       expect(response.status).toBe(401);
       expect(toApiError(response.status, response.data).code).toBe('UNAUTHORIZED');
@@ -146,8 +171,8 @@ describe('frontend ↔ backend integration', () => {
     it('refuses a mutation without the header — 403', async () => {
       const bare = axios.create({ baseURL: BASE_URL, validateStatus: () => true });
       const response = await bare.post('/auth/login', {
-        subject: BOSS_EMAIL,
-        password: BOSS_PASSWORD,
+        subject: credentials.email,
+        password: credentials.password,
       });
 
       expect(response.status).toBe(403);
@@ -204,8 +229,8 @@ describe('frontend ↔ backend integration', () => {
     // provision, sign in, get 403, change the password, sign in again.
     const unique = Date.now();
     const email = `joiner${unique}@hoanglongti.com`;
-    const temporaryPassword = 'temp pass 1';
-    const chosenPassword = 'a properly long passphrase';
+    const temporaryPassword = TEMPORARY_A;
+    const chosenPassword = CHOSEN_A;
 
     let departmentId: string;
 
@@ -306,20 +331,20 @@ describe('frontend ↔ backend integration', () => {
       const created = await boss.post('/users', {
         displayName: 'Plain Member',
         email,
-        initialPassword: 'temp pass 2',
+        initialPassword: TEMPORARY_B,
         departmentId: department.data.id,
       });
       expect(created.status).toBe(201);
 
       const member = makeClient();
-      await login(member, email, 'temp pass 2');
+      await login(member, email, TEMPORARY_B);
       await member.post('/auth/password', {
-        currentPassword: 'temp pass 2',
-        newPassword: 'another long passphrase',
+        currentPassword: TEMPORARY_B,
+        newPassword: CHOSEN_B,
       });
 
       const active = makeClient();
-      await login(active, email, 'another long passphrase');
+      await login(active, email, CHOSEN_B);
 
       // GLOBAL-only route (§5).
       const forbidden = await active.get('/departments');
@@ -383,7 +408,7 @@ describe('frontend ↔ backend integration', () => {
   describe('logout (§1)', () => {
     it('revokes server-side: the captured cookie stops working', async () => {
       const client = makeClient();
-      await login(client, BOSS_EMAIL, BOSS_PASSWORD);
+      await login(client, credentials.email, credentials.password);
       const captured = client.cookie;
 
       expect((await client.post('/auth/logout')).status).toBe(204);

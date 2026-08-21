@@ -83,6 +83,11 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
       '0006_membership_change_requests.sql',
       '0007_account_invitations.sql',
       '0008_role_assignment_membership_fk_index.sql',
+      // 0009 and 0010 belong here because this spec exercises the REAL
+      // repository: `findPendingByEmail` calls `canonical_identity()`, which
+      // 0010 defines. Stopping at 0008 would test a schema no deployment runs.
+      '0009_list_pagination_indexes.sql',
+      '0010_canonical_email_identity.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
