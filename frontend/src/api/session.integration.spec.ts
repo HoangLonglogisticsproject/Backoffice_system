@@ -403,6 +403,93 @@ describe('frontend ↔ backend integration', () => {
     });
   });
 
+  // ------------------------------------------- the bootstrap credential --
+
+  describe('★ a bootstrapped account must change its password too (§12)', () => {
+    /**
+     * The invariant, and it is the same one in every environment: a credential
+     * this deployment HANDED to somebody has to be replaced before it means
+     * anything. `user:create` types its password on a command line — shell
+     * history, clipboard, quite possibly a chat message — so it is no different
+     * from the temporary one provisioning generates.
+     *
+     * There is deliberately no environment switch: no NODE_ENV branch, no
+     * variable, no staging-only path. `createWithPassword` defaults the flag to
+     * true and the CLI passes it explicitly, so a clean database bootstrapped
+     * anywhere produces the same account.
+     *
+     * The account this suite signs in with has already been settled by the
+     * global setup, which is what an operator does first. What is asserted here
+     * is that the requirement was REAL — the flag existed and clearing it is
+     * what made the session usable.
+     */
+    it('signed in with a password that is NOT the one it was bootstrapped with', async () => {
+      // ★ THIS IS WHAT THE OLD VERSION OF THIS TEST COULD NOT SAY. Asserting
+      // `mustChangePassword === false` passes just as well on an account that
+      // was never gated at all, so it locked nothing.
+      //
+      // The two passwords differ, and the account answers to the SECOND one:
+      // that is only true if the gate fired and a real change went through.
+      // The first one must no longer work, which is the entire point of
+      // retiring a credential that travelled.
+      expect(credentials.password).not.toBe(credentials.bootstrapPassword);
+
+      const settled = await login(makeClient(), credentials.email, credentials.password);
+      expect(settled.status).toBe(200);
+      expect(settled.data.mustChangePassword).toBe(false);
+
+      const retired = await login(makeClient(), credentials.email, credentials.bootstrapPassword);
+      expect(retired.status).toBe(401);
+    });
+
+    it('★ and the gate is not skippable — a fresh temporary credential still blocks', async () => {
+      // The same machinery, proven on an account created during this test, so
+      // the claim does not rest on setup that ran before it.
+      const unique = Date.now();
+      const email = `bootstrap-like-${unique}@hoanglonglti.com`;
+      const temporary = 'temp pass 1';
+
+      const department = await boss.post('/departments', {
+        slug: `boot-${unique}`,
+        name: `Boot ${unique}`,
+      });
+      expect(department.status).toBe(201);
+
+      expect(
+        (
+          await boss.post('/users', {
+            displayName: 'Fresh Joiner',
+            email,
+            initialPassword: temporary,
+            departmentId: department.data.id,
+          })
+        ).status,
+      ).toBe(201);
+
+      const fresh = makeClient();
+      const signedIn = await login(fresh, email, temporary);
+      expect(signedIn.status).toBe(200);
+      expect(signedIn.data.mustChangePassword).toBe(true);
+
+      const blocked = await fresh.get('/authorization/me');
+      expect(blocked.status).toBe(403);
+      expect(toApiError(blocked.status, blocked.data).code).toBe('PASSWORD_CHANGE_REQUIRED');
+
+      const chosen = 'a settled passphrase for this account';
+      expect(
+        (await fresh.post('/auth/password', { currentPassword: temporary, newPassword: chosen }))
+          .status,
+      ).toBe(204);
+
+      // The session that made the change is gone with the rest (§1).
+      expect((await fresh.get('/authorization/me')).status).toBe(401);
+
+      const settled = makeClient();
+      expect((await login(settled, email, chosen)).status).toBe(200);
+      expect((await settled.get('/authorization/me')).status).toBe(200);
+    });
+  });
+
   // -------------------------------------------------------------- logout --
 
   describe('logout (§1)', () => {

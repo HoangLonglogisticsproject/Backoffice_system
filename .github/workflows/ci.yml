@@ -260,17 +260,24 @@ jobs:
       # Generated per run and masked, so no credential lives in this file and
       # none reaches the log. The account exists for the life of a database that
       # is destroyed with the runner.
-      - name: Mint a throwaway bootstrap credential
+      # TWO of them, because a bootstrapped account must REPLACE its credential
+      # before anything works and the replacement has to differ. `user:create`
+      # is given the first; the suite signs in with the second, after its global
+      # setup performs that first login exactly as an operator would.
+      - name: Mint throwaway bootstrap credentials
         run: |
           set -euo pipefail
-          password="$(openssl rand -base64 24)"
-          echo "::add-mask::${password}"
-          echo "BOSS_PASSWORD=${password}" >> "$GITHUB_ENV"
+          bootstrap="$(openssl rand -base64 24)"
+          settled="$(openssl rand -base64 24)"
+          echo "::add-mask::${bootstrap}"
+          echo "::add-mask::${settled}"
+          echo "BOSS_BOOTSTRAP_PASSWORD=${bootstrap}" >> "$GITHUB_ENV"
+          echo "BOSS_PASSWORD=${settled}" >> "$GITHUB_ENV"
 
       - name: Bootstrap the first SuperAdmin
         working-directory: backend
         env:
-          BOOTSTRAP_PASSWORD: ${{ env.BOSS_PASSWORD }}
+          BOOTSTRAP_PASSWORD: ${{ env.BOSS_BOOTSTRAP_PASSWORD }}
         run: npm run user:create -- --email "$BOSS_EMAIL" --name "CI SuperAdmin" --superadmin
 
       # NODE_ENV=production on purpose: it is the shape the integration suite
@@ -313,6 +320,7 @@ jobs:
         working-directory: frontend
         env:
           BOSS_PASSWORD: ${{ env.BOSS_PASSWORD }}
+          BOSS_BOOTSTRAP_PASSWORD: ${{ env.BOSS_BOOTSTRAP_PASSWORD }}
         run: npm run test:integration -- --reporter=json --outputFile=vitest-integration.json
 
       # ★ The integration suite throws in `beforeAll` when the backend is
