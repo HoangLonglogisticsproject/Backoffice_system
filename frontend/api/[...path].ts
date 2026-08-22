@@ -46,6 +46,32 @@ const TIMEOUT_MS = Number(process.env.BACKEND_TIMEOUT_MS) || 15_000;
  */
 const HOP_BY_HOP = ['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade'];
 
+/**
+ * ★ WHO THE CALLER IS, IS NOT THE CALLER'S TO SAY.
+ *
+ * These are set BY a proxy, about the hop it just handled. A browser that sends
+ * them is not describing reality, it is proposing one — and nginx on the VPS
+ * appends to `X-Forwarded-For` rather than replacing it, so anything arriving
+ * here would be carried forward as though this proxy had vouched for it.
+ *
+ * That matters because the login throttle keys on `req.ip`. Whether a forged
+ * entry actually reaches `req.ip` depends on `TRUSTED_PROXIES` being exactly
+ * right on the far side; this removes the question instead of relying on the
+ * answer. `Forwarded` in particular is not overwritten by anything downstream,
+ * so without this it would arrive at the application verbatim.
+ *
+ * The correct values are added by the hop that can actually observe them —
+ * nginx, from its own socket.
+ */
+const FORWARDING_IDENTITY = [
+  'forwarded',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-forwarded-port',
+  'x-real-ip',
+];
+
 type Resolved = { origin: string } | { configError: string };
 
 /**
@@ -103,6 +129,17 @@ export default async function handler(request: Request): Promise<Response> {
   const target = new URL(incoming.pathname + incoming.search, BACKEND.origin);
 
   const headers = new Headers(request.headers);
+
+  // ★ ORDER MATTERS: `Connection` names further headers as hop-by-hop, so its
+  // value has to be read before it is itself deleted. Read after, and every
+  // header it nominated travels on.
+  const nominated = (headers.get('connection') ?? '')
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token !== '');
+
+  for (const name of FORWARDING_IDENTITY) headers.delete(name);
+  for (const name of nominated) headers.delete(name);
   for (const name of HOP_BY_HOP) headers.delete(name);
 
   // Buffered rather than streamed: a streaming body needs `duplex: 'half'`,

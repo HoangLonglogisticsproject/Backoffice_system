@@ -24,6 +24,8 @@ interface Seen {
   host: string | undefined;
   cookie: string | undefined;
   body: string;
+  /** Everything the origin actually received, lower-cased by node:http. */
+  headers: Record<string, string | string[] | undefined>;
 }
 
 let server: Server;
@@ -48,6 +50,7 @@ beforeAll(async () => {
         host: request.headers.host,
         cookie: request.headers.cookie,
         body: Buffer.concat(chunks).toString(),
+        headers: request.headers,
       };
 
       if (request.url?.startsWith('/api/conflict')) {
@@ -200,6 +203,142 @@ describe('the Vercel API proxy', () => {
 
       expect(response.status).toBe(302);
       expect(response.headers.get('location')).toBe('/somewhere');
+    });
+  });
+
+  // ------------------------------------------------ header sanitisation --
+
+  describe('★ forwarding identity is never replayed from the client', () => {
+    /**
+     * These headers are set BY a proxy, about the hop it just handled. A browser
+     * that sends them is proposing a reality, not describing one — and nginx on
+     * the VPS APPENDS to `X-Forwarded-For` rather than replacing it, so anything
+     * that survived this hop would be carried forward as though this proxy had
+     * vouched for it.
+     *
+     * It matters because the login throttle keys on `req.ip`. Whether a forged
+     * entry reaches it depends on `TRUSTED_PROXIES` being exactly right on the
+     * far side; stripping here removes the question instead of trusting the
+     * answer. `Forwarded` is the sharpest case — nothing downstream overwrites
+     * it, so it would arrive at the application verbatim.
+     */
+    it.each([
+      'Forwarded',
+      'X-Forwarded-For',
+      'X-Forwarded-Host',
+      'X-Forwarded-Proto',
+      'X-Forwarded-Port',
+      'X-Real-IP',
+    ])('strips a client-supplied %s', async (name) => {
+      const handler = await load();
+      await handler(
+        new Request('https://demo.vercel.app/api/health', {
+          headers: { [name]: 'for=1.2.3.4' },
+        }),
+      );
+
+      expect(seen.headers[name.toLowerCase()]).toBeUndefined();
+    });
+
+    it('strips them whatever case they arrive in', async () => {
+      const handler = await load();
+      await handler(
+        new Request('https://demo.vercel.app/api/health', {
+          headers: { 'X-FORWARDED-FOR': '9.9.9.9', 'x-ReAl-Ip': '9.9.9.9' },
+        }),
+      );
+
+      expect(seen.headers['x-forwarded-for']).toBeUndefined();
+      expect(seen.headers['x-real-ip']).toBeUndefined();
+    });
+
+    it('★ and does not invent them either — the origin sees none at all', async () => {
+      // The correct values are added by the hop that can observe them: nginx,
+      // from its own socket. This proxy has no business guessing.
+      const handler = await load();
+      await handler(new Request('https://demo.vercel.app/api/health'));
+
+      for (const name of [
+        'forwarded',
+        'x-forwarded-for',
+        'x-forwarded-host',
+        'x-forwarded-proto',
+        'x-forwarded-port',
+        'x-real-ip',
+      ]) {
+        expect(seen.headers[name]).toBeUndefined();
+      }
+    });
+  });
+
+  describe('★ Connection nominates further hop-by-hop headers', () => {
+    /**
+     * HTTP/1.1 lets `Connection` name headers that belong to this hop only.
+     * They have to be read BEFORE `Connection` is itself deleted — read after,
+     * and every header it nominated travels on.
+     */
+    it('removes the headers a Connection header names', async () => {
+      const handler = await load();
+      await handler(
+        new Request('https://demo.vercel.app/api/health', {
+          headers: {
+            connection: 'Foo, X-Custom-Hop',
+            foo: 'one',
+            'x-custom-hop': 'two',
+          },
+        }),
+      );
+
+      expect(seen.headers['foo']).toBeUndefined();
+      expect(seen.headers['x-custom-hop']).toBeUndefined();
+      expect(seen.headers['connection']).not.toBe('Foo, X-Custom-Hop');
+    });
+
+    it('matches nominated names case-insensitively', async () => {
+      const handler = await load();
+      await handler(
+        new Request('https://demo.vercel.app/api/health', {
+          headers: { connection: 'X-UPPER-HOP', 'x-upper-hop': 'gone' },
+        }),
+      );
+
+      expect(seen.headers['x-upper-hop']).toBeUndefined();
+    });
+
+    it('tolerates odd spacing and empty tokens', async () => {
+      const handler = await load();
+      await handler(
+        new Request('https://demo.vercel.app/api/health', {
+          headers: { connection: '  ,  X-Spaced-Hop  ,', 'x-spaced-hop': 'gone' },
+        }),
+      );
+
+      expect(seen.headers['x-spaced-hop']).toBeUndefined();
+    });
+  });
+
+  describe('★ ordinary headers still reach the backend', () => {
+    it('forwards content-type, the CSRF header and the cookie', async () => {
+      // Stripping too much is its own outage: the CSRF guard refuses a mutation
+      // without `X-Requested-With`, and the session is the cookie.
+      const handler = await load();
+      await handler(
+        new Request('https://demo.vercel.app/api/auth/login', {
+          method: 'POST',
+          body: '{}',
+          headers: {
+            'content-type': 'application/json',
+            'x-requested-with': 'XMLHttpRequest',
+            cookie: 'bo_session=keep',
+            'accept-language': 'vi-VN',
+          },
+        }),
+      );
+
+      expect(seen.headers['content-type']).toBe('application/json');
+      expect(seen.headers['x-requested-with']).toBe('XMLHttpRequest');
+      expect(seen.headers['cookie']).toBe('bo_session=keep');
+      expect(seen.headers['accept-language']).toBe('vi-VN');
     });
   });
 
