@@ -18,12 +18,26 @@
  * ★ THE `/api` PREFIX IS FORWARDED, NOT STRIPPED. nginx on the VPS is what
  * removes it (`proxy_pass http://upstream/`), and the app underneath has no
  * global prefix. Strip it here as well and every request arrives as `//health`.
+ *
+ * ⚠ `BACKEND_ORIGIN` IS READ ONCE, AT MODULE LOAD. That is how a serverless
+ * runtime works — the value is fixed for the life of the isolate — so changing
+ * it in the Vercel project requires a REDEPLOY, not just a save. Left as is on
+ * purpose: reading it per request would suggest a liveness this platform does
+ * not offer.
  */
 
 export const config = { runtime: 'edge' };
 
-/** Set in the Vercel project, never committed. e.g. https://opsystem.example.com */
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN;
+/**
+ * How long to wait for the VPS before giving up.
+ *
+ * Without a bound, a backend that accepts the connection and then says nothing
+ * — a tunnel that dropped, most likely — holds the function open until the
+ * platform kills it, and the caller gets a Vercel error page instead of an
+ * error they can read. Overridable so ops can tighten it, and so the specs can
+ * exercise the timeout without waiting fifteen seconds for it.
+ */
+const TIMEOUT_MS = Number(process.env.BACKEND_TIMEOUT_MS) || 15_000;
 
 /**
  * Headers that describe THIS hop and must not be replayed to the next one.
@@ -32,18 +46,61 @@ const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN;
  */
 const HOP_BY_HOP = ['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade'];
 
+type Resolved = { origin: string } | { configError: string };
+
+/**
+ * ★ AN ORIGIN, NOT A URL. `new URL('/api/health', base)` resolves against the
+ * base's ORIGIN — any path on the base is silently discarded, so
+ * `https://host/base` would quietly become `https://host/api/health` and the
+ * misconfiguration would look like a routing bug for as long as it took
+ * somebody to read this file.
+ *
+ * Refused up front instead. The messages name the RULE and never echo the
+ * value: this text reaches a browser, and the backend address is not something
+ * to hand out in an error body.
+ */
+function resolveOrigin(raw: string | undefined): Resolved {
+  if (!raw || raw.trim() === '') {
+    return { configError: 'BACKEND_ORIGIN is not set.' };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { configError: 'BACKEND_ORIGIN is not a valid absolute URL.' };
+  }
+
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return { configError: 'BACKEND_ORIGIN must be an http(s) URL.' };
+  }
+  if (parsed.pathname !== '/') {
+    return { configError: 'BACKEND_ORIGIN must be an origin only, with no path.' };
+  }
+  if (parsed.search !== '' || parsed.hash !== '') {
+    return { configError: 'BACKEND_ORIGIN must not carry a query string or fragment.' };
+  }
+
+  // `.origin` drops the trailing slash and anything else normalisable, so the
+  // value used downstream is exactly scheme + host + port.
+  return { origin: parsed.origin };
+}
+
+const BACKEND = resolveOrigin(process.env.BACKEND_ORIGIN);
+
+/** The shape `toApiError` on the client already parses: `{ error: { code, message } }`. */
+const fail = (code: string, message: string): Response =>
+  Response.json({ error: { code, message } }, { status: 502 });
+
 export default async function handler(request: Request): Promise<Response> {
-  if (!BACKEND_ORIGIN) {
-    // A 502 rather than a crash: this is the deployment being unconfigured, and
-    // saying so beats a stack trace in a function log nobody is watching.
-    return Response.json(
-      { error: { code: 'BACKEND_UNAVAILABLE', message: 'BACKEND_ORIGIN is not set.' } },
-      { status: 502 },
-    );
+  if ('configError' in BACKEND) {
+    // Distinct from an outage on purpose: this one is fixed in the Vercel
+    // project, not on the VPS, and they are different people at 3am.
+    return fail('BACKEND_MISCONFIGURED', BACKEND.configError);
   }
 
   const incoming = new URL(request.url);
-  const target = new URL(incoming.pathname + incoming.search, BACKEND_ORIGIN);
+  const target = new URL(incoming.pathname + incoming.search, BACKEND.origin);
 
   const headers = new Headers(request.headers);
   for (const name of HOP_BY_HOP) headers.delete(name);
@@ -56,14 +113,25 @@ export default async function handler(request: Request): Promise<Response> {
       ? undefined
       : await request.arrayBuffer();
 
-  const upstream = await fetch(target, {
-    method: request.method,
-    headers,
-    body,
-    // The backend answers 401/403/409 as data, and a redirect it does issue is
-    // the caller's to see. Following one here would hide it.
-    redirect: 'manual',
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+      // The backend answers 401/403/409 as data, and a redirect it does issue is
+      // the caller's to see. Following one here would hide it.
+      redirect: 'manual',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch {
+    // ★ EVERY failure mode, one answer. A refused connection is a `TypeError`, a
+    // timeout is a `TimeoutError` DOMException, DNS is another — and none of
+    // them is worth telling a browser about in detail, because the details are
+    // the backend's address and its network topology. Caught without inspecting
+    // so nothing from the error can escape into the response.
+    return fail('BACKEND_UNAVAILABLE', 'The API is not reachable right now.');
+  }
 
   // Constructed from the upstream headers so `Set-Cookie` survives intact —
   // including more than one of them, which a naive object copy flattens.
