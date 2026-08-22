@@ -67,6 +67,27 @@ export async function readPassword(
   return reader.readSecret('Password: ');
 }
 
+/**
+ * What the bootstrap account is created with.
+ *
+ * ★ FIRST LOGIN MUST CHANGE IT, in every environment. The password was typed
+ * on a command line: it is in shell history, in the operator’s clipboard, and
+ * quite possibly in a chat message to whoever is running the demo. It gets
+ * somebody in once and then stops meaning anything.
+ *
+ * `createWithPassword` defaults this to true anyway. It is stated here so the
+ * rule belongs to the account that owns the deployment rather than being
+ * inherited from another file — and so a spec can hold it in place, which a
+ * default alone cannot: delete the line and the behaviour would not move.
+ */
+export function bootstrapInput(input: {
+  displayName: string;
+  subject: string;
+  password: string;
+}): { displayName: string; subject: string; password: string; mustChangeSecret: boolean } {
+  return { ...input, mustChangeSecret: true };
+}
+
 async function main(): Promise<void> {
   const { email, name, superadmin } = parseArgs(process.argv.slice(2));
 
@@ -96,20 +117,9 @@ async function main(): Promise<void> {
   }
 
   try {
-    const user = await app.get(UserService).createWithPassword({
-      displayName: name,
-      subject: email,
-      password,
-      // ★ FIRST LOGIN MUST CHANGE IT, in every environment. The password above
-      // was typed on a command line: it is in shell history, in the operator’s
-      // clipboard, and quite possibly in a chat message to whoever is running
-      // the demo. It gets somebody in once and then stops meaning anything.
-      //
-      // Passed explicitly rather than left to the default: this is the account
-      // that owns the deployment, and the rule should be readable here rather
-      // than inferred from another file.
-      mustChangeSecret: true,
-    });
+      const user = await app.get(UserService).createWithPassword(
+        bootstrapInput({ displayName: name, subject: email, password }),
+      );
     // AFTER the account exists, and in its own transaction: the grant is a
     // separate decision with its own uniqueness rule, and a deployment that
     // already has a SuperAdmin must fail HERE, with the account intact, rather

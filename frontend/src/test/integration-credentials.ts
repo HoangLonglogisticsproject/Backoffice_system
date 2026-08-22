@@ -25,16 +25,29 @@ import { randomBytes } from 'node:crypto';
  * Required in CI (see `.github/workflows/ci.yml`, which mints and masks a
  * throwaway credential per run) and locally:
  *
- *   API_BASE_URL   default http://localhost:3000
- *   BOSS_EMAIL     the bootstrapped SuperAdmin
- *   BOSS_PASSWORD  its password — never written down here
+ *   API_BASE_URL             default http://localhost:3000
+ *   BOSS_EMAIL               the bootstrapped SuperAdmin
+ *   BOSS_BOOTSTRAP_PASSWORD  what `user:create` was given
+ *   BOSS_PASSWORD            what it becomes at first login — and it must DIFFER
+ *
+ * Two of them, because a bootstrapped credential must be REPLACED before the
+ * account works, and a replacement that equals the original is refused. That is
+ * the product rule, not a test detail: the password `user:create` was given
+ * travelled through a command line, and the gate exists to retire it.
  */
 
 export const BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
 
 export interface BossCredentials {
   email: string;
+  /** What the suite signs in with — the password AFTER the first login. */
   password: string;
+  /**
+   * What `user:create` was given. A bootstrapped account must replace its
+   * credential before anything works, and the replacement has to be a DIFFERENT
+   * string — so the harness needs both halves, exactly as an operator does.
+   */
+  bootstrapPassword: string;
 }
 
 const read = (name: string): string | undefined => {
@@ -52,15 +65,22 @@ const read = (name: string): string | undefined => {
 export function requireBossCredentials(): BossCredentials {
   const email = read('BOSS_EMAIL');
   const password = read('BOSS_PASSWORD');
+  const bootstrapPassword = read('BOSS_BOOTSTRAP_PASSWORD');
 
   const missing = [
     ['BOSS_EMAIL', email],
     ['BOSS_PASSWORD', password],
+    ['BOSS_BOOTSTRAP_PASSWORD', bootstrapPassword],
   ]
     .filter(([, value]) => value === undefined)
     .map(([name]) => name);
 
-  if (missing.length > 0 || email === undefined || password === undefined) {
+  if (
+    missing.length > 0 ||
+    email === undefined ||
+    password === undefined ||
+    bootstrapPassword === undefined
+  ) {
     throw new Error(
       `Missing required environment variable(s): ${missing.join(', ')}. ` +
         'The integration suite runs against a real deployment and has no default ' +
@@ -69,7 +89,7 @@ export function requireBossCredentials(): BossCredentials {
     );
   }
 
-  return { email, password };
+  return { email, password, bootstrapPassword };
 }
 
 /**

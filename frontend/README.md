@@ -27,7 +27,8 @@ bootstrapped SuperAdmin to sign in as.
 |---|---|---|
 | `API_BASE_URL` | no — defaults to `http://localhost:3000` | where the backend is listening |
 | `BOSS_EMAIL` | **yes** | the bootstrapped SuperAdmin |
-| `BOSS_PASSWORD` | **yes** | its password |
+| `BOSS_BOOTSTRAP_PASSWORD` | **yes** | what `user:create` was given |
+| `BOSS_PASSWORD` | **yes** | what it becomes at first login — must DIFFER from the above |
 
 **There is deliberately no default credential.** A fallback password in a spec
 file becomes a real password the moment `API_BASE_URL` points at a real

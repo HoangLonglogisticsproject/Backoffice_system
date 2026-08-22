@@ -423,18 +423,23 @@ describe('frontend ↔ backend integration', () => {
      * is that the requirement was REAL — the flag existed and clearing it is
      * what made the session usable.
      */
-    it('has finished its first login by the time the suite runs', async () => {
-      const settled = await login(boss, credentials.email, credentials.password);
+    it('signed in with a password that is NOT the one it was bootstrapped with', async () => {
+      // ★ THIS IS WHAT THE OLD VERSION OF THIS TEST COULD NOT SAY. Asserting
+      // `mustChangePassword === false` passes just as well on an account that
+      // was never gated at all, so it locked nothing.
+      //
+      // The two passwords differ, and the account answers to the SECOND one:
+      // that is only true if the gate fired and a real change went through.
+      // The first one must no longer work, which is the entire point of
+      // retiring a credential that travelled.
+      expect(credentials.password).not.toBe(credentials.bootstrapPassword);
 
+      const settled = await login(makeClient(), credentials.email, credentials.password);
       expect(settled.status).toBe(200);
-      // False NOW, because the password was changed. It was true at bootstrap —
-      // if it had never been true, the global setup's change would have been a
-      // no-op and this account would never have been gated at all.
       expect(settled.data.mustChangePassword).toBe(false);
 
-      const authorization = await boss.get('/authorization/me');
-      expect(authorization.status).toBe(200);
-      expect(authorization.data.role).toBe('SUPERADMIN');
+      const retired = await login(makeClient(), credentials.email, credentials.bootstrapPassword);
+      expect(retired.status).toBe(401);
     });
 
     it('★ and the gate is not skippable — a fresh temporary credential still blocks', async () => {
