@@ -28,8 +28,18 @@ is what the relative paths in `docker-compose.yml` already resolve against:
 /etc/ssl/cloudflare/          ← origin certificate
 ```
 
-Redeploying is `git pull` in `/opt/hoanglong-bo`, which is the reason for
-cloning rather than copying files around.
+Redeploying is a `git checkout` of an exact commit in `/opt/hoanglong-bo`, which
+is the reason for cloning rather than copying files around.
+
+**Releases are the pipeline's job now.** `release` in `.github/workflows/ci.yml`
+compares the commit each half is actually running against `main` and deploys the
+half that drifted, backend first. The commands below are what it does — kept
+here because they are also what you run when you have to do it by hand.
+
+★ **`APP_VERSION` is the release identity.** It becomes the image tag *and* the
+`release.sha` label the pipeline reads back to prove which build is serving.
+Leave it unset and you get `hoanglong-bo-backend:local`, which is honest: a hand
+build is not a release and should not be able to pass for one.
 
 ## First deploy
 
@@ -98,10 +108,47 @@ cd /opt/hoanglong-bo/deploy
 docker compose ps                      # health
 docker compose logs -f --tail=100 backend
 docker compose restart backend         # restart app only
-git -C .. pull && docker compose up -d --build   # redeploy after a code change
-docker compose run --rm --no-deps backend npm run migrate   # after new migrations
 systemctl reload nginx                 # after an nginx.conf change
+
+# which commit is actually serving? the question the pipeline asks
+docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)"
 ```
+
+### Releasing by hand
+
+Only when the pipeline cannot. Same order it uses, and the order matters:
+`migrate` runs ts-node from *inside* the image, so the image has to exist first,
+and the schema has to be in place before the container expecting it starts.
+
+```bash
+SHA=<full 40-char commit sha>
+cd /opt/hoanglong-bo
+git fetch --all --prune && git checkout --detach "$SHA"
+git status --porcelain    # must be empty; a dirty tree is not a release
+
+cd deploy
+export APP_VERSION="$SHA"
+docker compose build backend
+docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > ~/bo-pre-$SHA.dump   # if this release migrates
+docker compose run --rm --no-deps backend npm run migrate
+docker compose up -d backend
+
+curl -fsS http://127.0.0.1:3000/health
+docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)"   # must equal $SHA
+```
+
+### Rolling back
+
+```bash
+docker images hoanglong-bo-backend        # the tags ARE the releases
+APP_VERSION=<previous-sha> docker compose up -d --no-build backend
+```
+
+⚠ **Code rollback is not schema rollback.** Migrations here are forward-only and
+refuse rather than repair, so putting the previous image back does not undo one
+that ran. If the release you are undoing carried a migration, the dump taken
+above is the only way back — and restoring it is a decision a person makes, on
+purpose. Nothing automated will do it for you.
 
 ## Backup / restore
 
