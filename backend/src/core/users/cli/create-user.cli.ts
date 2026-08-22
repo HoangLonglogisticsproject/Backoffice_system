@@ -84,11 +84,12 @@ async function main(): Promise<void> {
     app.get<SecretReader>(SECRET_READER),
     process.env['BOOTSTRAP_PASSWORD'],
   );
-  // The PERMANENT floor, from the one place that defines it. This account
-  // chooses its own secret and is not asked to change it, so it is a permanent
-  // credential — not the temporary kind provisioning hands out. Reading the
-  // constant rather than repeating the number is what keeps the two in step
-  // when one of them moves.
+  // The PERMANENT floor, from the one place that defines it — deliberately,
+  // even though this credential must be replaced at first login. It is typed
+  // by a human at a prompt and may sit in a terminal until they get round to
+  // signing in, a longer and more exposed life than the temporary floor was
+  // sized for. Reading the constant rather than repeating the number is what
+  // keeps the two in step when one of them moves.
   if (password.length < PASSWORD_POLICY.minLength) {
     console.error(`Password must be at least ${PASSWORD_POLICY.minLength} characters.`);
     process.exit(1);
@@ -99,6 +100,15 @@ async function main(): Promise<void> {
       displayName: name,
       subject: email,
       password,
+      // ★ FIRST LOGIN MUST CHANGE IT, in every environment. The password above
+      // was typed on a command line: it is in shell history, in the operator’s
+      // clipboard, and quite possibly in a chat message to whoever is running
+      // the demo. It gets somebody in once and then stops meaning anything.
+      //
+      // Passed explicitly rather than left to the default: this is the account
+      // that owns the deployment, and the rule should be readable here rather
+      // than inferred from another file.
+      mustChangeSecret: true,
     });
     // AFTER the account exists, and in its own transaction: the grant is a
     // separate decision with its own uniqueness rule, and a deployment that

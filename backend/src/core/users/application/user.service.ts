@@ -27,6 +27,20 @@ export class UserService {
     displayName: string;
     subject: string;
     password: string;
+    /**
+     * ★ DEFAULTS TO TRUE, and the default is the point.
+     *
+     * A password this method is HANDED was chosen by somebody, and the only
+     * case where that somebody is the account owner is an operator typing one
+     * at a prompt. Every other path — a recovery account made ahead of time, a
+     * script, whatever calls this next — is a secret that travelled, and a
+     * secret that travelled has to be replaced before it means anything.
+     *
+     * So forgetting this flag produces the STRICTER outcome. The reverse
+     * default would let a new caller mint a permanent credential by omission,
+     * and nothing would say so.
+     */
+    mustChangeSecret?: boolean;
   }): Promise<User> {
     // Policy lives at the authentication boundary, not on the User model —
     // tightening it later must not make existing rows invalid.
@@ -53,7 +67,10 @@ export class UserService {
     // membership insert to join this same transaction.
     return this.db.transaction(async (tx) => {
       const user = await this.users.insertUser({ displayName: input.displayName.trim() }, tx);
-      await this.identities.insertLocal({ userId: user.id, subject, secretHash }, tx);
+      await this.identities.insertLocal(
+        { userId: user.id, subject, secretHash, mustChangeSecret: input.mustChangeSecret ?? true },
+        tx,
+      );
       return user;
     });
   }

@@ -51,6 +51,51 @@ describe('UserService', () => {
     expect(JSON.stringify(stored)).not.toContain('a real password');
   });
 
+  /**
+   * ★ THE DEFAULT IS THE STRICT ONE, and that is the whole design.
+   *
+   * A password handed to this method was chosen by somebody, and the only case
+   * where that somebody is the account owner is an operator typing one at a
+   * prompt. Everything else is a secret that travelled. So omitting the flag
+   * has to produce the credential that MUST be replaced — the reverse default
+   * would let a future caller mint a permanent one by saying nothing, and
+   * nothing would report it.
+   */
+  it('★ marks the credential as one that must be replaced, by default', async () => {
+    await service.createWithPassword({
+      displayName: 'A Person',
+      subject: 'a@example.com',
+      password: 'a valid passphrase',
+    });
+
+    expect(identities.insertLocal.mock.calls[0][0].mustChangeSecret).toBe(true);
+  });
+
+  it('honours an explicit true — the bootstrap CLI passes it at the call site', async () => {
+    await service.createWithPassword({
+      displayName: 'A Person',
+      subject: 'b@example.com',
+      password: 'a valid passphrase',
+      mustChangeSecret: true,
+    });
+
+    expect(identities.insertLocal.mock.calls[0][0].mustChangeSecret).toBe(true);
+  });
+
+  it('allows an explicit false, for a caller that owns its own secret', async () => {
+    // No production caller does this today. The option exists so that opting
+    // OUT is a deliberate sentence somebody wrote, rather than the outcome of
+    // forgetting an argument.
+    await service.createWithPassword({
+      displayName: 'A Person',
+      subject: 'c@example.com',
+      password: 'a valid passphrase',
+      mustChangeSecret: false,
+    });
+
+    expect(identities.insertLocal.mock.calls[0][0].mustChangeSecret).toBe(false);
+  });
+
   it('rejects a duplicate identity', async () => {
     identities.subjectExists.mockResolvedValue(true);
 
