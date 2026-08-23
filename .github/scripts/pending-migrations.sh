@@ -106,39 +106,45 @@ self_test() {
     fi
   }
 
-  local all='0001_a.sql
-0002_b.sql
-0003_c.sql'
+  # Named once. The point of every case below is WHICH of these comes back, so
+  # spelling them out per case turned the filename into noise the eye skips —
+  # and a typo inside one would have been a case quietly asserting nothing.
+  local first='0001_a.sql'
+  local second='0002_b.sql'
+  local third='0003_c.sql'
+
+  local all="$first
+$second
+$third"
+  local without_third="$first
+$second"
 
   echo "1. an up-to-date database needs nothing"
   check 'all applied -> no pending' '' "$all" "$all"
 
   echo "2. a new migration in this release"
-  check 'one new file -> that file' '0003_c.sql' '0001_a.sql
-0002_b.sql' "$all"
+  check 'one new file -> that file' "$third" "$without_third" "$all"
 
   echo "3. a database that has never been migrated"
-  check 'empty ledger -> everything' '0001_a.sql 0002_b.sql 0003_c.sql' '' "$all"
+  check 'empty ledger -> everything' "$first $second $third" '' "$all"
 
   echo "4. ★ the scenario the diff-based gate got wrong"
-  check 'previous release failed at 0003 -> still pending' '0003_c.sql' '0001_a.sql
-0002_b.sql' "$all"
+  check 'previous release failed at 0003 -> still pending' "$third" "$without_third" "$all"
 
   echo "5. noise must not become a phantom migration"
-  check 'blank lines in the ledger'   '0003_c.sql' '0001_a.sql
+  check 'blank lines in the ledger' "$third" "$first
 
-0002_b.sql
-' "$all"
-  check 'blank lines in the file list' '0003_c.sql' '0001_a.sql
-0002_b.sql' '0001_a.sql
+$second
+" "$all"
+  check 'blank lines in the file list' "$third" "$without_third" "$first
 
-0002_b.sql
-0003_c.sql
-'
-  check 'unsorted input still compares' '0003_c.sql' '0002_b.sql
-0001_a.sql' '0003_c.sql
-0001_a.sql
-0002_b.sql'
+$second
+$third
+"
+  check 'unsorted input still compares' "$third" "$second
+$first" "$third
+$first
+$second"
 
   echo "6. a ledger row with no file is NOT pending"
   # A migration applied here but absent from this image — a rollback to an older

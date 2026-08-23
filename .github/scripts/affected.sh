@@ -29,7 +29,9 @@ set -euo pipefail
 # after `frontend/README.md` is the entire reason a README does not ship a
 # deployment.
 classify() {
-  case "$1" in
+  local file="$1"
+
+  case "$file" in
     # -- documentation and editor furniture: no build, no runtime, no deploy --
     docs/*|__screenshots__/*|.vscode/*|.claude/*)          echo docs ;;
     README.md|.editorconfig|.gitignore|LICENSE)            echo docs ;;
@@ -133,12 +135,12 @@ self_test() {
   # so a typo in one of them is a test that silently checks nothing. Naming them
   # also means the analyser stops counting them as duplicated literals, which it
   # was right to do.
-  local BE=deploy_backend
-  local FE=deploy_frontend
-  local WORKFLOW=.github/workflows/ci.yml
-  local BACKEND_SRC=backend/src/main.ts
-  local FRONTEND_SRC=frontend/src/App.tsx
-  local UNCLASSIFIED=weird-new-thing.py
+  local be=deploy_backend
+  local fe=deploy_frontend
+  local workflow=.github/workflows/ci.yml
+  local backend_src=backend/src/main.ts
+  local frontend_src=frontend/src/App.tsx
+  local unclassified=weird-new-thing.py
 
   check() {
     label="$1"
@@ -154,47 +156,47 @@ self_test() {
   }
 
   echo "docs must never deploy"
-  check 'docs/ -> no backend deploy'        "$BE=false"  'docs/architecture/x.md'
-  check 'docs/ -> no frontend deploy'       "$FE=false" 'docs/architecture/x.md'
+  check 'docs/ -> no backend deploy'        "$be=false"  'docs/architecture/x.md'
+  check 'docs/ -> no frontend deploy'       "$fe=false" 'docs/architecture/x.md'
   check 'root README -> no integration'     'ci_integration=false'  'README.md'
-  check 'frontend README is docs'           "$FE=false" 'frontend/README.md'
-  check 'deploy README is docs'             "$BE=false"  'deploy/README.md'
-  check 'env.example is docs'               "$BE=false"  'deploy/env.example'
-  check 'screenshots are docs'              "$FE=false" '__screenshots__/a.png'
+  check 'frontend README is docs'           "$fe=false" 'frontend/README.md'
+  check 'deploy README is docs'             "$be=false"  'deploy/README.md'
+  check 'env.example is docs'               "$be=false"  'deploy/env.example'
+  check 'screenshots are docs'              "$fe=false" '__screenshots__/a.png'
 
   echo "frontend and backend do not bleed into each other"
-  check 'frontend src -> frontend'          "$FE=true"  "$FRONTEND_SRC"
-  check 'frontend src -> NOT backend'       "$BE=false"  "$FRONTEND_SRC"
-  check 'vercel edge proxy is frontend'     "$FE=true"  'frontend/api/[...path].ts'
-  check 'vercel edge proxy is NOT backend'  "$BE=false"  'frontend/api/[...path].ts'
-  check 'vercel.json is frontend'           "$FE=true"  'frontend/vercel.json'
-  check 'backend src -> backend'            "$BE=true"   "$BACKEND_SRC"
-  check 'backend src -> NOT frontend'       "$FE=false" "$BACKEND_SRC"
+  check 'frontend src -> frontend'          "$fe=true"  "$frontend_src"
+  check 'frontend src -> NOT backend'       "$be=false"  "$frontend_src"
+  check 'vercel edge proxy is frontend'     "$fe=true"  'frontend/api/[...path].ts'
+  check 'vercel edge proxy is NOT backend'  "$be=false"  'frontend/api/[...path].ts'
+  check 'vercel.json is frontend'           "$fe=true"  'frontend/vercel.json'
+  check 'backend src -> backend'            "$be=true"   "$backend_src"
+  check 'backend src -> NOT frontend'       "$fe=false" "$backend_src"
 
   echo "deploy/ belongs to the backend runtime"
-  check 'Dockerfile -> backend'             "$BE=true"   'deploy/backend.Dockerfile'
-  check 'compose -> backend'                "$BE=true"   'deploy/docker-compose.yml'
-  check 'nginx -> backend'                  "$BE=true"   'deploy/nginx.conf'
-  check 'Dockerfile -> NOT frontend'        "$FE=false" 'deploy/backend.Dockerfile'
+  check 'Dockerfile -> backend'             "$be=true"   'deploy/backend.Dockerfile'
+  check 'compose -> backend'                "$be=true"   'deploy/docker-compose.yml'
+  check 'nginx -> backend'                  "$be=true"   'deploy/nginx.conf'
+  check 'Dockerfile -> NOT frontend'        "$fe=false" 'deploy/backend.Dockerfile'
 
   echo "migrations additionally demand a backup"
   check 'migration sets the flag'           'migrations=true'       'backend/migrations/0011_x.sql'
-  check 'migration implies backend deploy'  "$BE=true"   'backend/migrations/0011_x.sql'
-  check 'plain backend change: no backup'   'migrations=false'      "$BACKEND_SRC"
+  check 'migration implies backend deploy'  "$be=true"   'backend/migrations/0011_x.sql'
+  check 'plain backend change: no backup'   'migrations=false'      "$backend_src"
 
   echo "a workflow change validates, but never deploys"
-  check 'workflow runs backend CI'          'ci_backend=true'       "$WORKFLOW"
-  check 'workflow runs frontend CI'         'ci_frontend=true'      "$WORKFLOW"
-  check 'workflow deploys no backend'       "$BE=false"  "$WORKFLOW"
-  check 'workflow deploys no frontend'      "$FE=false" "$WORKFLOW"
-  check 'this script deploys nothing'       "$BE=false"  '.github/scripts/affected.sh'
+  check 'workflow runs backend CI'          'ci_backend=true'       "$workflow"
+  check 'workflow runs frontend CI'         'ci_frontend=true'      "$workflow"
+  check 'workflow deploys no backend'       "$be=false"  "$workflow"
+  check 'workflow deploys no frontend'      "$fe=false" "$workflow"
+  check 'this script deploys nothing'       "$be=false"  '.github/scripts/affected.sh'
 
   echo "shared and unknown widen, never narrow"
-  check '.nvmrc widens to backend'          "$BE=true"   '.nvmrc'
-  check '.nvmrc widens to frontend'         "$FE=true"  '.nvmrc'
-  check 'unclassified -> backend'           "$BE=true"   "$UNCLASSIFIED"
-  check 'unclassified -> frontend'          "$FE=true"  "$UNCLASSIFIED"
-  check 'unclassified is reported by name'  "unknown=$UNCLASSIFIED" "$UNCLASSIFIED"
+  check '.nvmrc widens to backend'          "$be=true"   '.nvmrc'
+  check '.nvmrc widens to frontend'         "$fe=true"  '.nvmrc'
+  check 'unclassified -> backend'           "$be=true"   "$unclassified"
+  check 'unclassified -> frontend'          "$fe=true"  "$unclassified"
+  check 'unclassified is reported by name'  "unknown=$unclassified" "$unclassified"
 
   # ★ THE REGRESSION THIS EXISTS FOR. `printf '%s'` with no trailing newline is
   # what a caller piping a hand-built list produces, and the plain `read` loop
@@ -213,15 +215,15 @@ self_test() {
       failures=$((failures + 1))
     fi
   }
-  check_no_newline 'lone backend path, no newline'  "$BE=true"  "$BACKEND_SRC"
-  check_no_newline 'lone frontend path, no newline' "$FE=true"  "$FRONTEND_SRC"
-  check_no_newline 'docs path, no newline'          "$BE=false" 'docs/x.md'
-  check_no_newline 'last of several, no newline'    "$BE=true"  "docs/x.md
-$BACKEND_SRC"
+  check_no_newline 'lone backend path, no newline'  "$be=true"  "$backend_src"
+  check_no_newline 'lone frontend path, no newline' "$fe=true"  "$frontend_src"
+  check_no_newline 'docs path, no newline'          "$be=false" 'docs/x.md'
+  check_no_newline 'last of several, no newline'    "$be=true"  "docs/x.md
+$backend_src"
 
   echo "either half moving re-measures the contract"
-  check 'backend change runs integration'   'ci_integration=true'   "$BACKEND_SRC"
-  check 'frontend change runs integration'  'ci_integration=true'   "$FRONTEND_SRC"
+  check 'backend change runs integration'   'ci_integration=true'   "$backend_src"
+  check 'frontend change runs integration'  'ci_integration=true'   "$frontend_src"
 
   echo
   if [[ "$failures" -eq 0 ]]; then
