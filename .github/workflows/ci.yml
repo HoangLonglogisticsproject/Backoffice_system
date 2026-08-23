@@ -59,9 +59,14 @@ jobs:
       # Full history: the range being classified reaches back to the merge base,
       # and on `main` to the commit before the push. A shallow clone would make
       # `git diff` fail rather than answer.
+      #
+      # `persist-credentials: false` because nothing here pushes. The default
+      # leaves a GitHub token in `.git/config` for the life of the job, readable
+      # by every later step; this job only ever reads history.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # ★ BEFORE the classification, not after. A matrix that has quietly stopped
       # meaning what it says decides wrongly and silently — and if this ran last,
@@ -478,9 +483,15 @@ jobs:
       RELEASE_SHA: ${{ github.sha }}
 
     steps:
+      # ★ `persist-credentials: false` MATTERS MORE HERE THAN ANYWHERE ELSE.
+      # This is the job that runs an SSH client against a machine we own and a
+      # CLI that talks to a third party. Leaving a GitHub token in `.git/config`
+      # for the life of the job hands a credential to processes that have no
+      # business holding one. Nothing here pushes.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # ★ HOST KEY PINNED WHEN YOU GIVE US ONE. `ssh-keyscan` trusts whatever
       # answers on the day, which is not host verification — it is a coin flip
@@ -575,16 +586,25 @@ jobs:
         run: |
           set -euo pipefail
           sha=""
+          uid=""
           if [ -n "${VERCEL_TOKEN:-}" ] && [ -n "${VERCEL_PROJECT_ID:-}" ]; then
-            sha="$(curl -sS --fail-with-body \
+            body="$(curl -sS --fail-with-body \
               -H "Authorization: Bearer ${VERCEL_TOKEN}" \
-              "https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&teamId=${VERCEL_ORG_ID}&target=production&state=READY&limit=1" \
-              | jq -r '.deployments[0].meta.githubCommitSha // ""' || true)"
+              "https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&teamId=${VERCEL_ORG_ID}&target=production&state=READY&limit=1" || true)"
+            sha="$(printf '%s' "$body" | jq -r '.deployments[0].meta.githubCommitSha // ""' || true)"
+            # ★ RECORDED BEFORE ANYTHING IS DEPLOYED, because afterwards this
+            # query answers with the NEW deployment and the one we might need to
+            # go back to is no longer the first result. It is the only identifier
+            # `vercel rollback` and `vercel promote` accept.
+            uid="$(printf '%s' "$body" | jq -r '.deployments[0].uid // ""' || true)"
           else
             echo "::warning::Vercel credentials are not set - frontend drift cannot be measured."
           fi
-          echo "frontend is running: ${sha:-<unknown>}"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "frontend is running: ${sha:-<unknown>} (deployment ${uid:-<unknown>})"
+          {
+            echo "sha=$sha"
+            echo "uid=$uid"
+          } >> "$GITHUB_OUTPUT"
 
       # ------------------------------------------------------------ the plan --
       #
@@ -684,14 +704,39 @@ jobs:
           export APP_VERSION="$RELEASE_SHA"
           docker compose build backend
 
+          # ★ THE BACKUP IS A GATE, NOT A COURTESY. If it cannot be taken, the
+          # migration must not run — a forward-only migration with no dump behind
+          # it is a change with no way back. `set -e` already aborts on a failing
+          # pg_dump, but a redirect truncates its target BEFORE the command runs,
+          # so a dump that dies early leaves a plausible-looking file. The size
+          # check is what turns "a file exists" into "a backup exists".
           if [ "$NEEDS_BACKUP" = true ]; then
             dump="$HOME/bo-pre-${RELEASE_SHA:0:12}-$(date +%F-%H%M%S).dump"
             echo "migrations are in this release - dumping to $dump"
-            docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > "$dump"
+
+            if ! docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > "$dump"; then
+              echo "pg_dump FAILED - refusing to migrate. Nothing has been changed." >&2
+              rm -f "$dump"
+              exit 1
+            fi
+
+            if [ ! -s "$dump" ]; then
+              echo "pg_dump produced an empty file - refusing to migrate." >&2
+              rm -f "$dump"
+              exit 1
+            fi
+
             ls -lh "$dump"
           fi
 
-          docker compose run --rm --no-deps backend npm run migrate
+          # ★ `-T --interactive=false` OR THIS COMMAND EATS THE SCRIPT. Everything
+          # here arrives on the remote shell's stdin as one heredoc. A container
+          # that keeps stdin open consumes whatever is left of it, so `up -d`
+          # below would silently never run — the migration would apply and the
+          # old container would keep serving. Both flags verified against the
+          # compose in use.
+          docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+
           docker compose up -d backend
           REMOTE
 
@@ -746,11 +791,19 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
-          # Pinned rather than `@latest`: a deploy tool that changes under you
-          # between two runs makes every comparison between them meaningless.
-          npx --yes vercel@48.2.0 pull --yes --environment=production --token="$VERCEL_TOKEN"
-          npx --yes vercel@48.2.0 build --prod --token="$VERCEL_TOKEN"
-          npx --yes vercel@48.2.0 deploy --prebuilt --prod \
+
+          # ★ INSTALLED ONCE, THEN INVOKED LOCALLY. `npx --yes` resolves and
+          # executes a package straight from the registry on every call — three
+          # implicit downloads, three chances to differ. Pinned rather than
+          # `@latest` for the same reason: a deploy tool that changes under you
+          # between two runs makes any comparison between them meaningless.
+          npm install --no-save --no-audit --no-fund vercel@48.2.0
+          vercel=./node_modules/.bin/vercel
+          "$vercel" --version
+
+          "$vercel" pull --yes --environment=production --token="$VERCEL_TOKEN"
+          "$vercel" build --prod --token="$VERCEL_TOKEN"
+          "$vercel" deploy --prebuilt --prod \
             --token="$VERCEL_TOKEN" \
             --meta githubCommitSha="$RELEASE_SHA"
 
@@ -811,15 +864,78 @@ jobs:
           exit 1
           REMOTE
 
-      - name: Roll the frontend back
+      # ★ THIS DELIBERATELY DOES NOT ROLL BACK. It tells a person exactly how to.
+      #
+      # The previous version ran `vercel rollback --token=… --yes` with no
+      # deployment argument. Read the CLI it pins, 48.2.0:
+      #
+      #     const actionOrDeployId = parsedArgs.args[1] || "status";
+      #     if (actionOrDeployId === "status") { … return await …Status(…) }
+      #
+      # With no positional argument the command is `rollback status`. It PRINTS
+      # the state of a pending rollback and exits 0. It reverts nothing — and it
+      # reports success while doing so, which is worse than having no rollback at
+      # all, because the log would have said the frontend was restored.
+      #
+      # Passing `steps.deployed_fe.outputs.uid` would fix the command. It is not
+      # enough to make the automation safe:
+      #
+      #   - This fires on a SMOKE TEST failure, which is frequently one flaky
+      #     request against a public origin. Reverting production automatically
+      #     on a failed `curl` is a bigger outage than the one it answers.
+      #   - `POST /v9/projects/{id}/rollback/{deploymentId}` puts the PROJECT
+      #     into a rolled-back state, not just the alias, and the CLI carries
+      #     `autoAssignCustomDomains` handling around exactly this area. Undoing
+      #     it correctly needs `vercel promote`. Whether the next ordinary deploy
+      #     re-assigns the production domain by itself is a behaviour this
+      #     repository cannot verify without a live project, and guessing at it
+      #     inside an automatic recovery path is how a bad minute becomes a bad
+      #     afternoon.
+      #
+      # A backend rollback is a container swap on a machine we own, fully
+      # reversible and observable from the same shell. This is not that. So the
+      # rollback stays a human decision, and this step's job is to make that
+      # decision take ten seconds instead of ten minutes.
+      - name: Frontend rollback instructions
         if: failure() && steps.deploy_fe.outcome == 'success'
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        working-directory: frontend
+          PREVIOUS_UID: ${{ steps.deployed_fe.outputs.uid }}
+          PREVIOUS_SHA: ${{ steps.deployed_fe.outputs.sha }}
         run: |
           set -euo pipefail
-          echo "::warning::A production frontend was deployed and a later step failed."
-          npx --yes vercel@48.2.0 rollback --token="$VERCEL_TOKEN" --yes
+          echo "::error::A production frontend was deployed and a later step failed. It has NOT been rolled back."
+          {
+            echo "### ⚠ Frontend needs a decision"
+            echo
+            echo "\`${RELEASE_SHA}\` is live on production. The step after it failed."
+            echo
+            if [ -n "${PREVIOUS_UID:-}" ]; then
+              echo "The deployment that was live before this release:"
+              echo
+              echo "| | |"
+              echo "|---|---|"
+              echo "| deployment | \`${PREVIOUS_UID}\` |"
+              echo "| commit | \`${PREVIOUS_SHA:-unknown}\` |"
+              echo
+              echo "To revert, from a shell with \`VERCEL_TOKEN\` set:"
+              echo
+              echo '```bash'
+              echo "npx vercel@48.2.0 rollback ${PREVIOUS_UID} --token=\"\$VERCEL_TOKEN\" --yes"
+              echo '```'
+              echo
+              echo "If production domain assignment does not return on the next deploy, promote explicitly:"
+              echo
+              echo '```bash'
+              echo "npx vercel@48.2.0 promote ${PREVIOUS_UID} --token=\"\$VERCEL_TOKEN\" --yes"
+              echo '```'
+            else
+              echo "⚠ No previous production deployment was recorded, so there is no identifier to revert to."
+              echo "Pick one from the Vercel dashboard's deployment list."
+            fi
+            echo
+            echo "Check the backend first: it may already have been rolled back by the step above."
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
 
 # ---------------------------------------------------------------- SonarCloud --
 #

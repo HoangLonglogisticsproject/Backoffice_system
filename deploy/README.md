@@ -120,28 +120,57 @@ Only when the pipeline cannot. Same order it uses, and the order matters:
 `migrate` runs ts-node from *inside* the image, so the image has to exist first,
 and the schema has to be in place before the container expecting it starts.
 
+Paste it whole. Every check below **stops** the release rather than warning
+about it — a comment saying "this must be empty" is not a check, and the one
+time it matters is the one time nobody reads it.
+
 ```bash
-SHA=<full 40-char commit sha>
+set -euo pipefail
+
+SHA='<full 40-char commit sha>'
+MIGRATES=false          # true if this release adds anything under backend/migrations/
+
 cd /opt/hoanglong-bo
-git fetch --all --prune && git checkout --detach "$SHA"
-git status --porcelain    # must be empty; a dirty tree is not a release
+git fetch --all --prune
+git checkout --detach "$SHA"
+
+# A dirty tree means the image would carry code that is not $SHA, while the
+# label claims it is. Refuse.
+if [ -n "$(git status --porcelain)" ]; then
+  git status --short
+  echo "Working tree is dirty - refusing to release." >&2
+  exit 1
+fi
 
 cd deploy
 export APP_VERSION="$SHA"
 docker compose build backend
-docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > ~/bo-pre-$SHA.dump   # if this release migrates
-docker compose run --rm --no-deps backend npm run migrate
+
+# The backup is a GATE. A forward-only migration with no dump behind it is a
+# change with no way back, so a failed or empty dump stops here - before migrate.
+if [ "$MIGRATES" = true ]; then
+  dump=~/bo-pre-$SHA.dump
+  if ! docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > "$dump"; then
+    rm -f "$dump"; echo "pg_dump failed - not migrating." >&2; exit 1
+  fi
+  [ -s "$dump" ] || { rm -f "$dump"; echo "pg_dump wrote an empty file - not migrating." >&2; exit 1; }
+  ls -lh "$dump"
+fi
+
+docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
 docker compose up -d backend
 
 curl -fsS http://127.0.0.1:3000/health
-docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)"   # must equal $SHA
+running=$(docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)")
+[ "$running" = "$SHA" ] || { echo "Container reports '$running', expected '$SHA'." >&2; exit 1; }
+echo "released $SHA"
 ```
 
 ### Rolling back
 
 ```bash
 docker images hoanglong-bo-backend        # the tags ARE the releases
-APP_VERSION=<previous-sha> docker compose up -d --no-build backend
+APP_VERSION='<previous-sha>' docker compose up -d --no-build backend
 ```
 
 ⚠ **Code rollback is not schema rollback.** Migrations here are forward-only and
@@ -163,6 +192,8 @@ docker compose exec -T postgres pg_restore -U backoffice -d backoffice --clean -
 `postgres-data/` is a bind mount, so `docker compose down` does not lose data;
 only `rm -rf postgres-data` does. Take a dump before anything that migrates.
 
-<!-- ponytail: no CI/CD, no image registry, no automated backup cron. This is a
-     demo deploy driven by hand. Add a registry when two machines need the same
-     image, and a cron dump when losing a day of staging data starts to matter. -->
+<!-- ponytail: no image registry, no automated backup cron. Releases now run
+     from .github/workflows/ci.yml, but the image is still built on the VPS and
+     the dump is still taken per-release rather than on a schedule. Add a
+     registry when two machines need the same image, and a cron dump when losing
+     a day of staging data starts to matter. -->

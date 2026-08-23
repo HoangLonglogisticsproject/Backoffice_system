@@ -76,8 +76,13 @@ summarise() {
   shared=false
   unknown=""
 
-  while IFS= read -r file; do
-    [ -n "$file" ] || continue
+  # `|| [[ -n "$file" ]]` is what makes the LAST line count when the input does
+  # not end in a newline. `read` returns non-zero at EOF even after filling the
+  # variable, so the plain loop silently drops that record — and dropping a
+  # record means "not affected", which means "never deployed". `git diff` always
+  # terminates its output, but `--stdin` callers are not obliged to.
+  while IFS= read -r file || [[ -n "$file" ]]; do
+    [[ -n "$file" ]] || continue
     kind="$(classify "$file")"
     case "$kind" in
       frontend)   frontend=true ;;
@@ -87,20 +92,25 @@ summarise() {
       ci)         ci=true ;;
       docs)       : ;;
       unknown)    unknown="${unknown}${file} "; frontend=true; backend=true ;;
+      # A kind `classify` can return but this switch does not know about. It
+      # cannot happen today; if someone adds one and forgets to handle it here,
+      # the safe reading is the same as `unknown` — widen and say so, never
+      # silently drop the file.
+      *)          unknown="${unknown}${file} "; frontend=true; backend=true ;;
     esac
   done
 
   # `shared` widens both halves. `ci` widens validation only — never deployment.
-  if [ "$shared" = true ]; then frontend=true; backend=true; fi
+  if [[ "$shared" == true ]]; then frontend=true; backend=true; fi
 
   ci_frontend="$frontend"
   ci_backend="$backend"
-  if [ "$ci" = true ]; then ci_frontend=true; ci_backend=true; fi
+  if [[ "$ci" == true ]]; then ci_frontend=true; ci_backend=true; fi
 
   # The contract between the two halves is what this suite measures, so either
   # side moving is reason enough to re-measure it.
   ci_integration=false
-  if [ "$ci_frontend" = true ] || [ "$ci_backend" = true ]; then ci_integration=true; fi
+  if [[ "$ci_frontend" == true || "$ci_backend" == true ]]; then ci_integration=true; fi
 
   echo "deploy_frontend=$frontend"
   echo "deploy_backend=$backend"
@@ -119,12 +129,23 @@ summarise() {
 self_test() {
   failures=0
 
+  # ★ NAMED ONCE, NOT SEVEN TIMES. These strings are the assertions themselves,
+  # so a typo in one of them is a test that silently checks nothing. Naming them
+  # also means the analyser stops counting them as duplicated literals, which it
+  # was right to do.
+  local BE=deploy_backend
+  local FE=deploy_frontend
+  local WORKFLOW=.github/workflows/ci.yml
+  local BACKEND_SRC=backend/src/main.ts
+  local FRONTEND_SRC=frontend/src/App.tsx
+  local UNCLASSIFIED=weird-new-thing.py
+
   check() {
     label="$1"
     expected="$2"
     input="$3"
     actual="$(printf '%s\n' "$input" | summarise | grep "^${expected%%=*}=")"
-    if [ "$actual" = "$expected" ]; then
+    if [[ "$actual" == "$expected" ]]; then
       printf '  ok    %-46s %s\n' "$label" "$expected"
     else
       printf '  FAIL  %-46s want %s, got %s\n' "$label" "$expected" "$actual"
@@ -133,54 +154,77 @@ self_test() {
   }
 
   echo "docs must never deploy"
-  check 'docs/ -> no backend deploy'        'deploy_backend=false'  'docs/architecture/x.md'
-  check 'docs/ -> no frontend deploy'       'deploy_frontend=false' 'docs/architecture/x.md'
+  check 'docs/ -> no backend deploy'        "$BE=false"  'docs/architecture/x.md'
+  check 'docs/ -> no frontend deploy'       "$FE=false" 'docs/architecture/x.md'
   check 'root README -> no integration'     'ci_integration=false'  'README.md'
-  check 'frontend README is docs'           'deploy_frontend=false' 'frontend/README.md'
-  check 'deploy README is docs'             'deploy_backend=false'  'deploy/README.md'
-  check 'env.example is docs'               'deploy_backend=false'  'deploy/env.example'
-  check 'screenshots are docs'              'deploy_frontend=false' '__screenshots__/a.png'
+  check 'frontend README is docs'           "$FE=false" 'frontend/README.md'
+  check 'deploy README is docs'             "$BE=false"  'deploy/README.md'
+  check 'env.example is docs'               "$BE=false"  'deploy/env.example'
+  check 'screenshots are docs'              "$FE=false" '__screenshots__/a.png'
 
   echo "frontend and backend do not bleed into each other"
-  check 'frontend src -> frontend'          'deploy_frontend=true'  'frontend/src/App.tsx'
-  check 'frontend src -> NOT backend'       'deploy_backend=false'  'frontend/src/App.tsx'
-  check 'vercel edge proxy is frontend'     'deploy_frontend=true'  'frontend/api/[...path].ts'
-  check 'vercel edge proxy is NOT backend'  'deploy_backend=false'  'frontend/api/[...path].ts'
-  check 'vercel.json is frontend'           'deploy_frontend=true'  'frontend/vercel.json'
-  check 'backend src -> backend'            'deploy_backend=true'   'backend/src/main.ts'
-  check 'backend src -> NOT frontend'       'deploy_frontend=false' 'backend/src/main.ts'
+  check 'frontend src -> frontend'          "$FE=true"  "$FRONTEND_SRC"
+  check 'frontend src -> NOT backend'       "$BE=false"  "$FRONTEND_SRC"
+  check 'vercel edge proxy is frontend'     "$FE=true"  'frontend/api/[...path].ts'
+  check 'vercel edge proxy is NOT backend'  "$BE=false"  'frontend/api/[...path].ts'
+  check 'vercel.json is frontend'           "$FE=true"  'frontend/vercel.json'
+  check 'backend src -> backend'            "$BE=true"   "$BACKEND_SRC"
+  check 'backend src -> NOT frontend'       "$FE=false" "$BACKEND_SRC"
 
   echo "deploy/ belongs to the backend runtime"
-  check 'Dockerfile -> backend'             'deploy_backend=true'   'deploy/backend.Dockerfile'
-  check 'compose -> backend'                'deploy_backend=true'   'deploy/docker-compose.yml'
-  check 'nginx -> backend'                  'deploy_backend=true'   'deploy/nginx.conf'
-  check 'Dockerfile -> NOT frontend'        'deploy_frontend=false' 'deploy/backend.Dockerfile'
+  check 'Dockerfile -> backend'             "$BE=true"   'deploy/backend.Dockerfile'
+  check 'compose -> backend'                "$BE=true"   'deploy/docker-compose.yml'
+  check 'nginx -> backend'                  "$BE=true"   'deploy/nginx.conf'
+  check 'Dockerfile -> NOT frontend'        "$FE=false" 'deploy/backend.Dockerfile'
 
   echo "migrations additionally demand a backup"
   check 'migration sets the flag'           'migrations=true'       'backend/migrations/0011_x.sql'
-  check 'migration implies backend deploy'  'deploy_backend=true'   'backend/migrations/0011_x.sql'
-  check 'plain backend change: no backup'   'migrations=false'      'backend/src/main.ts'
+  check 'migration implies backend deploy'  "$BE=true"   'backend/migrations/0011_x.sql'
+  check 'plain backend change: no backup'   'migrations=false'      "$BACKEND_SRC"
 
   echo "a workflow change validates, but never deploys"
-  check 'workflow runs backend CI'          'ci_backend=true'       '.github/workflows/ci.yml'
-  check 'workflow runs frontend CI'         'ci_frontend=true'      '.github/workflows/ci.yml'
-  check 'workflow deploys no backend'       'deploy_backend=false'  '.github/workflows/ci.yml'
-  check 'workflow deploys no frontend'      'deploy_frontend=false' '.github/workflows/ci.yml'
-  check 'this script deploys nothing'       'deploy_backend=false'  '.github/scripts/affected.sh'
+  check 'workflow runs backend CI'          'ci_backend=true'       "$WORKFLOW"
+  check 'workflow runs frontend CI'         'ci_frontend=true'      "$WORKFLOW"
+  check 'workflow deploys no backend'       "$BE=false"  "$WORKFLOW"
+  check 'workflow deploys no frontend'      "$FE=false" "$WORKFLOW"
+  check 'this script deploys nothing'       "$BE=false"  '.github/scripts/affected.sh'
 
   echo "shared and unknown widen, never narrow"
-  check '.nvmrc widens to backend'          'deploy_backend=true'   '.nvmrc'
-  check '.nvmrc widens to frontend'         'deploy_frontend=true'  '.nvmrc'
-  check 'unclassified -> backend'           'deploy_backend=true'   'weird-new-thing.py'
-  check 'unclassified -> frontend'          'deploy_frontend=true'  'weird-new-thing.py'
-  check 'unclassified is reported by name'  'unknown=weird-new-thing.py' 'weird-new-thing.py'
+  check '.nvmrc widens to backend'          "$BE=true"   '.nvmrc'
+  check '.nvmrc widens to frontend'         "$FE=true"  '.nvmrc'
+  check 'unclassified -> backend'           "$BE=true"   "$UNCLASSIFIED"
+  check 'unclassified -> frontend'          "$FE=true"  "$UNCLASSIFIED"
+  check 'unclassified is reported by name'  "unknown=$UNCLASSIFIED" "$UNCLASSIFIED"
+
+  # ★ THE REGRESSION THIS EXISTS FOR. `printf '%s'` with no trailing newline is
+  # what a caller piping a hand-built list produces, and the plain `read` loop
+  # dropped that last record entirely — classifying a backend change as "nothing
+  # changed". Deliberately not using `check`, which appends a newline.
+  echo "a final record with no trailing newline still counts"
+  check_no_newline() {
+    local label="$1" expected="$2" input="$3" actual
+    actual="$(printf '%s' "$input" | summarise | grep "^${expected%%=*}=")"
+    if [[ "$actual" == "$expected" ]]; then
+      printf '  ok    %-46s %s
+' "$label" "$expected"
+    else
+      printf '  FAIL  %-46s want %s, got %s
+' "$label" "$expected" "$actual"
+      failures=$((failures + 1))
+    fi
+  }
+  check_no_newline 'lone backend path, no newline'  "$BE=true"  "$BACKEND_SRC"
+  check_no_newline 'lone frontend path, no newline' "$FE=true"  "$FRONTEND_SRC"
+  check_no_newline 'docs path, no newline'          "$BE=false" 'docs/x.md'
+  check_no_newline 'last of several, no newline'    "$BE=true"  "docs/x.md
+$BACKEND_SRC"
 
   echo "either half moving re-measures the contract"
-  check 'backend change runs integration'   'ci_integration=true'   'backend/src/main.ts'
-  check 'frontend change runs integration'  'ci_integration=true'   'frontend/src/App.tsx'
+  check 'backend change runs integration'   'ci_integration=true'   "$BACKEND_SRC"
+  check 'frontend change runs integration'  'ci_integration=true'   "$FRONTEND_SRC"
 
   echo
-  if [ "$failures" -eq 0 ]; then
+  if [[ "$failures" -eq 0 ]]; then
     echo "affected.sh: all checks passed"
   else
     echo "affected.sh: ${failures} check(s) FAILED" >&2
