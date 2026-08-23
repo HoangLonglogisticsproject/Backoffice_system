@@ -128,7 +128,6 @@ time it matters is the one time nobody reads it.
 set -euo pipefail
 
 SHA='<full 40-char commit sha>'
-MIGRATES=false          # true if this release adds anything under backend/migrations/
 
 cd /opt/hoanglong-bo
 git fetch --all --prune
@@ -146,18 +145,35 @@ cd deploy
 export APP_VERSION="$SHA"
 docker compose build backend
 
-# The backup is a GATE. A forward-only migration with no dump behind it is a
-# change with no way back, so a failed or empty dump stops here - before migrate.
-if [ "$MIGRATES" = true ]; then
+# ASK THE DATABASE, not yourself. "Does this release add a migration file?" is a
+# different question from "does this database have one waiting". A release whose
+# migration failed leaves the file unapplied; the next release touches nothing
+# under migrations/ and would migrate it unprotected.
+pg_user=$(sed -n 's/^POSTGRES_USER=//p' .env | head -1)
+pg_db=$(sed -n 's/^POSTGRES_DB=//p' .env | head -1)
+pending=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
+
+if [ -n "$pending" ]; then
+  printf 'pending:\n%s\n' "$pending"
+
+  # The backup is a GATE. A forward-only migration with no dump behind it is a
+  # change with no way back, so a failed or empty dump stops here - before migrate.
   dump=~/bo-pre-$SHA.dump
-  if ! docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > "$dump"; then
+  if ! docker compose exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
     rm -f "$dump"; echo "pg_dump failed - not migrating." >&2; exit 1
   fi
   [ -s "$dump" ] || { rm -f "$dump"; echo "pg_dump wrote an empty file - not migrating." >&2; exit 1; }
   ls -lh "$dump"
+
+  docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+
+  # The runner exits 0 whether it applied anything or not, so ask the ledger.
+  still=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
+  [ -z "$still" ] || { printf 'still unapplied:\n%s\n' "$still" >&2; exit 1; }
+else
+  echo "schema already up to date - no dump, no migration"
 fi
 
-docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
 docker compose up -d backend
 
 curl -fsS http://127.0.0.1:3000/health

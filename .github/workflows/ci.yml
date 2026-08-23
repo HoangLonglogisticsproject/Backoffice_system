@@ -667,7 +667,7 @@ jobs:
             echo "| backend | \`${BE_DEPLOYED:-unknown}\` | \`${RELEASE_SHA}\` | **${be%% *}** | ${be#* } |"
             echo "| frontend | \`${FE_DEPLOYED:-unknown}\` | \`${RELEASE_SHA}\` | **${fe%% *}** | ${fe#* } |"
             echo
-            echo "Database backup before migrate: **${migrations}**"
+            echo "This release adds migration files: **${migrations}** _(advisory only — whether a dump is taken is decided on the VPS from \`schema_migrations\`, not from this diff)_"
             echo
             echo "Armed: backend \`${{ vars.RELEASE_BACKEND_ENABLED || 'false' }}\`, frontend \`${{ vars.RELEASE_FRONTEND_ENABLED || 'false' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -683,11 +683,9 @@ jobs:
       - name: Deploy the backend
         id: deploy_be
         if: steps.plan.outputs.backend == 'true' && vars.RELEASE_BACKEND_ENABLED == 'true'
-        env:
-          NEEDS_BACKUP: ${{ steps.plan.outputs.migrations }}
         run: |
           set -euo pipefail
-          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' NEEDS_BACKUP='$NEEDS_BACKUP' bash -s" <<'REMOTE'
+          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' bash -s" <<'REMOTE'
           set -euo pipefail
           cd /opt/hoanglong-bo
 
@@ -704,17 +702,36 @@ jobs:
           export APP_VERSION="$RELEASE_SHA"
           docker compose build backend
 
-          # ★ THE BACKUP IS A GATE, NOT A COURTESY. If it cannot be taken, the
-          # migration must not run — a forward-only migration with no dump behind
-          # it is a change with no way back. `set -e` already aborts on a failing
-          # pg_dump, but a redirect truncates its target BEFORE the command runs,
-          # so a dump that dies early leaves a plausible-looking file. The size
-          # check is what turns "a file exists" into "a backup exists".
-          if [ "$NEEDS_BACKUP" = true ]; then
-            dump="$HOME/bo-pre-${RELEASE_SHA:0:12}-$(date +%F-%H%M%S).dump"
-            echo "migrations are in this release - dumping to $dump"
+          # ★ ASK THE DATABASE, NOT THE DIFF. Whether a backup is needed is a
+          # fact about this server's schema, and the commit range is not evidence
+          # about it. A release whose migration FAILED leaves the file unapplied;
+          # the next release touches no migration at all, so a diff-based gate
+          # would have said "no backup needed" and then migrated anyway.
+          #
+          # The ledger is `schema_migrations`, the file list comes from the image
+          # just built for THIS sha, and neither query writes anything — deciding
+          # whether to back up must not alter what is being backed up.
+          pg_user="$(sed -n 's/^POSTGRES_USER=//p' .env | head -1)"
+          pg_db="$(sed -n 's/^POSTGRES_DB=//p' .env | head -1)"
+          : "${pg_user:?POSTGRES_USER is missing from deploy/.env}"
+          : "${pg_db:?POSTGRES_DB is missing from deploy/.env}"
 
-            if ! docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > "$dump"; then
+          pending="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
+
+          if [ -n "$pending" ]; then
+            echo "pending migrations on this database:"
+            printf '%s\n' "$pending" | sed 's/^/  /'
+
+            # ★ THE BACKUP IS A GATE, NOT A COURTESY. A forward-only migration
+            # with no dump behind it is a change with no way back. `set -e`
+            # aborts on a failing pg_dump, but a redirect truncates its target
+            # BEFORE the command runs, so a dump that dies early leaves a
+            # plausible-looking file. The size check is what turns "a file
+            # exists" into "a backup exists".
+            dump="$HOME/bo-pre-${RELEASE_SHA:0:12}-$(date +%F-%H%M%S).dump"
+            echo "dumping to $dump before touching the schema"
+
+            if ! docker compose exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
               echo "pg_dump FAILED - refusing to migrate. Nothing has been changed." >&2
               rm -f "$dump"
               exit 1
@@ -727,15 +744,28 @@ jobs:
             fi
 
             ls -lh "$dump"
-          fi
 
-          # ★ `-T --interactive=false` OR THIS COMMAND EATS THE SCRIPT. Everything
-          # here arrives on the remote shell's stdin as one heredoc. A container
-          # that keeps stdin open consumes whatever is left of it, so `up -d`
-          # below would silently never run — the migration would apply and the
-          # old container would keep serving. Both flags verified against the
-          # compose in use.
-          docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+            # ★ `-T --interactive=false` OR THIS COMMAND EATS THE SCRIPT.
+            # Everything here arrives on the remote shell's stdin as one
+            # heredoc. A container that keeps stdin open consumes whatever is
+            # left of it, so `up -d` below would silently never run — the
+            # migration would apply and the old container would keep serving.
+            docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+
+            # The runner exits 0 both when it applies and when it has nothing to
+            # do, so its exit code alone cannot tell us the schema arrived. Ask
+            # the ledger again.
+            still="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
+            if [ -n "$still" ]; then
+              echo "migrate exited 0 but these are still unapplied:" >&2
+              printf '%s\n' "$still" | sed 's/^/  /' >&2
+              echo "Refusing to start the new backend. The dump is at $dump" >&2
+              exit 1
+            fi
+            echo "schema is now up to date"
+          else
+            echo "schema already up to date - no dump taken, no migration run"
+          fi
 
           docker compose up -d backend
           REMOTE
@@ -850,12 +880,15 @@ jobs:
         if: failure() && steps.deploy_be.outcome == 'success'
         env:
           BE_PREVIOUS: ${{ steps.deployed_be.outputs.sha }}
-          HAD_MIGRATIONS: ${{ steps.plan.outputs.migrations }}
         run: |
           set -euo pipefail
-          if [ "$HAD_MIGRATIONS" = true ]; then
-            echo "::warning::This release ran migrations. Rolling the image back does NOT roll the schema back - see the pg_dump path in the deploy step."
-          fi
+          # ★ WARNED UNCONDITIONALLY, because whether this release migrated is
+          # decided on the VPS from the database's own ledger — not here, and not
+          # from the commit range. A release that touched no migration file can
+          # still have applied one an earlier failed release left behind, which
+          # is the entire reason that gate moved. Predicting from the diff here
+          # would drop the warning in exactly that case.
+          echo "::warning::If this release applied a migration, rolling the image back does NOT roll the schema back. The deploy log names the pg_dump if one was taken."
           if [ -z "${BE_PREVIOUS:-}" ]; then
             echo "::error::No previous release SHA is recorded, so there is nothing to roll back to."
             echo "The backend is left running ${RELEASE_SHA}. Recover by hand:"
