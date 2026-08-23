@@ -63,6 +63,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ★ BEFORE the classification, not after. A matrix that has quietly stopped
+      # meaning what it says decides wrongly and silently — and if this ran last,
+      # a broken matrix would already have published its answer to $GITHUB_OUTPUT
+      # and the three jobs below would run on it. Failing first means a broken
+      # matrix publishes nothing, so everything downstream skips and `release`
+      # is blocked by its own `!failure()`.
+      - name: Prove the matrix still means what it says
+        run: bash .github/scripts/affected.sh --self-test
+
       - name: Classify the changed paths
         id: matrix
         env:
@@ -103,12 +112,6 @@ jobs:
           git diff --name-only "$base" "$head" | sed 's/^/  /'
           echo
           bash .github/scripts/affected.sh "$base" "$head" | tee -a "$GITHUB_OUTPUT"
-
-      # The matrix decides what runs; a matrix that has quietly stopped meaning
-      # what it says decides wrongly and silently. Cheap enough to prove every
-      # time rather than trusting it.
-      - name: Prove the matrix still means what it says
-        run: bash .github/scripts/affected.sh --self-test
 
   # ---------------------------------------------------------------- backend --
   backend:
@@ -484,18 +487,44 @@ jobs:
       # repeated every run, and losing it once means handing a deploy key to
       # whoever answered. Set the VPS_HOST_KEY secret (the VPS's own
       # `/etc/ssh/ssh_host_ed25519_key.pub`) and this pins instead.
+      # ★ NOT BEING CONFIGURED YET IS NOT A FAILURE. This job runs on every push
+      # to `main`, including documentation-only ones, because drift is measured
+      # rather than inferred. Hard-failing on absent credentials would therefore
+      # paint `main` red from the moment this merges until the last of seven
+      # secrets exists — and the agreed order is to land the pipeline first and
+      # configure it second.
+      #
+      # ⚠ ARMED AND UNREACHABLE IS A DIFFERENT THING, and it IS a failure. Asking
+      # for a deployment that cannot be delivered must never report success.
       - name: Configure the deploy connection
+        id: conn
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+          ARMED_BE: ${{ vars.RELEASE_BACKEND_ENABLED }}
+          ARMED_FE: ${{ vars.RELEASE_FRONTEND_ENABLED }}
         run: |
           set -euo pipefail
-          : "${VPS_HOST:?VPS_HOST is not set}"
-          : "${VPS_USER:?VPS_USER is not set}"
-          : "${VPS_SSH_KEY:?VPS_SSH_KEY is not set}"
+
+          missing=""
+          [ -n "${VPS_HOST:-}" ]    || missing="${missing} VPS_HOST"
+          [ -n "${VPS_USER:-}" ]    || missing="${missing} VPS_USER"
+          [ -n "${VPS_SSH_KEY:-}" ] || missing="${missing} VPS_SSH_KEY"
+
+          if [ -n "$missing" ]; then
+            if [ "${ARMED_BE:-}" = true ] || [ "${ARMED_FE:-}" = true ]; then
+              echo "::error::A release is armed but the VPS credentials are missing:${missing}"
+              exit 1
+            fi
+            echo "::warning::VPS credentials are not configured yet (${missing# }) - drift cannot be measured, nothing will be deployed."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
           port="${VPS_PORT:-22}"
 
           install -m 700 -d "$HOME/.ssh"
@@ -523,6 +552,7 @@ jobs:
       # ------------------------------------------------------ what is running --
       - name: Read the deployed backend revision
         id: deployed_be
+        if: steps.conn.outputs.configured == 'true'
         run: |
           set -euo pipefail
           sha="$("$HOME/vps" 'set -e
@@ -537,6 +567,7 @@ jobs:
 
       - name: Read the deployed frontend revision
         id: deployed_fe
+        if: steps.conn.outputs.configured == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -563,6 +594,7 @@ jobs:
       # neither component carries a label, so both read as unknown.
       - name: Decide what has drifted
         id: plan
+        if: steps.conn.outputs.configured == 'true'
         env:
           BE_DEPLOYED: ${{ steps.deployed_be.outputs.sha }}
           FE_DEPLOYED: ${{ steps.deployed_fe.outputs.sha }}
