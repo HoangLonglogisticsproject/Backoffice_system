@@ -29,4 +29,17 @@ COPY --chown=app:app src ./src
 COPY --chown=app:app migrations ./migrations
 USER app
 EXPOSE 3000
+
+# ★ WHICH COMMIT IS THIS. Without it "the backend is healthy" and "the backend
+# is the build we shipped" are the same sentence, and they are not: the skew
+# that produced this line was a perfectly healthy container five commits behind.
+# A label rather than an application change, because the question is about the
+# artifact, not about the program — and because it can be answered by
+# `docker inspect` without the process being asked to describe itself.
+#
+# `unknown` when nobody said, and the release pipeline treats unknown as "deploy
+# it", so a hand-built image never silently passes for a released one.
+ARG RELEASE_SHA=unknown
+LABEL release.sha="$RELEASE_SHA"
+
 CMD ["node", "dist/main.js"]

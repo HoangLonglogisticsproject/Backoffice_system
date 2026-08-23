@@ -32,7 +32,18 @@ services:
     build:
       context: ../backend
       dockerfile: ../deploy/backend.Dockerfile
-    image: hoanglong-bo-backend:latest
+      args:
+        RELEASE_SHA: ${APP_VERSION:-unknown}
+    # ★ THE TAG IS THE RELEASE IDENTITY. `latest` was here before and it is the
+    # reason nothing could be rolled back: one mutable tag, overwritten by every
+    # build, so the previous image existed but had no name to call it by.
+    #
+    # `APP_VERSION` is the commit being released. Deploying is
+    # `APP_VERSION=<sha> docker compose up -d backend`; rolling back is the same
+    # line with the previous sha and `--no-build`. Unset still works for a hand
+    # build on the box, and lands on `:local` rather than pretending to be a
+    # release nobody can trace.
+    image: hoanglong-bo-backend:${APP_VERSION:-local}
     restart: unless-stopped
     depends_on:
       postgres:

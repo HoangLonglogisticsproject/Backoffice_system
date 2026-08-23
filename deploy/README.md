@@ -28,8 +28,18 @@ is what the relative paths in `docker-compose.yml` already resolve against:
 /etc/ssl/cloudflare/          ← origin certificate
 ```
 
-Redeploying is `git pull` in `/opt/hoanglong-bo`, which is the reason for
-cloning rather than copying files around.
+Redeploying is a `git checkout` of an exact commit in `/opt/hoanglong-bo`, which
+is the reason for cloning rather than copying files around.
+
+**Releases are the pipeline's job now.** `release` in `.github/workflows/ci.yml`
+compares the commit each half is actually running against `main` and deploys the
+half that drifted, backend first. The commands below are what it does — kept
+here because they are also what you run when you have to do it by hand.
+
+★ **`APP_VERSION` is the release identity.** It becomes the image tag *and* the
+`release.sha` label the pipeline reads back to prove which build is serving.
+Leave it unset and you get `hoanglong-bo-backend:local`, which is honest: a hand
+build is not a release and should not be able to pass for one.
 
 ## First deploy
 
@@ -98,10 +108,100 @@ cd /opt/hoanglong-bo/deploy
 docker compose ps                      # health
 docker compose logs -f --tail=100 backend
 docker compose restart backend         # restart app only
-git -C .. pull && docker compose up -d --build   # redeploy after a code change
-docker compose run --rm --no-deps backend npm run migrate   # after new migrations
 systemctl reload nginx                 # after an nginx.conf change
+
+# which commit is actually serving? the question the pipeline asks
+docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)"
 ```
+
+### Releasing by hand
+
+Only when the pipeline cannot. Same order it uses, and the order matters:
+`migrate` runs ts-node from *inside* the image, so the image has to exist first,
+and the schema has to be in place before the container expecting it starts.
+
+Paste it whole. Every check below **stops** the release rather than warning
+about it — a comment saying "this must be empty" is not a check, and the one
+time it matters is the one time nobody reads it.
+
+```bash
+set -euo pipefail
+
+SHA='<full 40-char commit sha>'
+
+cd /opt/hoanglong-bo
+git fetch --all --prune
+git checkout --detach "$SHA"
+
+# A dirty tree means the image would carry code that is not $SHA, while the
+# label claims it is. Refuse.
+if [ -n "$(git status --porcelain)" ]; then
+  git status --short
+  echo "Working tree is dirty - refusing to release." >&2
+  exit 1
+fi
+
+cd deploy
+export APP_VERSION="$SHA"
+docker compose build backend
+
+# ASK THE DATABASE, not yourself. "Does this release add a migration file?" is a
+# different question from "does this database have one waiting". A release whose
+# migration failed leaves the file unapplied; the next release touches nothing
+# under migrations/ and would migrate it unprotected.
+pg_user=$(sed -n 's/^POSTGRES_USER=//p' .env | head -1)
+pg_db=$(sed -n 's/^POSTGRES_DB=//p' .env | head -1)
+pending=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
+
+# THE DUMP IS GATED, THE MIGRATE IS NOT. Two different questions:
+#   does the schema need CHANGING?   -> decides the backup
+#   does the schema MATCH the repo?  -> checked every single time
+if [ -n "$pending" ]; then
+  printf 'pending:\n%s\n' "$pending"
+
+  # The backup is a GATE. A forward-only migration with no dump behind it is a
+  # change with no way back, so a failed or empty dump stops here - before migrate.
+  dump=~/bo-pre-$SHA.dump
+  if ! docker compose exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
+    rm -f "$dump"; echo "pg_dump failed - not migrating." >&2; exit 1
+  fi
+  [ -s "$dump" ] || { rm -f "$dump"; echo "pg_dump wrote an empty file - not migrating." >&2; exit 1; }
+  ls -lh "$dump"
+else
+  echo "nothing pending - no dump, but the schema is still verified below"
+fi
+
+# ALWAYS, pending or not. With nothing pending it applies nothing, but it still
+# compares every applied migration's recorded checksum against the file in this
+# image. A migration edited after it was applied has no pending row, so this is
+# the only thing that catches it - and CI cannot, because CI starts from an
+# empty database where nothing has ever been "already applied".
+docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+
+# The runner exits 0 whether it applied anything or not, so ask the ledger.
+still=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
+[ -z "$still" ] || { printf 'still unapplied:\n%s\n' "$still" >&2; exit 1; }
+
+docker compose up -d backend
+
+curl -fsS http://127.0.0.1:3000/health
+running=$(docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)")
+[ "$running" = "$SHA" ] || { echo "Container reports '$running', expected '$SHA'." >&2; exit 1; }
+echo "released $SHA"
+```
+
+### Rolling back
+
+```bash
+docker images hoanglong-bo-backend        # the tags ARE the releases
+APP_VERSION='<previous-sha>' docker compose up -d --no-build backend
+```
+
+⚠ **Code rollback is not schema rollback.** Migrations here are forward-only and
+refuse rather than repair, so putting the previous image back does not undo one
+that ran. If the release you are undoing carried a migration, the dump taken
+above is the only way back — and restoring it is a decision a person makes, on
+purpose. Nothing automated will do it for you.
 
 ## Backup / restore
 
@@ -116,6 +216,8 @@ docker compose exec -T postgres pg_restore -U backoffice -d backoffice --clean -
 `postgres-data/` is a bind mount, so `docker compose down` does not lose data;
 only `rm -rf postgres-data` does. Take a dump before anything that migrates.
 
-<!-- ponytail: no CI/CD, no image registry, no automated backup cron. This is a
-     demo deploy driven by hand. Add a registry when two machines need the same
-     image, and a cron dump when losing a day of staging data starts to matter. -->
+<!-- ponytail: no image registry, no automated backup cron. Releases now run
+     from .github/workflows/ci.yml, but the image is still built on the VPS and
+     the dump is still taken per-release rather than on a schedule. Add a
+     registry when two machines need the same image, and a cron dump when losing
+     a day of staging data starts to matter. -->

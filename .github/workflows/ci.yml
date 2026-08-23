@@ -31,9 +31,98 @@ env:
   PGDATABASE_TEST: backoffice_itest
 
 jobs:
+  # ----------------------------------------------------------------- detect --
+  #
+  # Which half of the monorepo did this change actually touch?
+  #
+  # ★ A JOB-LEVEL `if:`, NEVER A WORKFLOW-LEVEL `paths:` FILTER. That difference
+  # is the whole reason this is safe. With `on.push.paths`, a documentation-only
+  # pull request does not start the workflow at all, the required checks never
+  # report, and branch protection blocks the merge FOREVER waiting for an answer
+  # nobody is going to send. With a job-level `if:` the workflow always runs, the
+  # job reports "skipped", and GitHub counts a skipped required check as
+  # satisfied. Same saving, no deadlock.
+  #
+  # ★ THE JOB NAMES BELOW ARE A PUBLIC API. Branch protection matches required
+  # checks by name. Renaming one silently un-protects the branch, so they stay
+  # byte-for-byte what they were.
+  detect:
+    name: detect · which half of the monorepo changed
+    runs-on: ubuntu-latest
+
+    outputs:
+      backend: ${{ steps.matrix.outputs.ci_backend }}
+      frontend: ${{ steps.matrix.outputs.ci_frontend }}
+      integration: ${{ steps.matrix.outputs.ci_integration }}
+
+    steps:
+      # Full history: the range being classified reaches back to the merge base,
+      # and on `main` to the commit before the push. A shallow clone would make
+      # `git diff` fail rather than answer.
+      #
+      # `persist-credentials: false` because nothing here pushes. The default
+      # leaves a GitHub token in `.git/config` for the life of the job, readable
+      # by every later step; this job only ever reads history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # ★ BEFORE the classification, not after. A matrix that has quietly stopped
+      # meaning what it says decides wrongly and silently — and if this ran last,
+      # a broken matrix would already have published its answer to $GITHUB_OUTPUT
+      # and the three jobs below would run on it. Failing first means a broken
+      # matrix publishes nothing, so everything downstream skips and `release`
+      # is blocked by its own `!failure()`.
+      - name: Prove the matrix still means what it says
+        run: bash .github/scripts/affected.sh --self-test
+
+      - name: Classify the changed paths
+        id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT" = "pull_request" ]; then
+            # Three-dot semantics by hand: what the branch ADDED, not everything
+            # that happened on main in the meantime.
+            base="$(git merge-base "$PR_BASE" "$PR_HEAD")"
+            head="$PR_HEAD"
+          else
+            base="$PUSH_BEFORE"
+            head="$HEAD_SHA"
+            # A first push, a force push, or a branch this clone cannot see all
+            # arrive as a SHA that does not resolve.
+            if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base=""
+            fi
+          fi
+
+          if [ -z "$base" ]; then
+            echo "No usable base commit — assuming everything moved."
+            {
+              echo "ci_backend=true"
+              echo "ci_frontend=true"
+              echo "ci_integration=true"
+            } | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Classifying ${base}..${head}"
+          git diff --name-only "$base" "$head" | sed 's/^/  /'
+          echo
+          bash .github/scripts/affected.sh "$base" "$head" | tee -a "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------- backend --
   backend:
     name: backend · boundaries, types, build, tests
+    needs: detect
+    if: needs.detect.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     services:
@@ -142,6 +231,8 @@ jobs:
   # --------------------------------------------------------------- frontend --
   frontend:
     name: frontend · lint, types, build, unit tests
+    needs: detect
+    if: needs.detect.outputs.frontend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -185,6 +276,8 @@ jobs:
   # ------------------------------------------------------------ integration --
   integration:
     name: integration · frontend ↔ real backend ↔ real PostgreSQL
+    needs: detect
+    if: needs.detect.outputs.integration == 'true'
     runs-on: ubuntu-latest
 
     services:
@@ -336,6 +429,586 @@ jobs:
       - name: Backend log (on failure)
         if: failure()
         run: cat "${RUNNER_TEMP}/backend.log" || true
+
+  # ---------------------------------------------------------------- release --
+  #
+  # ★ DRIFT, NOT DIFF. This job does not ask "what did the last commit change?"
+  # It asks each component what it is ACTUALLY RUNNING and diffs from there. The
+  # difference is not academic: the skew this pipeline exists to prevent was a
+  # backend five commits behind, and a last-commit diff would have shrugged at
+  # it forever because the commit that failed to deploy was long past. Drift
+  # heals itself on the next push; a diff never revisits what it already skipped.
+  #
+  # ★ BACKEND FIRST, ALWAYS. A new backend with an old frontend is a frontend
+  # not yet using something; an old backend with a new frontend is a frontend
+  # calling something that is not there — which is exactly the outage that
+  # prompted this file. So the order is not a preference, it is the asymmetry.
+  #
+  # ⚠ BOTH HALVES ARE DISARMED UNTIL YOU ARM THEM. `vars.RELEASE_BACKEND_ENABLED`
+  # and `vars.RELEASE_FRONTEND_ENABLED` default to unset, and unset means this
+  # job computes and prints the entire plan while touching nothing. An unproven
+  # pipeline should be readable before it is trusted, and the frontend in
+  # particular must stay disarmed until Vercel's own auto-deploy is turned off —
+  # arming it first would produce two production deployments per push.
+  release:
+    name: release · deploy what drifted, backend first
+    needs: [detect, backend, frontend, integration]
+
+    # ★ `!failure() && !cancelled()` rather than `success()`. Three of the four
+    # jobs above are ALLOWED to be skipped — that is the entire point of
+    # `detect` — and `success()` treats a skipped dependency as reason not to
+    # run. This proceeds when nothing failed, which is the actual requirement.
+    if: >-
+      ${{ github.event_name == 'push'
+       && github.ref == 'refs/heads/main'
+       && !failure()
+       && !cancelled() }}
+
+    runs-on: ubuntu-latest
+
+    # ★ NO `github.ref` IN THE GROUP. One release at a time across the whole
+    # repository, and never cancelled mid-flight: interrupting between `migrate`
+    # and `up -d` leaves a schema ahead of the container using it.
+    #
+    # Note what GitHub does with the QUEUE: one job runs, one waits, and a third
+    # arrival replaces the waiter. An intermediate commit can therefore never
+    # deploy — which is correct here and only because detection is drift-based.
+    # The newest SHA still diffs against what is actually running, so nothing
+    # the skipped commit changed is lost.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+
+    env:
+      RELEASE_SHA: ${{ github.sha }}
+
+    steps:
+      # ★ `persist-credentials: false` MATTERS MORE HERE THAN ANYWHERE ELSE.
+      # This is the job that runs an SSH client against a machine we own and a
+      # CLI that talks to a third party. Leaving a GitHub token in `.git/config`
+      # for the life of the job hands a credential to processes that have no
+      # business holding one. Nothing here pushes.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # ★ HOST KEY PINNED WHEN YOU GIVE US ONE. `ssh-keyscan` trusts whatever
+      # answers on the day, which is not host verification — it is a coin flip
+      # repeated every run, and losing it once means handing a deploy key to
+      # whoever answered. Set the VPS_HOST_KEY secret (the VPS's own
+      # `/etc/ssh/ssh_host_ed25519_key.pub`) and this pins instead.
+      # ★ NOT BEING CONFIGURED YET IS NOT A FAILURE. This job runs on every push
+      # to `main`, including documentation-only ones, because drift is measured
+      # rather than inferred. Hard-failing on absent credentials would therefore
+      # paint `main` red from the moment this merges until the last of seven
+      # secrets exists — and the agreed order is to land the pipeline first and
+      # configure it second.
+      #
+      # ⚠ ARMED AND UNREACHABLE IS A DIFFERENT THING, and it IS a failure. Asking
+      # for a deployment that cannot be delivered must never report success.
+      - name: Configure the deploy connection
+        id: conn
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+          ARMED_BE: ${{ vars.RELEASE_BACKEND_ENABLED }}
+          ARMED_FE: ${{ vars.RELEASE_FRONTEND_ENABLED }}
+        run: |
+          set -euo pipefail
+
+          missing=""
+          [ -n "${VPS_HOST:-}" ]    || missing="${missing} VPS_HOST"
+          [ -n "${VPS_USER:-}" ]    || missing="${missing} VPS_USER"
+          [ -n "${VPS_SSH_KEY:-}" ] || missing="${missing} VPS_SSH_KEY"
+
+          if [ -n "$missing" ]; then
+            if [ "${ARMED_BE:-}" = true ] || [ "${ARMED_FE:-}" = true ]; then
+              echo "::error::A release is armed but the VPS credentials are missing:${missing}"
+              exit 1
+            fi
+            echo "::warning::VPS credentials are not configured yet (${missing# }) - drift cannot be measured, nothing will be deployed."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          port="${VPS_PORT:-22}"
+
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          if [ -n "${VPS_HOST_KEY:-}" ]; then
+            printf '%s\n' "$VPS_HOST_KEY" > "$HOME/.ssh/known_hosts"
+            echo "Host key pinned from VPS_HOST_KEY."
+          else
+            echo "::warning::VPS_HOST_KEY is not set - trusting the host key offered on connect (TOFU, every run)."
+            ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+          # One wrapper so five later steps do not each re-spell the connection.
+          {
+            echo '#!/usr/bin/env bash'
+            echo "exec ssh -i '$HOME/.ssh/deploy_key' -o BatchMode=yes -o StrictHostKeyChecking=yes -p '$port' '$VPS_USER@$VPS_HOST' \"\$@\""
+          } > "$HOME/vps"
+          chmod +x "$HOME/vps"
+
+          "$HOME/vps" 'echo "connected: $(hostname)"'
+
+      # ------------------------------------------------------ what is running --
+      - name: Read the deployed backend revision
+        id: deployed_be
+        if: steps.conn.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          sha="$("$HOME/vps" 'set -e
+            cd /opt/hoanglong-bo/deploy
+            cid="$(docker compose ps -q backend 2>/dev/null || true)"
+            [ -n "$cid" ] || exit 0
+            docker inspect --format "{{index .Config.Labels \"release.sha\"}}" "$cid" 2>/dev/null || true
+          ' || true)"
+          sha="$(printf '%s' "$sha" | tr -d '[:space:]')"
+          echo "backend is running: ${sha:-<unlabelled>}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Read the deployed frontend revision
+        id: deployed_fe
+        if: steps.conn.outputs.configured == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          sha=""
+          uid=""
+          if [ -n "${VERCEL_TOKEN:-}" ] && [ -n "${VERCEL_PROJECT_ID:-}" ]; then
+            body="$(curl -sS --fail-with-body \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&teamId=${VERCEL_ORG_ID}&target=production&state=READY&limit=1" || true)"
+            sha="$(printf '%s' "$body" | jq -r '.deployments[0].meta.githubCommitSha // ""' || true)"
+            # ★ RECORDED BEFORE ANYTHING IS DEPLOYED, because afterwards this
+            # query answers with the NEW deployment and the one we might need to
+            # go back to is no longer the first result. It is the only identifier
+            # `vercel rollback` and `vercel promote` accept.
+            uid="$(printf '%s' "$body" | jq -r '.deployments[0].uid // ""' || true)"
+          else
+            echo "::warning::Vercel credentials are not set - frontend drift cannot be measured."
+          fi
+          echo "frontend is running: ${sha:-<unknown>} (deployment ${uid:-<unknown>})"
+          {
+            echo "sha=$sha"
+            echo "uid=$uid"
+          } >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------ the plan --
+      #
+      # An unresolvable revision means "we do not know what is out there", and
+      # the only safe reading of not knowing is to deploy. That is also what
+      # makes the FIRST run of this pipeline repair the existing skew: today
+      # neither component carries a label, so both read as unknown.
+      - name: Decide what has drifted
+        id: plan
+        if: steps.conn.outputs.configured == 'true'
+        env:
+          BE_DEPLOYED: ${{ steps.deployed_be.outputs.sha }}
+          FE_DEPLOYED: ${{ steps.deployed_fe.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          drift() {  # <deployed-sha> <component-key> -> prints "<bool> <reason>"
+            local deployed="$1" key="$2" out value
+            if [ -z "$deployed" ]; then
+              echo "true deployed revision unknown"
+            elif ! git cat-file -e "${deployed}^{commit}" 2>/dev/null; then
+              echo "true deployed revision ${deployed} is not in this history"
+            elif [ "$deployed" = "$RELEASE_SHA" ]; then
+              echo "false already running this commit"
+            else
+              out="$(bash .github/scripts/affected.sh "$deployed" "$RELEASE_SHA")"
+              value="$(printf '%s\n' "$out" | sed -n "s/^deploy_${key}=//p")"
+              if [ "$value" = true ]; then
+                echo "true ${key} paths changed since ${deployed}"
+              else
+                echo "false no ${key} path changed since ${deployed}"
+              fi
+            fi
+          }
+
+          be="$(drift "$BE_DEPLOYED" backend)"
+          fe="$(drift "$FE_DEPLOYED" frontend)"
+
+          # Migrations only matter for a backend that is actually being deployed,
+          # and only relative to what that backend is running now.
+          migrations=false
+          if [ "${be%% *}" = true ] && [ -n "$BE_DEPLOYED" ] && git cat-file -e "${BE_DEPLOYED}^{commit}" 2>/dev/null; then
+            migrations="$(bash .github/scripts/affected.sh "$BE_DEPLOYED" "$RELEASE_SHA" | sed -n 's/^migrations=//p')"
+          elif [ "${be%% *}" = true ]; then
+            # Unknown baseline: assume the schema may move, and take the backup.
+            migrations=true
+          fi
+
+          {
+            echo "backend=${be%% *}"
+            echo "frontend=${fe%% *}"
+            echo "migrations=$migrations"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Release plan"
+            echo
+            echo "| | running | target | deploy | why |"
+            echo "|---|---|---|---|---|"
+            echo "| backend | \`${BE_DEPLOYED:-unknown}\` | \`${RELEASE_SHA}\` | **${be%% *}** | ${be#* } |"
+            echo "| frontend | \`${FE_DEPLOYED:-unknown}\` | \`${RELEASE_SHA}\` | **${fe%% *}** | ${fe#* } |"
+            echo
+            echo "This release adds migration files: **${migrations}** _(advisory only — whether a dump is taken is decided on the VPS from \`schema_migrations\`, not from this diff)_"
+            echo
+            echo "Armed: backend \`${{ vars.RELEASE_BACKEND_ENABLED || 'false' }}\`, frontend \`${{ vars.RELEASE_FRONTEND_ENABLED || 'false' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat "$GITHUB_STEP_SUMMARY"
+
+      # ----------------------------------------------------------- backend --
+      #
+      # Ordered build -> backup -> migrate -> recreate, and that order is load
+      # bearing. `npm run migrate` runs ts-node from INSIDE the image, so the
+      # image must exist first; and the schema must be in place before the
+      # container serving requests is the one expecting it.
+      - name: Deploy the backend
+        id: deploy_be
+        if: steps.plan.outputs.backend == 'true' && vars.RELEASE_BACKEND_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd /opt/hoanglong-bo
+
+          git fetch --all --prune --tags
+          git checkout --detach "$RELEASE_SHA"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Working tree is dirty after checkout - refusing to deploy." >&2
+            git status --short >&2
+            exit 1
+          fi
+          echo "checked out $(git rev-parse HEAD)"
+
+          cd deploy
+          export APP_VERSION="$RELEASE_SHA"
+          docker compose build backend
+
+          # ★ ASK THE DATABASE, NOT THE DIFF. Whether a backup is needed is a
+          # fact about this server's schema, and the commit range is not evidence
+          # about it. A release whose migration FAILED leaves the file unapplied;
+          # the next release touches no migration at all, so a diff-based gate
+          # would have said "no backup needed" and then migrated anyway.
+          #
+          # The ledger is `schema_migrations`, the file list comes from the image
+          # just built for THIS sha, and neither query writes anything — deciding
+          # whether to back up must not alter what is being backed up.
+          pg_user="$(sed -n 's/^POSTGRES_USER=//p' .env | head -1)"
+          pg_db="$(sed -n 's/^POSTGRES_DB=//p' .env | head -1)"
+          : "${pg_user:?POSTGRES_USER is missing from deploy/.env}"
+          : "${pg_db:?POSTGRES_DB is missing from deploy/.env}"
+
+          pending="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
+
+          dump=""
+
+          # ★ THE DUMP IS GATED. THE MIGRATE IS NOT. Two different questions were
+          # being answered by one flag:
+          #
+          #   does the schema need CHANGING?    -> decides the backup
+          #   does the schema MATCH the repo?   -> must be checked every time
+          #
+          # They only coincide when something is pending. Gating both on
+          # `pending` meant that when nothing was pending, `migrate` never ran —
+          # and `migrate` is also what verifies the checksum of every ALREADY
+          # applied migration. A file edited after it was applied has no pending
+          # row, so that release sailed through in silence while the database
+          # kept a schema the repository no longer describes.
+          if [ -n "$pending" ]; then
+            echo "pending migrations on this database:"
+            printf '%s\n' "$pending" | sed 's/^/  /'
+
+            # ★ THE BACKUP IS A GATE, NOT A COURTESY. A forward-only migration
+            # with no dump behind it is a change with no way back. `set -e`
+            # aborts on a failing pg_dump, but a redirect truncates its target
+            # BEFORE the command runs, so a dump that dies early leaves a
+            # plausible-looking file. The size check is what turns "a file
+            # exists" into "a backup exists".
+            dump="$HOME/bo-pre-${RELEASE_SHA:0:12}-$(date +%F-%H%M%S).dump"
+            echo "dumping to $dump before touching the schema"
+
+            if ! docker compose exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
+              echo "pg_dump FAILED - refusing to migrate. Nothing has been changed." >&2
+              rm -f "$dump"
+              exit 1
+            fi
+
+            if [ ! -s "$dump" ]; then
+              echo "pg_dump produced an empty file - refusing to migrate." >&2
+              rm -f "$dump"
+              exit 1
+            fi
+
+            ls -lh "$dump"
+          else
+            echo "nothing pending - no dump taken, but the schema is still verified below"
+          fi
+
+          # ★ ALWAYS, PENDING OR NOT. With nothing pending this applies nothing —
+          # it computes the same difference this script does, so it CANNOT apply
+          # what the gate above did not see — and it still walks every applied
+          # migration comparing the recorded checksum against the file in this
+          # image. That comparison is the only thing standing between an edited
+          # migration and a database quietly diverging from the repository, and
+          # it has teeth nowhere else: CI drops and recreates its database on
+          # every run, so nothing there has ever been "already applied".
+          #
+          # `-T --interactive=false` OR THIS COMMAND EATS THE SCRIPT. Everything
+          # here arrives on the remote shell's stdin as one heredoc; a container
+          # holding stdin open consumes the rest, so `up -d` below would silently
+          # never run.
+          docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+
+          # The runner exits 0 both when it applies and when it has nothing to
+          # do, so its exit code alone cannot tell us the schema arrived.
+          still="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
+          if [ -n "$still" ]; then
+            echo "migrate exited 0 but these are still unapplied:" >&2
+            printf '%s\n' "$still" | sed 's/^/  /' >&2
+            if [ -n "$dump" ]; then
+              echo "Refusing to start the new backend. The dump is at $dump" >&2
+            else
+              echo "Refusing to start the new backend. No dump was taken - nothing was pending." >&2
+            fi
+            exit 1
+          fi
+          echo "schema verified and up to date"
+
+          docker compose up -d backend
+          REMOTE
+
+      # ★ TWO GATES, AND THEY ANSWER DIFFERENT QUESTIONS. "Is it alive" is not
+      # "is it the build we just shipped" — the skew that started all of this
+      # was a perfectly healthy backend running the wrong code. Health alone
+      # would have called it fine.
+      - name: Gate the backend on health, then on identity
+        id: gate_be
+        if: steps.deploy_be.outcome == 'success'
+        run: |
+          set -euo pipefail
+          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd /opt/hoanglong-bo/deploy
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then
+              echo "gate 1/2 - healthy on attempt ${attempt}"
+              curl -fsS http://127.0.0.1:3000/health
+              echo
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "gate 1/2 FAILED - never became healthy" >&2
+              docker compose logs --tail=80 backend >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          cid="$(docker compose ps -q backend)"
+          running="$(docker inspect --format '{{index .Config.Labels "release.sha"}}' "$cid")"
+          if [ "$running" != "$RELEASE_SHA" ]; then
+            echo "gate 2/2 FAILED - container reports '${running}', expected '${RELEASE_SHA}'" >&2
+            exit 1
+          fi
+          echo "gate 2/2 - running ${running}"
+          REMOTE
+
+      # ---------------------------------------------------------- frontend --
+      - name: Deploy the frontend
+        id: deploy_fe
+        if: >-
+          steps.plan.outputs.frontend == 'true'
+          && vars.RELEASE_FRONTEND_ENABLED == 'true'
+          && (steps.gate_be.outcome == 'success' || steps.plan.outputs.backend != 'true')
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+
+          # ★ INSTALLED ONCE, THEN INVOKED LOCALLY. `npx --yes` resolves and
+          # executes a package straight from the registry on every call — three
+          # implicit downloads, three chances to differ. Pinned rather than
+          # `@latest` for the same reason: a deploy tool that changes under you
+          # between two runs makes any comparison between them meaningless.
+          #
+          # ★ `--ignore-scripts` BECAUSE INSTALLING IS NOT CONSENTING TO EXECUTE.
+          # Without it every package in the tree may run arbitrary code as this
+          # job — the job holding an SSH key and a Vercel token. The four `npm ci`
+          # calls elsewhere in this file have always carried the flag; this line
+          # was the one exception, and SonarCloud was right to call it a
+          # vulnerability (githubactions:S6505, MAJOR).
+          #
+          # Verified rather than assumed, on node:24 because the runner is Linux
+          # and this is exactly where esbuild differs: `esbuild-linux-64` is an
+          # optionalDependency npm resolves on its own, NOT something the
+          # postinstall fetches, so `esbuild.transform()` compiles TypeScript
+          # identically with and without the flag. Only the convenience shim at
+          # `node_modules/esbuild/bin/esbuild` is left thin, and the build path
+          # uses the library, not that shim.
+          npm install --no-save --no-audit --no-fund --ignore-scripts vercel@48.2.0
+          vercel=./node_modules/.bin/vercel
+          "$vercel" --version
+
+          "$vercel" pull --yes --environment=production --token="$VERCEL_TOKEN"
+          "$vercel" build --prod --token="$VERCEL_TOKEN"
+          "$vercel" deploy --prebuilt --prod \
+            --token="$VERCEL_TOKEN" \
+            --meta githubCommitSha="$RELEASE_SHA"
+
+      # ------------------------------------------------------------- smoke --
+      - name: Smoke the public origin
+        if: steps.deploy_be.outcome == 'success' || steps.deploy_fe.outcome == 'success'
+        env:
+          PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PUBLIC_ORIGIN:-}" ]; then
+            echo "::warning::PUBLIC_ORIGIN is not set - the deployment was verified only from inside the VPS."
+            exit 0
+          fi
+          echo "GET ${PUBLIC_ORIGIN}/api/health"
+          curl -fsS --max-time 20 "${PUBLIC_ORIGIN}/api/health"
+          echo
+          echo "GET ${PUBLIC_ORIGIN}/"
+          curl -fsS --max-time 20 -o /dev/null -w 'status %{http_code}\n' "${PUBLIC_ORIGIN}/"
+
+      # ---------------------------------------------------------- rollback --
+      #
+      # ⚠ CODE ROLLBACK IS NOT SCHEMA ROLLBACK. Migrations here are forward-only
+      # and refuse-not-repair; putting the previous image back does not undo one
+      # that ran. If this release carried a migration, the dump named in the
+      # deploy log is the only way back, and restoring it is a decision a person
+      # makes — never this file.
+      - name: Roll the backend back
+        if: failure() && steps.deploy_be.outcome == 'success'
+        env:
+          BE_PREVIOUS: ${{ steps.deployed_be.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # ★ WARNED UNCONDITIONALLY, because whether this release migrated is
+          # decided on the VPS from the database's own ledger — not here, and not
+          # from the commit range. A release that touched no migration file can
+          # still have applied one an earlier failed release left behind, which
+          # is the entire reason that gate moved. Predicting from the diff here
+          # would drop the warning in exactly that case.
+          echo "::warning::If this release applied a migration, rolling the image back does NOT roll the schema back. The deploy log names the pg_dump if one was taken."
+          if [ -z "${BE_PREVIOUS:-}" ]; then
+            echo "::error::No previous release SHA is recorded, so there is nothing to roll back to."
+            echo "The backend is left running ${RELEASE_SHA}. Recover by hand:"
+            echo "  cd /opt/hoanglong-bo/deploy && docker images hoanglong-bo-backend"
+            exit 1
+          fi
+          echo "Rolling back to ${BE_PREVIOUS}"
+          "$HOME/vps" "BE_PREVIOUS='$BE_PREVIOUS' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd /opt/hoanglong-bo/deploy
+          if ! docker image inspect "hoanglong-bo-backend:$BE_PREVIOUS" >/dev/null 2>&1; then
+            echo "Image hoanglong-bo-backend:$BE_PREVIOUS is gone - cannot roll back." >&2
+            exit 1
+          fi
+          APP_VERSION="$BE_PREVIOUS" docker compose up -d --no-build backend
+          for attempt in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1 && { echo "rolled back and healthy"; exit 0; }
+            sleep 2
+          done
+          echo "Rolled back but never became healthy." >&2
+          exit 1
+          REMOTE
+
+      # ★ THIS DELIBERATELY DOES NOT ROLL BACK. It tells a person exactly how to.
+      #
+      # The previous version ran `vercel rollback --token=… --yes` with no
+      # deployment argument. Read the CLI it pins, 48.2.0:
+      #
+      #     const actionOrDeployId = parsedArgs.args[1] || "status";
+      #     if (actionOrDeployId === "status") { … return await …Status(…) }
+      #
+      # With no positional argument the command is `rollback status`. It PRINTS
+      # the state of a pending rollback and exits 0. It reverts nothing — and it
+      # reports success while doing so, which is worse than having no rollback at
+      # all, because the log would have said the frontend was restored.
+      #
+      # Passing `steps.deployed_fe.outputs.uid` would fix the command. It is not
+      # enough to make the automation safe:
+      #
+      #   - This fires on a SMOKE TEST failure, which is frequently one flaky
+      #     request against a public origin. Reverting production automatically
+      #     on a failed `curl` is a bigger outage than the one it answers.
+      #   - `POST /v9/projects/{id}/rollback/{deploymentId}` puts the PROJECT
+      #     into a rolled-back state, not just the alias, and the CLI carries
+      #     `autoAssignCustomDomains` handling around exactly this area. Undoing
+      #     it correctly needs `vercel promote`. Whether the next ordinary deploy
+      #     re-assigns the production domain by itself is a behaviour this
+      #     repository cannot verify without a live project, and guessing at it
+      #     inside an automatic recovery path is how a bad minute becomes a bad
+      #     afternoon.
+      #
+      # A backend rollback is a container swap on a machine we own, fully
+      # reversible and observable from the same shell. This is not that. So the
+      # rollback stays a human decision, and this step's job is to make that
+      # decision take ten seconds instead of ten minutes.
+      - name: Frontend rollback instructions
+        if: failure() && steps.deploy_fe.outcome == 'success'
+        env:
+          PREVIOUS_UID: ${{ steps.deployed_fe.outputs.uid }}
+          PREVIOUS_SHA: ${{ steps.deployed_fe.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo "::error::A production frontend was deployed and a later step failed. It has NOT been rolled back."
+          {
+            echo "### ⚠ Frontend needs a decision"
+            echo
+            echo "\`${RELEASE_SHA}\` is live on production. The step after it failed."
+            echo
+            if [ -n "${PREVIOUS_UID:-}" ]; then
+              echo "The deployment that was live before this release:"
+              echo
+              echo "| | |"
+              echo "|---|---|"
+              echo "| deployment | \`${PREVIOUS_UID}\` |"
+              echo "| commit | \`${PREVIOUS_SHA:-unknown}\` |"
+              echo
+              echo "To revert, from a shell with \`VERCEL_TOKEN\` set:"
+              echo
+              echo '```bash'
+              echo "npx vercel@48.2.0 rollback ${PREVIOUS_UID} --token=\"\$VERCEL_TOKEN\" --yes"
+              echo '```'
+              echo
+              echo "If production domain assignment does not return on the next deploy, promote explicitly:"
+              echo
+              echo '```bash'
+              echo "npx vercel@48.2.0 promote ${PREVIOUS_UID} --token=\"\$VERCEL_TOKEN\" --yes"
+              echo '```'
+            else
+              echo "⚠ No previous production deployment was recorded, so there is no identifier to revert to."
+              echo "Pick one from the Vercel dashboard's deployment list."
+            fi
+            echo
+            echo "Check the backend first: it may already have been rolled back by the step above."
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
 
 # ---------------------------------------------------------------- SonarCloud --
 #
