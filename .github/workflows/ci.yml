@@ -718,6 +718,20 @@ jobs:
 
           pending="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
 
+          dump=""
+
+          # ★ THE DUMP IS GATED. THE MIGRATE IS NOT. Two different questions were
+          # being answered by one flag:
+          #
+          #   does the schema need CHANGING?    -> decides the backup
+          #   does the schema MATCH the repo?   -> must be checked every time
+          #
+          # They only coincide when something is pending. Gating both on
+          # `pending` meant that when nothing was pending, `migrate` never ran —
+          # and `migrate` is also what verifies the checksum of every ALREADY
+          # applied migration. A file edited after it was applied has no pending
+          # row, so that release sailed through in silence while the database
+          # kept a schema the repository no longer describes.
           if [ -n "$pending" ]; then
             echo "pending migrations on this database:"
             printf '%s\n' "$pending" | sed 's/^/  /'
@@ -744,28 +758,39 @@ jobs:
             fi
 
             ls -lh "$dump"
-
-            # ★ `-T --interactive=false` OR THIS COMMAND EATS THE SCRIPT.
-            # Everything here arrives on the remote shell's stdin as one
-            # heredoc. A container that keeps stdin open consumes whatever is
-            # left of it, so `up -d` below would silently never run — the
-            # migration would apply and the old container would keep serving.
-            docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
-
-            # The runner exits 0 both when it applies and when it has nothing to
-            # do, so its exit code alone cannot tell us the schema arrived. Ask
-            # the ledger again.
-            still="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
-            if [ -n "$still" ]; then
-              echo "migrate exited 0 but these are still unapplied:" >&2
-              printf '%s\n' "$still" | sed 's/^/  /' >&2
-              echo "Refusing to start the new backend. The dump is at $dump" >&2
-              exit 1
-            fi
-            echo "schema is now up to date"
           else
-            echo "schema already up to date - no dump taken, no migration run"
+            echo "nothing pending - no dump taken, but the schema is still verified below"
           fi
+
+          # ★ ALWAYS, PENDING OR NOT. With nothing pending this applies nothing —
+          # it computes the same difference this script does, so it CANNOT apply
+          # what the gate above did not see — and it still walks every applied
+          # migration comparing the recorded checksum against the file in this
+          # image. That comparison is the only thing standing between an edited
+          # migration and a database quietly diverging from the repository, and
+          # it has teeth nowhere else: CI drops and recreates its database on
+          # every run, so nothing there has ever been "already applied".
+          #
+          # `-T --interactive=false` OR THIS COMMAND EATS THE SCRIPT. Everything
+          # here arrives on the remote shell's stdin as one heredoc; a container
+          # holding stdin open consumes the rest, so `up -d` below would silently
+          # never run.
+          docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+
+          # The runner exits 0 both when it applies and when it has nothing to
+          # do, so its exit code alone cannot tell us the schema arrived.
+          still="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
+          if [ -n "$still" ]; then
+            echo "migrate exited 0 but these are still unapplied:" >&2
+            printf '%s\n' "$still" | sed 's/^/  /' >&2
+            if [ -n "$dump" ]; then
+              echo "Refusing to start the new backend. The dump is at $dump" >&2
+            else
+              echo "Refusing to start the new backend. No dump was taken - nothing was pending." >&2
+            fi
+            exit 1
+          fi
+          echo "schema verified and up to date"
 
           docker compose up -d backend
           REMOTE

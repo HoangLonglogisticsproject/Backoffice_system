@@ -153,6 +153,9 @@ pg_user=$(sed -n 's/^POSTGRES_USER=//p' .env | head -1)
 pg_db=$(sed -n 's/^POSTGRES_DB=//p' .env | head -1)
 pending=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
 
+# THE DUMP IS GATED, THE MIGRATE IS NOT. Two different questions:
+#   does the schema need CHANGING?   -> decides the backup
+#   does the schema MATCH the repo?  -> checked every single time
 if [ -n "$pending" ]; then
   printf 'pending:\n%s\n' "$pending"
 
@@ -164,15 +167,20 @@ if [ -n "$pending" ]; then
   fi
   [ -s "$dump" ] || { rm -f "$dump"; echo "pg_dump wrote an empty file - not migrating." >&2; exit 1; }
   ls -lh "$dump"
-
-  docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
-
-  # The runner exits 0 whether it applied anything or not, so ask the ledger.
-  still=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
-  [ -z "$still" ] || { printf 'still unapplied:\n%s\n' "$still" >&2; exit 1; }
 else
-  echo "schema already up to date - no dump, no migration"
+  echo "nothing pending - no dump, but the schema is still verified below"
 fi
+
+# ALWAYS, pending or not. With nothing pending it applies nothing, but it still
+# compares every applied migration's recorded checksum against the file in this
+# image. A migration edited after it was applied has no pending row, so this is
+# the only thing that catches it - and CI cannot, because CI starts from an
+# empty database where nothing has ever been "already applied".
+docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+
+# The runner exits 0 whether it applied anything or not, so ask the ledger.
+still=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
+[ -z "$still" ] || { printf 'still unapplied:\n%s\n' "$still" >&2; exit 1; }
 
 docker compose up -d backend
 
