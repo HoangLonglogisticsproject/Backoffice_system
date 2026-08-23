@@ -797,7 +797,22 @@ jobs:
           # implicit downloads, three chances to differ. Pinned rather than
           # `@latest` for the same reason: a deploy tool that changes under you
           # between two runs makes any comparison between them meaningless.
-          npm install --no-save --no-audit --no-fund vercel@48.2.0
+          #
+          # ★ `--ignore-scripts` BECAUSE INSTALLING IS NOT CONSENTING TO EXECUTE.
+          # Without it every package in the tree may run arbitrary code as this
+          # job — the job holding an SSH key and a Vercel token. The four `npm ci`
+          # calls elsewhere in this file have always carried the flag; this line
+          # was the one exception, and SonarCloud was right to call it a
+          # vulnerability (githubactions:S6505, MAJOR).
+          #
+          # Verified rather than assumed, on node:24 because the runner is Linux
+          # and this is exactly where esbuild differs: `esbuild-linux-64` is an
+          # optionalDependency npm resolves on its own, NOT something the
+          # postinstall fetches, so `esbuild.transform()` compiles TypeScript
+          # identically with and without the flag. Only the convenience shim at
+          # `node_modules/esbuild/bin/esbuild` is left thin, and the build path
+          # uses the library, not that shim.
+          npm install --no-save --no-audit --no-fund --ignore-scripts vercel@48.2.0
           vercel=./node_modules/.bin/vercel
           "$vercel" --version
 
