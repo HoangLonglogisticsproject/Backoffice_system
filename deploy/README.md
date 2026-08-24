@@ -21,12 +21,23 @@ is what the relative paths in `docker-compose.yml` already resolve against:
 └── deploy/                   ← RUN COMPOSE FROM HERE
     ├── docker-compose.yml
     ├── backend.Dockerfile
-    ├── .env                  ← created on the VPS, never committed
     └── postgres-data/        ← the database (gitignored)
 
+/etc/hoanglong-bo/staging.env ← runtime secrets, root:root 0600, NEVER in git
 /var/www/opsystem/            ← frontend dist/, uploaded from a build machine
 /etc/ssl/cloudflare/          ← origin certificate
 ```
+
+★ **The runtime env lives outside the git tree, and every compose command names
+it explicitly.** Compose reads `.env` from the directory holding the compose
+file — not the working directory, and it does not walk upwards — so leaving it
+implicit made the secret's location a consequence of where you happened to be
+standing. It also failed quietly: with no readable file, `${POSTGRES_USER}`
+becomes a blank string, compose warns, and exits 0 having built
+`postgres://:@postgres:5432/`. `--env-file` makes that a hard failure.
+
+The checkout is rewritten by every release and will eventually belong to an
+unprivileged deploy user, which is the other reason the secret is not in it.
 
 Redeploying is a `git checkout` of an exact commit in `/opt/hoanglong-bo`, which
 is the reason for cloning rather than copying files around.
@@ -47,19 +58,22 @@ build is not a release and should not be able to pass for one.
 git clone <repo-url> /opt/hoanglong-bo
 cd /opt/hoanglong-bo/deploy
 
-# secrets, once. Generated here and stored nowhere else
-cp env.example .env
-sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 24)|" .env
-chmod 600 .env
+# secrets, once, OUTSIDE the git tree. Generated here and stored nowhere else.
+ENV_FILE=/etc/hoanglong-bo/staging.env
+install -d -m 700 -o root -g root /etc/hoanglong-bo
+umask 077
+cp env.example "$ENV_FILE"
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 24)|" "$ENV_FILE"
+chmod 600 "$ENV_FILE" && chown root:root "$ENV_FILE"
 
-docker compose up -d --build
+docker compose --env-file "$ENV_FILE" up -d --build
 
 # schema. Refuses rather than repairs — read the error, do not force it
-docker compose run --rm --no-deps backend npm run migrate
+docker compose --env-file "$ENV_FILE" run --rm --no-deps backend npm run migrate
 
 # the first SuperAdmin. Password is typed here and stored nowhere
 read -rsp 'Bootstrap password: ' BOOTSTRAP_PASSWORD && echo
-docker compose run --rm --no-deps -e BOOTSTRAP_PASSWORD backend   npm run user:create -- --email 'admin@hoanglonglti.com' --name 'Tong Giam Doc' --superadmin
+docker compose --env-file "$ENV_FILE" run --rm --no-deps -e BOOTSTRAP_PASSWORD backend   npm run user:create -- --email 'admin@hoanglonglti.com' --name 'Tong Giam Doc' --superadmin
 unset BOOTSTRAP_PASSWORD
 ```
 
@@ -105,13 +119,15 @@ ss -lntp        # 5432 and 3000 must NOT appear on 0.0.0.0
 
 ```bash
 cd /opt/hoanglong-bo/deploy
-docker compose ps                      # health
-docker compose logs -f --tail=100 backend
-docker compose restart backend         # restart app only
-systemctl reload nginx                 # after an nginx.conf change
+export ENV_FILE=/etc/hoanglong-bo/staging.env
+
+docker compose --env-file "$ENV_FILE" ps                 # health
+docker compose --env-file "$ENV_FILE" logs -f --tail=100 backend
+docker compose --env-file "$ENV_FILE" restart backend    # restart app only
+systemctl reload nginx                                   # after an nginx.conf change
 
 # which commit is actually serving? the question the pipeline asks
-docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)"
+docker inspect --format '{{index .Config.Labels "release.sha"}}'   "$(docker compose --env-file "$ENV_FILE" ps -q backend)"
 ```
 
 ### Releasing by hand
@@ -143,15 +159,17 @@ fi
 
 cd deploy
 export APP_VERSION="$SHA"
-docker compose build backend
+ENV_FILE=/etc/hoanglong-bo/staging.env
+[ -r "$ENV_FILE" ] || { echo "Cannot read $ENV_FILE" >&2; exit 1; }
+docker compose --env-file "$ENV_FILE" build backend
 
 # ASK THE DATABASE, not yourself. "Does this release add a migration file?" is a
 # different question from "does this database have one waiting". A release whose
 # migration failed leaves the file unapplied; the next release touches nothing
 # under migrations/ and would migrate it unprotected.
-pg_user=$(sed -n 's/^POSTGRES_USER=//p' .env | head -1)
-pg_db=$(sed -n 's/^POSTGRES_DB=//p' .env | head -1)
-pending=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
+pg_user=$(sed -n 's/^POSTGRES_USER=//p' "$ENV_FILE" | head -1)
+pg_db=$(sed -n 's/^POSTGRES_DB=//p' "$ENV_FILE" | head -1)
+pending=$(bash ../.github/scripts/pending-migrations.sh . "$ENV_FILE" "$pg_user" "$pg_db")
 
 # THE DUMP IS GATED, THE MIGRATE IS NOT. Two different questions:
 #   does the schema need CHANGING?   -> decides the backup
@@ -162,7 +180,7 @@ if [ -n "$pending" ]; then
   # The backup is a GATE. A forward-only migration with no dump behind it is a
   # change with no way back, so a failed or empty dump stops here - before migrate.
   dump=~/bo-pre-$SHA.dump
-  if ! docker compose exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
+  if ! docker compose --env-file "$ENV_FILE" exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
     rm -f "$dump"; echo "pg_dump failed - not migrating." >&2; exit 1
   fi
   [ -s "$dump" ] || { rm -f "$dump"; echo "pg_dump wrote an empty file - not migrating." >&2; exit 1; }
@@ -176,16 +194,16 @@ fi
 # image. A migration edited after it was applied has no pending row, so this is
 # the only thing that catches it - and CI cannot, because CI starts from an
 # empty database where nothing has ever been "already applied".
-docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+docker compose --env-file "$ENV_FILE" run --rm -T --interactive=false --no-deps backend npm run migrate
 
 # The runner exits 0 whether it applied anything or not, so ask the ledger.
-still=$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")
+still=$(bash ../.github/scripts/pending-migrations.sh . "$ENV_FILE" "$pg_user" "$pg_db")
 [ -z "$still" ] || { printf 'still unapplied:\n%s\n' "$still" >&2; exit 1; }
 
-docker compose up -d backend
+docker compose --env-file "$ENV_FILE" up -d backend
 
 curl -fsS http://127.0.0.1:3000/health
-running=$(docker inspect --format '{{index .Config.Labels "release.sha"}}' "$(docker compose ps -q backend)")
+running=$(docker inspect --format '{{index .Config.Labels "release.sha"}}'   "$(docker compose --env-file "$ENV_FILE" ps -q backend)")
 [ "$running" = "$SHA" ] || { echo "Container reports '$running', expected '$SHA'." >&2; exit 1; }
 echo "released $SHA"
 ```
@@ -193,8 +211,9 @@ echo "released $SHA"
 ### Rolling back
 
 ```bash
+ENV_FILE=/etc/hoanglong-bo/staging.env
 docker images hoanglong-bo-backend        # the tags ARE the releases
-APP_VERSION='<previous-sha>' docker compose up -d --no-build backend
+APP_VERSION='<previous-sha>' docker compose --env-file "$ENV_FILE" up -d --no-build backend
 ```
 
 ⚠ **Code rollback is not schema rollback.** Migrations here are forward-only and
@@ -206,11 +225,13 @@ purpose. Nothing automated will do it for you.
 ## Backup / restore
 
 ```bash
+ENV_FILE=/etc/hoanglong-bo/staging.env
+
 # backup — run before every migration
-docker compose exec -T postgres pg_dump -U backoffice -Fc backoffice > ~/bo-$(date +%F-%H%M).dump
+docker compose --env-file "$ENV_FILE" exec -T postgres   pg_dump -U backoffice -Fc backoffice > ~/bo-$(date +%F-%H%M).dump
 
 # restore into an empty database
-docker compose exec -T postgres pg_restore -U backoffice -d backoffice --clean --if-exists < ~/bo-XXXX.dump
+docker compose --env-file "$ENV_FILE" exec -T postgres   pg_restore -U backoffice -d backoffice --clean --if-exists < ~/bo-XXXX.dump
 ```
 
 `postgres-data/` is a bind mount, so `docker compose down` does not lose data;
