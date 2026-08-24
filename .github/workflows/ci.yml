@@ -490,18 +490,11 @@ jobs:
     env:
       RELEASE_SHA: ${{ github.sha }}
 
-      # ★ ONE PATH, NAMED ONCE. Compose reads `.env` from the directory holding
-      # the compose file — not the working directory, and it does not walk
-      # upwards. That made the runtime secret's location an implicit consequence
-      # of which directory a command happened to run from, and the repository
-      # disagreed with itself about where it was. It is now an explicit argument
-      # to every compose call, which also means an unreadable file FAILS rather
-      # than resolving `${POSTGRES_USER}` to a blank string and exiting 0 with
-      # `postgres://:@postgres:5432/`.
-      #
-      # Outside the git tree on purpose: the checkout is rewritten by every
-      # release and will eventually be owned by an unprivileged deploy user.
-      VPS_ENV_FILE: /etc/hoanglong-bo/staging.env
+      # ★ THE RUNTIME SECRET'S PATH IS NOT HERE ANY MORE, and that is the point.
+      # `/etc/hoanglong-bo/staging.env` is named once, inside
+      # `.github/scripts/vps-release.sh`, which runs as root on the VPS. This job
+      # never reads it, never passes it, and never has it on a command line — the
+      # deploy user it connects as cannot read the file at all.
 
     steps:
       # ★ `persist-credentials: false` MATTERS MORE HERE THAN ANYWHERE ELSE.
@@ -581,27 +574,6 @@ jobs:
 
           "$HOME/vps" 'echo "connected: $(hostname)"'
 
-      # ------------------------------------------------------ what is running --
-      - name: Read the deployed backend revision
-        id: deployed_be
-        if: steps.conn.outputs.configured == 'true'
-        run: |
-          set -euo pipefail
-          # Written to a file rather than captured inline: a quoted heredoc
-          # cannot live inside `$( … )` — the closing paren would land on the
-          # redirect line and end the substitution before the body was read.
-          "$HOME/vps" "ENV_FILE='$VPS_ENV_FILE' bash -s" \
-            > "${RUNNER_TEMP}/be_sha" 2>/dev/null <<'REMOTE' || true
-          set -e
-          cd /opt/hoanglong-bo/deploy
-          cid="$(docker compose --env-file "$ENV_FILE" ps -q backend 2>/dev/null || true)"
-          [ -n "$cid" ] || exit 0
-          docker inspect --format '{{index .Config.Labels "release.sha"}}' "$cid" 2>/dev/null || true
-          REMOTE
-          sha="$(tr -d '[:space:]' < "${RUNNER_TEMP}/be_sha")"
-          echo "backend is running: ${sha:-<unlabelled>}"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
       - name: Read the deployed frontend revision
         id: deployed_fe
         if: steps.conn.outputs.configured == 'true'
@@ -631,79 +603,55 @@ jobs:
             echo "sha=$sha"
             echo "uid=$uid"
           } >> "$GITHUB_OUTPUT"
-
       # ------------------------------------------------------------ the plan --
       #
+      # ★ ONLY THE FRONTEND IS DECIDED HERE NOW. The backend's drift is settled
+      # on the VPS, by `bo-release`, from the label of the container that is
+      # actually running — because after the restricted-deploy change this job
+      # can no longer talk to the Docker daemon to ask. That is a better place
+      # for the question anyway: `bo-release` exiting 0 IS the statement "the
+      # backend is at this commit", made by the machine running it, rather than
+      # a conclusion this job reaches by comparing two strings.
+      #
       # An unresolvable revision means "we do not know what is out there", and
-      # the only safe reading of not knowing is to deploy. That is also what
-      # makes the FIRST run of this pipeline repair the existing skew: today
-      # neither component carries a label, so both read as unknown.
+      # the only safe reading of not knowing is to deploy.
       - name: Decide what has drifted
         id: plan
         if: steps.conn.outputs.configured == 'true'
         env:
-          BE_DEPLOYED: ${{ steps.deployed_be.outputs.sha }}
           FE_DEPLOYED: ${{ steps.deployed_fe.outputs.sha }}
-          # ★ THROUGH `env:`, NEVER INTERPOLATED INTO THE SCRIPT. A `${{ }}`
-          # inside a `run:` block is pasted into the shell source before bash
-          # ever sees it, so whatever the value happens to contain becomes
-          # script. Repository variables are set by people with write access
-          # rather than by strangers, which makes this a latent hazard instead
-          # of an open door - but the fix costs two lines and removes the
-          # question entirely. Read as `${ARMED_BE:-false}`: unset is the
-          # disarmed default, and the shell substitutes it as DATA.
+          # Through `env:`, never interpolated into the script: a `${{ }}` inside
+          # a `run:` block is pasted into the shell source before bash sees it.
           ARMED_BE: ${{ vars.RELEASE_BACKEND_ENABLED }}
           ARMED_FE: ${{ vars.RELEASE_FRONTEND_ENABLED }}
         run: |
           set -euo pipefail
 
-          drift() {  # <deployed-sha> <component-key> -> prints "<bool> <reason>"
-            local deployed="$1" key="$2" out value
-            if [ -z "$deployed" ]; then
-              echo "true deployed revision unknown"
-            elif ! git cat-file -e "${deployed}^{commit}" 2>/dev/null; then
-              echo "true deployed revision ${deployed} is not in this history"
-            elif [ "$deployed" = "$RELEASE_SHA" ]; then
-              echo "false already running this commit"
+          if [ -z "$FE_DEPLOYED" ]; then
+            fe=true; why="deployed revision unknown"
+          elif ! git cat-file -e "${FE_DEPLOYED}^{commit}" 2>/dev/null; then
+            fe=true; why="deployed revision ${FE_DEPLOYED} is not in this history"
+          elif [ "$FE_DEPLOYED" = "$RELEASE_SHA" ]; then
+            fe=false; why="already running this commit"
+          else
+            value="$(bash .github/scripts/affected.sh "$FE_DEPLOYED" "$RELEASE_SHA" \
+              | sed -n 's/^deploy_frontend=//p')"
+            if [ "$value" = true ]; then
+              fe=true; why="frontend paths changed since ${FE_DEPLOYED}"
             else
-              out="$(bash .github/scripts/affected.sh "$deployed" "$RELEASE_SHA")"
-              value="$(printf '%s\n' "$out" | sed -n "s/^deploy_${key}=//p")"
-              if [ "$value" = true ]; then
-                echo "true ${key} paths changed since ${deployed}"
-              else
-                echo "false no ${key} path changed since ${deployed}"
-              fi
+              fe=false; why="no frontend path changed since ${FE_DEPLOYED}"
             fi
-          }
-
-          be="$(drift "$BE_DEPLOYED" backend)"
-          fe="$(drift "$FE_DEPLOYED" frontend)"
-
-          # Migrations only matter for a backend that is actually being deployed,
-          # and only relative to what that backend is running now.
-          migrations=false
-          if [ "${be%% *}" = true ] && [ -n "$BE_DEPLOYED" ] && git cat-file -e "${BE_DEPLOYED}^{commit}" 2>/dev/null; then
-            migrations="$(bash .github/scripts/affected.sh "$BE_DEPLOYED" "$RELEASE_SHA" | sed -n 's/^migrations=//p')"
-          elif [ "${be%% *}" = true ]; then
-            # Unknown baseline: assume the schema may move, and take the backup.
-            migrations=true
           fi
 
-          {
-            echo "backend=${be%% *}"
-            echo "frontend=${fe%% *}"
-            echo "migrations=$migrations"
-          } >> "$GITHUB_OUTPUT"
+          echo "frontend=$fe" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Release plan"
             echo
             echo "| | running | target | deploy | why |"
             echo "|---|---|---|---|---|"
-            echo "| backend | \`${BE_DEPLOYED:-unknown}\` | \`${RELEASE_SHA}\` | **${be%% *}** | ${be#* } |"
-            echo "| frontend | \`${FE_DEPLOYED:-unknown}\` | \`${RELEASE_SHA}\` | **${fe%% *}** | ${fe#* } |"
-            echo
-            echo "This release adds migration files: **${migrations}** _(advisory only — whether a dump is taken is decided on the VPS from \`schema_migrations\`, not from this diff)_"
+            echo "| backend | _decided on the VPS_ | \`${RELEASE_SHA}\` | **${ARMED_BE:-false}** | \`bo-release\` no-ops if already there |"
+            echo "| frontend | \`${FE_DEPLOYED:-unknown}\` | \`${RELEASE_SHA}\` | **${fe}** | ${why} |"
             echo
             echo "Armed: backend \`${ARMED_BE:-false}\`, frontend \`${ARMED_FE:-false}\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -712,170 +660,53 @@ jobs:
 
       # ----------------------------------------------------------- backend --
       #
-      # Ordered build -> backup -> migrate -> recreate, and that order is load
-      # bearing. `npm run migrate` runs ts-node from INSIDE the image, so the
-      # image must exist first; and the schema must be in place before the
-      # container serving requests is the one expecting it.
+      # ★ ONE COMMAND, AND IT IS THE ONLY THING THIS KEY CAN DO. Everything that
+      # used to live here as three heredocs full of `docker compose` — build,
+      # dump, migrate, recreate, health, identity, rollback — now runs inside
+      # `/usr/local/bin/bo-release`, a root-owned wrapper on the VPS. The deploy
+      # user is not in the `docker` group and cannot read the runtime secret; the
+      # single sudo rule it has accepts one argument shaped like a commit sha and
+      # nothing else.
+      #
+      # ★ CALLED UNCONDITIONALLY WHEN ARMED, because the wrapper decides for
+      # itself whether there is anything to do. It compares the requested sha
+      # against the `release.sha` label of the running container and returns
+      # early if they match — while still settling the schema, since a database
+      # can be restored underneath an unchanged image. So exit 0 means "the
+      # backend is at this commit", not "a deployment happened", and that is the
+      # stronger of the two claims.
+      #
+      # ⚠ `sudo -n`: never prompt. If the sudoers rule is missing or the argument
+      # does not match its pattern, this must fail loudly rather than hang.
       - name: Deploy the backend
         id: deploy_be
-        if: steps.plan.outputs.backend == 'true' && vars.RELEASE_BACKEND_ENABLED == 'true'
+        if: steps.conn.outputs.configured == 'true' && vars.RELEASE_BACKEND_ENABLED == 'true'
+        # A build, a migration and a health gate on a 1-CPU box. Twenty minutes
+        # is generous for that and still far below the job default, so a wrapper
+        # that hangs — an ssh session that never returns, a health loop with no
+        # end — fails in a readable time instead of holding a runner for hours.
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' ENV_FILE='$VPS_ENV_FILE' bash -s" <<'REMOTE'
-          set -euo pipefail
-          cd /opt/hoanglong-bo
+          # `$RELEASE_SHA` is `github.sha` — forty hex characters produced by
+          # GitHub — and it is quoted here, pinned by the sudoers pattern, and
+          # validated a third time inside the wrapper. Three checks that
+          # disagree beat one that is trusted.
+          "$HOME/vps" "sudo -n /usr/local/bin/bo-release '$RELEASE_SHA'"
 
-          git fetch --all --prune --tags
-          git checkout --detach "$RELEASE_SHA"
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "Working tree is dirty after checkout - refusing to deploy." >&2
-            git status --short >&2
-            exit 1
-          fi
-          echo "checked out $(git rev-parse HEAD)"
-
-          cd deploy
-          export APP_VERSION="$RELEASE_SHA"
-          docker compose --env-file "$ENV_FILE" build backend
-
-          # ★ ASK THE DATABASE, NOT THE DIFF. Whether a backup is needed is a
-          # fact about this server's schema, and the commit range is not evidence
-          # about it. A release whose migration FAILED leaves the file unapplied;
-          # the next release touches no migration at all, so a diff-based gate
-          # would have said "no backup needed" and then migrated anyway.
-          #
-          # The ledger is `schema_migrations`, the file list comes from the image
-          # just built for THIS sha, and neither query writes anything — deciding
-          # whether to back up must not alter what is being backed up.
-          [ -r "$ENV_FILE" ] || { echo "Cannot read $ENV_FILE - is the runtime env installed?" >&2; exit 1; }
-          pg_user="$(sed -n 's/^POSTGRES_USER=//p' "$ENV_FILE" | head -1)"
-          pg_db="$(sed -n 's/^POSTGRES_DB=//p' "$ENV_FILE" | head -1)"
-          : "${pg_user:?POSTGRES_USER is missing from $ENV_FILE}"
-          : "${pg_db:?POSTGRES_DB is missing from $ENV_FILE}"
-
-          pending="$(bash ../.github/scripts/pending-migrations.sh . "$ENV_FILE" "$pg_user" "$pg_db")"
-
-          dump=""
-
-          # ★ THE DUMP IS GATED. THE MIGRATE IS NOT. Two different questions were
-          # being answered by one flag:
-          #
-          #   does the schema need CHANGING?    -> decides the backup
-          #   does the schema MATCH the repo?   -> must be checked every time
-          #
-          # They only coincide when something is pending. Gating both on
-          # `pending` meant that when nothing was pending, `migrate` never ran —
-          # and `migrate` is also what verifies the checksum of every ALREADY
-          # applied migration. A file edited after it was applied has no pending
-          # row, so that release sailed through in silence while the database
-          # kept a schema the repository no longer describes.
-          if [ -n "$pending" ]; then
-            echo "pending migrations on this database:"
-            printf '%s\n' "$pending" | sed 's/^/  /'
-
-            # ★ THE BACKUP IS A GATE, NOT A COURTESY. A forward-only migration
-            # with no dump behind it is a change with no way back. `set -e`
-            # aborts on a failing pg_dump, but a redirect truncates its target
-            # BEFORE the command runs, so a dump that dies early leaves a
-            # plausible-looking file. The size check is what turns "a file
-            # exists" into "a backup exists".
-            dump="$HOME/bo-pre-${RELEASE_SHA:0:12}-$(date +%F-%H%M%S).dump"
-            echo "dumping to $dump before touching the schema"
-
-            if ! docker compose --env-file "$ENV_FILE" exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
-              echo "pg_dump FAILED - refusing to migrate. Nothing has been changed." >&2
-              rm -f "$dump"
-              exit 1
-            fi
-
-            if [ ! -s "$dump" ]; then
-              echo "pg_dump produced an empty file - refusing to migrate." >&2
-              rm -f "$dump"
-              exit 1
-            fi
-
-            ls -lh "$dump"
-          else
-            echo "nothing pending - no dump taken, but the schema is still verified below"
-          fi
-
-          # ★ ALWAYS, PENDING OR NOT. With nothing pending this applies nothing —
-          # it computes the same difference this script does, so it CANNOT apply
-          # what the gate above did not see — and it still walks every applied
-          # migration comparing the recorded checksum against the file in this
-          # image. That comparison is the only thing standing between an edited
-          # migration and a database quietly diverging from the repository, and
-          # it has teeth nowhere else: CI drops and recreates its database on
-          # every run, so nothing there has ever been "already applied".
-          #
-          # `-T --interactive=false` OR THIS COMMAND EATS THE SCRIPT. Everything
-          # here arrives on the remote shell's stdin as one heredoc; a container
-          # holding stdin open consumes the rest, so `up -d` below would silently
-          # never run.
-          docker compose --env-file "$ENV_FILE" run --rm -T --interactive=false --no-deps backend npm run migrate
-
-          # The runner exits 0 both when it applies and when it has nothing to
-          # do, so its exit code alone cannot tell us the schema arrived.
-          still="$(bash ../.github/scripts/pending-migrations.sh . "$ENV_FILE" "$pg_user" "$pg_db")"
-          if [ -n "$still" ]; then
-            echo "migrate exited 0 but these are still unapplied:" >&2
-            printf '%s\n' "$still" | sed 's/^/  /' >&2
-            if [ -n "$dump" ]; then
-              echo "Refusing to start the new backend. The dump is at $dump" >&2
-            else
-              echo "Refusing to start the new backend. No dump was taken - nothing was pending." >&2
-            fi
-            exit 1
-          fi
-          echo "schema verified and up to date"
-
-          docker compose --env-file "$ENV_FILE" up -d backend
-          REMOTE
-
-      # ★ TWO GATES, AND THEY ANSWER DIFFERENT QUESTIONS. "Is it alive" is not
-      # "is it the build we just shipped" — the skew that started all of this
-      # was a perfectly healthy backend running the wrong code. Health alone
-      # would have called it fine.
-      - name: Gate the backend on health, then on identity
-        id: gate_be
-        if: steps.deploy_be.outcome == 'success'
-        run: |
-          set -euo pipefail
-          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' ENV_FILE='$VPS_ENV_FILE' bash -s" <<'REMOTE'
-          set -euo pipefail
-          cd /opt/hoanglong-bo/deploy
-
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then
-              echo "gate 1/2 - healthy on attempt ${attempt}"
-              curl -fsS http://127.0.0.1:3000/health
-              echo
-              break
-            fi
-            if [ "$attempt" -eq 30 ]; then
-              echo "gate 1/2 FAILED - never became healthy" >&2
-              docker compose --env-file "$ENV_FILE" logs --tail=80 backend >&2
-              exit 1
-            fi
-            sleep 2
-          done
-
-          cid="$(docker compose --env-file "$ENV_FILE" ps -q backend)"
-          running="$(docker inspect --format '{{index .Config.Labels "release.sha"}}' "$cid")"
-          if [ "$running" != "$RELEASE_SHA" ]; then
-            echo "gate 2/2 FAILED - container reports '${running}', expected '${RELEASE_SHA}'" >&2
-            exit 1
-          fi
-          echo "gate 2/2 - running ${running}"
-          REMOTE
 
       # ---------------------------------------------------------- frontend --
       - name: Deploy the frontend
         id: deploy_fe
+        # ★ THE BACKEND MUST HAVE SUCCEEDED, not merely "not failed". A skipped
+        # backend step means the backend was DISARMED, and a disarmed backend is
+        # one nobody has confirmed is at this commit — shipping a frontend past
+        # it is exactly how the original skew happened. Stricter than the
+        # condition it replaces, and deliberately so: the frontend cannot lead.
         if: >-
           steps.plan.outputs.frontend == 'true'
           && vars.RELEASE_FRONTEND_ENABLED == 'true'
-          && (steps.gate_be.outcome == 'success' || steps.plan.outputs.backend != 'true')
+          && steps.deploy_be.outcome == 'success'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -914,6 +745,7 @@ jobs:
             --token="$VERCEL_TOKEN" \
             --meta githubCommitSha="$RELEASE_SHA"
 
+
       # ------------------------------------------------------------- smoke --
       - name: Smoke the public origin
         if: steps.deploy_be.outcome == 'success' || steps.deploy_fe.outcome == 'success'
@@ -930,49 +762,6 @@ jobs:
           echo
           echo "GET ${PUBLIC_ORIGIN}/"
           curl -fsS --max-time 20 -o /dev/null -w 'status %{http_code}\n' "${PUBLIC_ORIGIN}/"
-
-      # ---------------------------------------------------------- rollback --
-      #
-      # ⚠ CODE ROLLBACK IS NOT SCHEMA ROLLBACK. Migrations here are forward-only
-      # and refuse-not-repair; putting the previous image back does not undo one
-      # that ran. If this release carried a migration, the dump named in the
-      # deploy log is the only way back, and restoring it is a decision a person
-      # makes — never this file.
-      - name: Roll the backend back
-        if: failure() && steps.deploy_be.outcome == 'success'
-        env:
-          BE_PREVIOUS: ${{ steps.deployed_be.outputs.sha }}
-        run: |
-          set -euo pipefail
-          # ★ WARNED UNCONDITIONALLY, because whether this release migrated is
-          # decided on the VPS from the database's own ledger — not here, and not
-          # from the commit range. A release that touched no migration file can
-          # still have applied one an earlier failed release left behind, which
-          # is the entire reason that gate moved. Predicting from the diff here
-          # would drop the warning in exactly that case.
-          echo "::warning::If this release applied a migration, rolling the image back does NOT roll the schema back. The deploy log names the pg_dump if one was taken."
-          if [ -z "${BE_PREVIOUS:-}" ]; then
-            echo "::error::No previous release SHA is recorded, so there is nothing to roll back to."
-            echo "The backend is left running ${RELEASE_SHA}. Recover by hand:"
-            echo "  cd /opt/hoanglong-bo/deploy && docker images hoanglong-bo-backend"
-            exit 1
-          fi
-          echo "Rolling back to ${BE_PREVIOUS}"
-          "$HOME/vps" "BE_PREVIOUS='$BE_PREVIOUS' ENV_FILE='$VPS_ENV_FILE' bash -s" <<'REMOTE'
-          set -euo pipefail
-          cd /opt/hoanglong-bo/deploy
-          if ! docker image inspect "hoanglong-bo-backend:$BE_PREVIOUS" >/dev/null 2>&1; then
-            echo "Image hoanglong-bo-backend:$BE_PREVIOUS is gone - cannot roll back." >&2
-            exit 1
-          fi
-          APP_VERSION="$BE_PREVIOUS" docker compose --env-file "$ENV_FILE" up -d --no-build backend
-          for attempt in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1 && { echo "rolled back and healthy"; exit 0; }
-            sleep 2
-          done
-          echo "Rolled back but never became healthy." >&2
-          exit 1
-          REMOTE
 
       # ★ THIS DELIBERATELY DOES NOT ROLL BACK. It tells a person exactly how to.
       #

@@ -132,11 +132,201 @@ systemctl reload nginx                                   # after an nginx.conf c
 docker inspect --format '{{index .Config.Labels "release.sha"}}'   "$(docker compose --env-file "$ENV_FILE" ps -q backend)"
 ```
 
+## Restricted deploy user
+
+GitHub Actions does not SSH as root, and the account it does use cannot reach
+the Docker daemon, cannot read the runtime secret, and cannot write the
+repository. It is allowed exactly one privileged action:
+
+```
+GitHub Actions
+  -> ssh deploy@vps
+  -> sudo -n /usr/local/bin/bo-release <40-hex-sha>
+  -> root wrapper: validate, fetch, checkout, verify HEAD
+  -> exec /opt/hoanglong-bo/.github/scripts/vps-release.sh <sha>
+```
+
+### Why the wrapper is split in two
+
+`/usr/local/bin/bo-release` lives on the box, is root-owned, and almost never
+changes: it is the trust anchor. It does the four things that must be true
+before any repository code runs, then hands over to a script that is **versioned
+with the commit being released** — so a release brings its own deployment logic
+while the anchor stays still.
+
+⚠ **Root therefore executes repository code.** That is not new — `docker build`
+has always run this repository's Dockerfile with root-equivalent privilege — but
+say it plainly: the gate is branch protection and review, not file permissions.
+What this arrangement buys is that `deploy` cannot WRITE the repository, so only
+merged code ever runs as root.
+
+### `/usr/local/bin/bo-release`
+
+Install verbatim, `root:root 0755`:
+
+```bash
+#!/usr/bin/env bash
+# The only command the deploy user may run as root. Small enough to read in one
+# sitting: everything it does is a precondition for trusting the script it hands
+# over to.
+set -euo pipefail
+IFS=$'\n\t'
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+REPO_DIR=/opt/hoanglong-bo
+
+[ "$#" -eq 1 ] || { echo "usage: bo-release <40-hex-sha>" >&2; exit 2; }
+SHA="$1"
+
+# Lowercase hex, exactly forty. The shape alone removes every shell
+# metacharacter, every path, and any leading "-" that could become a git OPTION.
+[[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: not a 40-char lowercase hex sha" >&2; exit 2; }
+
+cd "$REPO_DIR"
+git fetch --all --prune --tags --quiet
+git rev-parse --verify --quiet "${SHA}^{commit}" >/dev/null \
+  || { echo "ERROR: $SHA is not a commit in this repository" >&2; exit 2; }
+git checkout --detach --quiet "$SHA"
+
+# Belt and braces: prove we are where we asked to be before running anything.
+HEAD_SHA="$(git rev-parse HEAD)"
+[ "$HEAD_SHA" = "$SHA" ] || { echo "ERROR: HEAD is $HEAD_SHA, expected $SHA" >&2; exit 1; }
+
+# A dirty tree means the image would carry code that is not $SHA while the
+# release.sha label claims it is.
+if [ -n "$(git status --porcelain)" ]; then
+  git status --short >&2
+  echo "ERROR: working tree is dirty - refusing to release" >&2
+  exit 1
+fi
+
+exec /usr/bin/env bash "$REPO_DIR/.github/scripts/vps-release.sh" "$SHA"
+```
+
+### sudoers
+
+Generated rather than typed — forty character classes is an invitation to a
+typo, and the wrong one fails open:
+
+```bash
+pat=$(printf '[0-9a-f]%.0s' $(seq 40))
+printf 'Cmnd_Alias BO_RELEASE = /usr/local/bin/bo-release %s\n' "$pat" > /etc/sudoers.d/bo-release
+printf 'Defaults!BO_RELEASE  env_reset, secure_path="/usr/sbin:/usr/bin:/sbin:/bin"\n' >> /etc/sudoers.d/bo-release
+printf 'deploy ALL=(root) NOPASSWD: BO_RELEASE\n' >> /etc/sudoers.d/bo-release
+chmod 440 /etc/sudoers.d/bo-release
+
+visudo -c            # MUST say "parsed OK" before you log out
+sudo -l -U deploy    # MUST list exactly this one entry
+```
+
+⚠ **Never write `bo-release *`.** A free wildcard accepts any argument,
+including a path, and is the classic way a sudo rule becomes a root shell. Each
+`[0-9a-f]` matches exactly one character, so the pattern pins both length and
+alphabet: a 39- or 41-character argument, an uppercase sha, `--upload-pack=…` or
+`/etc/…` all fail to match and sudo refuses.
+
+The pattern is a second opinion, not the defence — `bo-release` and
+`vps-release.sh` each validate the argument again. Three checks that can
+disagree beat one that is trusted.
+
+### Filesystem
+
+| Path | Owner | Mode | What `deploy` can do |
+|---|---|---|---|
+| `/opt/hoanglong-bo` | `root:root` | `0750` | nothing |
+| `/etc/hoanglong-bo/staging.env` | `root:root` | `0600` | nothing |
+| `deploy/postgres-data` | `70:70` | `0700` | nothing |
+| `/usr/local/bin/bo-release` | `root:root` | `0755` | execute, through sudo only |
+
+`0750` rather than `0755`: the deploy user runs everything through root and has
+no reason to read the checkout at all.
+
+⚠ `postgres-data` must stay `0700` owned by uid/gid 70 — PostgreSQL refuses to
+start if its data directory is group- or world-accessible.
+
+### Bootstrap, in three separate steps
+
+Each one fails differently. Do not combine them.
+
+```bash
+# 1. install the wrapper and the sudo rule, change nothing else. Set
+#    VPS_USER=deploy in GitHub and run one real release, while `deploy` still
+#    has its old privileges to fall back on.
+
+# 2. take the repository away from the deploy user
+#
+#    ★ postgres-data is EXCLUDED, not chowned and put back. It belongs to
+#    uid/gid 70 inside the container, and `chown -R root:root` across a LIVE
+#    data directory is a running database losing access to its own files — for
+#    the second it takes to restore it, which is a second too long. Prune it.
+find /opt/hoanglong-bo -path /opt/hoanglong-bo/deploy/postgres-data -prune \
+  -o -exec chown root:root {} +
+chmod 750 /opt/hoanglong-bo
+
+#    it should not have moved; check rather than assume
+stat -c '%u:%g %a  %n' /opt/hoanglong-bo/deploy/postgres-data   # MUST be 70:70 700
+#    then run another release
+
+# 3. take the Docker daemon away
+gpasswd -d deploy docker
+```
+
+⚠ Group membership only changes on a **new** login session; an SSH connection
+already open keeps the old groups.
+
+### Prove it
+
+These four lines are the whole point of the exercise. If the first three
+succeed, `deploy` is still root-equivalent and the rest is decoration.
+
+```bash
+sudo -u deploy -i docker ps                           # MUST be denied
+sudo -u deploy -i cat /etc/hoanglong-bo/staging.env   # MUST be denied
+sudo -u deploy -i ls /opt/hoanglong-bo                # MUST be denied
+sudo -u deploy -i sudo -n /usr/local/bin/bo-release "$(git -C /opt/hoanglong-bo rev-parse origin/main)"
+```
+
+### Rolling back the restriction
+
+Reverse order, one step at a time, same exclusion:
+
+```bash
+# 3. give the Docker daemon back
+gpasswd -a deploy docker
+
+# 2. give the repository back — postgres-data pruned, for the same reason it was
+#    pruned on the way in: it is uid/gid 70's, not the deploy user's, and a
+#    recursive chown that sweeps it up breaks a database that is running fine.
+find /opt/hoanglong-bo -path /opt/hoanglong-bo/deploy/postgres-data -prune \
+  -o -exec chown deploy:deploy {} +
+chmod 755 /opt/hoanglong-bo
+
+stat -c '%u:%g %a  %n' /opt/hoanglong-bo/deploy/postgres-data   # MUST still be 70:70 700
+
+# 1. set VPS_USER back to root in GitHub, and revert the commit
+```
+
+⚠ **`chown -R deploy:deploy /opt/hoanglong-bo` is not an acceptable shorthand
+for step 2.** It reaches `deploy/postgres-data`, and PostgreSQL refuses to start
+on a data directory it does not own — turning a routine rollback into an
+outage. Both directions prune it, and both verify afterwards.
+
 ### Releasing by hand
 
-Only when the pipeline cannot. Same order it uses, and the order matters:
-`migrate` runs ts-node from *inside* the image, so the image has to exist first,
-and the schema has to be in place before the container expecting it starts.
+Normally one line, as root:
+
+```bash
+/usr/local/bin/bo-release '<40-hex-sha>'
+```
+
+That is the same code the pipeline runs, because the pipeline runs exactly this.
+The long form below is what `vps-release.sh` does; keep it for the case where
+the wrapper is not installed yet, or when debugging one step in isolation.
+
+Same order it uses, and the order matters: `migrate` runs ts-node from *inside*
+the image, so the image has to exist first, and the schema has to be in place
+before the container expecting it starts.
 
 Paste it whole. Every check below **stops** the release rather than warning
 about it — a comment saying "this must be empty" is not a check, and the one
