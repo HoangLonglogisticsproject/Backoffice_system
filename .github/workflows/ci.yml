@@ -74,8 +74,16 @@ jobs:
       # and the three jobs below would run on it. Failing first means a broken
       # matrix publishes nothing, so everything downstream skips and `release`
       # is blocked by its own `!failure()`.
-      - name: Prove the matrix still means what it says
-        run: bash .github/scripts/affected.sh --self-test
+      #
+      # ★ AND `pending-migrations.sh` EARNS ITS PLACE HERE TOO, even though
+      # `detect` never calls it. It decides whether a database is backed up
+      # before a forward-only migration, and the only other thing that runs it is
+      # the release — which is far too late to discover it is broken. Both are
+      # pure bash: no Docker, no database, about a second for the pair.
+      - name: Prove the scripts still mean what they say
+        run: |
+          bash .github/scripts/affected.sh --self-test
+          bash .github/scripts/pending-migrations.sh --self-test
 
       - name: Classify the changed paths
         id: matrix
@@ -636,6 +644,16 @@ jobs:
         env:
           BE_DEPLOYED: ${{ steps.deployed_be.outputs.sha }}
           FE_DEPLOYED: ${{ steps.deployed_fe.outputs.sha }}
+          # ★ THROUGH `env:`, NEVER INTERPOLATED INTO THE SCRIPT. A `${{ }}`
+          # inside a `run:` block is pasted into the shell source before bash
+          # ever sees it, so whatever the value happens to contain becomes
+          # script. Repository variables are set by people with write access
+          # rather than by strangers, which makes this a latent hazard instead
+          # of an open door - but the fix costs two lines and removes the
+          # question entirely. Read as `${ARMED_BE:-false}`: unset is the
+          # disarmed default, and the shell substitutes it as DATA.
+          ARMED_BE: ${{ vars.RELEASE_BACKEND_ENABLED }}
+          ARMED_FE: ${{ vars.RELEASE_FRONTEND_ENABLED }}
         run: |
           set -euo pipefail
 
@@ -687,7 +705,7 @@ jobs:
             echo
             echo "This release adds migration files: **${migrations}** _(advisory only — whether a dump is taken is decided on the VPS from \`schema_migrations\`, not from this diff)_"
             echo
-            echo "Armed: backend \`${{ vars.RELEASE_BACKEND_ENABLED || 'false' }}\`, frontend \`${{ vars.RELEASE_FRONTEND_ENABLED || 'false' }}\`"
+            echo "Armed: backend \`${ARMED_BE:-false}\`, frontend \`${ARMED_FE:-false}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
           cat "$GITHUB_STEP_SUMMARY"

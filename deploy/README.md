@@ -63,7 +63,9 @@ ENV_FILE=/etc/hoanglong-bo/staging.env
 install -d -m 700 -o root -g root /etc/hoanglong-bo
 umask 077
 cp env.example "$ENV_FILE"
-sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 24)|" "$ENV_FILE"
+# hex, not base64: this ends up inside postgres://user:PASSWORD@host/db, and a
+# "/" in the password makes that URL unparseable. 39.7% of base64 values have one.
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 24)|" "$ENV_FILE"
 chmod 600 "$ENV_FILE" && chown root:root "$ENV_FILE"
 
 docker compose --env-file "$ENV_FILE" up -d --build
