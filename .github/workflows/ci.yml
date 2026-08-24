@@ -74,8 +74,16 @@ jobs:
       # and the three jobs below would run on it. Failing first means a broken
       # matrix publishes nothing, so everything downstream skips and `release`
       # is blocked by its own `!failure()`.
-      - name: Prove the matrix still means what it says
-        run: bash .github/scripts/affected.sh --self-test
+      #
+      # ★ AND `pending-migrations.sh` EARNS ITS PLACE HERE TOO, even though
+      # `detect` never calls it. It decides whether a database is backed up
+      # before a forward-only migration, and the only other thing that runs it is
+      # the release — which is far too late to discover it is broken. Both are
+      # pure bash: no Docker, no database, about a second for the pair.
+      - name: Prove the scripts still mean what they say
+        run: |
+          bash .github/scripts/affected.sh --self-test
+          bash .github/scripts/pending-migrations.sh --self-test
 
       - name: Classify the changed paths
         id: matrix
@@ -482,6 +490,19 @@ jobs:
     env:
       RELEASE_SHA: ${{ github.sha }}
 
+      # ★ ONE PATH, NAMED ONCE. Compose reads `.env` from the directory holding
+      # the compose file — not the working directory, and it does not walk
+      # upwards. That made the runtime secret's location an implicit consequence
+      # of which directory a command happened to run from, and the repository
+      # disagreed with itself about where it was. It is now an explicit argument
+      # to every compose call, which also means an unreadable file FAILS rather
+      # than resolving `${POSTGRES_USER}` to a blank string and exiting 0 with
+      # `postgres://:@postgres:5432/`.
+      #
+      # Outside the git tree on purpose: the checkout is rewritten by every
+      # release and will eventually be owned by an unprivileged deploy user.
+      VPS_ENV_FILE: /etc/hoanglong-bo/staging.env
+
     steps:
       # ★ `persist-credentials: false` MATTERS MORE HERE THAN ANYWHERE ELSE.
       # This is the job that runs an SSH client against a machine we own and a
@@ -566,13 +587,18 @@ jobs:
         if: steps.conn.outputs.configured == 'true'
         run: |
           set -euo pipefail
-          sha="$("$HOME/vps" 'set -e
-            cd /opt/hoanglong-bo/deploy
-            cid="$(docker compose ps -q backend 2>/dev/null || true)"
-            [ -n "$cid" ] || exit 0
-            docker inspect --format "{{index .Config.Labels \"release.sha\"}}" "$cid" 2>/dev/null || true
-          ' || true)"
-          sha="$(printf '%s' "$sha" | tr -d '[:space:]')"
+          # Written to a file rather than captured inline: a quoted heredoc
+          # cannot live inside `$( … )` — the closing paren would land on the
+          # redirect line and end the substitution before the body was read.
+          "$HOME/vps" "ENV_FILE='$VPS_ENV_FILE' bash -s" \
+            > "${RUNNER_TEMP}/be_sha" 2>/dev/null <<'REMOTE' || true
+          set -e
+          cd /opt/hoanglong-bo/deploy
+          cid="$(docker compose --env-file "$ENV_FILE" ps -q backend 2>/dev/null || true)"
+          [ -n "$cid" ] || exit 0
+          docker inspect --format '{{index .Config.Labels "release.sha"}}' "$cid" 2>/dev/null || true
+          REMOTE
+          sha="$(tr -d '[:space:]' < "${RUNNER_TEMP}/be_sha")"
           echo "backend is running: ${sha:-<unlabelled>}"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
@@ -618,6 +644,16 @@ jobs:
         env:
           BE_DEPLOYED: ${{ steps.deployed_be.outputs.sha }}
           FE_DEPLOYED: ${{ steps.deployed_fe.outputs.sha }}
+          # ★ THROUGH `env:`, NEVER INTERPOLATED INTO THE SCRIPT. A `${{ }}`
+          # inside a `run:` block is pasted into the shell source before bash
+          # ever sees it, so whatever the value happens to contain becomes
+          # script. Repository variables are set by people with write access
+          # rather than by strangers, which makes this a latent hazard instead
+          # of an open door - but the fix costs two lines and removes the
+          # question entirely. Read as `${ARMED_BE:-false}`: unset is the
+          # disarmed default, and the shell substitutes it as DATA.
+          ARMED_BE: ${{ vars.RELEASE_BACKEND_ENABLED }}
+          ARMED_FE: ${{ vars.RELEASE_FRONTEND_ENABLED }}
         run: |
           set -euo pipefail
 
@@ -669,7 +705,7 @@ jobs:
             echo
             echo "This release adds migration files: **${migrations}** _(advisory only — whether a dump is taken is decided on the VPS from \`schema_migrations\`, not from this diff)_"
             echo
-            echo "Armed: backend \`${{ vars.RELEASE_BACKEND_ENABLED || 'false' }}\`, frontend \`${{ vars.RELEASE_FRONTEND_ENABLED || 'false' }}\`"
+            echo "Armed: backend \`${ARMED_BE:-false}\`, frontend \`${ARMED_FE:-false}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
           cat "$GITHUB_STEP_SUMMARY"
@@ -685,7 +721,7 @@ jobs:
         if: steps.plan.outputs.backend == 'true' && vars.RELEASE_BACKEND_ENABLED == 'true'
         run: |
           set -euo pipefail
-          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' bash -s" <<'REMOTE'
+          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' ENV_FILE='$VPS_ENV_FILE' bash -s" <<'REMOTE'
           set -euo pipefail
           cd /opt/hoanglong-bo
 
@@ -700,7 +736,7 @@ jobs:
 
           cd deploy
           export APP_VERSION="$RELEASE_SHA"
-          docker compose build backend
+          docker compose --env-file "$ENV_FILE" build backend
 
           # ★ ASK THE DATABASE, NOT THE DIFF. Whether a backup is needed is a
           # fact about this server's schema, and the commit range is not evidence
@@ -711,12 +747,13 @@ jobs:
           # The ledger is `schema_migrations`, the file list comes from the image
           # just built for THIS sha, and neither query writes anything — deciding
           # whether to back up must not alter what is being backed up.
-          pg_user="$(sed -n 's/^POSTGRES_USER=//p' .env | head -1)"
-          pg_db="$(sed -n 's/^POSTGRES_DB=//p' .env | head -1)"
-          : "${pg_user:?POSTGRES_USER is missing from deploy/.env}"
-          : "${pg_db:?POSTGRES_DB is missing from deploy/.env}"
+          [ -r "$ENV_FILE" ] || { echo "Cannot read $ENV_FILE - is the runtime env installed?" >&2; exit 1; }
+          pg_user="$(sed -n 's/^POSTGRES_USER=//p' "$ENV_FILE" | head -1)"
+          pg_db="$(sed -n 's/^POSTGRES_DB=//p' "$ENV_FILE" | head -1)"
+          : "${pg_user:?POSTGRES_USER is missing from $ENV_FILE}"
+          : "${pg_db:?POSTGRES_DB is missing from $ENV_FILE}"
 
-          pending="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
+          pending="$(bash ../.github/scripts/pending-migrations.sh . "$ENV_FILE" "$pg_user" "$pg_db")"
 
           dump=""
 
@@ -745,7 +782,7 @@ jobs:
             dump="$HOME/bo-pre-${RELEASE_SHA:0:12}-$(date +%F-%H%M%S).dump"
             echo "dumping to $dump before touching the schema"
 
-            if ! docker compose exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
+            if ! docker compose --env-file "$ENV_FILE" exec -T postgres pg_dump -U "$pg_user" -Fc "$pg_db" > "$dump"; then
               echo "pg_dump FAILED - refusing to migrate. Nothing has been changed." >&2
               rm -f "$dump"
               exit 1
@@ -775,11 +812,11 @@ jobs:
           # here arrives on the remote shell's stdin as one heredoc; a container
           # holding stdin open consumes the rest, so `up -d` below would silently
           # never run.
-          docker compose run --rm -T --interactive=false --no-deps backend npm run migrate
+          docker compose --env-file "$ENV_FILE" run --rm -T --interactive=false --no-deps backend npm run migrate
 
           # The runner exits 0 both when it applies and when it has nothing to
           # do, so its exit code alone cannot tell us the schema arrived.
-          still="$(bash ../.github/scripts/pending-migrations.sh . "$pg_user" "$pg_db")"
+          still="$(bash ../.github/scripts/pending-migrations.sh . "$ENV_FILE" "$pg_user" "$pg_db")"
           if [ -n "$still" ]; then
             echo "migrate exited 0 but these are still unapplied:" >&2
             printf '%s\n' "$still" | sed 's/^/  /' >&2
@@ -792,7 +829,7 @@ jobs:
           fi
           echo "schema verified and up to date"
 
-          docker compose up -d backend
+          docker compose --env-file "$ENV_FILE" up -d backend
           REMOTE
 
       # ★ TWO GATES, AND THEY ANSWER DIFFERENT QUESTIONS. "Is it alive" is not
@@ -804,7 +841,7 @@ jobs:
         if: steps.deploy_be.outcome == 'success'
         run: |
           set -euo pipefail
-          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' bash -s" <<'REMOTE'
+          "$HOME/vps" "RELEASE_SHA='$RELEASE_SHA' ENV_FILE='$VPS_ENV_FILE' bash -s" <<'REMOTE'
           set -euo pipefail
           cd /opt/hoanglong-bo/deploy
 
@@ -817,13 +854,13 @@ jobs:
             fi
             if [ "$attempt" -eq 30 ]; then
               echo "gate 1/2 FAILED - never became healthy" >&2
-              docker compose logs --tail=80 backend >&2
+              docker compose --env-file "$ENV_FILE" logs --tail=80 backend >&2
               exit 1
             fi
             sleep 2
           done
 
-          cid="$(docker compose ps -q backend)"
+          cid="$(docker compose --env-file "$ENV_FILE" ps -q backend)"
           running="$(docker inspect --format '{{index .Config.Labels "release.sha"}}' "$cid")"
           if [ "$running" != "$RELEASE_SHA" ]; then
             echo "gate 2/2 FAILED - container reports '${running}', expected '${RELEASE_SHA}'" >&2
@@ -921,14 +958,14 @@ jobs:
             exit 1
           fi
           echo "Rolling back to ${BE_PREVIOUS}"
-          "$HOME/vps" "BE_PREVIOUS='$BE_PREVIOUS' bash -s" <<'REMOTE'
+          "$HOME/vps" "BE_PREVIOUS='$BE_PREVIOUS' ENV_FILE='$VPS_ENV_FILE' bash -s" <<'REMOTE'
           set -euo pipefail
           cd /opt/hoanglong-bo/deploy
           if ! docker image inspect "hoanglong-bo-backend:$BE_PREVIOUS" >/dev/null 2>&1; then
             echo "Image hoanglong-bo-backend:$BE_PREVIOUS is gone - cannot roll back." >&2
             exit 1
           fi
-          APP_VERSION="$BE_PREVIOUS" docker compose up -d --no-build backend
+          APP_VERSION="$BE_PREVIOUS" docker compose --env-file "$ENV_FILE" up -d --no-build backend
           for attempt in $(seq 1 30); do
             curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1 && { echo "rolled back and healthy"; exit 0; }
             sleep 2

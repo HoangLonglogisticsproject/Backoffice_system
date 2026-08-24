@@ -23,8 +23,16 @@
 # image is what will run `migrate`, and reading anything else would be answering
 # about a different artifact. `docker compose build` must have run first.
 #
+# ★ THE ENV FILE IS PASSED, NEVER INFERRED. Compose reads `.env` from the
+# directory holding the compose file — not the working directory, and it does not
+# walk upwards. Measured, because the difference is invisible until it bites:
+# with only a parent-directory `.env`, `${POSTGRES_USER}` resolves to a blank
+# string, compose warns, and then exits 0 having produced
+# `postgres://:@postgres:5432/`. An explicit `--env-file` turns that silent
+# substitution into a hard failure.
+#
 # Usage:
-#   pending-migrations.sh <compose-dir> <pg-user> <pg-db>   list pending, one per line
+#   pending-migrations.sh <compose-dir> <env-file> <pg-user> <pg-db>
 #   pending-migrations.sh --compare <applied-file> <files-file>
 #   pending-migrations.sh --self-test
 #
@@ -55,10 +63,10 @@ compare() {
 # output, which happens to mean "everything is pending". It was right by
 # accident and would have become a hard failure under ON_ERROR_STOP.
 applied_versions() {
-  local dir="$1" user="$2" db="$3" exists
+  local dir="$1" env_file="$2" user="$3" db="$4" exists
 
   exists="$(
-    docker compose -f "$dir/docker-compose.yml" exec -T postgres \
+    docker compose --env-file "$env_file" -f "$dir/docker-compose.yml" exec -T postgres \
       psql -U "$user" -d "$db" -tAc \
       "SELECT to_regclass('public.schema_migrations') IS NOT NULL" \
       | tr -d '[:space:]'
@@ -69,7 +77,7 @@ applied_versions() {
     return 0
   fi
 
-  docker compose -f "$dir/docker-compose.yml" exec -T postgres \
+  docker compose --env-file "$env_file" -f "$dir/docker-compose.yml" exec -T postgres \
     psql -U "$user" -d "$db" -tAc \
     "SELECT version FROM schema_migrations ORDER BY version" \
     | tr -d '\r'
@@ -77,9 +85,10 @@ applied_versions() {
 
 # --------------------------------------------------------- the image files --
 image_migrations() {
-  local dir="$1"
-  docker compose -f "$dir/docker-compose.yml" run --rm -T --interactive=false \
-    --no-deps --entrypoint sh backend -c 'ls -1 migrations | grep "\.sql$"' \
+  local dir="$1" env_file="$2"
+  docker compose --env-file "$env_file" -f "$dir/docker-compose.yml" run --rm -T \
+    --interactive=false --no-deps --entrypoint sh backend \
+    -c 'ls -1 migrations | grep "\.sql$"' \
     | tr -d '\r'
 }
 
@@ -170,17 +179,21 @@ case "${1:-}" in
     compare "${2:?applied file required}" "${3:?files list required}"
     ;;
   "")
-    echo "usage: pending-migrations.sh <compose-dir> <pg-user> <pg-db> | --compare A F | --self-test" >&2
+    echo "usage: pending-migrations.sh <compose-dir> <env-file> <pg-user> <pg-db> | --compare A F | --self-test" >&2
     exit 2
     ;;
   *)
     dir="$1"
-    user="${2:?postgres user required}"
-    db="${3:?postgres database required}"
+    env_file="${2:?env file required}"
+    user="${3:?postgres user required}"
+    db="${4:?postgres database required}"
+    # Fail here, by name, rather than letting compose substitute blanks and
+    # report a connection error about a URL with no credentials in it.
+    [[ -r "$env_file" ]] || { echo "Cannot read env file: $env_file" >&2; exit 1; }
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
-    applied_versions "$dir" "$user" "$db" > "$work/applied"
-    image_migrations "$dir" > "$work/files"
+    applied_versions "$dir" "$env_file" "$user" "$db" > "$work/applied"
+    image_migrations "$dir" "$env_file" > "$work/files"
     compare "$work/applied" "$work/files"
     ;;
 esac
