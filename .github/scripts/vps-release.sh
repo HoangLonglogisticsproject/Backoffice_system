@@ -123,19 +123,30 @@ gate_identity() {
 # refuse rather than repair, so restoring the previous image does not undo one
 # that ran. If this release migrated, the dump named in the log is the only way
 # back — and restoring it is a decision a person makes, never this file.
+#
+# ★ TWO FAILURES, TWO EXIT CODES, because they need different sentences. "We
+# tried to roll back and the old version would not come up" and "there was
+# nothing to roll back to" are read by the same person at the same hour, and the
+# first draft of this said the former for both — on a FIRST deployment, where no
+# rollback had been attempted at all. That line is what lands in the Actions
+# error annotation, so it is the one sentence that has to be true.
+#
+#   0  rolled back and healthy
+#   1  rolled back, still not healthy
+#   2  nothing to roll back to - nothing was attempted
 roll_back_to() {
   local previous="$1"
 
   if [ -z "$previous" ]; then
-    log "NO previous release recorded - cannot roll back automatically"
+    log "NO previous release recorded - nothing to roll back to, nothing attempted"
     log "  the backend is left running the failed release; recover by hand:"
     log "    docker images $IMAGE"
-    return 1
+    return 2
   fi
 
   if ! docker image inspect "${IMAGE}:${previous}" >/dev/null 2>&1; then
-    log "image ${IMAGE}:${previous} is gone - cannot roll back"
-    return 1
+    log "image ${IMAGE}:${previous} is gone - nothing to roll back to"
+    return 2
   fi
 
   log "rolling back to ${previous}"
@@ -280,10 +291,13 @@ main() {
   fi
 
   log "gates failed - rolling back"
-  if roll_back_to "$previous"; then
-    die "release ${RELEASE_SHA} failed its gates; rolled back to ${previous}"
-  fi
-  die "release ${RELEASE_SHA} failed its gates AND the rollback did not restore health"
+  local rc=0
+  roll_back_to "$previous" || rc=$?
+  case "$rc" in
+    0) die "release ${RELEASE_SHA} failed its gates; rolled back to ${previous}, which is healthy" ;;
+    2) die "release ${RELEASE_SHA} failed its gates and there was NOTHING TO ROLL BACK TO - MANUAL RECOVERY REQUIRED" ;;
+    *) die "release ${RELEASE_SHA} failed its gates AND the rollback did not restore health - MANUAL RECOVERY REQUIRED" ;;
+  esac
 }
 
 # ---------------------------------------------------------------- self-test --
