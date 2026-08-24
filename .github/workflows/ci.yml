@@ -681,6 +681,11 @@ jobs:
       - name: Deploy the backend
         id: deploy_be
         if: steps.conn.outputs.configured == 'true' && vars.RELEASE_BACKEND_ENABLED == 'true'
+        # A build, a migration and a health gate on a 1-CPU box. Twenty minutes
+        # is generous for that and still far below the job default, so a wrapper
+        # that hangs — an ssh session that never returns, a health loop with no
+        # end — fails in a readable time instead of holding a runner for hours.
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           # `$RELEASE_SHA` is `github.sha` — forty hex characters produced by

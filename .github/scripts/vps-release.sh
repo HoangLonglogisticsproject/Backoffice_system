@@ -66,12 +66,14 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # answers in lowercase, so allowing both would make the equality check in the
 # wrapper compare two spellings of the same commit and refuse a valid release.
 valid_sha() {
-  [[ "${1-}" =~ ^[0-9a-f]{40}$ ]]
+  local candidate="${1-}"
+  [[ "$candidate" =~ ^[0-9a-f]{40}$ ]]
 }
 
 require_sha() {
-  [ "$#" -eq 1 ] || { printf 'usage: vps-release.sh <40-hex-sha>\n' >&2; exit 2; }
-  valid_sha "$1" || { printf 'ERROR: not a 40-character lowercase hex sha\n' >&2; exit 2; }
+  [[ "$#" -eq 1 ]] || { printf 'usage: vps-release.sh <40-hex-sha>\n' >&2; exit 2; }
+  local candidate="$1"
+  valid_sha "$candidate" || { printf 'ERROR: not a 40-character lowercase hex sha\n' >&2; exit 2; }
 }
 
 # ------------------------------------------------------------ what is running --
@@ -81,7 +83,7 @@ require_sha() {
 current_sha() {
   local cid
   cid="$(compose ps -q "$SERVICE" 2>/dev/null || true)"
-  [ -n "$cid" ] || return 0
+  [[ -n "$cid" ]] || return 0
   docker inspect --format '{{index .Config.Labels "release.sha"}}' "$cid" 2>/dev/null || true
 }
 
@@ -109,7 +111,7 @@ gate_health() {
 gate_identity() {
   local want="$1" running
   running="$(current_sha)"
-  if [ "$running" != "$want" ]; then
+  if [[ "$running" != "$want" ]]; then
     log "identity FAILED - container reports '${running:-<unlabelled>}', expected '${want}'"
     return 1
   fi
@@ -137,7 +139,7 @@ gate_identity() {
 roll_back_to() {
   local previous="$1"
 
-  if [ -z "$previous" ]; then
+  if [[ -z "$previous" ]]; then
     log "NO previous release recorded - nothing to roll back to, nothing attempted"
     log "  the backend is left running the failed release; recover by hand:"
     log "    docker images $IMAGE"
@@ -185,13 +187,13 @@ settle_schema() {
 
   pg_user="$(sed -n 's/^POSTGRES_USER=//p' "$ENV_FILE" | head -1)"
   pg_db="$(sed -n 's/^POSTGRES_DB=//p' "$ENV_FILE" | head -1)"
-  [ -n "$pg_user" ] || die "POSTGRES_USER is missing from $ENV_FILE"
-  [ -n "$pg_db" ] || die "POSTGRES_DB is missing from $ENV_FILE"
+  [[ -n "$pg_user" ]] || die "POSTGRES_USER is missing from $ENV_FILE"
+  [[ -n "$pg_db" ]] || die "POSTGRES_DB is missing from $ENV_FILE"
 
   pending="$(bash "$REPO_DIR/.github/scripts/pending-migrations.sh" \
     "$COMPOSE_DIR" "$ENV_FILE" "$pg_user" "$pg_db")"
 
-  if [ -n "$pending" ]; then
+  if [[ -n "$pending" ]]; then
     log "pending migrations on this database:"
     printf '%s\n' "$pending" | sed 's/^/    /'
 
@@ -208,7 +210,7 @@ settle_schema() {
       rm -f "$dump"
       die "pg_dump FAILED - refusing to migrate. Nothing has been changed."
     fi
-    if [ ! -s "$dump" ]; then
+    if [[ ! -s "$dump" ]]; then
       rm -f "$dump"
       die "pg_dump produced an empty file - refusing to migrate."
     fi
@@ -228,10 +230,10 @@ settle_schema() {
   # its exit code alone cannot say the schema arrived. Ask the ledger again.
   still="$(bash "$REPO_DIR/.github/scripts/pending-migrations.sh" \
     "$COMPOSE_DIR" "$ENV_FILE" "$pg_user" "$pg_db")"
-  if [ -n "$still" ]; then
+  if [[ -n "$still" ]]; then
     printf 'ERROR: migrate exited 0 but these are still unapplied:\n' >&2
     printf '%s\n' "$still" | sed 's/^/    /' >&2
-    [ -n "${dump:-}" ] && printf '  the dump is at %s\n' "$dump" >&2
+    [[ -n "${dump:-}" ]] && printf '  the dump is at %s\n' "$dump" >&2
     exit 1
   fi
   log "schema verified and up to date"
@@ -240,10 +242,11 @@ settle_schema() {
 # ------------------------------------------------------------------- main --
 main() {
   require_sha "$@"
-  RELEASE_SHA="$1"
+  local requested="$1"
+  RELEASE_SHA="$requested"
 
-  [ -r "$ENV_FILE" ] || die "Cannot read $ENV_FILE - is the runtime env installed?"
-  [ -d "$COMPOSE_DIR" ] || die "$COMPOSE_DIR does not exist"
+  [[ -r "$ENV_FILE" ]] || die "Cannot read $ENV_FILE - is the runtime env installed?"
+  [[ -d "$COMPOSE_DIR" ]] || die "$COMPOSE_DIR does not exist"
 
   # ★ CHECKED HERE, BEFORE ANYTHING IS BUILT, because the health gate silences
   # its own probe. `curl … >/dev/null 2>&1` cannot tell "the service is not
@@ -266,14 +269,22 @@ main() {
   # the container does not need replacing — but the DATABASE can have moved
   # underneath it since, most obviously by being restored from a dump. The
   # schema is settled either way; only the expensive half is skipped.
-  if [ "$previous" = "$RELEASE_SHA" ]; then
+  # ★ SET BEFORE THE EARLY RETURN, NOT AFTER IT. `settle_schema` runs on both
+  # paths, and it runs containers through compose — where the service resolves
+  # to `hoanglong-bo-backend:${APP_VERSION:-local}`. Leaving it unset here did
+  # not fail loudly, which is why it survived a review: compose found no `:local`
+  # image, saw a `build:` section, and quietly built one. The no-op path then
+  # migrated from an image that was not the release, having spent a build doing
+  # it. Exported once, above every branch that can reach compose.
+  export APP_VERSION="$RELEASE_SHA"
+
+  if [[ "$previous" == "$RELEASE_SHA" ]]; then
     log "already running this release - skipping build and restart"
     settle_schema
     log "release ${RELEASE_SHA} confirmed"
     return 0
   fi
 
-  export APP_VERSION="$RELEASE_SHA"
   log "building ${IMAGE}:${RELEASE_SHA}"
   compose build "$SERVICE"
 
@@ -310,21 +321,22 @@ self_test() {
   local failures=0
 
   accepts() {
-    if valid_sha "$1"; then
-      printf '  ok    accepts  %-58s\n' "${1:0:58}"
+    local candidate="$1"
+    if valid_sha "$candidate"; then
+      printf '  ok    accepts  %-58s\n' "${candidate:0:58}"
     else
-      printf '  FAIL  rejected a VALID sha: %s\n' "$1"
+      printf '  FAIL  rejected a VALID sha: %s\n' "$candidate"
       failures=$((failures + 1))
     fi
   }
 
   rejects() {
-    local label="$2"
-    if valid_sha "$1"; then
-      printf '  FAIL  ACCEPTED %-24s %s\n' "$label" "${1:0:40}"
+    local candidate="$1" label="$2"
+    if valid_sha "$candidate"; then
+      printf '  FAIL  ACCEPTED %-24s %s\n' "$label" "${candidate:0:40}"
       failures=$((failures + 1))
     else
-      printf '  ok    rejects  %-24s %s\n' "$label" "${1:0:44}"
+      printf '  ok    rejects  %-24s %s\n' "$label" "${candidate:0:44}"
     fi
   }
 
@@ -367,7 +379,7 @@ self_test() {
   rejects "main"                       'a branch name'
 
   echo
-  if [ "$failures" -eq 0 ]; then
+  if [[ "$failures" -eq 0 ]]; then
     echo "vps-release.sh: all checks passed"
   else
     echo "vps-release.sh: ${failures} check(s) FAILED" >&2

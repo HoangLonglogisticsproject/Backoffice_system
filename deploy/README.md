@@ -255,10 +255,17 @@ Each one fails differently. Do not combine them.
 #    has its old privileges to fall back on.
 
 # 2. take the repository away from the deploy user
-chown -R root:root /opt/hoanglong-bo
+#
+#    ★ postgres-data is EXCLUDED, not chowned and put back. It belongs to
+#    uid/gid 70 inside the container, and `chown -R root:root` across a LIVE
+#    data directory is a running database losing access to its own files — for
+#    the second it takes to restore it, which is a second too long. Prune it.
+find /opt/hoanglong-bo -path /opt/hoanglong-bo/deploy/postgres-data -prune \
+  -o -exec chown root:root {} +
 chmod 750 /opt/hoanglong-bo
-chown -R 70:70 /opt/hoanglong-bo/deploy/postgres-data
-chmod 700 /opt/hoanglong-bo/deploy/postgres-data
+
+#    it should not have moved; check rather than assume
+stat -c '%u:%g %a  %n' /opt/hoanglong-bo/deploy/postgres-data   # MUST be 70:70 700
 #    then run another release
 
 # 3. take the Docker daemon away
@@ -282,8 +289,28 @@ sudo -u deploy -i sudo -n /usr/local/bin/bo-release "$(git -C /opt/hoanglong-bo 
 
 ### Rolling back the restriction
 
-Step 3 `gpasswd -a deploy docker`; step 2 `chown -R deploy:deploy
-/opt/hoanglong-bo`; step 1 set `VPS_USER` back to `root` and revert the commit.
+Reverse order, one step at a time, same exclusion:
+
+```bash
+# 3. give the Docker daemon back
+gpasswd -a deploy docker
+
+# 2. give the repository back — postgres-data pruned, for the same reason it was
+#    pruned on the way in: it is uid/gid 70's, not the deploy user's, and a
+#    recursive chown that sweeps it up breaks a database that is running fine.
+find /opt/hoanglong-bo -path /opt/hoanglong-bo/deploy/postgres-data -prune \
+  -o -exec chown deploy:deploy {} +
+chmod 755 /opt/hoanglong-bo
+
+stat -c '%u:%g %a  %n' /opt/hoanglong-bo/deploy/postgres-data   # MUST still be 70:70 700
+
+# 1. set VPS_USER back to root in GitHub, and revert the commit
+```
+
+⚠ **`chown -R deploy:deploy /opt/hoanglong-bo` is not an acceptable shorthand
+for step 2.** It reaches `deploy/postgres-data`, and PostgreSQL refuses to start
+on a data directory it does not own — turning a routine rollback into an
+outage. Both directions prune it, and both verify afterwards.
 
 ### Releasing by hand
 
