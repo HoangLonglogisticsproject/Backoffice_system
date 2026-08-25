@@ -474,6 +474,24 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    # ★ WITHOUT THIS LINE THE JOB CANNOT SEE ANY OF ITS OWN CONFIGURATION.
+    # Every secret and variable this release depends on — the arming flags, the
+    # VPS host, user, port, ssh key and host key, and the three Vercel ids —
+    # lives on the `staging` GitHub Environment, and GitHub hands those to a job
+    # only when the job names the environment. Without it `vars` and `secrets`
+    # resolve to empty strings.
+    #
+    # Which is why the symptom was silence rather than an error: an unset
+    # `RELEASE_BACKEND_ENABLED` is not `'true'`, so the deploy step skipped and
+    # the run went green having done nothing. Everything downstream was working
+    # exactly as designed on inputs that never arrived.
+    #
+    # ⚠ Naming an environment also subjects this job to whatever protection
+    # rules `staging` carries. If required reviewers are configured there, the
+    # release will WAIT for approval rather than run — intended for production,
+    # surprising the first time it happens on staging.
+    environment: staging
+
     # ★ NO `github.ref` IN THE GROUP. One release at a time across the whole
     # repository, and never cancelled mid-flight: interrupting between `migrate`
     # and `up -d` leaves a schema ahead of the container using it.
