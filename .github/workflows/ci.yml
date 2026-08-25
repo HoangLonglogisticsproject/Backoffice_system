@@ -788,9 +788,28 @@ jobs:
             --scope "$VERCEL_ORG_ID" \
             --token="$VERCEL_TOKEN"
 
-          "$vercel" pull --yes --environment=production --token="$VERCEL_TOKEN"
-          "$vercel" build --prod --token="$VERCEL_TOKEN"
-          "$vercel" deploy --prebuilt --prod \
+          # ★ VERCEL BUILDS THIS, NOT THE RUNNER. `vercel build` here produced
+          # static files and no `.vercel/output/functions` at all, exiting 1 on
+          # `@vercel/node` — three attempts, two different errors, never a
+          # function. `--prebuilt` would then have shipped a site whose `/api`
+          # route does not exist, which is every request the frontend makes.
+          # Vercel's own infrastructure has always built that function; this
+          # hands the source over and lets it.
+          #
+          # `pull` goes with it. Its job was to fetch project settings and the
+          # production environment into `.vercel/` for a LOCAL build. A
+          # server-side build reads both from the project itself, so the call
+          # would fetch files nothing goes on to read — and `link` above already
+          # proves the token can reach the project, which was `pull`'s only other
+          # value here.
+          #
+          # ⚠ THIS RUNS FROM THE REPOSITORY ROOT, and the missing
+          # `working-directory` above is what makes that true. The CLI sends
+          # `rootDirectory` to the API and resolves `join(cwd,
+          # project.rootDirectory)` itself, so starting inside `frontend/` would
+          # look for `frontend/frontend` — the same mistake that caused `spawn sh
+          # ENOENT`, moved to the other side of the network.
+          "$vercel" deploy --prod \
             --token="$VERCEL_TOKEN" \
             --meta githubCommitSha="$RELEASE_SHA"
 
