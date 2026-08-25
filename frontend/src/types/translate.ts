@@ -203,7 +203,7 @@ const PHRASES = {
   loginEmailLabel: { vi: 'Email đăng nhập', en: 'Login email' },
 
   // Add employee — SUPERADMIN direct create
-  initialPasswordLabel: { vi: 'Mật khẩu khởi tạo', en: 'Initial password' },
+  initialPasswordLabel: { vi: 'Mật khẩu tạm *', en: 'Temporary password *' },
   initialPasswordHint: {
     vi: 'Người dùng sẽ phải đổi mật khẩu ở lần đăng nhập đầu tiên.',
     en: 'The user must change this at first sign-in.',
@@ -211,9 +211,16 @@ const PHRASES = {
   creating: { vi: 'Đang tạo…', en: 'Creating…' },
   createFailed: { vi: 'Không tạo được tài khoản.', en: 'Could not create the account.' },
   requestAccountTitle: { vi: 'Đề nghị mở tài khoản', en: 'Request an account' },
+  // ★ SAYS WHAT THE REQUEST DOES NOT CARRY, not just what it does.
+  //
+  // `account_invitations` has no role column and approval reads nothing off the
+  // row but the address and the department, so a head cannot express a chức vụ
+  // at this step through any endpoint that exists. Leaving that unsaid invites
+  // somebody to assume the field was merely forgotten and that the role will
+  // arrive with the account.
   requestAccountBody: {
-    vi: 'Trưởng phòng chỉ gửi email. Quản trị viên duyệt và hệ thống sinh mật khẩu.',
-    en: 'A head submits the email only. An administrator approves and the system issues the password.',
+    vi: 'Đề nghị này chỉ mở tài khoản: bạn gửi email, quản trị viên duyệt và hệ thống sinh mật khẩu tạm. Đề nghị KHÔNG mang chức vụ — quản trị viên bổ nhiệm sau khi tài khoản đã tồn tại.',
+    en: 'This request only opens an account: you submit the email, an administrator approves it and the system issues a temporary password. It carries NO role — an administrator appoints one after the account exists.',
   },
   submitRequest: { vi: 'Gửi đề nghị', en: 'Submit request' },
 
@@ -223,6 +230,56 @@ const PHRASES = {
   invalidCompanyEmail: {
     vi: 'Vui lòng nhập email công ty hợp lệ.',
     en: 'Please enter a valid company email.',
+  },
+
+  // Add employee — the department and the role, both from real backend data.
+  //
+  // ⚠ THE ROLE IS NOT A FIELD ON `POST /users`. Only two of the three role keys
+  // are storable at all (MEMBER is the absence of an assignment), and the one
+  // that is stored is written by `POST /departments/:id/head`. So this select
+  // offers exactly what the backend can actually record — see the modal.
+  departmentLabelRequired: { vi: 'Phòng ban *', en: 'Department *' },
+  roleLabel: { vi: 'Chức vụ *', en: 'Role *' },
+  roleMember: { vi: 'Nhân viên', en: 'Member' },
+  roleDepartmentHead: { vi: 'Trưởng phòng', en: 'Department head' },
+  roleHint: {
+    vi: 'Trưởng phòng được bổ nhiệm sau khi tài khoản được tạo.',
+    en: 'A department head is appointed after the account is created.',
+  },
+  roleAssignFailed: {
+    vi: 'Đã tạo tài khoản nhưng chưa bổ nhiệm được trưởng phòng:',
+    en: 'The account was created but the head appointment failed:',
+  },
+  // The action that finishes a partial success. It appoints the account that
+  // already exists; it never creates a second one.
+  retryAppointment: { vi: 'Thử bổ nhiệm lại', en: 'Retry the appointment' },
+  loadDepartmentsFailed: {
+    vi: 'Không tải được danh sách phòng ban.',
+    en: 'Could not load the departments.',
+  },
+  // ★ FOLLOWED BY THE FULL ADDRESS at the call site. The administrator typed a
+  // LOCAL PART; `POST /auth/login` takes the whole address as `subject`. Saying
+  // only "created" leaves them to reconstruct it, and the approval dialog
+  // already carries a note about where that assumption led once.
+  employeeCreated: { vi: 'Đã tạo tài khoản nhân viên:', en: 'Employee account created:' },
+  requestSubmitted: {
+    vi: 'Đã gửi đề nghị mở tài khoản, đang chờ quản trị viên duyệt:',
+    en: 'The account request was submitted and is awaiting a decision:',
+  },
+  dismiss: { vi: 'Bỏ qua', en: 'Dismiss' },
+
+  // The head's own view of the two queues — read only, because a head proposes
+  // and never decides.
+  myDepartmentQueues: {
+    vi: 'Yêu cầu của phòng ban bạn phụ trách. Quản trị viên là người duyệt.',
+    en: 'Your department’s requests. An administrator decides them.',
+  },
+  statusPending: { vi: 'Chờ duyệt', en: 'Pending' },
+  statusApproved: { vi: 'Đã duyệt', en: 'Approved' },
+  statusRejected: { vi: 'Từ chối', en: 'Rejected' },
+  noDepartmentScope: {
+    vi: 'Tài khoản của bạn không phụ trách phòng ban nào.',
+    en: 'Your account does not lead any department.',
   },
 } as const satisfies Record<string, Phrase>;
 

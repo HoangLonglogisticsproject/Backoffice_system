@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
+import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -18,17 +19,28 @@ import { useCursorPages } from '@/hooks/useCursorPages';
 import type { Page, PageRequest } from '@/types/pagination';
 import {
   approveMembershipRequest,
+  fetchDepartmentMembershipRequests,
   fetchPendingMembershipRequests,
   rejectMembershipRequest,
 } from '@/api/membership-request';
 import {
   approveAccountInvitation,
+  fetchDepartmentAccountInvitations,
   fetchPendingAccountInvitations,
   rejectAccountInvitation,
   type ApprovedInvitation,
 } from '@/api/account-invitation';
+import { useSession } from '@/contexts/SessionProvider';
+import {
+  AddEmployeeModal,
+  type AddEmployeeOutcome,
+} from '@/pages/organization/components/AddEmployeeModal';
 import { isApiError } from '@/utils/errors';
-import type { AccountInvitationWithUser, MembershipChangeRequestWithUsers } from '@/types/approval';
+import type {
+  AccountInvitationWithUser,
+  DecisionStatus,
+  MembershipChangeRequestWithUsers,
+} from '@/types/approval';
 
 /**
  * The global decision queues.
@@ -47,13 +59,80 @@ import type { AccountInvitationWithUser, MembershipChangeRequestWithUsers } from
  */
 export default function ApprovalsPage() {
   const { t } = useLanguage();
+  const { state, can } = useSession();
   const [tab, setTab] = useState<'requests' | 'invitations'>('requests');
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [notice, setNotice] = useState<{ outcome: AddEmployeeOutcome; email: string } | null>(null);
+  // Bumped after a create or a request so the head's own queue re-reads and the
+  // row appears — without a full reload, which would throw away the session
+  // context and the language choice with it.
+  const [refresh, setRefresh] = useState(0);
+
+  // ★ TWO DIFFERENT QUESTIONS, AND ONLY ONE OF THEM IS A PERMISSION.
+  //
+  // Creating an account outright needs `user.write`, which is GLOBAL-only, so
+  // `can()` answers it exactly. Raising an invitation is guarded RELATIONALLY —
+  // `HeadOfRouteDepartmentGuard` asks "do you lead this unit", and there is no
+  // permission key for that, so `can()` cannot answer it at all. The closest the
+  // session can say is role plus membership, and it is exact in practice: a head
+  // must be an active member of the unit they lead (invariant #6) and may hold
+  // only one active membership, so `departmentIds` IS the unit they head.
+  //
+  // ⚠ STILL ONLY A RENDER HINT (§13). The server re-decides every request and
+  // answers 403 regardless of what was drawn here.
+  const isGlobal = can('user.write');
+  const authorization = state?.status === 'ready' ? state.authorization : null;
+  const headDepartmentId =
+    authorization?.role === 'DEPARTMENT_HEAD' ? authorization.departmentIds[0] : undefined;
+  // A MEMBER matches neither, and so is offered nothing — which is also what
+  // every endpoint behind these buttons would tell them.
+  const canAddSomeone = isGlobal || headDepartmentId !== undefined;
 
   return (
     <div className="space-y-6">
-      <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
-        <h1 className="text-xl font-bold text-gray-900">{t('approvalsTitle')}</h1>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">{t('approvalsTitle')}</h1>
+          {!isGlobal && headDepartmentId && (
+            <p className="mt-1 text-sm text-gray-500">{t('myDepartmentQueues')}</p>
+          )}
+        </div>
+
+        {/* ★ ONE BUTTON, AND ITS WORDING IS THE WORKFLOW. A global administrator
+            creates the account; a head proposes one. Same dialog, because the
+            dialog already knows the difference — see `AddEmployeeModal`. */}
+        {canAddSomeone && (
+          <Button
+            onClick={() => setIsAddOpen(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+          >
+            <Plus className="h-4 w-4" />
+            {isGlobal ? t('addEmployee') : t('requestAccountTitle')}
+          </Button>
+        )}
       </div>
+
+      {/*
+        ★ `<output>`, NOT a div wearing `role="status"`. The element carries that
+        role implicitly and is the HTML for exactly this — the result of an
+        action the user just took. The ARIA attribute was re-declaring in a
+        second place what the tag already says, which is the version that goes
+        stale. Assistive technology sees the same polite live region either way;
+        `flex` overrides the inline default so the layout is unchanged.
+      */}
+      {notice && (
+        <output className="flex w-full items-center justify-between gap-4 rounded-xl border border-green-200 bg-green-50 px-5 py-3 text-sm text-green-800">
+          <span>
+            {notice.outcome === 'created' ? t('employeeCreated') : t('requestSubmitted')}{' '}
+            {/* The address they will sign in with, not the local part that was
+                typed — see `onCreated`. */}
+            <code className="font-mono">{notice.email}</code>
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setNotice(null)}>
+            {t('dismiss')}
+          </Button>
+        </output>
+      )}
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="flex border-b border-gray-100">
@@ -80,9 +159,199 @@ export default function ApprovalsPage() {
           ))}
         </div>
 
-        {tab === 'requests' ? <MembershipRequestQueue /> : <InvitationQueue />}
+        {/*
+          THE SAME TWO TABS FOR EVERYONE, reading whichever endpoint the caller is
+          allowed to read. A head has no access to the two GLOBAL queues — those
+          answer 403, including for requests they raised themselves — but the
+          DEPARTMENT-scoped versions of both are open to them. Pointing a head at
+          the global queue would render "not permitted" on the one screen that is
+          supposed to show them their own pending request.
+        */}
+        {isGlobal || !headDepartmentId ? (
+          <GlobalQueue tab={tab} />
+        ) : (
+          <DepartmentQueue tab={tab} departmentId={headDepartmentId} refresh={refresh} />
+        )}
       </div>
+
+      <AddEmployeeModal
+        isOpen={isAddOpen}
+        onClose={() => setIsAddOpen(false)}
+        onCreated={(outcome, email) => {
+          setNotice({ outcome, email });
+          setRefresh((n) => n + 1);
+        }}
+      />
     </div>
+  );
+}
+
+/** The decision queues. GLOBAL only — a head gets 403 and it is rendered as one. */
+function GlobalQueue({ tab }: Readonly<{ tab: 'requests' | 'invitations' }>) {
+  return tab === 'requests' ? <MembershipRequestQueue /> : <InvitationQueue />;
+}
+
+/**
+ * What a head sees for their own unit: the same two lists, READ ONLY.
+ *
+ * No Approve and no Reject, and not because the buttons are hidden — a head
+ * cannot decide anything, including their own request. Deciding needs a
+ * global-only permission AND the database refuses `decided_by = requested_by`.
+ * Drawing the buttons would offer two actions whose only outcome is a 403.
+ *
+ * These lists are HISTORY, not just what is pending, so the status is a column
+ * rather than an assumption.
+ */
+function DepartmentQueue({
+  tab,
+  departmentId,
+  refresh,
+}: Readonly<{ tab: 'requests' | 'invitations'; departmentId: string; refresh: number }>) {
+  const { t, language } = useLanguage();
+
+  if (tab === 'requests') {
+    return (
+      <ReadOnlyQueue<MembershipChangeRequestWithUsers>
+        // ★ KEYED BY TAB, AND IT IS NOT COSMETIC. Both branches render the same
+        // component type at the same position, so without a key React keeps the
+        // instance and only swaps the props — and `useCursorPages` re-reads on
+        // its DEPS, which did not change. The second tab drew its own headers
+        // over the first tab's rows. Remounting also drops the cursor stack,
+        // which is right: a cursor from one list means nothing to the other.
+        key="requests"
+        read={(page) => fetchDepartmentMembershipRequests(departmentId, page)}
+        refresh={refresh}
+        headers={[t('colTarget'), t('colAction'), t('colRequestedAt'), t('colStatus')]}
+        emptyKey="emptyRequests"
+        renderCells={(row) => (
+          <>
+            <TableCell className="font-medium text-gray-900">{row.targetUser.displayName}</TableCell>
+            <TableCell className="text-gray-600">{row.action}</TableCell>
+            <TableCell className="text-gray-600">
+              {formatDateTime(row.requestedAt, language)}
+            </TableCell>
+            <TableCell>
+              <DecisionStatusBadge status={row.status} />
+            </TableCell>
+          </>
+        )}
+      />
+    );
+  }
+
+  return (
+    <ReadOnlyQueue<AccountInvitationWithUser>
+      key="invitations"
+      read={(page) => fetchDepartmentAccountInvitations(departmentId, page)}
+      refresh={refresh}
+      headers={[t('colEmail'), t('colRequestedBy'), t('colRequestedAt'), t('colStatus')]}
+      emptyKey="emptyInvitations"
+      renderCells={(row) => (
+        <>
+          <TableCell className="font-medium text-gray-900">{row.email}</TableCell>
+          <TableCell className="text-gray-600">{row.requestedByUser.displayName}</TableCell>
+          <TableCell className="text-gray-600">
+            {formatDateTime(row.requestedAt, language)}
+          </TableCell>
+          <TableCell>
+            <DecisionStatusBadge status={row.status} />
+          </TableCell>
+        </>
+      )}
+    />
+  );
+}
+
+/** The three decision states, said in words rather than left as a raw enum. */
+function DecisionStatusBadge({ status }: Readonly<{ status: DecisionStatus }>) {
+  const { t } = useLanguage();
+  const styles: Record<DecisionStatus, string> = {
+    pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+    approved: 'bg-green-50 text-green-700 ring-green-600/20',
+    rejected: 'bg-gray-50 text-gray-600 ring-gray-500/10',
+  };
+  const labels: Record<DecisionStatus, string> = {
+    pending: t('statusPending'),
+    approved: t('statusApproved'),
+    rejected: t('statusRejected'),
+  };
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset ${styles[status]}`}
+    >
+      {labels[status]}
+    </span>
+  );
+}
+
+/**
+ * A paged list with no decisions on it.
+ *
+ * Shares the four states and the cursor controls with `DecisionQueue` and
+ * deliberately nothing else — the confirmation step, the two buttons and the
+ * refresh-after-decision all exist only because a decision can be made, and a
+ * `readOnly` flag threaded through that component would have to disable every
+ * one of them at a different point.
+ */
+function ReadOnlyQueue<T extends { id: string }>({
+  read,
+  refresh,
+  headers,
+  renderCells,
+  emptyKey,
+}: Readonly<{
+  read: (page: PageRequest) => Promise<Page<T>>;
+  refresh: number;
+  headers: string[];
+  renderCells: (row: T) => ReactNode;
+  emptyKey: 'emptyRequests' | 'emptyInvitations';
+}>) {
+  const page = useCursorPages<T>(read, [refresh]);
+
+  return (
+    <>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader className="bg-gray-50/50">
+            <TableRow>
+              {headers.map((heading) => (
+                <TableHead key={heading} className="font-semibold text-gray-600">
+                  {heading}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {page.items.map((row) => (
+              <TableRow key={row.id} className="hover:bg-blue-50/30">
+                {renderCells(row)}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+
+        <QueueStates
+          loading={page.loading}
+          forbidden={page.forbidden}
+          error={Boolean(page.error) && !page.forbidden}
+          empty={page.items.length === 0}
+          emptyKey={emptyKey}
+        />
+      </div>
+
+      <CursorPagination
+        shown={page.items.length}
+        hasMore={page.hasMore}
+        canGoBack={page.canGoBack}
+        onNext={page.next}
+        onPrevious={page.previous}
+        pageSize={page.pageSize}
+        onPageSizeChange={page.setPageSize}
+        isLoading={page.loading}
+        className="border-t border-gray-100 bg-gray-50/30"
+      />
+    </>
   );
 }
 
