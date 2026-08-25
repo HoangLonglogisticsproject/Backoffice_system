@@ -250,6 +250,9 @@ const PHRASES = {
     vi: 'Đã tạo tài khoản nhưng chưa bổ nhiệm được trưởng phòng:',
     en: 'The account was created but the head appointment failed:',
   },
+  // The action that finishes a partial success. It appoints the account that
+  // already exists; it never creates a second one.
+  retryAppointment: { vi: 'Thử bổ nhiệm lại', en: 'Retry the appointment' },
   loadDepartmentsFailed: {
     vi: 'Không tải được danh sách phòng ban.',
     en: 'Could not load the departments.',

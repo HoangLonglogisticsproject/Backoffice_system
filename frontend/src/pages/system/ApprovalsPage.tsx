@@ -112,11 +112,16 @@ export default function ApprovalsPage() {
         )}
       </div>
 
+      {/*
+        ★ `<output>`, NOT a div wearing `role="status"`. The element carries that
+        role implicitly and is the HTML for exactly this — the result of an
+        action the user just took. The ARIA attribute was re-declaring in a
+        second place what the tag already says, which is the version that goes
+        stale. Assistive technology sees the same polite live region either way;
+        `flex` overrides the inline default so the layout is unchanged.
+      */}
       {notice && (
-        <div
-          role="status"
-          className="flex items-center justify-between gap-4 rounded-xl border border-green-200 bg-green-50 px-5 py-3 text-sm text-green-800"
-        >
+        <output className="flex w-full items-center justify-between gap-4 rounded-xl border border-green-200 bg-green-50 px-5 py-3 text-sm text-green-800">
           <span>
             {notice.outcome === 'created' ? t('employeeCreated') : t('requestSubmitted')}{' '}
             {/* The address they will sign in with, not the local part that was
@@ -126,7 +131,7 @@ export default function ApprovalsPage() {
           <Button variant="ghost" size="sm" onClick={() => setNotice(null)}>
             {t('dismiss')}
           </Button>
-        </div>
+        </output>
       )}
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">

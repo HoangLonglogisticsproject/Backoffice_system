@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AddEmployeeModal } from './AddEmployeeModal';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 
@@ -177,41 +177,6 @@ describe('AddEmployeeModal', () => {
 
       await waitFor(() => expect(createUser).toHaveBeenCalled());
       expect(assignDepartmentHead).not.toHaveBeenCalled();
-    });
-
-    it('says the account EXISTS when only the appointment failed', async () => {
-      const { ApiError } = await import('@/utils/errors');
-      assignDepartmentHead.mockRejectedValue(
-        new ApiError(409, 'CONFLICT', 'That department already has a head.'),
-      );
-      const onCreated = vi.fn();
-      render(
-        <LanguageProvider>
-          <AddEmployeeModal
-            isOpen
-            departmentId={DEPARTMENT}
-            onClose={vi.fn()}
-            onCreated={onCreated}
-          />
-        </LanguageProvider>,
-      );
-
-      fireEvent.change(screen.getByLabelText('Họ và tên *'), { target: { value: 'New Head' } });
-      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'uyen' } });
-      fireEvent.change(screen.getByLabelText('Mật khẩu tạm *'), {
-        target: { value: 'a temporary handover' },
-      });
-      fireEvent.change(screen.getByLabelText('Chức vụ *'), {
-        target: { value: 'DEPARTMENT_HEAD' },
-      });
-      fireEvent.click(screen.getByRole('button', { name: /lưu|save/i }));
-
-      // Two calls, two outcomes, and the message must not merge them: reporting
-      // "could not create the account" would send somebody to create it again.
-      const alert = await screen.findByRole('alert');
-      expect(alert).toHaveTextContent('Đã tạo tài khoản nhưng chưa bổ nhiệm được trưởng phòng');
-      expect(alert).toHaveTextContent('That department already has a head.');
-      expect(onCreated).not.toHaveBeenCalled();
     });
 
     it('hides the temporary password behind a toggle, and reveals it on request', () => {
@@ -413,6 +378,182 @@ describe('AddEmployeeModal', () => {
   });
 
   /**
+   * ★ PARTIAL SUCCESS, AND THE ONLY STATE IN THIS DIALOG THAT CANNOT BE RETRIED
+   * FROM THE TOP.
+   *
+   * `POST /users` and `POST /departments/:id/head` are two calls; the backend
+   * has no route that does both, which is a confirmed contract rather than an
+   * oversight. When the first succeeds and the second fails, the account is
+   * REAL — and the form still holds the address that now owns it.
+   *
+   * The bug this suite pins: pressing the button again used to send a second
+   * `POST /users`, which can only ever answer 409, leaving the appointment
+   * unreachable from this screen. The created id is kept instead, and every
+   * route back into the dialog appoints rather than creates.
+   */
+  describe('an appointment that failed after the account was created', () => {
+    const CONFLICT = () =>
+      import('@/utils/errors').then(
+        ({ ApiError }) => new ApiError(409, 'CONFLICT', 'That department already has a head.'),
+      );
+
+    const onClose = vi.fn();
+    const onCreated = vi.fn();
+
+    const fillAndCreateAHead = async () => {
+      can.mockReturnValue(true);
+      render(
+        <LanguageProvider>
+          <AddEmployeeModal
+            isOpen
+            departmentId={DEPARTMENT}
+            onClose={onClose}
+            onCreated={onCreated}
+          />
+        </LanguageProvider>,
+      );
+
+      fireEvent.change(screen.getByLabelText('Họ và tên *'), { target: { value: 'New Head' } });
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'uyen' } });
+      fireEvent.change(screen.getByLabelText('Mật khẩu tạm *'), {
+        target: { value: 'a temporary handover' },
+      });
+      fireEvent.change(screen.getByLabelText('Chức vụ *'), {
+        target: { value: 'DEPARTMENT_HEAD' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /lưu nhân viên/i }));
+    };
+
+    const retryButton = () => screen.getByRole('button', { name: 'Thử bổ nhiệm lại' });
+
+    beforeEach(() => {
+      onClose.mockReset();
+      onCreated.mockReset();
+    });
+
+    it('creates then appoints, in that order, when both succeed', async () => {
+      await fillAndCreateAHead();
+
+      await waitFor(() => expect(createUser).toHaveBeenCalledTimes(1));
+      // Invariant #6: the appointment needs an ACTIVE MEMBERSHIP, which exists
+      // only once provisioning has committed.
+      expect(assignDepartmentHead).toHaveBeenCalledWith(DEPARTMENT, 'created-user-id');
+      await waitFor(() =>
+        expect(onCreated).toHaveBeenCalledWith('created', 'uyen@hoanglonglti.com'),
+      );
+      expect(onClose).toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Thử bổ nhiệm lại' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the account, the error and a retry action when the appointment fails', async () => {
+      assignDepartmentHead.mockRejectedValue(await CONFLICT());
+      await fillAndCreateAHead();
+
+      // Two calls, two outcomes, and the message must not merge them: reporting
+      // "could not create the account" would send somebody to create it again.
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Đã tạo tài khoản nhưng chưa bổ nhiệm được trưởng phòng');
+      expect(alert).toHaveTextContent('That department already has a head.');
+
+      expect(retryButton()).toBeInTheDocument();
+      // Nothing was reset and nothing was closed — the account exists, so the
+      // message has to stay on screen long enough to be read.
+      expect(onCreated).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('locks the form, because nothing in it can change the retry', async () => {
+      assignDepartmentHead.mockRejectedValue(await CONFLICT());
+      await fillAndCreateAHead();
+      await screen.findByRole('alert');
+
+      // The retry appoints the id that was captured; a department changed here
+      // afterwards would be silently ignored.
+      expect(screen.getByLabelText('Email *')).toBeDisabled();
+      expect(screen.getByLabelText('Chức vụ *')).toBeDisabled();
+      expect(screen.getByLabelText('Mật khẩu tạm *')).toBeDisabled();
+      // And "Cancel" is no longer true — there is nothing left to cancel, only
+      // something left to finish. Scoped to the footer: the dialog's own X
+      // carries the same accessible name.
+      const footer = retryButton().parentElement as HTMLElement;
+      expect(within(footer).getByRole('button', { name: 'Đóng' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Hủy bỏ' })).not.toBeInTheDocument();
+    });
+
+    it('★ RETRY APPOINTS AND NEVER CREATES A SECOND ACCOUNT', async () => {
+      assignDepartmentHead.mockRejectedValueOnce(await CONFLICT()).mockResolvedValue({});
+      await fillAndCreateAHead();
+      await screen.findByRole('alert');
+      expect(createUser).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(retryButton());
+
+      await waitFor(() => expect(assignDepartmentHead).toHaveBeenCalledTimes(2));
+      // THE ASSERTION THIS WHOLE SUITE EXISTS FOR.
+      expect(createUser).toHaveBeenCalledTimes(1);
+      expect(assignDepartmentHead).toHaveBeenLastCalledWith(DEPARTMENT, 'created-user-id');
+    });
+
+    it('finishes the normal success flow once the retry succeeds', async () => {
+      assignDepartmentHead.mockRejectedValueOnce(await CONFLICT()).mockResolvedValue({});
+      await fillAndCreateAHead();
+      await screen.findByRole('alert');
+
+      fireEvent.click(retryButton());
+
+      await waitFor(() =>
+        expect(onCreated).toHaveBeenCalledWith('created', 'uyen@hoanglonglti.com'),
+      );
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('holds the same account when the retry fails again', async () => {
+      assignDepartmentHead.mockRejectedValue(await CONFLICT());
+      await fillAndCreateAHead();
+      await screen.findByRole('alert');
+
+      fireEvent.click(retryButton());
+      await waitFor(() => expect(assignDepartmentHead).toHaveBeenCalledTimes(2));
+
+      // Same id, still no second create, still retryable.
+      expect(assignDepartmentHead).toHaveBeenLastCalledWith(DEPARTMENT, 'created-user-id');
+      expect(createUser).toHaveBeenCalledTimes(1);
+      expect(retryButton()).toBeInTheDocument();
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Đã tạo tài khoản nhưng chưa bổ nhiệm được trưởng phòng',
+      );
+      expect(onCreated).not.toHaveBeenCalled();
+    });
+
+    it('routes the ENTER key to the retry too, not to a second create', async () => {
+      assignDepartmentHead.mockRejectedValueOnce(await CONFLICT()).mockResolvedValue({});
+      await fillAndCreateAHead();
+      await screen.findByRole('alert');
+
+      // `disabled` never sees an Enter keypress in a text field, so the guard
+      // cannot live on the button alone.
+      fireEvent.submit(document.getElementById('add-employee-form') as HTMLFormElement);
+
+      await waitFor(() => expect(assignDepartmentHead).toHaveBeenCalledTimes(2));
+      expect(createUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('puts neither the account id nor the password anywhere the browser keeps things', async () => {
+      assignDepartmentHead.mockRejectedValue(await CONFLICT());
+      await fillAndCreateAHead();
+      await screen.findByRole('alert');
+
+      for (const secret of ['created-user-id', 'a temporary handover']) {
+        expect(window.location.href).not.toContain(secret);
+        expect(localStorage.getItem('createdUserId')).toBeNull();
+        expect(JSON.stringify(Object.keys(sessionStorage))).not.toContain(secret);
+      }
+      // The password is still in its own field and nowhere else on the page.
+      expect(screen.getByLabelText('Mật khẩu tạm *')).toHaveAttribute('type', 'password');
+    });
+  });
+
+  /**
    * THE DEPARTMENT COMES FROM THE ROUTE WHEN THERE IS ONE, and is asked for
    * when there is not.
    *
@@ -436,7 +577,9 @@ describe('AddEmployeeModal', () => {
       renderModalWithoutDepartment();
 
       const picker = await screen.findByLabelText('Phòng ban *');
-      await waitFor(() => expect(screen.getByRole('option', { name: 'Sales' })).toBeInTheDocument());
+      // `findByRole` IS the wait — `waitFor` wrapped around a `getBy` retries a
+      // throwing query to prove presence, which is the one thing `findBy` is for.
+      await screen.findByRole('option', { name: 'Sales' });
       expect(screen.getByRole('option', { name: 'Operations' })).toBeInTheDocument();
       expect(picker).toBeRequired();
     });

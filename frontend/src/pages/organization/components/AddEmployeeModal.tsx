@@ -16,6 +16,32 @@ import type { Department } from '@/types/organization';
 
 export type AddEmployeeOutcome = 'created' | 'requested';
 
+/**
+ * An account that EXISTS but has not been appointed head yet.
+ *
+ * ⚠ THIS IS THE PARTIAL SUCCESS, HELD RATHER THAN LOST. `POST /users` and
+ * `POST /departments/:id/head` are two calls and the backend has no route that
+ * does both — a confirmed contract, not an oversight. So when the first
+ * succeeds and the second fails, the account is real and its id is the only
+ * thing that can finish the job.
+ *
+ * Dropping it was the actual bug: the form still held an address that now has
+ * an account, so the obvious retry — press the button again — sent a second
+ * `POST /users` that could only ever answer 409, and the appointment became
+ * unreachable from this screen entirely.
+ *
+ * ⚠ NO PASSWORD HERE, and nothing in this object is ever written to a URL, to
+ * `localStorage` or to `sessionStorage`. It lives for as long as the dialog is
+ * open and no longer.
+ */
+interface PendingAppointment {
+  /** From `POST /users`. What makes a retry an appointment and not a create. */
+  userId: string;
+  departmentId: string;
+  /** Carried so the success path can still name the address to sign in with. */
+  email: string;
+}
+
 interface AddEmployeeModalProps {
   isOpen: boolean;
   /**
@@ -101,6 +127,9 @@ export function AddEmployeeModal({
   const [role, setRole] = useState<'MEMBER' | 'DEPARTMENT_HEAD'>('MEMBER');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Null until `POST /users` has succeeded and the appointment after it has
+  // not. While it is set, every submit is a retry — see `submit`.
+  const [pending, setPending] = useState<PendingAppointment | null>(null);
 
   const reset = () => {
     setDisplayName('');
@@ -110,11 +139,115 @@ export function AddEmployeeModal({
     setChosenDepartment('');
     setRole('MEMBER');
     setError(null);
+    setPending(null);
   };
 
   const close = () => {
     reset();
     onClose();
+  };
+
+  /**
+   * The server's words, or ours when it never answered.
+   *
+   * The server knows about domain allowlists, duplicate addresses and password
+   * policy, and this form does not.
+   */
+  const messageOf = (failure: unknown) =>
+    isApiError(failure) ? failure.message : t('createFailed');
+
+  /** The success path, in the one place all three routes to it converge. */
+  const finish = (outcome: AddEmployeeOutcome, email: string) => {
+    reset();
+    onCreated(outcome, email);
+    onClose();
+  };
+
+  /**
+   * The two values a submit needs, or the reason it cannot have them.
+   *
+   * Both checks are what this form CAN answer without asking. The server checks
+   * the address again regardless, and the department id ends up in a URL path,
+   * so neither is left to the browser having been the one to look.
+   */
+  const resolveTarget = (): { email: string; department: string } | { error: string } => {
+    const email = toCompanyEmail(localPart);
+    if (email === null) return { error: t('invalidCompanyEmail') };
+
+    const department = departmentId ?? chosenDepartment;
+    if (!department) return { error: t('selectDepartment') };
+
+    return { email, department };
+  };
+
+  /**
+   * ★ THE ONLY PLACE `assignDepartmentHead` IS CALLED — first attempt and every
+   * retry alike, so the two can never drift into doing different things.
+   *
+   * ponytail: no rollback. Deleting a just-created account to undo a failed
+   * appointment is worse than telling the truth about both.
+   */
+  const appoint = async (target: PendingAppointment) => {
+    setBusy(true);
+    setError(null);
+
+    try {
+      await assignDepartmentHead(target.departmentId, target.userId);
+      setPending(null);
+      finish('created', target.email);
+    } catch (failure) {
+      // ⚠ THE ACCOUNT EXISTS. Holding the id is the whole fix: it is what makes
+      // the next attempt an appointment rather than a duplicate create.
+      setPending(target);
+      setError(`${t('roleAssignFailed')} ${messageOf(failure)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** First attempt: create or propose, then appoint if a head was asked for. */
+  const createEmployee = async () => {
+    const target = resolveTarget();
+    if ('error' in target) {
+      setError(target.error);
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      if (!isGlobal) {
+        await requestAccountInvitation(target.department, target.email);
+        finish('requested', target.email);
+        return;
+      }
+
+      const created = await createUser({
+        displayName,
+        email: target.email,
+        initialPassword,
+        departmentId: target.department,
+      });
+
+      if (role === 'DEPARTMENT_HEAD') {
+        // Invariant #6: the appointment needs an ACTIVE MEMBERSHIP, which only
+        // exists once provisioning has committed. The order is not a preference.
+        await appoint({
+          userId: created.id,
+          departmentId: target.department,
+          email: target.email,
+        });
+        return;
+      }
+
+      finish('created', target.email);
+    } catch (failure) {
+      // ★ NOTHING IS RESET AND NOTHING IS CLOSED. A 409 on the address must not
+      // cost somebody the rest of the form.
+      setError(messageOf(failure));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -124,81 +257,28 @@ export function AddEmployeeModal({
     // twice is not an idempotent mistake — the second call answers 409 having
     // already charged somebody a duplicate address.
     if (busy) return;
-    setError(null);
 
-    // Before anything is sent, because the address this form builds is the one
-    // thing it CAN check without asking. The server checks it again regardless.
-    const email = toCompanyEmail(localPart);
-    if (email === null) {
-      setError(t('invalidCompanyEmail'));
+    // ★ A PENDING APPOINTMENT MAKES EVERY SUBMIT A RETRY, including the Enter
+    // key. Routing here rather than only from the retry button is what
+    // guarantees `createUser` cannot be reached a second time.
+    if (pending) {
+      await appoint(pending);
       return;
     }
 
-    const department = departmentId ?? chosenDepartment;
-    if (!department) {
-      setError(t('selectDepartment'));
-      return;
-    }
-
-    setBusy(true);
-
-    try {
-      if (isGlobal) {
-        const created = await createUser({
-          displayName,
-          email,
-          initialPassword,
-          departmentId: department,
-        });
-
-        // ★ A SECOND CALL, AND IT IS NOT IN THE SAME TRANSACTION. The backend
-        // has no route that creates an account and appoints a head at once, and
-        // inventing one is a backend change. So the failure is reported for what
-        // it is: the account EXISTS, the appointment did not happen, and the
-        // administrator can retry it from the department screen. Swallowing it
-        // would leave somebody believing they had made a head.
-        //
-        // ponytail: no rollback — deleting a just-created account to undo a
-        // failed appointment is worse than telling the truth about both.
-        if (role === 'DEPARTMENT_HEAD') {
-          try {
-            await assignDepartmentHead(department, created.id);
-          } catch (assignError) {
-            const detail = isApiError(assignError) ? assignError.message : t('createFailed');
-            setError(`${t('roleAssignFailed')} ${detail}`);
-            // `finally` still clears `busy`. The form is deliberately NOT reset
-            // and NOT closed: the account exists, so the message has to stay on
-            // screen long enough to be read.
-            return;
-          }
-        }
-      } else {
-        await requestAccountInvitation(department, email);
-      }
-      // ★ ONLY HERE. Nothing is reset and nothing is closed on a failure — the
-      // form keeps what was typed so a 409 on the address does not cost
-      // somebody the whole form.
-      reset();
-      onCreated(isGlobal ? 'created' : 'requested', email);
-      onClose();
-    } catch (error_) {
-      // The server's message is the honest one — it knows about domain
-      // allowlists, duplicate addresses and password policy, and this form
-      // does not.
-      setError(isApiError(error_) ? error_.message : t('createFailed'));
-    } finally {
-      setBusy(false);
-    }
+    await createEmployee();
   };
 
   const formId = 'add-employee-form';
 
-  // Three states, read top to bottom instead of nested inside one expression.
-  // Same values and same precedence: `busy` still wins over the workflow, and
-  // the workflow still decides between creating and requesting.
+  // Read top to bottom instead of nested inside one expression. Precedence is
+  // unchanged: `busy` still wins over everything, and a held appointment wins
+  // over the workflow, because it is the only action left that can succeed.
   let submitLabel: string;
   if (busy) {
     submitLabel = t('creating');
+  } else if (pending) {
+    submitLabel = t('retryAppointment');
   } else if (isGlobal) {
     submitLabel = t('saveEmployee');
   } else {
@@ -212,8 +292,10 @@ export function AddEmployeeModal({
       title={isGlobal ? t('addNewEmployee') : t('requestAccountTitle')}
       footer={
         <>
+          {/* "Cancel" would be a lie once the account exists — there is
+              nothing left to cancel, only something left to finish. */}
           <Button variant="outline" type="button" onClick={close} disabled={busy}>
-            {t('cancel')}
+            {pending ? t('closeLabel') : t('cancel')}
           </Button>
           <Button
             type="submit"
@@ -227,6 +309,13 @@ export function AddEmployeeModal({
       }
     >
       <form id={formId} onSubmit={submit} className="space-y-4">
+        {/*
+          ★ LOCKED ONCE THE ACCOUNT EXISTS. The retry appoints the id that was
+          captured, so a department changed here afterwards would be silently
+          ignored — a control that looks like it still decides something, and
+          does not, is worse than one that says it is finished.
+        */}
+        <fieldset disabled={pending !== null} className="space-y-4 m-0 min-w-0 border-0 p-0">
         {!isGlobal && <p className="text-sm text-gray-500">{t('requestAccountBody')}</p>}
 
         {isGlobal && (
@@ -346,6 +435,10 @@ export function AddEmployeeModal({
           </div>
         )}
 
+        </fieldset>
+
+        {/* Outside the fieldset: it is the one thing that must stay readable
+            while everything else is locked. */}
         {error && (
           <p role="alert" className="text-sm text-red-600">
             {error}
