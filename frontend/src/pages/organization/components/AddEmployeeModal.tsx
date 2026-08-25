@@ -195,11 +195,11 @@ export function AddEmployeeModal({
       await assignDepartmentHead(target.departmentId, target.userId);
       setPending(null);
       finish('created', target.email);
-    } catch (failure) {
+    } catch (error_) {
       // ⚠ THE ACCOUNT EXISTS. Holding the id is the whole fix: it is what makes
       // the next attempt an appointment rather than a duplicate create.
       setPending(target);
-      setError(`${t('roleAssignFailed')} ${messageOf(failure)}`);
+      setError(`${t('roleAssignFailed')} ${messageOf(error_)}`);
     } finally {
       setBusy(false);
     }
@@ -241,10 +241,10 @@ export function AddEmployeeModal({
       }
 
       finish('created', target.email);
-    } catch (failure) {
+    } catch (error_) {
       // ★ NOTHING IS RESET AND NOTHING IS CLOSED. A 409 on the address must not
       // cost somebody the rest of the form.
-      setError(messageOf(failure));
+      setError(messageOf(error_));
     } finally {
       setBusy(false);
     }
