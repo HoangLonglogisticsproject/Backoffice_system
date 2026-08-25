@@ -729,7 +729,23 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        working-directory: frontend
+        # ★ THE ONE FRONTEND STEP IN THIS FILE THAT RUNS FROM THE REPOSITORY
+        # ROOT. Every other one sets `working-directory: frontend`; this one
+        # must not, and the reason is worth writing down because it looks like
+        # an oversight.
+        #
+        # The Vercel project's Root Directory is already `frontend`, so the CLI
+        # appends it to wherever it is started. Starting inside `frontend/` made
+        # that `frontend/frontend`, which does not exist — and the install
+        # command was then spawned with a cwd that is not there. Node reports
+        # that as `spawn sh ENOENT`, naming the shell rather than the missing
+        # directory, which is why it reads like a broken runner and is not.
+        #
+        # Reproduced exactly by pointing `rootDirectory` at a directory that is
+        # not there; fixed by letting the setting apply once, from the root,
+        # exactly as a Git deployment would. `frontend/vercel.json` is still
+        # found from here — verified by breaking it on purpose and watching the
+        # build refuse.
         run: |
           set -euo pipefail
 
