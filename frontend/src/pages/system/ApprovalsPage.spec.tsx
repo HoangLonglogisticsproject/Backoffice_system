@@ -3,6 +3,14 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import ApprovalsPage from './ApprovalsPage';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 
+const useSession = vi.fn();
+const fetchDepartmentMembershipRequests = vi.fn();
+const fetchDepartmentAccountInvitations = vi.fn();
+const createUser = vi.fn();
+const requestAccountInvitation = vi.fn();
+const fetchDepartments = vi.fn();
+const assignDepartmentHead = vi.fn();
+const useMyDepartments = vi.fn();
 const fetchPendingMembershipRequests = vi.fn();
 const approveMembershipRequest = vi.fn();
 const rejectMembershipRequest = vi.fn();
@@ -12,17 +20,66 @@ const rejectAccountInvitation = vi.fn();
 
 vi.mock('@/api/membership-request', () => ({
   fetchPendingMembershipRequests: (...a: unknown[]) => fetchPendingMembershipRequests(...a),
+  fetchDepartmentMembershipRequests: (...a: unknown[]) => fetchDepartmentMembershipRequests(...a),
   approveMembershipRequest: (...a: unknown[]) => approveMembershipRequest(...a),
   rejectMembershipRequest: (...a: unknown[]) => rejectMembershipRequest(...a),
 }));
 vi.mock('@/api/account-invitation', () => ({
   fetchPendingAccountInvitations: (...a: unknown[]) => fetchPendingAccountInvitations(...a),
+  fetchDepartmentAccountInvitations: (...a: unknown[]) => fetchDepartmentAccountInvitations(...a),
   approveAccountInvitation: (...a: unknown[]) => approveAccountInvitation(...a),
   rejectAccountInvitation: (...a: unknown[]) => rejectAccountInvitation(...a),
+  requestAccountInvitation: (...a: unknown[]) => requestAccountInvitation(...a),
+}));
+vi.mock('@/api/users', () => ({
+  createUser: (...a: unknown[]) => createUser(...a),
+}));
+vi.mock('@/api/department', () => ({
+  fetchDepartments: (...a: unknown[]) => fetchDepartments(...a),
+}));
+vi.mock('@/api/department-head', () => ({
+  assignDepartmentHead: (...a: unknown[]) => assignDepartmentHead(...a),
+}));
+vi.mock('@/hooks/useMyDepartments', () => ({
+  useMyDepartments: () => useMyDepartments(),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
-  useSession: () => ({ state: { status: 'ready' }, loading: false }),
+  useSession: () => useSession(),
 }));
+
+const DEPARTMENT = 'd0000000-0000-4000-8000-000000000000';
+
+/**
+ * A session as `GET /authorization/me` actually returns it.
+ *
+ * `can` mirrors the server's own answer — `permissions` is the list the endpoint
+ * sends, and `can()` is a membership test over it. Faking the two independently
+ * would let a spec assert a combination the server cannot produce.
+ */
+const session = (
+  role: 'SUPERADMIN' | 'DEPARTMENT_HEAD' | 'MEMBER',
+  permissions: string[],
+  departmentIds: string[] = [],
+) => ({
+  state: {
+    status: 'ready' as const,
+    authorization: { userId: 'me', username: 'me', role, departmentIds, permissions },
+  },
+  loading: false,
+  can: (permission: string) => permissions.includes(permission),
+});
+
+const SUPERADMIN = () =>
+  session('SUPERADMIN', [
+    'unit.read',
+    'unit.write',
+    'unit.member.read',
+    'unit.member.write',
+    'role.assign',
+    'user.write',
+  ]);
+const HEAD = () => session('DEPARTMENT_HEAD', ['unit.read', 'unit.member.read'], [DEPARTMENT]);
+const MEMBER = () => session('MEMBER', ['unit.read']);
 
 const SECRET = 'Xy7-generated_by_the_server-9Za';
 
@@ -89,6 +146,23 @@ const openInvitations = async () => {
 
 describe('ApprovalsPage', () => {
   beforeEach(() => {
+    useSession.mockReset().mockReturnValue(SUPERADMIN());
+    fetchDepartmentMembershipRequests.mockReset().mockResolvedValue(page([REQUEST]));
+    fetchDepartmentAccountInvitations.mockReset().mockResolvedValue(page([INVITATION]));
+    createUser.mockReset().mockResolvedValue({ id: 'created-user-id' });
+    requestAccountInvitation.mockReset().mockResolvedValue({});
+    fetchDepartments.mockReset().mockResolvedValue([
+      {
+        id: DEPARTMENT,
+        slug: 'sales',
+        name: 'Sales',
+        status: 'active',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    assignDepartmentHead.mockReset().mockResolvedValue({});
+    useMyDepartments.mockReset().mockReturnValue({ departments: [], loading: false });
     fetchPendingMembershipRequests.mockReset().mockResolvedValue(page([REQUEST]));
     fetchPendingAccountInvitations.mockReset().mockResolvedValue(page([INVITATION]));
     approveMembershipRequest.mockReset().mockResolvedValue({});
@@ -379,5 +453,210 @@ describe('ApprovalsPage', () => {
     // the right query here: this is waiting for text to APPEAR after an async
     // read settles, which is exactly what it does.
     expect(await screen.findByText(/không có quyền|not permitted/i)).toBeInTheDocument();
+  });
+
+  /**
+   * ROLE VISIBILITY — and every line of it is a RENDER HINT, not a control.
+   *
+   * The server re-decides on every request and answers 403 regardless of what
+   * was drawn here (§13). What these pin is that nobody is offered an action
+   * whose only possible outcome is a refusal.
+   */
+  describe('who is offered what', () => {
+    it('offers a SUPERADMIN direct create, and both decisions', async () => {
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      expect(screen.getByRole('button', { name: /thêm nhân viên/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^duyệt$/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^từ chối$/i })).toBeInTheDocument();
+    });
+
+    it('keeps the two tabs whoever is looking', async () => {
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      expect(screen.getByRole('button', { name: 'Yêu cầu nhân sự' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Lời mời tài khoản' })).toBeInTheDocument();
+    });
+
+    it('offers a DEPARTMENT_HEAD the request action, never direct create', async () => {
+      useSession.mockReturnValue(HEAD());
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      // ★ `POST /users` needs `user.write`, which is GLOBAL-only. A head who
+      // could create accounts could create one for themselves.
+      expect(screen.queryByRole('button', { name: /thêm nhân viên/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /đề nghị mở tài khoản/i })).toBeInTheDocument();
+    });
+
+    it('offers a DEPARTMENT_HEAD no decision at all — not even on their own request', async () => {
+      useSession.mockReturnValue(HEAD());
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      // Deciding needs a global-only permission AND the database refuses
+      // `decided_by = requested_by`. Two layers, both saying no.
+      expect(screen.queryByRole('button', { name: /^duyệt$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
+    });
+
+    it('offers a MEMBER nothing', async () => {
+      useSession.mockReturnValue(MEMBER());
+      renderPage();
+
+      expect(screen.queryByRole('button', { name: /thêm nhân viên/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /đề nghị mở tài khoản/i })).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: /^duyệt$/i })).not.toBeInTheDocument(),
+      );
+    });
+  });
+
+  /**
+   * ★ A HEAD READS THE DEPARTMENT-SCOPED ENDPOINTS, NOT THE GLOBAL ONES.
+   *
+   * The global queues answer 403 to a head, including for requests they raised
+   * themselves. Pointing them there would render "not permitted" on the one
+   * screen that is supposed to show them their own pending request.
+   */
+  describe('a head watching their own department', () => {
+    beforeEach(() => useSession.mockReturnValue(HEAD()));
+
+    it('reads the department queue and never the global one', async () => {
+      renderPage();
+
+      await waitFor(() =>
+        expect(fetchDepartmentMembershipRequests).toHaveBeenCalledWith(
+          DEPARTMENT,
+          expect.anything(),
+        ),
+      );
+      expect(fetchPendingMembershipRequests).not.toHaveBeenCalled();
+    });
+
+    it('reads the department invitations on the second tab', async () => {
+      renderPage();
+      fireEvent.click(screen.getByRole('button', { name: 'Lời mời tài khoản' }));
+
+      await waitFor(() =>
+        expect(fetchDepartmentAccountInvitations).toHaveBeenCalledWith(
+          DEPARTMENT,
+          expect.anything(),
+        ),
+      );
+      expect(fetchPendingAccountInvitations).not.toHaveBeenCalled();
+    });
+
+    it('shows the decision state, because these lists are history', async () => {
+      fetchDepartmentAccountInvitations.mockResolvedValue(page([INVITATION]));
+      renderPage();
+      fireEvent.click(screen.getByRole('button', { name: 'Lời mời tài khoản' }));
+
+      expect(await screen.findByText('newcomer@hoanglonglti.com')).toBeInTheDocument();
+      expect(screen.getByText('Chờ duyệt')).toBeInTheDocument();
+    });
+
+    it('re-reads after a request is submitted, without a page reload', async () => {
+      useMyDepartments.mockReturnValue({
+        departments: [
+          {
+            id: DEPARTMENT,
+            slug: 'sales',
+            name: 'Sales',
+            status: 'active',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+        loading: false,
+      });
+      renderPage();
+      await waitFor(() => expect(fetchDepartmentMembershipRequests).toHaveBeenCalled());
+      const before = fetchDepartmentMembershipRequests.mock.calls.length;
+
+      fireEvent.click(screen.getByRole('button', { name: /đề nghị mở tài khoản/i }));
+      await screen.findByRole('option', { name: 'Sales' });
+      fireEvent.change(screen.getByLabelText('Phòng ban *'), { target: { value: DEPARTMENT } });
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'nuna' } });
+      fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị/i }));
+
+      await waitFor(() =>
+        expect(requestAccountInvitation).toHaveBeenCalledWith(DEPARTMENT, 'nuna@hoanglonglti.com'),
+      );
+      // The row is now pending on the server; the list has to say so.
+      await waitFor(() =>
+        expect(fetchDepartmentMembershipRequests.mock.calls.length).toBeGreaterThan(before),
+      );
+      expect(screen.getByRole('status')).toHaveTextContent('Đã gửi yêu cầu nhân sự');
+    });
+  });
+
+  /** SUPERADMIN direct create, from the approvals area. */
+  describe('creating an employee outright', () => {
+    it('asks which department, because this screen has none in scope', async () => {
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      fireEvent.click(screen.getByRole('button', { name: /thêm nhân viên/i }));
+
+      expect(await screen.findByLabelText('Phòng ban *')).toBeInTheDocument();
+      expect(screen.getByLabelText('Chức vụ *')).toBeInTheDocument();
+      expect(screen.getByLabelText('Mật khẩu tạm *')).toBeInTheDocument();
+    });
+
+    it('creates the account and says so, without reloading', async () => {
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      fireEvent.click(screen.getByRole('button', { name: /thêm nhân viên/i }));
+      await screen.findByRole('option', { name: 'Sales' });
+
+      fireEvent.change(screen.getByLabelText('Họ và tên *'), { target: { value: 'New Comer' } });
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'uyen' } });
+      fireEvent.change(screen.getByLabelText('Mật khẩu tạm *'), {
+        target: { value: 'a temporary handover' },
+      });
+      fireEvent.change(screen.getByLabelText('Phòng ban *'), { target: { value: DEPARTMENT } });
+      fireEvent.click(screen.getByRole('button', { name: /^lưu nhân viên$/i }));
+
+      await waitFor(() =>
+        expect(createUser).toHaveBeenCalledWith({
+          displayName: 'New Comer',
+          email: 'uyen@hoanglonglti.com',
+          initialPassword: 'a temporary handover',
+          departmentId: DEPARTMENT,
+        }),
+      );
+      expect(await screen.findByRole('status')).toHaveTextContent('Đã tạo tài khoản nhân viên.');
+    });
+
+    it('shows the server’s refusal and keeps the dialog open', async () => {
+      const { ApiError } = await import('@/utils/errors');
+      createUser.mockRejectedValue(
+        new ApiError(409, 'CONFLICT', 'That identity is already registered.'),
+      );
+      renderPage();
+      await screen.findByText('Moved Person');
+
+      fireEvent.click(screen.getByRole('button', { name: /thêm nhân viên/i }));
+      await screen.findByRole('option', { name: 'Sales' });
+
+      fireEvent.change(screen.getByLabelText('Họ và tên *'), { target: { value: 'New Comer' } });
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'uyen' } });
+      fireEvent.change(screen.getByLabelText('Mật khẩu tạm *'), {
+        target: { value: 'a temporary handover' },
+      });
+      fireEvent.change(screen.getByLabelText('Phòng ban *'), { target: { value: DEPARTMENT } });
+      fireEvent.click(screen.getByRole('button', { name: /^lưu nhân viên$/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'That identity is already registered.',
+      );
+      // Still open, still holding what was typed.
+      expect(screen.getByLabelText('Email *')).toHaveValue('uyen');
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
   });
 });

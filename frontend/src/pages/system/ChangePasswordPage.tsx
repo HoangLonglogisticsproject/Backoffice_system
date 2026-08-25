@@ -26,6 +26,7 @@ const MIN_PERMANENT_PASSWORD_LENGTH = 12
 export default function ChangePasswordPage() {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -42,12 +43,30 @@ export default function ChangePasswordPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    // The button is disabled while in flight, but Enter submits the form
+    // directly and never touches it. A second change-password call answers 401
+    // — the first one already revoked the session it authenticated with.
+    if (submitting) return
     setError(null)
 
     // Checked here for a fast answer; the server decides regardless and
     // answers 422 (§13).
     if (newPassword.length < MIN_PERMANENT_PASSWORD_LENGTH) {
       setError(`Mật khẩu mới phải có ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự.`)
+      return
+    }
+
+    // ★ THE CONFIRMATION IS THE ONLY CHECK THE SERVER CANNOT MAKE. It never
+    // sees this field, so a typo becomes a permanent password nobody knows —
+    // and this screen is reached from a temporary credential that is about to
+    // be destroyed, so there is no second chance to notice.
+    //
+    // This used to be impossible to fail: both inputs were bound to
+    // `newPassword` and both carried `id="newPassword"`, so the third box was a
+    // second view of the second one. It agreed with itself no matter what was
+    // typed.
+    if (confirmPassword !== newPassword) {
+      setError('Mật khẩu xác nhận không khớp.')
       return
     }
 
@@ -145,7 +164,7 @@ export default function ChangePasswordPage() {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="newPassword" className="text-[13px] font-bold text-gray-700 ml-1">
+              <label htmlFor="confirmPassword" className="text-[13px] font-bold text-gray-700 ml-1">
                 Nhập lại mật khẩu mới
               </label>
               <div className="relative">
@@ -153,10 +172,10 @@ export default function ChangePasswordPage() {
                   <Lock className="h-[18px] w-[18px]" />
                 </div>
                 <Input
-                  id="newPassword"
+                  id="confirmPassword"
                   type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
                   autoComplete="new-password"
                   minLength={MIN_PERMANENT_PASSWORD_LENGTH}
                   placeholder={`Ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự`}

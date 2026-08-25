@@ -203,7 +203,7 @@ const PHRASES = {
   loginEmailLabel: { vi: 'Email đăng nhập', en: 'Login email' },
 
   // Add employee — SUPERADMIN direct create
-  initialPasswordLabel: { vi: 'Mật khẩu khởi tạo', en: 'Initial password' },
+  initialPasswordLabel: { vi: 'Mật khẩu tạm *', en: 'Temporary password *' },
   initialPasswordHint: {
     vi: 'Người dùng sẽ phải đổi mật khẩu ở lần đăng nhập đầu tiên.',
     en: 'The user must change this at first sign-in.',
@@ -223,6 +223,49 @@ const PHRASES = {
   invalidCompanyEmail: {
     vi: 'Vui lòng nhập email công ty hợp lệ.',
     en: 'Please enter a valid company email.',
+  },
+
+  // Add employee — the department and the role, both from real backend data.
+  //
+  // ⚠ THE ROLE IS NOT A FIELD ON `POST /users`. Only two of the three role keys
+  // are storable at all (MEMBER is the absence of an assignment), and the one
+  // that is stored is written by `POST /departments/:id/head`. So this select
+  // offers exactly what the backend can actually record — see the modal.
+  departmentLabelRequired: { vi: 'Phòng ban *', en: 'Department *' },
+  roleLabel: { vi: 'Chức vụ *', en: 'Role *' },
+  roleMember: { vi: 'Nhân viên', en: 'Member' },
+  roleDepartmentHead: { vi: 'Trưởng phòng', en: 'Department head' },
+  roleHint: {
+    vi: 'Trưởng phòng được bổ nhiệm sau khi tài khoản được tạo.',
+    en: 'A department head is appointed after the account is created.',
+  },
+  roleAssignFailed: {
+    vi: 'Đã tạo tài khoản nhưng chưa bổ nhiệm được trưởng phòng:',
+    en: 'The account was created but the head appointment failed:',
+  },
+  loadDepartmentsFailed: {
+    vi: 'Không tải được danh sách phòng ban.',
+    en: 'Could not load the departments.',
+  },
+  employeeCreated: { vi: 'Đã tạo tài khoản nhân viên.', en: 'The employee account was created.' },
+  requestSubmitted: {
+    vi: 'Đã gửi yêu cầu nhân sự. Quản trị viên sẽ duyệt.',
+    en: 'The request was submitted. An administrator will decide it.',
+  },
+  dismiss: { vi: 'Bỏ qua', en: 'Dismiss' },
+
+  // The head's own view of the two queues — read only, because a head proposes
+  // and never decides.
+  myDepartmentQueues: {
+    vi: 'Yêu cầu của phòng ban bạn phụ trách. Quản trị viên là người duyệt.',
+    en: 'Your department’s requests. An administrator decides them.',
+  },
+  statusPending: { vi: 'Chờ duyệt', en: 'Pending' },
+  statusApproved: { vi: 'Đã duyệt', en: 'Approved' },
+  statusRejected: { vi: 'Từ chối', en: 'Rejected' },
+  noDepartmentScope: {
+    vi: 'Tài khoản của bạn không phụ trách phòng ban nào.',
+    en: 'Your account does not lead any department.',
   },
 } as const satisfies Record<string, Phrase>;
 

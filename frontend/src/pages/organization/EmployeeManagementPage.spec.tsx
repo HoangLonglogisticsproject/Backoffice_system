@@ -120,7 +120,7 @@ describe('EmployeeManagementPage — who can add somebody', () => {
     // No name, no password, no department — those belong to `POST /users`,
     // which a head is refused.
     expect(screen.queryByLabelText('Họ và tên *')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Mật khẩu khởi tạo')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Mật khẩu tạm *')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /lưu nhân viên|save employee/i })).not.toBeInTheDocument();
   });
 
@@ -133,7 +133,7 @@ describe('EmployeeManagementPage — who can add somebody', () => {
 
     expect(screen.getByLabelText('Họ và tên *')).toBeInTheDocument();
     expect(screen.getByLabelText('Email *')).toBeInTheDocument();
-    expect(screen.getByLabelText('Mật khẩu khởi tạo')).toBeInTheDocument();
+    expect(screen.getByLabelText('Mật khẩu tạm *')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /lưu nhân viên|save employee/i })).toBeInTheDocument();
   });
 

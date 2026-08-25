@@ -22,3 +22,18 @@ export async function fetchDepartment(departmentId: string): Promise<Department>
   );
   return data;
 }
+
+/**
+ * Every department in the deployment (contract §5).
+ *
+ * ⚠ GLOBAL ONLY. `unit.read` is checked with NO route scope, so only a global
+ * caller passes — a head or member gets 403 and must use `fetchDepartment` on
+ * the one id `GET /authorization/me` already gave them (see `useMyDepartments`).
+ *
+ * Not paginated: the backend returns a bare array, because a deployment has
+ * tens of departments and never thousands.
+ */
+export async function fetchDepartments(): Promise<Department[]> {
+  const { data } = await httpClient.get<Department[]>('/departments');
+  return data;
+}
