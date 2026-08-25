@@ -589,7 +589,9 @@ describe('ApprovalsPage', () => {
       await waitFor(() =>
         expect(fetchDepartmentMembershipRequests.mock.calls.length).toBeGreaterThan(before),
       );
-      expect(screen.getByRole('status')).toHaveTextContent('Đã gửi yêu cầu nhân sự');
+      const status = screen.getByRole('status');
+      expect(status).toHaveTextContent('Đã gửi đề nghị mở tài khoản');
+      expect(status).toHaveTextContent('nuna@hoanglonglti.com');
     });
   });
 
@@ -629,7 +631,20 @@ describe('ApprovalsPage', () => {
           departmentId: DEPARTMENT,
         }),
       );
-      expect(await screen.findByRole('status')).toHaveTextContent('Đã tạo tài khoản nhân viên.');
+      const status = await screen.findByRole('status');
+      expect(status).toHaveTextContent('Đã tạo tài khoản nhân viên');
+      // ★ THE ADDRESS THEY WILL SIGN IN WITH. The administrator typed `uyen`;
+      // `POST /auth/login` takes `uyen@hoanglonglti.com` as `subject`, and the
+      // approval dialog already carries a note about where that gap led once.
+      expect(status).toHaveTextContent('uyen@hoanglonglti.com');
+
+      // ⚠ AND NOT THE PASSWORD. The notice interpolates data the administrator
+      // typed into the page; the address belongs there and the credential does
+      // not, on screen or anywhere the browser keeps things.
+      expect(document.body.innerHTML).not.toContain('a temporary handover');
+      expect(storageEntries(localStorage)).not.toContain('a temporary handover');
+      expect(storageEntries(sessionStorage)).not.toContain('a temporary handover');
+      expect(window.location.href).not.toContain('a temporary handover');
     });
 
     it('shows the server’s refusal and keeps the dialog open', async () => {

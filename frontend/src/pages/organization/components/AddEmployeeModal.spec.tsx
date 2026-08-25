@@ -286,6 +286,22 @@ describe('AddEmployeeModal', () => {
       expect(screen.queryByLabelText(/phòng ban|department/i)).not.toBeInTheDocument();
     });
 
+    /**
+     * ★ AND IT SAYS SO, rather than leaving the missing field to be read as an
+     * oversight.
+     *
+     * `account_invitations` has no role column and approval reads nothing off
+     * the row but the address and the department, so there is no step at which
+     * a role a head typed could survive. A head who assumes otherwise hands
+     * over an account and waits for authority that is never coming.
+     */
+    it('offers no chức vụ, and says the request carries none', () => {
+      renderModal();
+
+      expect(screen.queryByLabelText('Chức vụ *')).not.toBeInTheDocument();
+      expect(screen.getByText(/KHÔNG mang chức vụ/)).toBeInTheDocument();
+    });
+
     it('raises an invitation rather than creating an account', async () => {
       renderModal();
 
@@ -588,7 +604,12 @@ describe('AddEmployeeModal', () => {
       });
       fireEvent.click(screen.getByRole('button', { name: /lưu|save/i }));
 
-      await waitFor(() => expect(onCreated).toHaveBeenCalledWith('created'));
+      // ★ THE FULL ADDRESS, not the local part that was typed. `POST /auth/login`
+      // takes the whole thing as `subject`, so whatever confirms the outcome has
+      // to be able to show what the new person will actually type.
+      await waitFor(() =>
+        expect(onCreated).toHaveBeenCalledWith('created', 'uyen@hoanglonglti.com'),
+      );
       expect(onClose).toHaveBeenCalled();
     });
 
@@ -643,7 +664,9 @@ describe('AddEmployeeModal', () => {
 
       // The two outcomes read differently to the person who did it: one issued
       // a credential, the other asked somebody else to.
-      await waitFor(() => expect(onCreated).toHaveBeenCalledWith('requested'));
+      await waitFor(() =>
+        expect(onCreated).toHaveBeenCalledWith('requested', 'nuna@hoanglonglti.com'),
+      );
     });
   });
 });

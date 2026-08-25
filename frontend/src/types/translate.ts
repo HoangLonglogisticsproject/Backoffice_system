@@ -211,9 +211,16 @@ const PHRASES = {
   creating: { vi: 'Đang tạo…', en: 'Creating…' },
   createFailed: { vi: 'Không tạo được tài khoản.', en: 'Could not create the account.' },
   requestAccountTitle: { vi: 'Đề nghị mở tài khoản', en: 'Request an account' },
+  // ★ SAYS WHAT THE REQUEST DOES NOT CARRY, not just what it does.
+  //
+  // `account_invitations` has no role column and approval reads nothing off the
+  // row but the address and the department, so a head cannot express a chức vụ
+  // at this step through any endpoint that exists. Leaving that unsaid invites
+  // somebody to assume the field was merely forgotten and that the role will
+  // arrive with the account.
   requestAccountBody: {
-    vi: 'Trưởng phòng chỉ gửi email. Quản trị viên duyệt và hệ thống sinh mật khẩu.',
-    en: 'A head submits the email only. An administrator approves and the system issues the password.',
+    vi: 'Đề nghị này chỉ mở tài khoản: bạn gửi email, quản trị viên duyệt và hệ thống sinh mật khẩu tạm. Đề nghị KHÔNG mang chức vụ — quản trị viên bổ nhiệm sau khi tài khoản đã tồn tại.',
+    en: 'This request only opens an account: you submit the email, an administrator approves it and the system issues a temporary password. It carries NO role — an administrator appoints one after the account exists.',
   },
   submitRequest: { vi: 'Gửi đề nghị', en: 'Submit request' },
 
@@ -247,10 +254,14 @@ const PHRASES = {
     vi: 'Không tải được danh sách phòng ban.',
     en: 'Could not load the departments.',
   },
-  employeeCreated: { vi: 'Đã tạo tài khoản nhân viên.', en: 'The employee account was created.' },
+  // ★ FOLLOWED BY THE FULL ADDRESS at the call site. The administrator typed a
+  // LOCAL PART; `POST /auth/login` takes the whole address as `subject`. Saying
+  // only "created" leaves them to reconstruct it, and the approval dialog
+  // already carries a note about where that assumption led once.
+  employeeCreated: { vi: 'Đã tạo tài khoản nhân viên:', en: 'Employee account created:' },
   requestSubmitted: {
-    vi: 'Đã gửi yêu cầu nhân sự. Quản trị viên sẽ duyệt.',
-    en: 'The request was submitted. An administrator will decide it.',
+    vi: 'Đã gửi đề nghị mở tài khoản, đang chờ quản trị viên duyệt:',
+    en: 'The account request was submitted and is awaiting a decision:',
   },
   dismiss: { vi: 'Bỏ qua', en: 'Dismiss' },
 

@@ -62,7 +62,7 @@ export default function ApprovalsPage() {
   const { state, can } = useSession();
   const [tab, setTab] = useState<'requests' | 'invitations'>('requests');
   const [isAddOpen, setIsAddOpen] = useState(false);
-  const [notice, setNotice] = useState<AddEmployeeOutcome | null>(null);
+  const [notice, setNotice] = useState<{ outcome: AddEmployeeOutcome; email: string } | null>(null);
   // Bumped after a create or a request so the head's own queue re-reads and the
   // row appears — without a full reload, which would throw away the session
   // context and the language choice with it.
@@ -117,7 +117,12 @@ export default function ApprovalsPage() {
           role="status"
           className="flex items-center justify-between gap-4 rounded-xl border border-green-200 bg-green-50 px-5 py-3 text-sm text-green-800"
         >
-          <span>{notice === 'created' ? t('employeeCreated') : t('requestSubmitted')}</span>
+          <span>
+            {notice.outcome === 'created' ? t('employeeCreated') : t('requestSubmitted')}{' '}
+            {/* The address they will sign in with, not the local part that was
+                typed — see `onCreated`. */}
+            <code className="font-mono">{notice.email}</code>
+          </span>
           <Button variant="ghost" size="sm" onClick={() => setNotice(null)}>
             {t('dismiss')}
           </Button>
@@ -167,8 +172,8 @@ export default function ApprovalsPage() {
       <AddEmployeeModal
         isOpen={isAddOpen}
         onClose={() => setIsAddOpen(false)}
-        onCreated={(outcome) => {
-          setNotice(outcome);
+        onCreated={(outcome, email) => {
+          setNotice({ outcome, email });
           setRefresh((n) => n + 1);
         }}
       />

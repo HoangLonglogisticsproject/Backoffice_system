@@ -27,7 +27,14 @@ interface AddEmployeeModalProps {
    */
   departmentId?: string;
   onClose: () => void;
-  onCreated: (outcome: AddEmployeeOutcome) => void;
+  /**
+   * What happened, and to which ADDRESS.
+   *
+   * The full address rather than the local part the form asked for:
+   * `POST /auth/login` takes the whole thing as `subject`, so a screen that
+   * confirms the outcome has to be able to show what the person will type.
+   */
+  onCreated: (outcome: AddEmployeeOutcome, email: string) => void;
 }
 
 /**
@@ -172,7 +179,7 @@ export function AddEmployeeModal({
       // form keeps what was typed so a 409 on the address does not cost
       // somebody the whole form.
       reset();
-      onCreated(isGlobal ? 'created' : 'requested');
+      onCreated(isGlobal ? 'created' : 'requested', email);
       onClose();
     } catch (error_) {
       // The server's message is the honest one — it knows about domain
