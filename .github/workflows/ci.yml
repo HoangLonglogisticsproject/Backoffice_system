@@ -757,6 +757,21 @@ jobs:
           vercel=./node_modules/.bin/vercel
           "$vercel" --version
 
+          # ★ LINKED EXPLICITLY, THOUGH THE ENVIRONMENT ALREADY SHOULD. A fresh
+          # runner has no `.vercel/project.json`, and `frontend/` is a
+          # subdirectory of a monorepo — but `VERCEL_ORG_ID` and
+          # `VERCEL_PROJECT_ID` are exactly what the CLI reads INSTEAD of that
+          # file, so this is belt over braces rather than the missing piece.
+          #
+          # ⚠ It also fails first, and closer to the cause, if the token cannot
+          # see that scope: `link` and `pull` call the same API with the same
+          # credentials, so a permissions problem surfaces here rather than
+          # inside `pull`, where the CLI reports it as a missing directory.
+          "$vercel" link --yes \
+            --project "$VERCEL_PROJECT_ID" \
+            --scope "$VERCEL_ORG_ID" \
+            --token="$VERCEL_TOKEN"
+
           "$vercel" pull --yes --environment=production --token="$VERCEL_TOKEN"
           "$vercel" build --prod --token="$VERCEL_TOKEN"
           "$vercel" deploy --prebuilt --prod \
