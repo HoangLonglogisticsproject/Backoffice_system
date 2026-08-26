@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import ApprovalsPage from './ApprovalsPage';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 
@@ -12,6 +13,7 @@ const fetchDepartments = vi.fn();
 const assignDepartmentHead = vi.fn();
 const useMyDepartments = vi.fn();
 const fetchPendingMembershipRequests = vi.fn();
+const fetchEmployeeRoster = vi.fn();
 const approveMembershipRequest = vi.fn();
 const rejectMembershipRequest = vi.fn();
 const fetchPendingAccountInvitations = vi.fn();
@@ -33,6 +35,9 @@ vi.mock('@/api/account-invitation', () => ({
 }));
 vi.mock('@/api/users', () => ({
   createUser: (...a: unknown[]) => createUser(...a),
+}));
+vi.mock('@/api/membership', () => ({
+  fetchEmployeeRoster: (...a: unknown[]) => fetchEmployeeRoster(...a),
 }));
 vi.mock('@/api/department', () => ({
   fetchDepartments: (...a: unknown[]) => fetchDepartments(...a),
@@ -132,11 +137,15 @@ const lastConfirmButton = (): HTMLElement => {
   return buttons[buttons.length - 1];
 };
 
+// The roster links each person to their detail page, so the tree needs a
+// router. `MemoryRouter` keeps the assertions about content, not navigation.
 const renderPage = () =>
   render(
-    <LanguageProvider>
-      <ApprovalsPage />
-    </LanguageProvider>,
+    <MemoryRouter>
+      <LanguageProvider>
+        <ApprovalsPage />
+      </LanguageProvider>
+    </MemoryRouter>,
   );
 
 const openInvitations = async () => {
@@ -163,6 +172,7 @@ describe('ApprovalsPage', () => {
     ]);
     assignDepartmentHead.mockReset().mockResolvedValue({});
     useMyDepartments.mockReset().mockReturnValue({ departments: [], loading: false });
+    fetchEmployeeRoster.mockReset().mockResolvedValue(page([]));
     fetchPendingMembershipRequests.mockReset().mockResolvedValue(page([REQUEST]));
     fetchPendingAccountInvitations.mockReset().mockResolvedValue(page([INVITATION]));
     approveMembershipRequest.mockReset().mockResolvedValue({});
@@ -691,4 +701,193 @@ describe('ApprovalsPage', () => {
       expect(screen.queryByRole('status')).not.toBeInTheDocument();
     });
   });
+  /**
+   * ★ THE GLOBAL EMPLOYEE ROSTER — a third tab, and deliberately NOT a third
+   * queue. The other two hold things awaiting a decision and offer Approve and
+   * Reject; this one holds people and offers nothing. Sharing a screen is not
+   * sharing a meaning.
+   */
+  describe('the employee management tab', () => {
+    const rosterRow = (over: Record<string, unknown> = {}) => ({
+      id: 'mem-1',
+      user: { id: 'user-1', displayName: 'Lê Gia Minh Phú' },
+      department: { id: 'dep-sales', name: 'Sales' },
+      role: 'MEMBER',
+      membershipStatus: 'active',
+      accountStatus: 'active',
+      joinedAt: '2026-08-26T03:00:00.000Z',
+      endedAt: null,
+      ...over,
+    });
+
+    const openRoster = async () => {
+      fireEvent.click(screen.getByRole('button', { name: /quản lý nhân viên/i }));
+      // `findAll`, because one person legitimately appears on more than one row
+      // — an ended membership beside an active one is two lines of history.
+      await screen.findAllByText('Lê Gia Minh Phú');
+    };
+
+    beforeEach(() => {
+      useSession.mockReturnValue(SUPERADMIN());
+      fetchEmployeeRoster.mockResolvedValue(
+        page([
+          rosterRow(),
+          rosterRow({
+            id: 'mem-2',
+            user: { id: 'user-2', displayName: 'Nguyễn Văn A' },
+            role: 'DEPARTMENT_HEAD',
+            joinedAt: '2026-08-20T03:00:00.000Z',
+          }),
+          rosterRow({
+            id: 'mem-3',
+            user: { id: 'user-3', displayName: 'Trần Văn B' },
+            department: { id: 'dep-ops', name: 'Vận hành' },
+            joinedAt: '2026-08-18T03:00:00.000Z',
+          }),
+        ]),
+      );
+    });
+
+    it('offers the tab to a SUPERADMIN', () => {
+      renderPage();
+
+      expect(screen.getByRole('button', { name: /quản lý nhân viên/i })).toBeInTheDocument();
+    });
+
+    /**
+     * ⚠ `GET /memberships` is authorized WITHOUT a department, which only a
+     * global caller survives. Offering a head the tab would be offering a 403.
+     */
+    it('does not offer it to a DEPARTMENT_HEAD', () => {
+      useSession.mockReturnValue(HEAD());
+      renderPage();
+
+      expect(screen.queryByRole('button', { name: /quản lý nhân viên/i })).not.toBeInTheDocument();
+    });
+
+    it('does not offer it to a MEMBER', () => {
+      useSession.mockReturnValue(MEMBER());
+      renderPage();
+
+      expect(screen.queryByRole('button', { name: /quản lý nhân viên/i })).not.toBeInTheDocument();
+    });
+
+    it('reads the GLOBAL endpoint once, not one call per department', async () => {
+      renderPage();
+      await openRoster();
+
+      expect(fetchEmployeeRoster).toHaveBeenCalledTimes(1);
+      // Active is the default view, asked for explicitly.
+      expect(fetchEmployeeRoster).toHaveBeenCalledWith(expect.anything(), 'active');
+      // ★ NO FAN-OUT: the department-scoped roster is never touched here.
+      expect(fetchDepartmentMembershipRequests).not.toHaveBeenCalled();
+    });
+
+    it('draws the six columns, department included', async () => {
+      renderPage();
+      await openRoster();
+
+      const headers = screen.getAllByRole('columnheader').map((cell) => cell.textContent);
+      expect(headers).toEqual([
+        '#',
+        'Nhân viên',
+        'Phòng ban',
+        'Vị trí',
+        'Trạng thái',
+        'Ngày vào phòng',
+      ]);
+    });
+
+    /** ★ GLOBAL MEANS GLOBAL: more than one department on one page. */
+    it('shows employees from every department at once', async () => {
+      renderPage();
+      await openRoster();
+
+      expect(screen.getByText('Trần Văn B')).toBeInTheDocument();
+      expect(screen.getAllByText('Sales')).toHaveLength(2);
+      expect(screen.getByText('Vận hành')).toBeInTheDocument();
+    });
+
+    it('maps each row from the response — position, status and joined date', async () => {
+      renderPage();
+      await openRoster();
+
+      const rows = screen.getAllByRole('row');
+      expect(within(rows[1]!).getByText('Nhân viên')).toBeInTheDocument();
+      expect(within(rows[1]!).getByText('Đang làm việc')).toBeInTheDocument();
+      expect(within(rows[1]!).getByText('26/8/2026')).toBeInTheDocument();
+      expect(within(rows[2]!).getByText('Trưởng phòng')).toBeInTheDocument();
+      expect(within(rows[3]!).getByText('18/8/2026')).toBeInTheDocument();
+    });
+
+    /**
+     * ★ THE FILTER IS SERVER-SIDE. Asking for people who have left must reach
+     * the query — hiding rows the server already sent would page wrongly and
+     * misreport how many there are.
+     */
+    it('asks the server for ended memberships rather than filtering in the browser', async () => {
+      renderPage();
+      await openRoster();
+
+      fireEvent.change(screen.getByLabelText(/lọc theo trạng thái/i), {
+        target: { value: 'ended' },
+      });
+
+      await waitFor(() =>
+        expect(fetchEmployeeRoster).toHaveBeenLastCalledWith(expect.anything(), 'ended'),
+      );
+    });
+
+    it('asks for both when the filter is cleared', async () => {
+      renderPage();
+      await openRoster();
+
+      fireEvent.change(screen.getByLabelText(/lọc theo trạng thái/i), {
+        target: { value: 'all' },
+      });
+
+      // `undefined`, not a magic "all" value the server would have to know.
+      await waitFor(() =>
+        expect(fetchEmployeeRoster).toHaveBeenLastCalledWith(expect.anything(), undefined),
+      );
+    });
+
+    it('offers no decision on a roster row — it is not an approval queue', async () => {
+      renderPage();
+      await openRoster();
+
+      expect(screen.queryByRole('button', { name: /^duyệt$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
+    });
+
+    it('keeps one identity when a person holds an ended and an active membership', async () => {
+      fetchEmployeeRoster.mockResolvedValue(
+        page([
+          rosterRow({
+            id: 'mem-sales',
+            membershipStatus: 'ended',
+            department: { id: 'dep-sales', name: 'Sales' },
+          }),
+          rosterRow({
+            id: 'mem-ops',
+            membershipStatus: 'active',
+            department: { id: 'dep-ops', name: 'Vận hành' },
+          }),
+        ]),
+      );
+      renderPage();
+      await openRoster();
+
+      // Two lines of history for ONE employee — not two employees.
+      expect(screen.getAllByText('Lê Gia Minh Phú')).toHaveLength(2);
+      // Scoped to the rows: the status filter's own <option> list carries the
+      // same two words, and matching those would prove nothing about the table.
+      const rows = screen.getAllByRole('row');
+      expect(within(rows[1]!).getByText('Đã nghỉ việc')).toBeInTheDocument();
+      expect(within(rows[1]!).getByText('Sales')).toBeInTheDocument();
+      expect(within(rows[2]!).getByText('Đang làm việc')).toBeInTheDocument();
+      expect(within(rows[2]!).getByText('Vận hành')).toBeInTheDocument();
+    });
+  });
+
 });

@@ -141,11 +141,13 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
     it('carries each member’s name alongside the id it already had', async () => {
       const userId = await addMember('Ada Lovelace');
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 50 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 50 });
 
       expect(page.items).toHaveLength(1);
-      // ADDITIVE: the scalar `userId` is exactly where it always was.
-      expect(page.items[0]!.userId).toBe(userId);
+      expect(page.items[0]!.user.id).toBe(userId);
+      // ★ THE MEMBERSHIP'S id IS NOT THE PERSON'S. Three tables in this query
+      // carry `id`; if one overwrote another the row would name the wrong thing.
+      expect(page.items[0]!.id).not.toBe(userId);
       expect(page.items[0]!.user).toEqual({ id: userId, displayName: 'Ada Lovelace' });
     });
 
@@ -156,16 +158,20 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
       const ids: string[] = [];
       for (const name of names) ids.push(await addMember(name));
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 50 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 50 });
 
-      // Every row's projected id must equal its own scalar userId...
+      // Every row's projected user must be one this test actually created —
+      // not a membership id or a department id leaking through a shared column
+      // name, which is exactly what a `SELECT *` over these three tables does.
       for (const item of page.items) {
-        expect(item.user.id).toBe(item.userId);
+        expect(ids).toContain(item.user.id);
+        expect(item.id).not.toBe(item.user.id);
+        expect(item.department.id).toBe(departmentId);
       }
       // ...and the name must be the one that user was actually created with.
       const byId = new Map(ids.map((id, n) => [id, names[n]!]));
       for (const item of page.items) {
-        expect(item.user.displayName).toBe(byId.get(item.userId));
+        expect(item.user.displayName).toBe(byId.get(item.user.id));
       }
     });
 
@@ -173,7 +179,7 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
       const userId = await addMember('Real Person');
       await pool.query('UPDATE users SET display_name = $1 WHERE id = $2', ['Renamed', userId]);
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 50 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 50 });
 
       // Reads through to the live row rather than a copy taken at join time.
       expect(page.items[0]!.user.displayName).toBe('Renamed');
@@ -190,10 +196,11 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
       const seen: string[] = [];
       let cursor: string | undefined;
       for (let guard = 0; guard < 20; guard++) {
-        const page = await memberships.listActiveMembers(departmentId, { limit: 10, cursor });
+        const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10, cursor });
         for (const item of page.items) {
           // Every row on every page carries its projection — not just page one.
-          expect(item.user.id).toBe(item.userId);
+          expect(item.user.id).toEqual(expect.any(String));
+          expect(item.id).not.toBe(item.user.id);
           seen.push(item.user.displayName);
         }
         if (!page.hasMore) break;
@@ -210,11 +217,11 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
       // would encode a user id and the next page would silently be wrong.
       for (const name of ['A', 'B', 'C']) await addMember(name);
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 2 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 2 });
       const cursor = decodeCursor(page.nextCursor as string);
 
       expect(cursor.i).toBe(page.items[1]!.id);
-      expect(cursor.i).not.toBe(page.items[1]!.userId);
+      expect(cursor.i).not.toBe(page.items[1]!.user.id);
     });
 
     it('survives a timestamp tie, which is where a broken ORDER BY would show', async () => {
@@ -230,8 +237,8 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
         [departmentId],
       );
 
-      const first = await memberships.listActiveMembers(departmentId, { limit: 3 });
-      const second = await memberships.listActiveMembers(departmentId, {
+      const first = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 3 });
+      const second = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, {
         limit: 3,
         cursor: first.nextCursor as string,
       });
@@ -249,7 +256,7 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
       await addMember('Inside Person', departmentId);
       await addMember('Outside Person', otherDepartmentId);
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 50 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 50 });
 
       expect(page.items).toHaveLength(1);
       expect(page.items[0]!.user.displayName).toBe('Inside Person');
@@ -266,10 +273,10 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
         [leaves],
       );
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 50 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 50 });
 
       expect(page.items).toHaveLength(1);
-      expect(page.items[0]!.userId).toBe(stays);
+      expect(page.items[0]!.user.id).toBe(stays);
     });
 
     it('a disabled user is still named, because the MEMBERSHIP is what is listed', async () => {
@@ -278,7 +285,7 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
       const userId = await addMember('Disabled Person');
       await pool.query("UPDATE users SET status = 'disabled' WHERE id = $1", [userId]);
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 50 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 50 });
 
       expect(page.items[0]!.user.displayName).toBe('Disabled Person');
     });
@@ -303,7 +310,7 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
       const head = await assignments.findActiveHeadOfDepartmentWithUser(departmentId);
 
       expect(head).not.toBeNull();
-      expect(head!.userId).toBe(userId);
+      expect(head!.user.id).toBe(userId);
       expect(head!.user).toEqual({ id: userId, displayName: 'Head Person' });
     });
 

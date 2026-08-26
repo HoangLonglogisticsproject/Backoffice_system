@@ -21,7 +21,7 @@ import { PermissionGuard, RequirePermission } from '../../authorization/api/perm
 import {
   Department,
   DepartmentMembership,
-  DepartmentMembershipWithUser,
+  EmployeeRosterRow,
 } from '../domain/department.entity';
 import { DepartmentService } from '../application/department.service';
 import { MembershipService } from '../application/membership.service';
@@ -60,6 +60,24 @@ const renameDepartmentSchema = z.object({
  * wherever that person currently is — a fact read from the database, never a
  * value the caller supplies.
  */
+/**
+ * `?membershipStatus=` on a roster read.
+ *
+ * ★ ABSENT MEANS BOTH, and the DEFAULT IS CHOSEN BY THE CLIENT, not here. A
+ * server-side default of `active` would make "Tất cả" impossible to ask for —
+ * there would be no value meaning "do not filter". The screens send
+ * `membershipStatus=active` for their default view; this schema only says which
+ * values are legal.
+ *
+ * The two values are `department_memberships.status`, not invented: 0003
+ * CHECKs the column against exactly this pair.
+ */
+const rosterQuerySchema = pageQuerySchema.extend({
+  membershipStatus: z.enum(['active', 'ended']).optional(),
+});
+
+type RosterQuery = z.infer<typeof rosterQuerySchema>;
+
 const transferIntoSchema = z.object({
   userId: z.string().uuid(),
 });
@@ -137,9 +155,16 @@ export class OrganizationController {
   @RequirePermission('unit.member.read', 'departmentId')
   async members(
     @Param('departmentId', UuidParam) departmentId: string,
-    @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
-  ): Promise<Page<DepartmentMembershipWithUser>> {
-    return this.memberships.listActiveMembers(departmentId, page);
+    @Query(new ZodValidationPipe(rosterQuerySchema)) query: RosterQuery,
+  ): Promise<Page<EmployeeRosterRow>> {
+    // ★ THE SCOPE IS THE ROUTE PARAMETER, and it is not negotiable: the guard
+    // checked `unit.member.read` against THIS department, so the query is built
+    // from the same id it authorized. A head cannot widen it by sending
+    // anything, because there is nothing in the query string that names a unit.
+    return this.memberships.listRoster(
+      { departmentId, membershipStatus: query.membershipStatus },
+      query,
+    );
   }
 
   /**

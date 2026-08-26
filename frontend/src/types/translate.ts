@@ -64,13 +64,86 @@ const PHRASES = {
   departmentAll: { vi: 'Phòng ban: Tất cả', en: 'Department: All' },
   statusAll: { vi: 'Trạng thái: Tất cả', en: 'Status: All' },
   statusActive: { vi: 'Đang làm việc', en: 'Active' },
-  statusInactive: { vi: 'Nghỉ việc', en: 'Resigned' },
+  statusInactive: { vi: 'Đã nghỉ việc', en: 'Resigned' },
   statusPause: { vi: 'Tạm nghỉ', en: 'On Leave' },
   filterBtn: { vi: 'Bộ lọc', en: 'Filter' },
   colIndex: { vi: '#', en: '#' },
   colEmployee: { vi: 'Nhân viên', en: 'Employee' },
   colEmpCode: { vi: 'Mã nhân viên', en: 'Emp Code' },
   colDepartment: { vi: 'Phòng ban', en: 'Department' },
+  // ★ POSITION, NOT SYSTEM ROLE. The column shows what somebody DOES here —
+  // derived from whether they hold an active DEPARTMENT_HEAD assignment, which
+  // is the only thing `role_assignments` can answer.
+  colPosition: { vi: 'Vị trí', en: 'Position' },
+  colEndedAt: { vi: 'Ngày kết thúc', en: 'Ended' },
+
+  // ---- Employee detail. READ ONLY: no action word appears anywhere here. ----
+  employeeDetailTitle: { vi: 'Thông tin nhân viên', en: 'Employee' },
+  sectionIdentity: { vi: 'Thông tin nhân viên', en: 'Employee information' },
+  sectionAccount: { vi: 'Tài khoản Backoffice', en: 'Backoffice account' },
+  sectionCurrentDepartment: { vi: 'Phòng ban hiện tại', en: 'Current department' },
+  // ★ ACCOUNT, NOT WORK. `users.status` answers whether the account may operate;
+  // saying "Trạng thái nhân viên" here would merge two different columns in the
+  // reader's head even though the code keeps them apart.
+  accountStatusLabel: { vi: 'Trạng thái tài khoản', en: 'Account status' },
+  accountActive: { vi: 'Đang hoạt động', en: 'Active' },
+  accountDisabled: { vi: 'Đã vô hiệu hóa', en: 'Disabled' },
+  // ★ WORK, NOT ACCOUNT. `department_memberships.status`.
+  workStatusLabel: { vi: 'Trạng thái làm việc', en: 'Work status' },
+  historyTitle: { vi: 'Lịch sử phòng ban', en: 'Department history' },
+  // ⚠ SAID OUT LOUD, because a filtered list that looks complete is worse than
+  // no list. A head sees only the units they lead.
+  historyTitleScoped: {
+    vi: 'Lịch sử phòng ban trong phạm vi được phân quyền',
+    en: 'Department history within your authorized scope',
+  },
+  historyScopedNote: {
+    vi: 'Chỉ hiển thị các giai đoạn thuộc phòng ban bạn được phân quyền quản lý.',
+    en: 'Only periods in departments you are authorized to manage are shown.',
+  },
+  noCurrentDepartment: {
+    vi: 'Nhân viên này hiện không thuộc phòng ban nào.',
+    en: 'This employee currently belongs to no department.',
+  },
+  noHistory: { vi: 'Không có giai đoạn nào để hiển thị.', en: 'No periods to show.' },
+  employeeNotFound: { vi: 'Không tìm thấy nhân viên này.', en: 'Employee not found.' },
+  employeeForbidden: {
+    vi: 'Bạn không có quyền xem nhân viên này.',
+    en: 'You are not allowed to view this employee.',
+  },
+
+  // ---- Disabling an account. ACCESS, never deletion. ----
+  // ★ THE WORD IS "vô hiệu hóa", NEVER "xóa". Nothing is deleted: the person,
+  // their credential and every past period survive. Calling it a deletion would
+  // describe an operation this system does not have and cannot undo.
+  disableAccount: { vi: 'Vô hiệu hóa tài khoản', en: 'Disable account' },
+  disableAccountTitle: { vi: 'Vô hiệu hóa tài khoản Backoffice?', en: 'Disable this Backoffice account?' },
+  disableAccountConfirm: { vi: 'Xác nhận vô hiệu hóa', en: 'Confirm disable' },
+  disableEffectLogin: {
+    vi: 'Tài khoản Backoffice sẽ không thể đăng nhập.',
+    en: 'This Backoffice account will no longer be able to sign in.',
+  },
+  disableEffectKeepsData: {
+    vi: 'Dữ liệu nhân viên không bị xóa.',
+    en: 'The employee record is not deleted.',
+  },
+  disableEffectKeepsHistory: {
+    vi: 'Lịch sử phòng ban vẫn được giữ lại.',
+    en: 'Department history is retained.',
+  },
+  disableEffectAccess: {
+    vi: 'Đây là thao tác ảnh hưởng quyền truy cập hệ thống.',
+    en: 'This changes what the person may access.',
+  },
+  disabling: { vi: 'Đang vô hiệu hóa…', en: 'Disabling…' },
+  disableFailed: { vi: 'Không vô hiệu hóa được tài khoản.', en: 'Could not disable the account.' },
+  // ★ MANAGEMENT, NOT APPROVAL. It shares a screen with the two decision
+  // queues and must not share their meaning: nothing here is approved or
+  // rejected, it answers "who works here".
+  tabEmployeeRoster: { vi: 'Quản lý nhân viên', en: 'Employee management' },
+  filterAllStatuses: { vi: 'Tất cả', en: 'All' },
+  filterMembershipStatus: { vi: 'Lọc theo trạng thái', en: 'Filter by status' },
+  emptyRoster: { vi: 'Không có nhân viên nào khớp bộ lọc này.', en: 'No employee matches this filter.' },
   colTitle: { vi: 'Chức danh', en: 'Title' },
   colEmail: { vi: 'Email', en: 'Email' },
   colPhone: { vi: 'SĐT', en: 'Phone' },

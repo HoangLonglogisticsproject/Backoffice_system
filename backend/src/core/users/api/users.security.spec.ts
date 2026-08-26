@@ -7,13 +7,18 @@ import { DomainErrorFilter } from '../../../common/http/domain-error.filter';
 import { AppConfig } from '../../../config/app.config';
 import { AuthorizationService } from '../../authorization/application/authorization.service';
 import { AuthorizationContext } from '../../authorization/domain/authorization.context';
-import { PermissionGuard } from '../../authorization/api/permission.guard';
+import {
+  HeadOfTargetUserDepartmentGuard,
+  PermissionGuard,
+} from '../../authorization/api/permission.guard';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
 import { SESSION_COOKIE } from '../../identity/api/session.cookie';
 import { SessionService } from '../../identity/application/session.service';
 import { AccountLifecycleService } from '../application/account-lifecycle.service';
 import { AccountProvisioningService } from '../application/account-provisioning.service';
+import { UserService } from '../application/user.service';
+import { MembershipService } from '../../organization/application/membership.service';
 import { UsersController } from './users.controller';
 
 /**
@@ -32,6 +37,9 @@ describe('users HTTP security', () => {
   let app: INestApplication;
   let provisioning: { provision: jest.Mock };
   let lifecycle: { disable: jest.Mock };
+  let users: { requireById: jest.Mock };
+  let employment: { listEmployeeHistory: jest.Mock };
+  let activeMembership: { departmentId: string } | null;
   let context: AuthorizationContext;
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
@@ -54,6 +62,14 @@ describe('users HTTP security', () => {
     lifecycle = {
       disable: jest.fn().mockResolvedValue({ id: TARGET, status: 'disabled' }),
     };
+    users = {
+      requireById: jest
+        .fn()
+        .mockResolvedValue({ id: TARGET, displayName: 'A Person', status: 'active' }),
+    };
+    employment = { listEmployeeHistory: jest.fn().mockResolvedValue([]) };
+    // What the guard resolves for the TARGET. Null means "no active membership".
+    activeMembership = { departmentId: A };
 
     const moduleRef = await Test.createTestingModule({
       controllers: [UsersController],
@@ -73,9 +89,15 @@ describe('users HTTP security', () => {
               .mockResolvedValue({ id: ACTOR, displayName: 'Actor', status: 'active' }),
           },
         },
+        HeadOfTargetUserDepartmentGuard,
+        { provide: UserService, useValue: users },
+        { provide: MembershipService, useValue: employment },
         {
           provide: AuthorizationService,
-          useValue: { loadContext: jest.fn().mockImplementation(async () => context) },
+          useValue: {
+            loadContext: jest.fn().mockImplementation(async () => context),
+            findActiveMembershipOf: jest.fn().mockImplementation(async () => activeMembership),
+          },
         },
       ],
     }).compile();
@@ -90,7 +112,7 @@ describe('users HTTP security', () => {
     await app?.close();
   });
 
-  const authed = (method: 'post' | 'patch', path: string) =>
+  const authed = (method: 'get' | 'post' | 'patch', path: string) =>
     request(app.getHttpServer())
       [method](path)
       .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
@@ -228,6 +250,201 @@ describe('users HTTP security', () => {
       await authed('patch', `/users/${TARGET}/status`).send({ status: 'disabled' }).expect(403);
       expect(provisioning.provision).not.toHaveBeenCalled();
       expect(lifecycle.disable).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * EMPLOYEE DETAIL - `GET /users/:userId/memberships`.
+   *
+   * The security property under test is NOT "a head can read their people". It
+   * is that a head's reach is decided by the target's ACTIVE membership and by
+   * nothing else - so history never opens a door, and a person who has moved on
+   * is out of reach even for the head they used to report to.
+   */
+  describe('employee detail', () => {
+    const detail = () => authed('get', `/users/${TARGET}/memberships`);
+    const B = '22222222-2222-2222-2222-222222222222';
+
+    it('1. lets a SuperAdmin read any employee, with the full history', async () => {
+      context = asContext({ global: true });
+      activeMembership = { departmentId: B };
+      employment.listEmployeeHistory.mockResolvedValue([{ id: 'm1' }, { id: 'm2' }]);
+
+      const response = await detail().expect(200);
+
+      expect(response.body.memberships).toHaveLength(2);
+      // `undefined` - unfiltered. A global caller sees every period, and the
+      // absence of a scope is what says so.
+      expect(employment.listEmployeeHistory).toHaveBeenCalledWith(TARGET, undefined);
+    });
+
+    it('2. lets a head read somebody currently in the unit they lead', async () => {
+      context = asContext({ headOf: [A], memberOf: [A] });
+      activeMembership = { departmentId: A };
+
+      await detail().expect(200);
+
+      // SCOPED DISCLOSURE: the history they are shown is narrowed to their own
+      // units, so it cannot even name one they have no authority over.
+      expect(employment.listEmployeeHistory).toHaveBeenCalledWith(TARGET, [A]);
+    });
+
+    it('3. refuses a head whose target currently belongs to another unit', async () => {
+      context = asContext({ headOf: [A], memberOf: [A] });
+      activeMembership = { departmentId: B };
+
+      await detail().expect(403);
+
+      // Refused BEFORE any history is read - not filtered afterwards.
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+      expect(users.requireById).not.toHaveBeenCalled();
+    });
+
+    /**
+     * THE CORE RULE. The target once belonged to this head's unit and has since
+     * moved. `findActiveMembershipOf` returns the CURRENT membership, so the old
+     * one is not a key to anything.
+     */
+    it('4. refuses a head when the shared department is only in the past', async () => {
+      context = asContext({ headOf: [A], memberOf: [A] });
+      activeMembership = { departmentId: B };
+
+      await detail().expect(403);
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+    });
+
+    it('5. refuses a head when the target has no active membership at all', async () => {
+      context = asContext({ headOf: [A], memberOf: [A] });
+      activeMembership = null;
+
+      await detail().expect(403);
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+    });
+
+    it('6. refuses a plain member', async () => {
+      context = asContext({ memberOf: [A] });
+      activeMembership = { departmentId: A };
+
+      await detail().expect(403);
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+    });
+
+    it('7. refuses an unauthenticated caller with 401', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/users/${TARGET}/memberships`)
+        .set('X-Requested-With', 'XMLHttpRequest');
+
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+    });
+
+    /** Disabled is not deleted. The person, and their history, remain readable. */
+    it('8. still shows a disabled employee to a SuperAdmin', async () => {
+      context = asContext({ global: true });
+      users.requireById.mockResolvedValue({
+        id: TARGET,
+        displayName: 'Left The Company',
+        status: 'disabled',
+      });
+      employment.listEmployeeHistory.mockResolvedValue([{ id: 'm1' }]);
+
+      const response = await detail().expect(200);
+
+      expect(response.body.accountStatus).toBe('disabled');
+      expect(response.body.memberships).toHaveLength(1);
+    });
+
+    it('9. answers 404 for a user that does not exist, once authorized', async () => {
+      context = asContext({ global: true });
+      const { NotFoundError } = await import('../../../common/errors/domain.error');
+      users.requireById.mockRejectedValue(new NotFoundError('User not found.'));
+
+      await detail().expect(404);
+    });
+
+    it('10. hands the scope to the query rather than filtering rows afterwards', async () => {
+      context = asContext({ headOf: [A, B], memberOf: [A] });
+      activeMembership = { departmentId: A };
+
+      await detail().expect(200);
+
+      // Both units the caller leads, passed as a SCOPE - the query does the
+      // narrowing, so periods outside it are never read into this process.
+      expect(employment.listEmployeeHistory).toHaveBeenCalledWith(TARGET, [A, B]);
+    });
+
+    it('11. never lets a historical membership authorize the caller', async () => {
+      // The caller leads A. The target's history includes A, but their ACTIVE
+      // membership is B - the only thing authorization consults.
+      context = asContext({ headOf: [A], memberOf: [A] });
+      activeMembership = { departmentId: B };
+
+      await detail().expect(403);
+    });
+
+    /**
+     * The caller's OWN history grants nothing either. `headOf` and `memberOf`
+     * are built from ACTIVE rows in `loadContext`, so an ex-head arrives with an
+     * empty `headOf` and is refused like any member.
+     */
+    it('12. refuses a caller whose own headship has ended', async () => {
+      context = asContext({ headOf: [], memberOf: [A] });
+      activeMembership = { departmentId: A };
+
+      await detail().expect(403);
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+    });
+
+    it('14. reads accountStatus from the user record, not from any membership', async () => {
+      context = asContext({ global: true });
+      users.requireById.mockResolvedValue({
+        id: TARGET,
+        displayName: 'A Person',
+        status: 'active',
+      });
+      // Every period ended, yet the ACCOUNT is still active - the two are
+      // independent, and the response must say so.
+      employment.listEmployeeHistory.mockResolvedValue([{ id: 'm1', membershipStatus: 'ended' }]);
+
+      const response = await detail().expect(200);
+
+      expect(response.body.accountStatus).toBe('active');
+      expect(response.body.memberships[0].membershipStatus).toBe('ended');
+    });
+
+    it('15. keeps membershipStatus independent of accountStatus', async () => {
+      context = asContext({ global: true });
+      users.requireById.mockResolvedValue({
+        id: TARGET,
+        displayName: 'A Person',
+        status: 'disabled',
+      });
+      employment.listEmployeeHistory.mockResolvedValue([{ id: 'm1', membershipStatus: 'active' }]);
+
+      const response = await detail().expect(200);
+
+      // Representable on purpose: a disabled account on a still-active period.
+      expect(response.body.accountStatus).toBe('disabled');
+      expect(response.body.memberships[0].membershipStatus).toBe('active');
+    });
+
+    it('reaches no service at all when it refuses', async () => {
+      context = asContext({ memberOf: [A] });
+
+      await detail().expect(403);
+
+      expect(users.requireById).not.toHaveBeenCalled();
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+      expect(provisioning.provision).not.toHaveBeenCalled();
+      expect(lifecycle.disable).not.toHaveBeenCalled();
+    });
+
+    it('mounts nothing destructive under the detail route - GET only', async () => {
+      context = asContext({ global: true });
+
+      await authed('post', `/users/${TARGET}/memberships`).expect(404);
+      await authed('patch', `/users/${TARGET}/memberships`).expect(404);
     });
   });
 

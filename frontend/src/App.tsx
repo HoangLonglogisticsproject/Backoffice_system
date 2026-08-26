@@ -22,6 +22,7 @@ import PlaceholderPage from './pages/system/PlaceholderPage'
 import LoginPage from './pages/system/LoginPage'
 import ChangePasswordPage from './pages/system/ChangePasswordPage'
 import ApprovalsPage from './pages/system/ApprovalsPage'
+import EmployeeDetailPage from '@/pages/organization/EmployeeDetailPage'
 import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
 import AccountSecurityPage from './pages/account/AccountSecurityPage'
 import { RequireSession } from './components/common/SessionGuard'
@@ -58,6 +59,9 @@ function App() {
           path="/organization/department/:departmentId/members"
           element={<EmployeeManagementPage />}
         />
+        {/* ★ KEYED BY THE PERSON. Both rosters link here with `user.id`; a
+            membership id would scope the page to one employment period. */}
+        <Route path="/organization/employee/:userId" element={<EmployeeDetailPage />} />
 
         {/* Dispatch. No department segment on purpose — the trip schedule is
             company-wide data, so there is no unit to scope it to (§21). */}

@@ -32,3 +32,20 @@ export interface UserSummary {
   /** Never empty: `users.display_name` is NOT NULL with a non-blank CHECK. */
   displayName: string;
 }
+
+/**
+ * `users.status` — whether the BACKOFFICE ACCOUNT may operate.
+ *
+ * ⚠ NOT whether somebody still works here. That is the MEMBERSHIP's status, and
+ * the two are different columns answering different questions:
+ *
+ *   accountStatus     `users.status`                    active | disabled
+ *   membershipStatus  `department_memberships.status`   active | ended
+ *
+ * They move together during offboarding — `AccountLifecycleService.disable`
+ * writes both in one transaction — but nothing in the schema ties them, and the
+ * combination `disabled` + `active` is representable on purpose. Deriving
+ * either from the other would invent a rule the database does not hold, so no
+ * read model here does.
+ */
+export type AccountStatus = 'active' | 'disabled';

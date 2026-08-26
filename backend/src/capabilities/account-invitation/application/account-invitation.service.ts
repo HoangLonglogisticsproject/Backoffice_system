@@ -130,7 +130,11 @@ export class AccountInvitationService {
         throw new ConflictError('You cannot decide your own invitation.');
       }
 
-      const department = await this.departments.findById(invitation.departmentId, tx);
+      // ★ LOCKED, like every other path that creates a membership. Approving
+      // provisions somebody INTO this unit, so it races `DepartmentService.archive`
+      // exactly as `enroll` and `transfer` do; an unlocked read here let an
+      // approval commit a fresh member into a unit archived a moment earlier.
+      const department = await this.departments.lockById(invitation.departmentId, tx);
       if (!department) throw new NotFoundError('Department not found.');
       if (department.status !== 'active') {
         throw new ConflictError('That department is archived and cannot take new members.');

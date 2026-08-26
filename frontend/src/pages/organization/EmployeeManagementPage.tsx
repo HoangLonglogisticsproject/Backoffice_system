@@ -10,23 +10,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { CursorPagination } from '@/components/ui/pagination';
+import { EmployeeRosterTable } from '@/components/common/EmployeeRosterTable';
 import { AddEmployeeModal } from './components/AddEmployeeModal';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { formatDate } from '@/utils/format/datetime';
 import { useCursorPages } from '@/hooks/useCursorPages';
 import { fetchDepartmentMembers } from '@/api/membership';
 import { useSession } from '@/contexts/SessionProvider';
-import type { DepartmentMembershipWithUser, MembershipStatus } from '@/types/organization';
+import type { EmployeeRosterRow } from '@/types/organization';
 
 /**
  * Who is in a department.
@@ -46,14 +37,14 @@ import type { DepartmentMembershipWithUser, MembershipStatus } from '@/types/org
  */
 export default function EmployeeManagementPage() {
   const { departmentId } = useParams<{ departmentId: string }>();
-  const { t, language } = useLanguage();
+  const { t } = useLanguage();
   const { state, can } = useSession();
   const [isAddOpen, setIsAddOpen] = useState(false);
   // Bumped after a create so the list re-reads. A full page reload would
   // throw away the session context and the language choice with it.
   const [refresh, setRefresh] = useState(0);
 
-  const page = useCursorPages<DepartmentMembershipWithUser>(
+  const page = useCursorPages<EmployeeRosterRow>(
     // Hooks cannot be called conditionally, so this runs before the guard
     // below. Rejecting is the honest answer: casting `undefined` to a string
     // would send a request to `/departments/undefined/members`, and returning
@@ -61,7 +52,10 @@ export default function EmployeeManagementPage() {
     // members".
     (request) =>
       departmentId
-        ? fetchDepartmentMembers(departmentId, request)
+        ? // ★ ACTIVE BY DEFAULT, AND ASKED FOR EXPLICITLY. The server no longer
+          // pins the filter, so "who works here now" is a question this screen
+          // states rather than one the endpoint happens to answer.
+          fetchDepartmentMembers(departmentId, request, 'active')
         : Promise.reject(new Error('No department on the route.')),
     [departmentId, refresh],
   );
@@ -158,48 +152,7 @@ export default function EmployeeManagementPage() {
         </p>
 
         <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-gray-50/50">
-              <TableRow>
-                <TableHead className="w-[50px] text-center font-semibold text-gray-600">
-                  {t('colIndex')}
-                </TableHead>
-                <TableHead className="font-semibold text-gray-600">{t('colEmployee')}</TableHead>
-                <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
-                <TableHead className="font-semibold text-gray-600">{t('colJoinedAt')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {page.items.map((membership, index) => (
-                <TableRow key={membership.id} className="hover:bg-blue-50/30 transition-colors">
-                  <TableCell className="text-center text-gray-500 font-medium">
-                    {index + 1}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-8 w-8 ring-1 ring-gray-100">
-                        <AvatarFallback className="bg-blue-100 text-blue-700 text-xs font-semibold">
-                          {membership.user.displayName.trim().charAt(0).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex flex-col">
-                        {/* The projected name — not the UUID underneath it. */}
-                        <span className="font-medium text-gray-900">
-                          {membership.user.displayName}
-                        </span>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <MembershipStatusBadge status={membership.status} />
-                  </TableCell>
-                  <TableCell className="text-gray-600">
-                    {formatDate(membership.createdAt, language)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <EmployeeRosterTable rows={page.items} />
 
           {!page.loading && page.items.length === 0 && !page.error && (
             <p className="px-6 py-10 text-center text-sm text-gray-500">{t('emptyMembers')}</p>
@@ -237,22 +190,5 @@ export default function EmployeeManagementPage() {
         onCreated={() => setRefresh((n) => n + 1)}
       />
     </div>
-  );
-}
-
-/** The MEMBERSHIP's status — `active` or `ended`. Not the user's account state. */
-function MembershipStatusBadge({ status }: Readonly<{ status: MembershipStatus }>) {
-  const { t } = useLanguage();
-  const styles =
-    status === 'active'
-      ? 'bg-green-50 text-green-700 ring-green-600/20'
-      : 'bg-gray-50 text-gray-600 ring-gray-500/10';
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset ${styles}`}
-    >
-      {status === 'active' ? t('statusActive') : t('statusInactive')}
-    </span>
   );
 }

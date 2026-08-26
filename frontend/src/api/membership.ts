@@ -1,5 +1,5 @@
 import { httpClient } from './client';
-import type { DepartmentMembershipWithUser } from '@/types/organization';
+import type { EmployeeDetail, EmployeeRosterRow, MembershipStatus } from '@/types/organization';
 import type { Page, PageRequest } from '@/types/pagination';
 
 /**
@@ -28,10 +28,60 @@ import type { Page, PageRequest } from '@/types/pagination';
 export async function fetchDepartmentMembers(
   departmentId: string,
   page: PageRequest = {},
-): Promise<Page<DepartmentMembershipWithUser>> {
-  const { data } = await httpClient.get<Page<DepartmentMembershipWithUser>>(
+  membershipStatus?: MembershipStatus,
+): Promise<Page<EmployeeRosterRow>> {
+  const { data } = await httpClient.get<Page<EmployeeRosterRow>>(
     `/departments/${encodeURIComponent(departmentId)}/members`,
-    { params: { limit: page.limit, cursor: page.cursor } },
+    { params: { limit: page.limit, cursor: page.cursor, membershipStatus } },
+  );
+  return data;
+}
+
+/**
+ * The DEPLOYMENT-WIDE roster (`GET /memberships`) — every unit, one page at a
+ * time.
+ *
+ * ★ GLOBAL-ONLY, AND THE SERVER IS WHAT MAKES IT SO. `unit.member.read` is
+ * checked here WITHOUT a department, and an unscoped check is exactly what only
+ * a global caller survives. A head asking for this gets 403; they have their own
+ * department's roster and nothing wider.
+ *
+ * ★ ONE REQUEST, NOT ONE PER DEPARTMENT. Listing departments and then fetching
+ * each unit's members would be N+1, would give every unit its own cursor so the
+ * merged list could not be paginated or ordered, and would put a scope decision
+ * in the browser. The server answers it as a single keyset query instead.
+ *
+ * ⚠ NO `departmentId` PARAMETER. Narrowing to one unit is the SCOPED endpoint's
+ * job, where the guard checks that unit. Accepting one here would be a scoped
+ * query authorized by the global rule.
+ */
+export async function fetchEmployeeRoster(
+  page: PageRequest = {},
+  membershipStatus?: MembershipStatus,
+): Promise<Page<EmployeeRosterRow>> {
+  const { data } = await httpClient.get<Page<EmployeeRosterRow>>('/memberships', {
+    // `undefined` is dropped by the client, which is how "Tất cả" asks for both
+    // without a magic value meaning "do not filter".
+    params: { limit: page.limit, cursor: page.cursor, membershipStatus },
+  });
+  return data;
+}
+
+/**
+ * One employee: identity, account state, and employment history.
+ *
+ * ★ THE SERVER DECIDES BOTH ACCESS AND DISCLOSURE. Whether this caller may open
+ * the person at all is judged against the target's ACTIVE membership, and which
+ * periods come back is narrowed by the same authority. Nothing is filtered here,
+ * and no department is sent — there is no parameter a caller could use to widen
+ * or narrow what they are allowed to see.
+ *
+ * A 403 is a normal outcome to render: a head reaching somebody who has moved to
+ * another unit is refused by design, not by accident.
+ */
+export async function fetchEmployeeDetail(userId: string): Promise<EmployeeDetail> {
+  const { data } = await httpClient.get<EmployeeDetail>(
+    `/users/${encodeURIComponent(userId)}/memberships`,
   );
   return data;
 }

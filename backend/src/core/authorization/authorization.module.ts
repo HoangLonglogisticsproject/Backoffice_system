@@ -5,7 +5,11 @@ import { AuthorizationController } from './api/authorization.controller';
 import { DepartmentHeadController } from './api/department-head.controller';
 import { AuthorizationRepository } from './persistence/authorization.repository';
 import { AuthorizationService } from './application/authorization.service';
-import { HeadOfRouteDepartmentGuard, PermissionGuard } from './api/permission.guard';
+import {
+  HeadOfRouteDepartmentGuard,
+  HeadOfTargetUserDepartmentGuard,
+  PermissionGuard,
+} from './api/permission.guard';
 
 /**
  * Who may do what.
@@ -29,12 +33,14 @@ import { HeadOfRouteDepartmentGuard, PermissionGuard } from './api/permission.gu
     AuthorizationService,
     PermissionGuard,
     HeadOfRouteDepartmentGuard,
+    HeadOfTargetUserDepartmentGuard,
   ],
   exports: [
     AuthorizationService,
     AuthorizationRepository,
     PermissionGuard,
     HeadOfRouteDepartmentGuard,
+    HeadOfTargetUserDepartmentGuard,
   ],
 })
 export class AuthorizationModule {}
