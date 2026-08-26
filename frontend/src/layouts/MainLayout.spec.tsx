@@ -20,10 +20,32 @@ vi.mock('react-router-dom', async () => ({
   useNavigate: () => navigate,
 }));
 
-const ready = (username: string) => ({
-  state: { status: 'ready', authorization: { username, departmentIds: [] } },
-  signOut,
-});
+/**
+ * A session as `GET /authorization/me` returns it, for one role.
+ *
+ * `can` is a membership test over `permissions`, exactly as `SessionProvider`
+ * implements it — faking the two independently would let a test assert a
+ * combination the server cannot produce.
+ */
+const ready = (
+  username: string,
+  role: 'SUPERADMIN' | 'DEPARTMENT_HEAD' | 'MEMBER' = 'SUPERADMIN',
+  departmentIds: string[] = [],
+) => {
+  // A global caller holds every permission; the others hold no global one.
+  const permissions = role === 'SUPERADMIN' ? ['user.write', 'unit.read'] : ['unit.read'];
+  return {
+    state: { status: 'ready', authorization: { username, role, departmentIds, permissions } },
+    signOut,
+    can: (permission: string) => permissions.includes(permission),
+  };
+};
+
+const HEAD_DEPARTMENT = 'd1';
+const headSession = (username = 'head') =>
+  ready(username, 'DEPARTMENT_HEAD', [HEAD_DEPARTMENT]);
+const memberSession = (username = 'member') =>
+  ready(username, 'MEMBER', [HEAD_DEPARTMENT]);
 
 const renderLayout = () =>
   render(
@@ -86,9 +108,16 @@ describe('MainLayout', () => {
       useSession.mockReturnValue({
         state: {
           status: 'ready',
-          authorization: { userId: 'u1', username: null, role: 'MEMBER', departmentIds: [] },
+          authorization: {
+            userId: 'u1',
+            username: null,
+            role: 'MEMBER',
+            departmentIds: [],
+            permissions: [],
+          },
         },
         signOut,
+        can: () => false,
       });
 
       expect(() => renderLayout()).not.toThrow();
@@ -100,9 +129,16 @@ describe('MainLayout', () => {
       useSession.mockReturnValue({
         state: {
           status: 'ready',
-          authorization: { userId: 'u1', username: null, role: 'MEMBER', departmentIds: [] },
+          authorization: {
+            userId: 'u1',
+            username: null,
+            role: 'MEMBER',
+            departmentIds: [],
+            permissions: [],
+          },
         },
         signOut,
+        can: () => false,
       });
       renderLayout();
 
@@ -116,7 +152,7 @@ describe('MainLayout', () => {
     it('still renders while the session is not ready', () => {
       // `RequireSession` routes this case, but the shell must not be the thing
       // that explodes on the way there.
-      useSession.mockReturnValue({ state: null, signOut });
+      useSession.mockReturnValue({ state: null, signOut, can: () => false });
 
       expect(() => renderLayout()).not.toThrow();
       expect(screen.getByText('?')).toBeInTheDocument();
@@ -159,6 +195,88 @@ describe('MainLayout', () => {
         'href',
         '/organization/department/d1/members',
       );
+    });
+  });
+
+  /**
+   * ★ THE TWO ROLES DO NOT SHARE AN INFORMATION ARCHITECTURE.
+   *
+   * "Phê duyệt" is the deployment-wide decision queue — it approves and rejects
+   * across every unit. A head decides nothing: they propose, and a SUPERADMIN
+   * decides. Showing them that row offered a screen whose whole purpose is an
+   * action they do not have, and made their job look like a smaller copy of the
+   * administrator's instead of a different one.
+   *
+   * ⚠ These assert the MENU, never authorization. Every endpoint behind these
+   * links re-decides on its own.
+   */
+  describe('the menu is split by role, not shared', () => {
+    /** The row's DESTINATION, not just its label — a link that reads right and
+     *  points nowhere is the failure this is here to catch. */
+    const hrefOf = (label: string) => screen.getByText(label).closest('a')?.getAttribute('href');
+
+    it('leaves a SUPERADMIN every global destination they already had', () => {
+      useSession.mockReturnValue(ready('boss', 'SUPERADMIN'));
+      renderLayout();
+
+      expect(hrefOf('Phê duyệt')).toBe('/system/approvals');
+      // ★ THE REGRESSION GUARD. "Phòng ban" is a fixed global row, NOT the
+      // session-derived section that was retitled for a head — so retitling
+      // that section must never cost an administrator this destination.
+      expect(hrefOf('Phòng ban')).toBe('/organization/departments');
+      expect(hrefOf('Tổng quan')).toBe('/organization/dashboard');
+    });
+
+    it('gives a DEPARTMENT_HEAD a personnel area instead of the approvals queue', () => {
+      useSession.mockReturnValue(headSession());
+      useMyDepartments.mockReturnValue({
+        departments: [
+          { id: HEAD_DEPARTMENT, slug: 'ops', name: 'Phòng Vận hành', status: 'active' },
+        ],
+        loading: false,
+      });
+      renderLayout();
+
+      // ★ NOT the administrator's queue — no row, and so no destination.
+      expect(screen.queryByText('Phê duyệt')).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: /phê duyệt/i }),
+      ).not.toBeInTheDocument();
+      // Their own area, named for the work rather than for the unit.
+      expect(screen.getByText('NHÂN SỰ')).toBeInTheDocument();
+      expect(screen.queryByText('PHÒNG BAN')).not.toBeInTheDocument();
+      // And it lands on the roster of the unit they actually lead.
+      expect(screen.getByText('Phòng Vận hành').closest('a')).toHaveAttribute(
+        'href',
+        `/organization/department/${HEAD_DEPARTMENT}/members`,
+      );
+    });
+
+    /**
+     * ⚠ `GET /departments/:id/members` answers 403 to an ordinary member of
+     * that very department — the decided default. The menu used to send them
+     * there anyway, so the one HR screen a member could reach was a refusal.
+     */
+    it('offers a MEMBER no approvals queue and no roster to be refused at', () => {
+      useSession.mockReturnValue(memberSession());
+      useMyDepartments.mockReturnValue({
+        departments: [
+          { id: HEAD_DEPARTMENT, slug: 'ops', name: 'Phòng Vận hành', status: 'active' },
+        ],
+        loading: false,
+      });
+      renderLayout();
+
+      expect(screen.queryByText('Phê duyệt')).not.toBeInTheDocument();
+      expect(screen.queryByText('NHÂN SỰ')).not.toBeInTheDocument();
+      expect(screen.queryByText('PHÒNG BAN')).not.toBeInTheDocument();
+      expect(screen.queryByText('Phòng Vận hành')).not.toBeInTheDocument();
+      // No link anywhere points at a roster this account would be refused at.
+      const rosterLinks = screen
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href') ?? '')
+        .filter((href) => href.includes('/members'));
+      expect(rosterLinks).toEqual([]);
     });
   });
 

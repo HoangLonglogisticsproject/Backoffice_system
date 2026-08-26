@@ -32,6 +32,11 @@ const PHRASES = {
   departments: { vi: 'Phòng ban', en: 'Departments' },
   employees: { vi: 'Nhân viên', en: 'Employees' },
   departmentsSection: { vi: 'PHÒNG BAN', en: 'DEPARTMENTS' },
+  // ★ THE HEAD'S OWN SECTION. A head does not administer the deployment; they
+  // run the people in ONE unit. Naming their area for the work (personnel)
+  // rather than for the unit is what stops it reading as a smaller copy of the
+  // global "Phê duyệt".
+  hrSection: { vi: 'NHÂN SỰ', en: 'PERSONNEL' },
   sales: { vi: 'Sales', en: 'Sales' },
   operations: { vi: 'Operations', en: 'Operations' },
   marketing: { vi: 'Marketing', en: 'Marketing' },
@@ -277,9 +282,19 @@ const PHRASES = {
   statusPending: { vi: 'Chờ duyệt', en: 'Pending' },
   statusApproved: { vi: 'Đã duyệt', en: 'Approved' },
   statusRejected: { vi: 'Từ chối', en: 'Rejected' },
+  // ★ SCOPE. Only ever true of a caller who HAS a scope — a head. It answers
+  // "why is this menu empty" with "because of who you are".
   noDepartmentScope: {
     vi: 'Tài khoản của bạn không phụ trách phòng ban nào.',
     en: 'Your account does not lead any department.',
+  },
+  // ★ INVENTORY, and the distinction is the whole point. A SUPERADMIN is scoped
+  // to nothing BY DESIGN, so telling them they lead no department states a rule
+  // that does not apply to them and hides the real reason: the deployment has
+  // no active department to put anybody into yet.
+  noActiveDepartments: {
+    vi: 'Chưa có phòng ban nào đang hoạt động.',
+    en: 'No department is active yet.',
   },
 } as const satisfies Record<string, Phrase>;
 
