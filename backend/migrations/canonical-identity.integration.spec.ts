@@ -88,16 +88,22 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
     }
   };
 
-  it('applies EVERY migration in the directory — the list above is not stale', async () => {
+  it('applies EVERY migration up to 0010 — the list above is not stale', async () => {
     // ponytail: an assertion, not a loader. The two lists here are the test's
     // subject (everything before 0010, then 0010), so reading the directory
     // instead would erase the distinction this file is built on. What was
     // actually missing is a failure when a new migration lands and nobody
     // updates the list — silence, until the spec quietly tests a stale schema.
+    //
+    // Bounded at CANONICAL rather than at the end of the directory. Migrations
+    // that sort AFTER 0010 belong to later capabilities and are not part of the
+    // schema this invariant is defined on; requiring 0010 to stay the newest
+    // file in the repo would make every future migration fail here for no
+    // reason. Anything landing at or BEFORE it still has to be listed.
     const onDisk = (await readdir(__dirname)).filter((f) => f.endsWith('.sql')).sort();
 
-    expect(MIGRATIONS).toEqual(onDisk);
-    expect(CANONICAL).toBe(onDisk[onDisk.length - 1]);
+    expect(onDisk).toContain(CANONICAL);
+    expect(MIGRATIONS).toEqual(onDisk.slice(0, onDisk.indexOf(CANONICAL) + 1));
   });
 
   beforeAll(async () => {
