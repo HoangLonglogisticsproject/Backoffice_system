@@ -301,6 +301,124 @@ const PHRASES = {
     vi: 'Chưa có phòng ban nào đang hoạt động.',
     en: 'No department is active yet.',
   },
+
+  // ── Dispatch ──────────────────────────────────────────────────────────────
+  // The trip schedule and its catalogue, replacing `LỊCH XE - CHI PHÍ XE.xlsx`.
+  //
+  // ★ THE VIETNAMESE IS THE SOURCE, NOT THE TRANSLATION. Dispatch has entered
+  // these columns by hand for months and says "chuyến", "biển số", "đợi SX" —
+  // so the vi side records the words already in use and the en side follows it.
+  // Inventing tidier Vietnamese here would rename a vocabulary that is already
+  // shared with the drivers on the phone.
+  dispatchSection: { vi: 'ĐIỀU PHỐI', en: 'DISPATCH' },
+  tripSchedule: { vi: 'Lịch xe', en: 'Trip schedule' },
+  tripScheduleTitle: { vi: 'Lịch xe', en: 'Trip schedule' },
+  tripMasterData: { vi: 'Danh mục xe & khách', en: 'Vehicles & customers' },
+
+  // Actions shared by both dispatch screens.
+  save: { vi: 'Lưu', en: 'Save' },
+  saving: { vi: 'Đang lưu…', en: 'Saving…' },
+  saveFailed: { vi: 'Không lưu được.', en: 'Could not save.' },
+  edit: { vi: 'Sửa', en: 'Edit' },
+  archive: { vi: 'Lưu trữ', en: 'Archive' },
+
+  // Trip schedule — the table
+  addTrip: { vi: 'Thêm chuyến', en: 'Add trip' },
+  editTrip: { vi: 'Sửa chuyến', en: 'Edit trip' },
+  dateFrom: { vi: 'Từ ngày', en: 'From' },
+  dateTo: { vi: 'Đến ngày', en: 'To' },
+  thisMonth: { vi: 'Tháng này', en: 'This month' },
+  colDate: { vi: 'Ngày', en: 'Date' },
+  colVehicle: { vi: 'Xe', en: 'Vehicle' },
+  colCustomer: { vi: 'Khách hàng', en: 'Customer' },
+  colCargo: { vi: 'Hàng hoá', en: 'Cargo' },
+  colPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
+  colDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },
+  colNote: { vi: 'Ghi chú', en: 'Note' },
+  colCreatedBy: { vi: 'Người tạo', en: 'Created by' },
+  emptyTrips: {
+    vi: 'Không có chuyến nào trong khoảng ngày này.',
+    en: 'No trips in this date range.',
+  },
+  // ★ AN ANSWER, NOT A PROMPT. The workbook wrote `ĐIỀN SAU` in a cell it had
+  // not filled yet, and the API stores that as null — so this reads as a state
+  // the row is genuinely in, both in a select and in a table cell.
+  notSelected: { vi: 'Chưa chọn', en: 'Not selected' },
+
+  // Trip schedule — the form
+  fieldDate: { vi: 'Ngày chạy', en: 'Trip date' },
+  fieldStatus: { vi: 'Trạng thái', en: 'Status' },
+  fieldVehicle: { vi: 'Xe', en: 'Vehicle' },
+  fieldCustomer: { vi: 'Khách hàng', en: 'Customer' },
+  fieldCargo: { vi: 'Thông tin hàng', en: 'Cargo details' },
+  fieldPickupAddress: { vi: 'Địa chỉ lấy hàng', en: 'Pickup address' },
+  fieldDeliveryAddress: { vi: 'Địa chỉ giao hàng', en: 'Delivery address' },
+  fieldPickupContact: { vi: 'Liên hệ lấy hàng', en: 'Pickup contact' },
+  fieldDeliveryContact: { vi: 'Liên hệ giao hàng', en: 'Delivery contact' },
+  fieldPickupAt: { vi: 'Giờ lấy hàng', en: 'Pickup time' },
+  fieldDeliveryAt: { vi: 'Giờ giao hàng', en: 'Delivery time' },
+  fieldNote: { vi: 'Ghi chú', en: 'Note' },
+  // Why the delivery control asks for a date as well as a time.
+  deliveryMayBeLater: {
+    vi: 'Giờ giao có thể rơi sang ngày khác ngày lấy hàng.',
+    en: 'Delivery may fall on a later day than pickup.',
+  },
+  catalogueHint: {
+    vi: 'Chưa có xe hoặc khách trong danh mục? Bấm + để thêm ngay tại đây.',
+    en: 'Vehicle or customer not in the catalogue? Use + to add it here.',
+  },
+  confirmArchiveTripTitle: { vi: 'Lưu trữ chuyến', en: 'Archive trip' },
+  confirmArchiveTripBody: {
+    vi: 'Lưu trữ chuyến này? Chuyến sẽ không còn hiện trong lịch, nhưng dữ liệu vẫn được giữ lại.',
+    en: 'Archive this trip? It leaves the schedule, but the record is kept.',
+  },
+
+  // Trip status — the workbook's legend, kept as dispatch already says it.
+  //
+  // ⚠ NOT PARAPHRASED. Each monthly sheet carries this legend at the bottom and
+  // dispatch reads it daily; a neater wording would be a second name for a
+  // state everybody can already name. See `tripStatus.ts` for the colours,
+  // which are carried over from the row fills for the same reason.
+  //
+  // `tripAwaitingVehicle` is the one abbreviation: the sheet writes `SX RỒI
+  // ĐANG ĐỢI XE`, which does not fit a badge. The short form is what the page
+  // spec pins, so it is the wording the screen is actually held to.
+  tripAwaitingProduction: { vi: 'Đang đợi SX', en: 'Awaiting production' },
+  tripAwaitingVehicle: { vi: 'SX rồi, đợi xe', en: 'Produced, awaiting vehicle' },
+  tripNeedsConfirmation: { vi: 'Thông tin cần xác nhận lại', en: 'Needs confirmation' },
+  tripExternalBooking: { vi: 'Book xe ngoài', en: 'External booking' },
+  tripDone: { vi: 'Đã xong', en: 'Done' },
+  changeStatus: { vi: 'Đổi trạng thái', en: 'Change status' },
+  statusChangeFailed: {
+    vi: 'Không đổi được trạng thái.',
+    en: 'Could not change the status.',
+  },
+
+  // Catalogue — vehicles and customers, the two tabs of one screen
+  vehicles: { vi: 'Xe', en: 'Vehicles' },
+  customers: { vi: 'Khách hàng', en: 'Customers' },
+  addVehicle: { vi: 'Thêm xe', en: 'Add vehicle' },
+  addCustomer: { vi: 'Thêm khách hàng', en: 'Add customer' },
+  plateLabel: { vi: 'Biển số *', en: 'Plate *' },
+  platePlaceholder: { vi: '51C-123.45', en: '51C-123.45' },
+  customerNameLabel: { vi: 'Tên khách hàng *', en: 'Customer name *' },
+  customerNamePlaceholder: { vi: 'Nhập tên khách hàng', en: 'Enter the customer name' },
+  noteOptional: { vi: 'Ghi chú (không bắt buộc)', en: 'Note (optional)' },
+  showArchived: { vi: 'Hiện cả mục đã lưu trữ', en: 'Show archived' },
+  statusArchived: { vi: 'Đã lưu trữ', en: 'Archived' },
+  emptyVehicles: { vi: 'Chưa có xe nào.', en: 'No vehicles yet.' },
+  emptyCustomers: { vi: 'Chưa có khách hàng nào.', en: 'No customers yet.' },
+  // ★ SAYS WHAT ARCHIVING IS NOT. People read "lưu trữ" as a delete and worry
+  // that last month's trips will lose the plate they were run under. They do
+  // not: the row stops being OFFERED, and nothing already written changes.
+  confirmArchiveVehicleBody: {
+    vi: 'Lưu trữ xe này? Các chuyến đã chạy vẫn giữ nguyên biển số — xe chỉ không còn được chọn cho chuyến mới.',
+    en: 'Archive this vehicle? Past trips keep the plate — it is only no longer offered for new trips.',
+  },
+  confirmArchiveCustomerBody: {
+    vi: 'Lưu trữ khách hàng này? Các chuyến cũ vẫn giữ nguyên tên khách — khách chỉ không còn được chọn cho chuyến mới.',
+    en: 'Archive this customer? Past trips keep the name — they are only no longer offered for new trips.',
+  },
 } as const satisfies Record<string, Phrase>;
 
 export type TranslationKey = keyof typeof PHRASES;
