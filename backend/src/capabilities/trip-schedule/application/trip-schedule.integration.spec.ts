@@ -76,7 +76,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     for (const file of [
       '0001_identity.sql',
       '0002_users_updated_at.sql',
-      '0010_trip_schedule.sql',
+      '0011_trip_schedule.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }

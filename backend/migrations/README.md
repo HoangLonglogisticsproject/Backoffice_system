@@ -56,15 +56,16 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0007_account_invitations.sql` | project | account_invitations · `uq_pending_invitation_email` |
 | `0008_role_assignment_membership_fk_index.sql` | core | partial index cho FK check của invariant #6 |
 | `0009_list_pagination_indexes.sql` | core | 3 index keyset cho các list phòng ban (ADR-0002) |
-| `0010_trip_schedule.sql` | project | trip_vehicles · trip_customers · trip_schedules · 2 unique index chuẩn hoá |
+| `0010_canonical_email_identity.sql` | core | email canonical: CHECK + unique index trên dạng đã chuẩn hoá |
+| `0011_trip_schedule.sql` | project | trip_vehicles · trip_customers · trip_schedules · 2 unique index chuẩn hoá |
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
-gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0010`
+gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0011`
 dùng lại đúng hàm đó cho cả ba bảng của nó.
 
 Mỗi migration có một spec kiểm **hình dạng** file, chạy không cần database:
 `migration-schema.spec.ts` cho `0001`, `organization-schema.spec.ts` cho `0003`,
 `authorization-schema.spec.ts` cho `0004` và `0005`,
-`trip-schedule-schema.spec.ts` cho `0010`.
+`trip-schedule-schema.spec.ts` cho `0011`.
 Chúng bắt đúng loại lỗi sống sót qua review rồi thành lỗ hổng: thiếu unique index,
 cascade ăn mất lịch sử, seed dữ liệu nghiệp vụ.

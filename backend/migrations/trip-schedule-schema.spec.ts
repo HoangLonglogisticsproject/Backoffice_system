@@ -11,11 +11,11 @@ import { join } from 'node:path';
  * normalisation index that lets the workbook's duplicate plates back in, a
  * status column with no CHECK, a DELETE the runtime is forbidden to issue.
  */
-describe('0010_trip_schedule.sql', () => {
+describe('0011_trip_schedule.sql', () => {
   let sql: string;
 
   beforeAll(async () => {
-    sql = await readFile(join(__dirname, '0010_trip_schedule.sql'), 'utf8');
+    sql = await readFile(join(__dirname, '0011_trip_schedule.sql'), 'utf8');
   });
 
   const normalized = (): string => sql.replace(/\s+/g, ' ');
