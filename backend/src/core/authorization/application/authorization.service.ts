@@ -120,6 +120,67 @@ export class AuthorizationService {
   }
 
   /**
+   * BootstrapTransferSuperAdmin — the offline way out of a locked-out deployment.
+   *
+   * ★ WHY THIS EXISTS ALONGSIDE `transferSuperAdmin`. That one is the API path
+   * and needs an ACTOR: somebody already holding GLOBAL authority who is handing
+   * it on. This one has no actor, because the situation it repairs is exactly
+   * the one where nobody can act — the active SuperAdmin assignment sits on an
+   * account that cannot log in (no identity row, a disabled user, a lost
+   * password), so `role.assign` is held only by somebody who can never call it.
+   * There is no HTTP path out of that, deliberately, and there must be no HTTP
+   * path INTO this one either.
+   *
+   * ⚠ REVOKE THEN GRANT, IN ONE TRANSACTION, and the order is forced by the
+   * database rather than chosen: `uq_single_active_superadmin` allows exactly
+   * one active row, so granting first cannot be committed at all.
+   *
+   * Provenance is `'bootstrap'` on BOTH halves, with both actor columns null —
+   * the same vocabulary `bootstrapSuperAdmin` uses, and for the same reason:
+   * there was no actor inside the system. An audit reader must not find this
+   * recorded as though a person performed it.
+   *
+   * Tolerates there being no current holder, unlike `transferSuperAdmin`: a
+   * deployment whose assignment was deleted outright is just as locked out as
+   * one whose holder cannot log in, and refusing here would help nobody.
+   */
+  async bootstrapTransferSuperAdmin(userId: string, now: Date = new Date()): Promise<RoleAssignment> {
+    return this.db.transaction(async (tx) => {
+      const current = await this.repository.findActiveSuperAdmin(tx);
+
+      if (current) {
+        if (current.userId === userId) {
+          throw new ConflictError('That user already holds the SuperAdmin assignment.');
+        }
+
+        const revoked = await this.repository.revoke(
+          { id: current.id, revokedVia: 'bootstrap', revokedBy: null, now },
+          tx,
+        );
+        if (!revoked) throw new ConflictError('The SuperAdmin assignment changed concurrently.');
+
+        // Inside the transaction, as in `transferSuperAdmin`: authority that
+        // survives in a live session is authority that was not actually taken
+        // away. Usually a no-op here — an account nobody can log into has no
+        // sessions — but "usually" is not a guarantee worth relying on.
+        await this.sessions.revokeAllForUser(current.userId, now, tx);
+      }
+
+      return this.repository.grant(
+        {
+          userId,
+          roleKey: 'SUPERADMIN',
+          scopeId: null,
+          membershipId: null,
+          grantedVia: 'bootstrap',
+          grantedBy: null,
+        },
+        tx,
+      );
+    });
+  }
+
+  /**
    * TransferSuperAdmin — revoke, then grant, then cut the old holder's sessions.
    *
    * That order is forced by the database, not chosen: granting first collides

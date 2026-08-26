@@ -21,6 +21,16 @@ export const PERMISSIONS = [
   'role.assign',
   /** Create an account, or change an account's status. */
   'user.write',
+  /** See the trip schedule, and the vehicle / customer catalogues behind it. */
+  'trip.read',
+  /** Add a row to the trip schedule, or a vehicle / customer to the catalogues. */
+  'trip.create',
+  /**
+   * Edit, restatus or archive a trip row — including rows somebody else wrote.
+   * Held by a GLOBAL caller and by any department head; see the requirement
+   * table below for why "any department" is the honest reading here.
+   */
+  'trip.write',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];
@@ -45,9 +55,11 @@ export type ScopeType = 'GLOBAL' | 'DEPARTMENT';
 /**
  * What a NON-GLOBAL caller must be to the target department for each permission.
  *
- *   'head'    — must hold the active head assignment for that department
- *   'member'  — must hold the active membership of that department
- *   'global'  — no departmental relation grants this; only GLOBAL does
+ *   'any'           — no relation required; any authenticated caller holds this
+ *   'head'          — must hold the active head assignment for that department
+ *   'member'        — must hold the active membership of that department
+ *   'head-anywhere' — must be head of SOME department; the target is not asked
+ *   'global'        — no departmental relation grants this; only GLOBAL does
  *
  * This table IS the permission model, and it is deliberately expressed as a
  * relation to the target rather than as a role. Roles would need `can()` to
@@ -58,16 +70,55 @@ export type ScopeType = 'GLOBAL' | 'DEPARTMENT';
  * A head necessarily also holds a membership of the same department (the
  * foreign key in 0004 guarantees it), so 'member' permissions cover heads too
  * without being listed twice.
+ *
+ * ★ WHY 'any' EXISTS, AND WHY IT IS NOT A HOLE. The four department-scoped
+ * relations cannot express "company-wide data every employee works with" — the
+ * trip schedule belongs to no department, so scoping it to one would be an
+ * invention rather than a fact. Without this tier such a route would have to
+ * drop `PermissionGuard` and run on `AuthGuard` alone, which ALSO drops the
+ * `mustChangeSecret` gate that only the guards enforce (see `permission.guard`).
+ * That is the actual hole this tier closes.
+ *
+ * It stays fail-closed because it is a value that must be WRITTEN HERE for a
+ * specific key. A permission with no entry does not become 'any'; it does not
+ * typecheck. And `can()` still refuses an 'any' permission to a caller whose
+ * temporary credential is unchanged, because that check runs first.
+ *
+ * ★ WHY 'head-anywhere' EXISTS, AND WHY 'head' COULD NOT BE REUSED. It answers
+ * "a senior caller, on company-wide data" — the combination the other four
+ * cannot spell. 'head' is a relation to a TARGET department, and `can()` fails
+ * closed when a scoped requirement is asked with no target; the trip routes
+ * declare no target because a trip belongs to no department. So marking
+ * `trip.write` as 'head' would refuse every head at the guard while
+ * `grantedPermissions` — which has no target either, and answers "somewhere" —
+ * happily listed it. The client would draw the edit button and the server would
+ * answer 403 to it. This tier is the one shape that keeps those two agreeing.
+ *
+ * ⚠ IT IS DELIBERATELY NOT "head of the department that owns the row", because
+ * there is no such department. A head of Sales may correct a trip nobody in
+ * Sales entered. That is the price of putting company-wide data behind a
+ * departmental role, and it is accepted here: heads are the shift seniors
+ * dispatch escalates a mistyped row to.
  */
-export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, 'head' | 'member' | 'global'>> =
-  {
-    'unit.read': 'member',
-    'unit.member.read': 'head',
-    'unit.write': 'global',
-    'unit.member.write': 'global',
-    'role.assign': 'global',
-    'user.write': 'global',
-  };
+export type PermissionRequirement = 'any' | 'head' | 'member' | 'head-anywhere' | 'global';
+
+export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRequirement>> = {
+  'unit.read': 'member',
+  'unit.member.read': 'head',
+  'unit.write': 'global',
+  'unit.member.write': 'global',
+  'role.assign': 'global',
+  'user.write': 'global',
+
+  // The trip schedule is dispatch's shared working record: everybody reads it
+  // and everybody adds rows to it. Correcting a row is still administration —
+  // it changes what a past trip appears to say — but administration a shift
+  // senior performs, not one that waits for a GLOBAL administrator. See the
+  // capability README for the decision.
+  'trip.read': 'any',
+  'trip.create': 'any',
+  'trip.write': 'head-anywhere',
+};
 
 export function isPermissionKey(value: string): value is PermissionKey {
   return (PERMISSIONS as readonly string[]).includes(value);

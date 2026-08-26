@@ -78,6 +78,18 @@ export function can(
   const requirement = PERMISSION_REQUIREMENT[permission];
   if (requirement === 'global') return false;
 
+  // Company-wide data with no departmental owner. Reached only AFTER the
+  // provisioning gate above, so "any authenticated caller" never includes one
+  // who is still holding a temporary credential.
+  if (requirement === 'any') return true;
+
+  // ★ ALSO COMPANY-WIDE, BUT SENIOR. Answered without a target on purpose: the
+  // routes behind this tier — correcting the trip schedule — have no department
+  // to name, so asking for one would refuse every head at the guard while
+  // `grantedPermissions` below listed the permission anyway. Holding a head
+  // assignment ANYWHERE is the whole test.
+  if (requirement === 'head-anywhere') return context.headOf.length > 0;
+
   const departmentId = target?.departmentId;
   if (!departmentId) return false;
 
@@ -102,7 +114,13 @@ export function grantedPermissions(context: AuthorizationContext): PermissionKey
 
     const requirement = PERMISSION_REQUIREMENT[permission];
     if (requirement === 'global') return false;
+    if (requirement === 'any') return true;
 
-    return requirement === 'head' ? context.headOf.length > 0 : context.memberOf.length > 0;
+    // 'head-anywhere' falls in with 'head' by construction: both are true
+    // exactly when this caller heads at least one department. They differ only
+    // in `can()`, where one needs a target and the other refuses to ask for one.
+    return requirement === 'head' || requirement === 'head-anywhere'
+      ? context.headOf.length > 0
+      : context.memberOf.length > 0;
   });
 }
