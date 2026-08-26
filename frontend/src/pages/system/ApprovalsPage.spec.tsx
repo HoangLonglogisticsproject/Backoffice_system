@@ -504,13 +504,30 @@ describe('ApprovalsPage', () => {
 
     it('offers a MEMBER nothing', async () => {
       useSession.mockReturnValue(MEMBER());
+      // A MEMBER is neither global nor a head, so the page routes them to the
+      // GLOBAL queue — and the backend answers that with 403 for a plain member
+      // (`membership-request.security.spec.ts`: "cannot read requests,
+      // anywhere"). The default `beforeEach` resolves it with a row instead,
+      // which is a state this role can never actually reach.
+      const { ApiError } = await import('@/utils/errors');
+      fetchPendingMembershipRequests.mockRejectedValue(new ApiError(403, 'FORBIDDEN', 'no'));
+
       renderPage();
+
+      // ⚠ WAIT FOR THE QUEUE TO SETTLE FIRST, and assert afterwards.
+      //
+      // `waitFor(() => expect(...).not.toBeInTheDocument())` passed on its FIRST
+      // tick — the button was absent because the read had not come back yet, not
+      // because the role forbids it. The assertion could never fail, so it was
+      // not testing anything. The refusal text only renders once the read has
+      // settled, so awaiting it is what makes the checks below observe the final
+      // state rather than the loading one.
+      expect(await screen.findByText(/không có quyền|not permitted/i)).toBeInTheDocument();
 
       expect(screen.queryByRole('button', { name: /thêm nhân viên/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /đề nghị mở tài khoản/i })).not.toBeInTheDocument();
-      await waitFor(() =>
-        expect(screen.queryByRole('button', { name: /^duyệt$/i })).not.toBeInTheDocument(),
-      );
+      expect(screen.queryByRole('button', { name: /^duyệt$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
     });
   });
 
