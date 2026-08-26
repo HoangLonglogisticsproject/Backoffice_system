@@ -812,4 +812,88 @@ describe('AddEmployeeModal', () => {
       );
     });
   });
+  /**
+   * ⚠ REGRESSION: ONE CHARACTER PER CLICK.
+   *
+   * `Modal` listed `onClose` in its focus-trap effect's dependencies. Every
+   * caller passes a fresh arrow, so any state change inside an open dialog tore
+   * the effect down — restoring focus to whatever opened the dialog — and set it
+   * up again, focusing the dialog element. A controlled input re-renders on each
+   * keystroke, so each character moved focus off the field being typed into.
+   *
+   * The input was never remounted: `sameNode` below is what says so, and it is
+   * why the fix belongs in the effect's dependencies rather than in an
+   * `onChange` that puts focus back.
+   */
+  describe('typing into it', () => {
+    beforeEach(() => can.mockReturnValue(true));
+
+    /** Types one character at a time, checking the field after each. */
+    const typeInto = (label: string, word: string) => {
+      const field = screen.getByLabelText(label);
+      field.focus();
+      expect(document.activeElement).toBe(field);
+
+      let typed = '';
+      for (const character of word) {
+        typed += character;
+        fireEvent.change(field, { target: { value: typed } });
+
+        const afterKeystroke = screen.getByLabelText(label);
+        // Same DOM node: a re-render, never a remount. If this ever fails the
+        // cause is a different one and the fix below is the wrong fix.
+        expect(afterKeystroke).toBe(field);
+        expect(afterKeystroke).toHaveValue(typed);
+        expect(document.activeElement).toBe(field);
+      }
+    };
+
+    it('keeps focus on the name field across consecutive characters', () => {
+      renderModal();
+      typeInto('Họ và tên *', 'Le Van Long');
+    });
+
+    it('keeps focus on the email local part across consecutive characters', () => {
+      renderModal();
+      typeInto('Email *', 'levanlong');
+    });
+
+    it('keeps focus on the temporary password across consecutive characters', () => {
+      renderModal();
+      typeInto('Mật khẩu tạm *', 'a temporary handover');
+    });
+
+    it('keeps focus while a head types the one field their form has', () => {
+      can.mockReturnValue(false);
+      renderModal();
+      typeInto('Email *', 'nuna');
+    });
+
+    it('holds every other field when a select changes', () => {
+      renderModal();
+      typeInto('Họ và tên *', 'Le');
+      typeInto('Email *', 'le');
+      typeInto('Mật khẩu tạm *', 'a temporary handover');
+
+      const role = screen.getByLabelText('Chức vụ *');
+      fireEvent.change(role, { target: { value: 'DEPARTMENT_HEAD' } });
+
+      // The select keeps its own choice, and nothing typed before it is lost.
+      expect(role).toHaveValue('DEPARTMENT_HEAD');
+      expect(screen.getByLabelText('Họ và tên *')).toHaveValue('Le');
+      expect(screen.getByLabelText('Email *')).toHaveValue('le');
+      expect(screen.getByLabelText('Mật khẩu tạm *')).toHaveValue('a temporary handover');
+    });
+
+    it('keeps focus on the department picker while it is being used', async () => {
+      renderModalWithoutDepartment();
+
+      const picker = await screen.findByLabelText('Phòng ban *');
+      picker.focus();
+      fireEvent.change(picker, { target: { value: OTHER_DEPARTMENT } });
+
+      expect(picker).toHaveValue(OTHER_DEPARTMENT);
+      expect(document.activeElement).toBe(picker);
+    });
+  });
 });
