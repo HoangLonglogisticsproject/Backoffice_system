@@ -120,7 +120,7 @@ Owned by ops. `bo_ops` exists for exactly this and can do nothing else.
 - [ ] `CORS_ORIGINS` — the real frontend origin, or **empty** if the client is served from
       the same origin. Never `*`; the schema refuses it.
 - [ ] `ALLOWED_EMAIL_DOMAINS` — **leave it unset** for Hoàng Long: the schema defaults to
-      `hoanglongti.com`, so the company policy holds without anyone remembering a variable.
+      `hoanglonglti.com`, so the company policy holds without anyone remembering a variable.
       Set it only to point a different deployment at a different domain. Setting it to an
       EXPLICIT empty value means no restriction at all — see
       `docs/backend/company-email-policy.md`.

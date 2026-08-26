@@ -13,6 +13,50 @@ import { isApiError } from '@/utils/errors'
 const MIN_PERMANENT_PASSWORD_LENGTH = 12
 
 /**
+ * The two rules the SERVER cannot apply for us, in the order they are asked.
+ *
+ * The length is checked here for a fast answer only — the server decides
+ * regardless and answers 422 (§13). The confirmation is different: the server
+ * never sees that field, so this is the only place it can be checked at all.
+ *
+ * ★ THE CONFIRMATION MATTERS MORE THAN IT LOOKS. A typo becomes a permanent
+ * password nobody knows, reached from a temporary credential that is destroyed
+ * in the same call — there is no second chance to notice.
+ *
+ * Returns the message, or `null` when there is nothing to say.
+ */
+function localValidationError(newPassword: string, confirmPassword: string): string | null {
+  if (newPassword.length < MIN_PERMANENT_PASSWORD_LENGTH) {
+    return `Mật khẩu mới phải có ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự.`
+  }
+  if (confirmPassword !== newPassword) {
+    return 'Mật khẩu xác nhận không khớp.'
+  }
+  return null
+}
+
+/**
+ * What to tell somebody about a failed password change.
+ *
+ * MODULE LEVEL AND PURE, because the mapping is a fact about the RESPONSE and
+ * not about this screen's state. Four branches nested inside a `catch` inside a
+ * handler cost more than the rest of the handler put together; out here they
+ * are a flat list that reads as the table it is.
+ *
+ * Status 0 is "never reached the server" rather than a made-up 500 — see the
+ * transport layer.
+ */
+function messageFor(failure: unknown): string {
+  if (!isApiError(failure)) return 'Đã xảy ra lỗi không mong muốn.'
+  if (failure.status === 401) return 'Mật khẩu hiện tại không đúng.'
+  if (failure.status === 0) return 'Không kết nối được tới máy chủ.'
+  if (failure.status === 422) {
+    return failure.details ? Object.values(failure.details).join(' ') : failure.message
+  }
+  return failure.message
+}
+
+/**
  * The only way out of `password-change-required` (contract §12).
  *
  * An account provisioned by an administrator holds a temporary credential, and
@@ -26,6 +70,7 @@ const MIN_PERMANENT_PASSWORD_LENGTH = 12
 export default function ChangePasswordPage() {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -42,12 +87,15 @@ export default function ChangePasswordPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    // The button is disabled while in flight, but Enter submits the form
+    // directly and never touches it. A second change-password call answers 401
+    // — the first one already revoked the session it authenticated with.
+    if (submitting) return
     setError(null)
 
-    // Checked here for a fast answer; the server decides regardless and
-    // answers 422 (§13).
-    if (newPassword.length < MIN_PERMANENT_PASSWORD_LENGTH) {
-      setError(`Mật khẩu mới phải có ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự.`)
+    const invalid = localValidationError(newPassword, confirmPassword)
+    if (invalid) {
+      setError(invalid)
       return
     }
 
@@ -59,19 +107,7 @@ export default function ChangePasswordPage() {
       await signOut()
       navigate('/login', { replace: true })
     } catch (error_) {
-      if (isApiError(error_)) {
-        if (error_.status === 401) {
-          setError('Mật khẩu hiện tại không đúng.')
-        } else if (error_.status === 422) {
-          setError(error_.details ? Object.values(error_.details).join(' ') : error_.message)
-        } else if (error_.status === 0) {
-          setError('Không kết nối được tới máy chủ.')
-        } else {
-          setError(error_.message)
-        }
-      } else {
-        setError('Đã xảy ra lỗi không mong muốn.')
-      }
+      setError(messageFor(error_))
     } finally {
       setSubmitting(false)
     }
@@ -145,7 +181,7 @@ export default function ChangePasswordPage() {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="newPassword" className="text-[13px] font-bold text-gray-700 ml-1">
+              <label htmlFor="confirmPassword" className="text-[13px] font-bold text-gray-700 ml-1">
                 Nhập lại mật khẩu mới
               </label>
               <div className="relative">
@@ -153,10 +189,10 @@ export default function ChangePasswordPage() {
                   <Lock className="h-[18px] w-[18px]" />
                 </div>
                 <Input
-                  id="newPassword"
+                  id="confirmPassword"
                   type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
                   autoComplete="new-password"
                   minLength={MIN_PERMANENT_PASSWORD_LENGTH}
                   placeholder={`Ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự`}

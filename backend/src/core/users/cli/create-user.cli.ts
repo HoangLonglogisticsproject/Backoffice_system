@@ -67,6 +67,27 @@ export async function readPassword(
   return reader.readSecret('Password: ');
 }
 
+/**
+ * What the bootstrap account is created with.
+ *
+ * ★ FIRST LOGIN MUST CHANGE IT, in every environment. The password was typed
+ * on a command line: it is in shell history, in the operator’s clipboard, and
+ * quite possibly in a chat message to whoever is running the demo. It gets
+ * somebody in once and then stops meaning anything.
+ *
+ * `createWithPassword` defaults this to true anyway. It is stated here so the
+ * rule belongs to the account that owns the deployment rather than being
+ * inherited from another file — and so a spec can hold it in place, which a
+ * default alone cannot: delete the line and the behaviour would not move.
+ */
+export function bootstrapInput(input: {
+  displayName: string;
+  subject: string;
+  password: string;
+}): { displayName: string; subject: string; password: string; mustChangeSecret: boolean } {
+  return { ...input, mustChangeSecret: true };
+}
+
 async function main(): Promise<void> {
   const { email, name, superadmin } = parseArgs(process.argv.slice(2));
 
@@ -84,22 +105,21 @@ async function main(): Promise<void> {
     app.get<SecretReader>(SECRET_READER),
     process.env['BOOTSTRAP_PASSWORD'],
   );
-  // The PERMANENT floor, from the one place that defines it. This account
-  // chooses its own secret and is not asked to change it, so it is a permanent
-  // credential — not the temporary kind provisioning hands out. Reading the
-  // constant rather than repeating the number is what keeps the two in step
-  // when one of them moves.
+  // The PERMANENT floor, from the one place that defines it — deliberately,
+  // even though this credential must be replaced at first login. It is typed
+  // by a human at a prompt and may sit in a terminal until they get round to
+  // signing in, a longer and more exposed life than the temporary floor was
+  // sized for. Reading the constant rather than repeating the number is what
+  // keeps the two in step when one of them moves.
   if (password.length < PASSWORD_POLICY.minLength) {
     console.error(`Password must be at least ${PASSWORD_POLICY.minLength} characters.`);
     process.exit(1);
   }
 
   try {
-    const user = await app.get(UserService).createWithPassword({
-      displayName: name,
-      subject: email,
-      password,
-    });
+      const user = await app.get(UserService).createWithPassword(
+        bootstrapInput({ displayName: name, subject: email, password }),
+      );
     // AFTER the account exists, and in its own transaction: the grant is a
     // separate decision with its own uniqueness rule, and a deployment that
     // already has a SuperAdmin must fail HERE, with the account intact, rather

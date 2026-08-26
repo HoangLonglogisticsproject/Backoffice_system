@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import type { Database, DatabaseQuery } from '../../../common/types/database.port';
@@ -73,17 +73,14 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
 
+    // READ, not listed. This spec wants the schema a deployment actually runs —
+    // it exercises the real repository, and `findPendingByEmail` calls
+    // `canonical_identity()`, which only exists from 0010. A hand-kept list
+    // silently tests a stale schema the day somebody adds a migration and
+    // forgets this file; it already did, between 0008 and 0010.
     const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
-    for (const file of [
-      '0001_identity.sql',
-      '0002_users_updated_at.sql',
-      '0003_organization.sql',
-      '0004_authorization.sql',
-      '0005_identity_credential_state.sql',
-      '0006_membership_change_requests.sql',
-      '0007_account_invitations.sql',
-      '0008_role_assignment_membership_fk_index.sql',
-    ]) {
+    const files = (await readdir(migrations)).filter((f) => f.endsWith('.sql')).sort();
+    for (const file of files) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
 
@@ -292,31 +289,31 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
      * The company policy on the deployment's real domain — the schema default,
      * so this is what a deployment that configures nothing gets.
      *
-     * The head's form appends `@hoanglongti.com` and cannot produce anything
+     * The head's form appends `@hoanglonglti.com` and cannot produce anything
      * else. None of that reaches here: these call the service directly, which
      * is the shape of a head who skips the form and posts to the endpoint.
      */
     describe('the company email policy', () => {
       it('accepts the company domain, and stores the full address', async () => {
         const { a, headAId } = await scenario();
-        allowedDomains = ['hoanglongti.com'];
+        allowedDomains = ['hoanglonglti.com'];
 
         const invitation = await invitations.create({
           departmentId: a.id,
           requestedBy: headAId,
-          email: 'nuna@hoanglongti.com',
+          email: 'nuna@hoanglonglti.com',
         });
 
-        expect(invitation.email).toBe('nuna@hoanglongti.com');
+        expect(invitation.email).toBe('nuna@hoanglonglti.com');
       });
 
       it.each([
         ['an outside domain', 'nuna@gmail.com', /domain is not permitted/],
         ['a bare local part', 'hlt58', /not a valid address/],
-        ['nothing before the @', '@hoanglongti.com', /not a valid address/],
+        ['nothing before the @', '@hoanglonglti.com', /not a valid address/],
       ])('refuses %s', async (_label, email, message) => {
         const { a, headAId } = await scenario();
-        allowedDomains = ['hoanglongti.com'];
+        allowedDomains = ['hoanglonglti.com'];
 
         await expect(
           invitations.create({ departmentId: a.id, requestedBy: headAId, email }),

@@ -1,5 +1,5 @@
 import type { SecretReader } from '../../../common/types/secret-reader.port';
-import { parseArgs, readPassword } from './create-user.cli';
+import { parseArgs, readPassword, bootstrapInput } from './create-user.cli';
 
 /**
  * The CLI is orchestration, and these are the two decisions it still makes on
@@ -92,6 +92,47 @@ describe('create-user CLI', () => {
       const source = reader('from the prompt');
 
       await expect(readPassword(source, '')).resolves.toBe('from the prompt');
+    });
+  });
+
+  // ------------------------------------------------ the bootstrap contract --
+
+  describe('★ what the CLI asks the service for', () => {
+    /**
+     * The service DEFAULTS `mustChangeSecret` to true, and this asserts that the
+     * CLI says it anyway. Two different things worth locking:
+     *
+     *   the default   protects a caller that forgets
+     *   this line     protects the account that owns the deployment, whose rule
+     *                 should be readable at the call site rather than inherited
+     *
+     * Delete `mustChangeSecret: true` from the CLI and the default keeps the
+     * behaviour identical — so nothing else in the suite would notice. This is
+     * the test that does.
+     */
+    it('★ bootstraps with mustChangeSecret: true, explicitly', () => {
+      const input = bootstrapInput({
+        displayName: 'Tong Giam Doc',
+        subject: 'boss@hoanglonglti.com',
+        password: 'a bootstrap passphrase',
+      });
+
+      expect(input.mustChangeSecret).toBe(true);
+    });
+
+    it('passes the operator’s values through untouched', () => {
+      const input = bootstrapInput({
+        displayName: 'Tong Giam Doc',
+        subject: 'boss@hoanglonglti.com',
+        password: 'a bootstrap passphrase',
+      });
+
+      expect(input).toEqual({
+        displayName: 'Tong Giam Doc',
+        subject: 'boss@hoanglonglti.com',
+        password: 'a bootstrap passphrase',
+        mustChangeSecret: true,
+      });
     });
   });
 });

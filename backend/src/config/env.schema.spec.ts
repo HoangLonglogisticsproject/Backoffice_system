@@ -122,7 +122,7 @@ describe('validateEnv', () => {
      * fails OPEN on any deployment that forgets it.
      */
     it('defaults to the company domain, so forgetting the variable still enforces it', () => {
-      expect(validateEnv(valid).ALLOWED_EMAIL_DOMAINS).toEqual(['hoanglongti.com']);
+      expect(validateEnv(valid).ALLOWED_EMAIL_DOMAINS).toEqual(['hoanglonglti.com']);
     });
 
     it('is overridable by a deployment that is not this one', () => {
@@ -134,9 +134,9 @@ describe('validateEnv', () => {
 
     it('lowercases, because the address it is compared against is normalised', () => {
       expect(
-        validateEnv({ ...valid, ALLOWED_EMAIL_DOMAINS: 'HoangLongTI.com' })
+        validateEnv({ ...valid, ALLOWED_EMAIL_DOMAINS: 'HoangLongLTI.com' })
           .ALLOWED_EMAIL_DOMAINS,
-      ).toEqual(['hoanglongti.com']);
+      ).toEqual(['hoanglonglti.com']);
     });
 
     it('treats an EXPLICIT empty value as "no restriction" — the documented escape hatch', () => {

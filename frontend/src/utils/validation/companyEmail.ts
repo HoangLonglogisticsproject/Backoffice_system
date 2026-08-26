@@ -1,9 +1,9 @@
 /**
  * The company email policy, as the form needs it.
  *
- * Every employee account is `<local-part>@hoanglongti.com`. The form therefore
+ * Every employee account is `<local-part>@hoanglonglti.com`. The form therefore
  * asks for the local part only and appends the domain — nobody types
- * `@hoanglongti.com` fifty times, and nobody can type a different one.
+ * `@hoanglonglti.com` fifty times, and nobody can type a different one.
  *
  * ★ THIS IS A UX HELPER, NOT A SECURITY CONTROL. The domain is enforced by the
  * server on every provisioning route (`ALLOWED_EMAIL_DOMAINS`, applied in
@@ -16,7 +16,7 @@
  * rule on this side is a second thing that can disagree with it.
  */
 
-export const COMPANY_EMAIL_DOMAIN = 'hoanglongti.com';
+export const COMPANY_EMAIL_DOMAIN = 'hoanglonglti.com';
 
 const SUFFIX = `@${COMPANY_EMAIL_DOMAIN}`;
 
@@ -30,10 +30,10 @@ const MAX_EMAIL_LENGTH = 320;
  * The alternative — "this field takes the local part only, try again" — punishes
  * the single most predictable thing somebody does with an email field, and the
  * intent is never ambiguous. Case-insensitive, because the server treats
- * `@HoangLongTI.com` as the same domain.
+ * `@HoangLongLTI.com` as the same domain.
  *
  * `uyen`                    → `uyen`
- * `uyen@hoanglongti.com`    → `uyen`      ← never `uyen@hoanglongti.com@…`
+ * `uyen@hoanglonglti.com`    → `uyen`      ← never `uyen@hoanglonglti.com@…`
  * `uyen@gmail.com`          → `uyen@gmail.com`, which then fails validation
  */
 export function toLocalPart(typed: string): string {

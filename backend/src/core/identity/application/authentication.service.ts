@@ -1,6 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database } from '../../../common/types/database.port';
-import { DomainError, NotFoundError, UnauthorizedError } from '../../../common/errors/domain.error';
+import {
+  DomainError,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationError,
+} from '../../../common/errors/domain.error';
 import { assertPasswordAcceptable } from '../domain/password.policy';
 import { LOCAL_PROVIDER } from '../../users/domain/user.entity';
 import { IdentityRepository } from '../persistence/identity.repository';
@@ -142,6 +147,27 @@ export class AuthenticationService {
     // Policy applies to the NEW secret only. Tightening it later must not make
     // an existing account impossible to log into.
     assertPasswordAcceptable(input.newPassword);
+
+    // ★ A CHANGE HAS TO CHANGE SOMETHING.
+    //
+    // Without this, somebody holding a temporary credential clears
+    // `must_change_secret` by submitting the password they were given, and the
+    // gate becomes a formality: the secret that travelled — a command line, an
+    // email, a chat message — still opens the account. Measured before this
+    // existed: same value in, 204 out, flag false.
+    //
+    // A string comparison, not a second `verify`: the line above already proved
+    // `currentPassword` IS the account's password, so equal strings mean equal
+    // passwords. Hashing again would cost another 100 ms of scrypt to learn
+    // nothing. Both values come from the same authenticated caller in the same
+    // request, so there is no secret here to leak through timing.
+    //
+    // Thrown BEFORE the transaction, so a refused attempt changes nothing —
+    // the credential stands, the flag stands, and the caller keeps the session
+    // they are using to fix it.
+    if (input.newPassword === input.currentPassword) {
+      throw new ValidationError('The new password must be different from the current one.');
+    }
 
     const secretHash = await this.hasher.hash(input.newPassword);
 

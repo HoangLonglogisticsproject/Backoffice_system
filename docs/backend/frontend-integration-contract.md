@@ -157,7 +157,7 @@ không*. Hiển thị sự vắng mặt đúng như nó là; **không bịa** `A
 `Unknown`, hay in `userId` ra thay.
 
 **Đăng nhập bằng địa chỉ đầy đủ**, không bao giờ bằng `username`. `phuongle` là
-giá trị trình bày; `phuongle@hoanglongti.com` là credential. Xem
+giá trị trình bày; `phuongle@hoanglonglti.com` là credential. Xem
 `docs/backend/company-email-policy.md` cho mô hình định danh đầy đủ.
 
 `departmentIds` có **tối đa một phần tử**: một người active thuộc đúng một phòng.
@@ -624,6 +624,36 @@ Mọi giá trị được **đọc lại lúc duyệt**. Request tạo thứ Hai
 Sáu, và trong khoảng đó target có thể đã chuyển phòng, đã bị disable, hoặc người
 đề xuất đã thôi làm HEAD → **409**.
 
+### TRANSFER thiếu đích → **409**, KHÔNG phải 422
+
+`targetDepartmentId` là optional trong schema — REMOVE cấm mang nó — nên
+"TRANSFER phải có đích" là **quy tắc nghiệp vụ** mà service kiểm, không phải quy
+tắc hình dạng mà pipe kiểm. Nghiệp vụ trả `CONFLICT`.
+
+Client rẽ nhánh theo 422 để tô đỏ một field sẽ **không bao giờ** tô được field
+này. Được ghim trong `mutations.integration.spec.ts`.
+
+### ⚠️ NỢ ĐÃ BIẾT — `reason` lúc từ chối KHÔNG được lưu
+
+Cột `reason` thuộc về **người ĐỀ XUẤT**, ghi một lần lúc tạo. Không có khái niệm
+"lý do từ chối" trong schema, và **cả hai** endpoint reject —
+`/membership-requests/:id/reject` và `/account-invitations/:id/reject` — không
+đọc body.
+
+Frontend hiện tại vẫn gửi `{ reason }`, và màn hình Approvals vẫn thu nó bằng một
+textarea "Lý do (tuỳ chọn)". Request thành công 200, **text bị bỏ đi im lặng**.
+
+Trạng thái: **nợ sản phẩm đã ghi nhận, cố ý chưa xử lý.** Backend đúng như thiết
+kế; UI hứa nhiều hơn API có. Hai hướng xử lý, và chọn hướng nào là quyết định sản
+phẩm chứ không phải sửa lỗi:
+
+1. bỏ textarea khỏi dialog reject, hoặc
+2. thêm cột `decision_reason` + migration + đọc body ở hai endpoint reject.
+
+Hành vi thật được ghim bằng test trong `mutations.integration.spec.ts`
+(`reason` gửi lên, response trả về `reason` của người đề xuất, không đổi) — để
+suite mô tả API như nó đang là, không như UI tưởng.
+
 ---
 
 ## 11. Error codes
@@ -773,9 +803,9 @@ người gọi vừa tự chọn giá trị đó nên không có gì để trả
 
 ⚠️ **MÀN HÌNH BÀN GIAO PHẢI HIỆN ĐỊA CHỈ ĐẦY ĐỦ, KHÔNG PHẢI `username`.**
 Response của approve có cả `username` (`nuna`) lẫn `invitation.email`
-(`nuna@hoanglongti.com`). Chỉ cái thứ hai đăng nhập được: `POST /auth/login` nhận
+(`nuna@hoanglonglti.com`). Chỉ cái thứ hai đăng nhập được: `POST /auth/login` nhận
 `subject` là địa chỉ đầy đủ. Dán nhãn "Tên đăng nhập" lên `nuna` là đưa cho người
-ta một thứ không dùng được — frontend hiện `Email đăng nhập: nuna@hoanglongti.com`.
+ta một thứ không dùng được — frontend hiện `Email đăng nhập: nuna@hoanglonglti.com`.
 `username` vẫn là projection hiển thị và không có việc gì trên màn hình này.
 
 Ngưỡng tạm thấp hơn là **cố ý**: mật khẩu tạm được đọc cho nhau nghe, mỗi người
@@ -928,9 +958,9 @@ Frontend không có màn hình nào cho việc này, và không nên có.
 **Đã có endpoint** — xem §15b. Frontend dựng được màn hình bổ nhiệm trưởng
 phòng cho SUPERADMIN.
 
-### Email công ty — `@hoanglongti.com`
+### Email công ty — `@hoanglonglti.com`
 
-**Mọi email tài khoản nhân viên phải thuộc `@hoanglongti.com`.** Backend từ chối
+**Mọi email tài khoản nhân viên phải thuộc `@hoanglonglti.com`.** Backend từ chối
 mọi domain khác trên cả `POST /users` lẫn `POST /departments/:id/account-invitations`
 (422), kể cả khi gọi thẳng API không qua form.
 
@@ -938,12 +968,12 @@ Trong UI, người dùng **chỉ gõ local part**; domain hiển thị cố đ�
 nhập và không sửa được. Frontend ghép trước khi gửi:
 
 ```
-gõ:  uyen         →  gửi:  { "email": "uyen@hoanglongti.com" }
-gõ:  nuna         →  gửi:  { "email": "nuna@hoanglongti.com" }
+gõ:  uyen         →  gửi:  { "email": "uyen@hoanglonglti.com" }
+gõ:  nuna         →  gửi:  { "email": "nuna@hoanglonglti.com" }
 ```
 
-Dán cả địa chỉ `uyen@hoanglongti.com` được chấp nhận và bóc đuôi — không bao giờ
-sinh ra `uyen@hoanglongti.com@hoanglongti.com`. Dán `uyen@gmail.com` bị từ chối
+Dán cả địa chỉ `uyen@hoanglonglti.com` được chấp nhận và bóc đuôi — không bao giờ
+sinh ra `uyen@hoanglonglti.com@hoanglonglti.com`. Dán `uyen@gmail.com` bị từ chối
 ngay tại form.
 
 Body gửi lên **luôn là địa chỉ đầy đủ**, không bao giờ là local part. Chưa có

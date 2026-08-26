@@ -17,6 +17,7 @@ import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import {
   HeadOfRouteDepartmentGuard,
   PermissionGuard,
+  RequireHeadOfRouteDepartment,
   RequirePermission,
 } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
@@ -61,8 +62,17 @@ type CreateRequestInput = z.infer<typeof createRequestSchema>;
 export class MembershipRequestController {
   constructor(private readonly requests: MembershipRequestService) {}
 
+  /**
+   * THE HEAD OF THAT UNIT, AND NOT THE GLOBAL ADMINISTRATOR — same reason as
+   * the invitation route: deciding is global-only and refuses a self-decision,
+   * so a request the global administrator raised has nobody left to decide it.
+   *
+   * The direct routes remain: `POST /departments/:id/members` moves somebody,
+   * and `PATCH /users/:userId/status` disables an account.
+   */
   @Post('departments/:departmentId/membership-requests')
   @UseGuards(AuthGuard, CsrfGuard, HeadOfRouteDepartmentGuard)
+  @RequireHeadOfRouteDepartment('departmentId', { allowGlobal: false })
   async create(
     @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(createRequestSchema)) body: CreateRequestInput,

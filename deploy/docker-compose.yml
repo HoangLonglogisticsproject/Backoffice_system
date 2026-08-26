@@ -1,0 +1,75 @@
+# Runtime for the VPS. Postgres + NestJS; nginx runs on the host and serves the
+# frontend from a directory, so it is not a service here.
+#
+# ★ NOTHING IS PUBLISHED TO THE INTERNET. Postgres publishes no port at all and
+# is reachable only over the compose network; the backend binds 127.0.0.1 so
+# only nginx on this host can reach it. UFW is the second layer, not the first.
+# Fixed, so containers are `hoanglong-bo-postgres-1` rather than named after
+# whatever directory this file happens to sit in.
+name: hoanglong-bo
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # A bind mount, not a named volume: the path is visible, and backing the
+      # database up is `tar` on a directory somebody can find without knowing
+      # docker's storage layout.
+      - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../deploy/backend.Dockerfile
+      args:
+        RELEASE_SHA: ${APP_VERSION:-unknown}
+    # ★ THE TAG IS THE RELEASE IDENTITY. `latest` was here before and it is the
+    # reason nothing could be rolled back: one mutable tag, overwritten by every
+    # build, so the previous image existed but had no name to call it by.
+    #
+    # `APP_VERSION` is the commit being released. Deploying is
+    # `APP_VERSION=<sha> docker compose up -d backend`; rolling back is the same
+    # line with the previous sha and `--no-build`. Unset still works for a hand
+    # build on the box, and lands on `:local` rather than pretending to be a
+    # release nobody can trace.
+    image: hoanglong-bo-backend:${APP_VERSION:-local}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-log}
+      # The service name, never the public IP — this never leaves the compose
+      # network.
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Same origin through nginx, so CORS stays off. Empty is the production
+      # shape the backend was written for.
+      CORS_ORIGINS: ''
+      # ★ Only the host's docker bridge is believed. The login throttle keys on
+      # req.ip; trusting more than the one proxy in front of us would let a
+      # forged X-Forwarded-For mint a fresh throttle budget per request.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
+    ports:
+      - '127.0.0.1:3000:3000'
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:3000/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '3' }

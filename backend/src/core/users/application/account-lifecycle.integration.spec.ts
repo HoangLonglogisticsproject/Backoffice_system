@@ -290,7 +290,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
     /**
      * The company policy itself, on the deployment's real domain — the two
      * above prove the allowlist is a mechanism, these prove which value it is
-     * pointed at. `hoanglongti.com` is the schema default, so this is what a
+     * pointed at. `hoanglonglti.com` is the schema default, so this is what a
      * deployment that configures nothing at all gets.
      *
      * ★ FRONTEND CONSTRUCTION IS NOT A CONTROL. The form appends the domain, so
@@ -300,7 +300,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
      */
     describe('the company email policy', () => {
       beforeEach(() => {
-        allowedDomains = ['hoanglongti.com'];
+        allowedDomains = ['hoanglonglti.com'];
       });
 
       it('stores and returns the FULL canonical address, not the local part', async () => {
@@ -308,7 +308,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
 
         const account = await provisioning.provision({
           displayName: 'Uyen',
-          email: 'uyen@hoanglongti.com',
+          email: 'uyen@hoanglonglti.com',
           departmentId: dept.id,
           initialPassword: 'a valid passphrase',
         });
@@ -319,7 +319,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
           'SELECT subject FROM identities WHERE user_id = $1',
           [account.user.id],
         );
-        expect(rows[0]!.subject).toBe('uyen@hoanglongti.com');
+        expect(rows[0]!.subject).toBe('uyen@hoanglonglti.com');
       });
 
       it.each([
@@ -328,7 +328,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
         // What the form would have built if it had no validation at all, and
         // what a direct caller can simply type.
         ['a bare local part with no domain', 'hlt58', /not a valid address/],
-        ['nothing before the @', '@hoanglongti.com', /not a valid address/],
+        ['nothing before the @', '@hoanglonglti.com', /not a valid address/],
         ['nothing after the @', 'uyen@', /not a valid address/],
       ])('refuses %s, and creates nothing', async (_label, email, message) => {
         const dept = await departments.create({ slug: 'a', name: 'A' });

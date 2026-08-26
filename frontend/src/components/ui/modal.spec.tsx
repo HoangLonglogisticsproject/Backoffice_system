@@ -124,4 +124,53 @@ describe('Modal', () => {
     renderModal();
     expect(screen.getByRole('button', { name: 'Đóng' })).toBeInTheDocument();
   });
+  /**
+   * ⚠ REGRESSION: this effect used to depend on `onClose`.
+   *
+   * Every caller passes a fresh arrow, so the trap was rebuilt on each render of
+   * the parent — teardown restoring focus to the opener, setup taking it to the
+   * dialog. Inside a form that meant a controlled input lost focus on every
+   * keystroke. Nothing remounted; focus was simply being taken.
+   */
+  it('leaves focus alone when only the `onClose` identity changes', () => {
+    const { rerender } = renderModal();
+
+    const first = screen.getByRole('button', { name: 'first' });
+    first.focus();
+    expect(document.activeElement).toBe(first);
+
+    // What a parent re-render looks like from here: same dialog, new closure.
+    rerender(
+      <LanguageProvider>
+        <Modal isOpen onClose={vi.fn()} title="A dialog">
+          <button type="button">first</button>
+          <button type="button">second</button>
+        </Modal>
+      </LanguageProvider>,
+    );
+
+    expect(document.activeElement).toBe(first);
+  });
+
+  it('closes on Escape with the newest `onClose`, not the one from mount', () => {
+    const stale = vi.fn();
+    const current = vi.fn();
+    const { rerender } = renderModal({ onClose: stale });
+
+    rerender(
+      <LanguageProvider>
+        <Modal isOpen onClose={current} title="A dialog">
+          <button type="button">first</button>
+          <button type="button">second</button>
+        </Modal>
+      </LanguageProvider>,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    // The ref is what keeps the handler current now that the effect no longer
+    // re-runs to capture a new closure.
+    expect(current).toHaveBeenCalled();
+    expect(stale).not.toHaveBeenCalled();
+  });
 });

@@ -1,5 +1,5 @@
 import { httpClient } from './client';
-import type { DepartmentHeadWithUser } from '@/types/organization';
+import type { DepartmentHead, DepartmentHeadWithUser } from '@/types/organization';
 
 /**
  * Reading who leads a department (contract §15b). Read-only: appointing and
@@ -23,6 +23,27 @@ import type { DepartmentHeadWithUser } from '@/types/organization';
 export async function fetchDepartmentHead(departmentId: string): Promise<DepartmentHeadWithUser> {
   const { data } = await httpClient.get<DepartmentHeadWithUser>(
     `/departments/${encodeURIComponent(departmentId)}/head`,
+  );
+  return data;
+}
+
+/**
+ * Appointing the head of a department (contract §15b) — `role.assign`, GLOBAL.
+ *
+ * ⚠ THE PERSON MUST ALREADY BE AN ACTIVE MEMBER of this department (invariant
+ * #6, held by a foreign key). Provisioning enrolls them, so the only correct
+ * order is create-then-appoint, and a 409 here means somebody already leads it:
+ * replacing a head is DELETE then POST, which no screen does yet.
+ *
+ * Answers from the write path, so there is no `user` projection on the result.
+ */
+export async function assignDepartmentHead(
+  departmentId: string,
+  userId: string,
+): Promise<DepartmentHead> {
+  const { data } = await httpClient.post<DepartmentHead>(
+    `/departments/${encodeURIComponent(departmentId)}/head`,
+    { userId },
   );
   return data;
 }

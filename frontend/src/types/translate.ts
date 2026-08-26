@@ -32,6 +32,11 @@ const PHRASES = {
   departments: { vi: 'Phòng ban', en: 'Departments' },
   employees: { vi: 'Nhân viên', en: 'Employees' },
   departmentsSection: { vi: 'PHÒNG BAN', en: 'DEPARTMENTS' },
+  // ★ THE HEAD'S OWN SECTION. A head does not administer the deployment; they
+  // run the people in ONE unit. Naming their area for the work (personnel)
+  // rather than for the unit is what stops it reading as a smaller copy of the
+  // global "Phê duyệt".
+  hrSection: { vi: 'NHÂN SỰ', en: 'PERSONNEL' },
   sales: { vi: 'Sales', en: 'Sales' },
   operations: { vi: 'Operations', en: 'Operations' },
   marketing: { vi: 'Marketing', en: 'Marketing' },
@@ -208,7 +213,7 @@ const PHRASES = {
   loginEmailLabel: { vi: 'Email đăng nhập', en: 'Login email' },
 
   // Add employee — SUPERADMIN direct create
-  initialPasswordLabel: { vi: 'Mật khẩu khởi tạo', en: 'Initial password' },
+  initialPasswordLabel: { vi: 'Mật khẩu tạm *', en: 'Temporary password *' },
   initialPasswordHint: {
     vi: 'Người dùng sẽ phải đổi mật khẩu ở lần đăng nhập đầu tiên.',
     en: 'The user must change this at first sign-in.',
@@ -216,9 +221,16 @@ const PHRASES = {
   creating: { vi: 'Đang tạo…', en: 'Creating…' },
   createFailed: { vi: 'Không tạo được tài khoản.', en: 'Could not create the account.' },
   requestAccountTitle: { vi: 'Đề nghị mở tài khoản', en: 'Request an account' },
+  // ★ SAYS WHAT THE REQUEST DOES NOT CARRY, not just what it does.
+  //
+  // `account_invitations` has no role column and approval reads nothing off the
+  // row but the address and the department, so a head cannot express a chức vụ
+  // at this step through any endpoint that exists. Leaving that unsaid invites
+  // somebody to assume the field was merely forgotten and that the role will
+  // arrive with the account.
   requestAccountBody: {
-    vi: 'Trưởng phòng chỉ gửi email. Quản trị viên duyệt và hệ thống sinh mật khẩu.',
-    en: 'A head submits the email only. An administrator approves and the system issues the password.',
+    vi: 'Đề nghị này chỉ mở tài khoản: bạn gửi email, quản trị viên duyệt và hệ thống sinh mật khẩu tạm. Đề nghị KHÔNG mang chức vụ — quản trị viên bổ nhiệm sau khi tài khoản đã tồn tại.',
+    en: 'This request only opens an account: you submit the email, an administrator approves it and the system issues a temporary password. It carries NO role — an administrator appoints one after the account exists.',
   },
   submitRequest: { vi: 'Gửi đề nghị', en: 'Submit request' },
 
@@ -230,128 +242,65 @@ const PHRASES = {
     en: 'Please enter a valid company email.',
   },
 
-  // ---------------------------------------------------------- Trip schedule --
-  // Replaces the shared workbook `LỊCH XE - CHI PHÍ XE.xlsx`. The Vietnamese
-  // side reuses the wording dispatch already uses on that sheet, deliberately:
-  // a screen that renames the columns is a screen people have to learn twice.
-  dispatchSection: { vi: 'ĐIỀU VẬN', en: 'DISPATCH' },
-  tripSchedule: { vi: 'Lịch xe', en: 'Trip schedule' },
-  tripMasterData: { vi: 'Xe & khách hàng', en: 'Vehicles & customers' },
-  tripScheduleTitle: { vi: 'Lịch xe trong ngày', en: 'Daily trip schedule' },
-  addTrip: { vi: 'Thêm chuyến', en: 'Add trip' },
-  editTrip: { vi: 'Sửa chuyến', en: 'Edit trip' },
+  // Add employee — the department and the role, both from real backend data.
+  //
+  // ⚠ THE ROLE IS NOT A FIELD ON `POST /users`. Only two of the three role keys
+  // are storable at all (MEMBER is the absence of an assignment), and the one
+  // that is stored is written by `POST /departments/:id/head`. So this select
+  // offers exactly what the backend can actually record — see the modal.
+  departmentLabelRequired: { vi: 'Phòng ban *', en: 'Department *' },
+  roleLabel: { vi: 'Chức vụ *', en: 'Role *' },
+  roleMember: { vi: 'Nhân viên', en: 'Member' },
+  roleDepartmentHead: { vi: 'Trưởng phòng', en: 'Department head' },
+  roleHint: {
+    vi: 'Trưởng phòng được bổ nhiệm sau khi tài khoản được tạo.',
+    en: 'A department head is appointed after the account is created.',
+  },
+  roleAssignFailed: {
+    vi: 'Đã tạo tài khoản nhưng chưa bổ nhiệm được trưởng phòng:',
+    en: 'The account was created but the head appointment failed:',
+  },
+  // The action that finishes a partial success. It appoints the account that
+  // already exists; it never creates a second one.
+  retryAppointment: { vi: 'Thử bổ nhiệm lại', en: 'Retry the appointment' },
+  loadDepartmentsFailed: {
+    vi: 'Không tải được danh sách phòng ban.',
+    en: 'Could not load the departments.',
+  },
+  // ★ FOLLOWED BY THE FULL ADDRESS at the call site. The administrator typed a
+  // LOCAL PART; `POST /auth/login` takes the whole address as `subject`. Saying
+  // only "created" leaves them to reconstruct it, and the approval dialog
+  // already carries a note about where that assumption led once.
+  employeeCreated: { vi: 'Đã tạo tài khoản nhân viên:', en: 'Employee account created:' },
+  requestSubmitted: {
+    vi: 'Đã gửi đề nghị mở tài khoản, đang chờ quản trị viên duyệt:',
+    en: 'The account request was submitted and is awaiting a decision:',
+  },
+  dismiss: { vi: 'Bỏ qua', en: 'Dismiss' },
 
-  // Filters. The date range is the only server-side filter this list has.
-  dateFrom: { vi: 'Từ ngày', en: 'From' },
-  dateTo: { vi: 'Đến ngày', en: 'To' },
-  thisMonth: { vi: 'Tháng này', en: 'This month' },
-  dateRangeTooWide: {
-    vi: 'Khoảng ngày tối đa là 366 ngày.',
-    en: 'A range may span at most 366 days.',
+  // The head's own view of the two queues — read only, because a head proposes
+  // and never decides.
+  myDepartmentQueues: {
+    vi: 'Yêu cầu của phòng ban bạn phụ trách. Quản trị viên là người duyệt.',
+    en: 'Your department’s requests. An administrator decides them.',
   },
-  dateRangeBackwards: {
-    vi: 'Ngày kết thúc phải sau ngày bắt đầu.',
-    en: 'The end date must not be before the start date.',
+  statusPending: { vi: 'Chờ duyệt', en: 'Pending' },
+  statusApproved: { vi: 'Đã duyệt', en: 'Approved' },
+  statusRejected: { vi: 'Từ chối', en: 'Rejected' },
+  // ★ SCOPE. Only ever true of a caller who HAS a scope — a head. It answers
+  // "why is this menu empty" with "because of who you are".
+  noDepartmentScope: {
+    vi: 'Tài khoản của bạn không phụ trách phòng ban nào.',
+    en: 'Your account does not lead any department.',
   },
-
-  // Columns — the twelve of the sheet, in its order.
-  colDate: { vi: 'Ngày', en: 'Date' },
-  colVehicle: { vi: 'Số xe', en: 'Vehicle' },
-  colCustomer: { vi: 'Khách hàng', en: 'Customer' },
-  colCargo: { vi: 'Thông tin lô hàng', en: 'Cargo' },
-  colPickup: { vi: 'Lấy hàng', en: 'Pickup' },
-  colDelivery: { vi: 'Giao hàng', en: 'Delivery' },
-  colNote: { vi: 'Ghi chú', en: 'Note' },
-  colCreatedBy: { vi: 'Người nhập', en: 'Entered by' },
-
-  // Form fields.
-  fieldDate: { vi: 'Ngày *', en: 'Date *' },
-  fieldVehicle: { vi: 'Số xe', en: 'Vehicle' },
-  fieldCustomer: { vi: 'Khách hàng', en: 'Customer' },
-  fieldCargo: { vi: 'Thông tin lô hàng', en: 'Cargo details' },
-  fieldPickupAddress: { vi: 'Địa chỉ lấy hàng', en: 'Pickup address' },
-  fieldDeliveryAddress: { vi: 'Địa chỉ giao hàng', en: 'Delivery address' },
-  fieldPickupContact: { vi: 'Liên hệ lấy hàng', en: 'Pickup contact' },
-  fieldDeliveryContact: { vi: 'Liên hệ giao hàng', en: 'Delivery contact' },
-  fieldPickupAt: { vi: 'Thời gian lấy hàng', en: 'Pickup time' },
-  fieldDeliveryAt: { vi: 'Thời gian giao hàng', en: 'Delivery time' },
-  fieldStatus: { vi: 'Trạng thái', en: 'Status' },
-  fieldNote: { vi: 'Ghi chú', en: 'Note' },
-  // Delivery legitimately runs to the next day; the form says so rather than
-  // letting somebody assume the two times share a date.
-  deliveryMayBeLater: {
-    vi: 'Giao hàng có thể sang ngày khác ngày lấy hàng.',
-    en: 'Delivery may fall on a later day than pickup.',
+  // ★ INVENTORY, and the distinction is the whole point. A SUPERADMIN is scoped
+  // to nothing BY DESIGN, so telling them they lead no department states a rule
+  // that does not apply to them and hides the real reason: the deployment has
+  // no active department to put anybody into yet.
+  noActiveDepartments: {
+    vi: 'Chưa có phòng ban nào đang hoạt động.',
+    en: 'No department is active yet.',
   },
-
-  // The five statuses — the row colours of the workbook, with its own wording.
-  tripAwaitingProduction: { vi: 'Đang đợi SX', en: 'Awaiting production' },
-  tripAwaitingVehicle: { vi: 'SX rồi, đợi xe', en: 'Awaiting a vehicle' },
-  tripNeedsConfirmation: { vi: 'Cần xác nhận lại', en: 'Needs confirmation' },
-  tripExternalBooking: { vi: 'Book xe ngoài', en: 'External booking' },
-  tripDone: { vi: 'Đã xong', en: 'Done' },
-  // The inline control on the board. "Đổi trạng thái" rather than "Trạng thái":
-  // the column header already says what the value is, and this names the ACTION
-  // for a screen reader that reaches the control without the header.
-  changeStatus: { vi: 'Đổi trạng thái', en: 'Change status' },
-  statusChangeFailed: {
-    vi: 'Không đổi được trạng thái.',
-    en: 'Could not change the status.',
-  },
-
-  // Catalogue.
-  vehicles: { vi: 'Xe', en: 'Vehicles' },
-  customers: { vi: 'Khách hàng', en: 'Customers' },
-  addVehicle: { vi: 'Thêm xe', en: 'Add vehicle' },
-  addCustomer: { vi: 'Thêm khách hàng', en: 'Add customer' },
-  plateLabel: { vi: 'Biển số *', en: 'Plate *' },
-  platePlaceholder: { vi: '51D-60088', en: '51D-60088' },
-  customerNameLabel: { vi: 'Tên khách hàng *', en: 'Customer name *' },
-  customerNamePlaceholder: { vi: 'WWL', en: 'WWL' },
-  noteOptional: { vi: 'Ghi chú', en: 'Note' },
-  notSelected: { vi: '— Chưa chọn —', en: '— Not set —' },
-  selectVehicle: { vi: 'Chọn xe', en: 'Select a vehicle' },
-  selectCustomer: { vi: 'Chọn khách hàng', en: 'Select a customer' },
-  // The catalogue exists because the sheet accumulated two spellings of one
-  // truck. Saying so at the point of entry is what stops it happening again.
-  catalogueHint: {
-    vi: 'Chọn từ danh mục thay vì gõ tay — đó là thứ tránh được hai cách viết cho cùng một xe.',
-    en: 'Pick from the catalogue rather than typing — that is what prevents one truck under two spellings.',
-  },
-
-  // Actions.
-  edit: { vi: 'Sửa', en: 'Edit' },
-  archive: { vi: 'Lưu trữ', en: 'Archive' },
-  restore: { vi: 'Dùng lại', en: 'Restore' },
-  save: { vi: 'Lưu', en: 'Save' },
-  saving: { vi: 'Đang lưu…', en: 'Saving…' },
-  saveFailed: { vi: 'Không lưu được.', en: 'Could not save.' },
-  showArchived: { vi: 'Hiện mục đã lưu trữ', en: 'Show archived' },
-  statusArchived: { vi: 'Đã lưu trữ', en: 'Archived' },
-
-  // ★ The confirmation says what archiving ACTUALLY does. A dialog that says
-  // "delete permanently" over an operation that keeps the row is a lie, and a
-  // dialog that says "remove" leaves people guessing which one it is.
-  confirmArchiveTripTitle: { vi: 'Lưu trữ chuyến này?', en: 'Archive this trip?' },
-  confirmArchiveTripBody: {
-    vi: 'Chuyến sẽ không còn hiện trên lịch xe. Bản ghi vẫn được giữ lại — đây không phải xoá vĩnh viễn.',
-    en: 'The trip leaves the schedule. The record is kept — this is not a permanent delete.',
-  },
-  confirmArchiveVehicleBody: {
-    vi: 'Xe sẽ không còn được chọn khi nhập chuyến mới. Các chuyến cũ vẫn hiện đúng biển số này.',
-    en: 'The vehicle stops being offered for new trips. Past trips keep showing this plate.',
-  },
-  confirmArchiveCustomerBody: {
-    vi: 'Khách hàng sẽ không còn được chọn khi nhập chuyến mới. Các chuyến cũ vẫn hiện đúng tên này.',
-    en: 'The customer stops being offered for new trips. Past trips keep showing this name.',
-  },
-
-  emptyTrips: {
-    vi: 'Không có chuyến nào trong khoảng ngày này.',
-    en: 'No trips in this date range.',
-  },
-  emptyVehicles: { vi: 'Danh mục xe còn trống.', en: 'The vehicle catalogue is empty.' },
-  emptyCustomers: { vi: 'Danh mục khách hàng còn trống.', en: 'The customer catalogue is empty.' },
 } as const satisfies Record<string, Phrase>;
 
 export type TranslationKey = keyof typeof PHRASES;

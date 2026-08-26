@@ -1,5 +1,5 @@
 import type { Database } from '../../../common/types/database.port';
-import { UnauthorizedError } from '../../../common/errors/domain.error';
+import { UnauthorizedError, ValidationError } from '../../../common/errors/domain.error';
 import { LOCAL_PROVIDER, User } from '../../users/domain/user.entity';
 import { IdentityRepository } from '../persistence/identity.repository';
 import { AuthenticationService, TooManyAttemptsError } from './authentication.service';
@@ -34,8 +34,12 @@ describe('AuthenticationService', () => {
   });
 
   let hasher: jest.Mocked<PasswordHasher>;
-  let users: { findWithUserBySubject: jest.Mock };
-  let sessions: { issue: jest.Mock; revoke: jest.Mock };
+  let users: {
+    findWithUserBySubject: jest.Mock;
+    findLocalForUser: jest.Mock;
+    replaceLocalSecret: jest.Mock;
+  };
+  let sessions: { issue: jest.Mock; revoke: jest.Mock; revokeAllForUser: jest.Mock };
   let service: AuthenticationService;
 
   beforeEach(() => {
@@ -44,10 +48,15 @@ describe('AuthenticationService', () => {
       verify: jest.fn().mockResolvedValue(true),
       fakeVerify: jest.fn().mockResolvedValue(undefined),
     };
-    users = { findWithUserBySubject: jest.fn() };
+    users = {
+      findWithUserBySubject: jest.fn(),
+      findLocalForUser: jest.fn().mockResolvedValue(identityFor('stored-hash')),
+      replaceLocalSecret: jest.fn().mockResolvedValue(1),
+    };
     sessions = {
       issue: jest.fn().mockResolvedValue({ token: 'tok', expiresAt: new Date() }),
       revoke: jest.fn(),
+      revokeAllForUser: jest.fn().mockResolvedValue(undefined),
     };
 
     service = new AuthenticationService(
@@ -210,6 +219,88 @@ describe('AuthenticationService', () => {
       await expect(
         service.login('someone-else@example.com', 'wrong', '203.0.113.9'),
       ).rejects.toBeInstanceOf(UnauthorizedError);
+    });
+  });
+
+  // --------------------------------------------------- changing a password --
+
+  describe('★ changePassword: a change has to change something', () => {
+    const CURRENT = 'the current passphrase';
+    const DIFFERENT = 'a genuinely different passphrase';
+
+    /**
+     * The first-login gate exists so that a credential the deployment HANDED
+     * out stops working. Submitting the same password back cleared
+     * `must_change_secret` and left that credential live — measured, 204 and
+     * the flag false — which made the gate a formality.
+     */
+    it('★ REFUSES a new password identical to the current one', async () => {
+      await expect(
+        service.changePassword({
+          userId: activeUser.id,
+          currentPassword: CURRENT,
+          newPassword: CURRENT,
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('★ leaves the credential and the flag untouched when it refuses', async () => {
+      // `replaceLocalSecret` is the only write, and it is what clears
+      // `must_change_secret`. Not calling it is what "the flag stands" means.
+      await expect(
+        service.changePassword({
+          userId: activeUser.id,
+          currentPassword: CURRENT,
+          newPassword: CURRENT,
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      expect(users.replaceLocalSecret).not.toHaveBeenCalled();
+    });
+
+    it('★ does not end the session the caller is using to fix it', async () => {
+      // A refused attempt is not a password change. Signing them out would
+      // strand somebody mid-way through the one screen they are allowed to use.
+      await expect(
+        service.changePassword({
+          userId: activeUser.id,
+          currentPassword: CURRENT,
+          newPassword: CURRENT,
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+    });
+
+    it('accepts a genuinely different password, and still ends every session', async () => {
+      hasher.hash.mockResolvedValue('new-hash');
+
+      await service.changePassword({
+        userId: activeUser.id,
+        currentPassword: CURRENT,
+        newPassword: DIFFERENT,
+      });
+
+      expect(users.replaceLocalSecret).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: activeUser.id, secretHash: 'new-hash' }),
+        expect.anything(),
+      );
+      // Unchanged behaviour (§1): the session that made the change goes too.
+      expect(sessions.revokeAllForUser).toHaveBeenCalled();
+    });
+
+    it('still rejects a wrong current password before anything else', async () => {
+      hasher.verify.mockResolvedValue(false);
+
+      await expect(
+        service.changePassword({
+          userId: activeUser.id,
+          currentPassword: 'not it',
+          newPassword: DIFFERENT,
+        }),
+      ).rejects.toBeInstanceOf(UnauthorizedError);
+
+      expect(users.replaceLocalSecret).not.toHaveBeenCalled();
     });
   });
 });

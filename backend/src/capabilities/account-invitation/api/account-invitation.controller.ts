@@ -17,6 +17,7 @@ import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import {
   HeadOfRouteDepartmentGuard,
   PermissionGuard,
+  RequireHeadOfRouteDepartment,
   RequirePermission,
 } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
@@ -64,8 +65,21 @@ type ApproveInvitationInput = z.infer<typeof approveInvitationSchema>;
 export class AccountInvitationController {
   constructor(private readonly invitations: AccountInvitationService) {}
 
+  /**
+   * THE HEAD OF THAT UNIT, AND NOT THE GLOBAL ADMINISTRATOR.
+   *
+   * An invitation raised by the global administrator cannot be decided by
+   * anybody: deciding needs `user.write` (global only), both decisions refuse
+   * `requestedBy === decidedBy`, and the deployment has exactly one global
+   * administrator. It would sit pending forever while blocking that address
+   * from being invited again.
+   *
+   * A global administrator has `POST /users` for this, which creates the
+   * account outright — no proposal, nothing to decide.
+   */
   @Post('departments/:departmentId/account-invitations')
   @UseGuards(AuthGuard, CsrfGuard, HeadOfRouteDepartmentGuard)
+  @RequireHeadOfRouteDepartment('departmentId', { allowGlobal: false })
   async create(
     @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(createInvitationSchema)) body: CreateInvitationInput,

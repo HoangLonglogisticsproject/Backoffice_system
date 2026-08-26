@@ -33,6 +33,27 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: R
   const { t } = useLanguage();
   const dialogRef = React.useRef<HTMLDialogElement>(null);
 
+  /**
+   * ⚠ `onClose` IS READ THROUGH A REF, AND THAT IS THE WHOLE BUG FIX.
+   *
+   * Callers pass an arrow — `onClose={() => setIsAddOpen(false)}`, or a `close`
+   * declared inside the component body — so its identity is new on every render
+   * of the parent. With `onClose` in the dependency list below, ANY state change
+   * inside an open dialog tore the effect down and set it up again: teardown ran
+   * `previouslyFocused.focus()`, setup ran `dialogRef.current.focus()`. Typing a
+   * character into a controlled field re-renders, so every keystroke pulled
+   * focus out of the input and onto the dialog — one character per click.
+   *
+   * The input was never remounted; it kept its DOM node. Focus was being taken
+   * from it. So the fix is to stop re-running the effect, not to put focus back.
+   */
+  const onCloseRef = React.useRef(onClose);
+  React.useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  // ★ `isOpen` ONLY. Open and close are the only two moments the trap should be
+  // built or dismantled — never a re-render in between.
   React.useEffect(() => {
     if (!isOpen) return;
 
@@ -47,7 +68,7 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: R
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -91,7 +112,7 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: R
       document.removeEventListener('keydown', onKeyDown);
       previouslyFocused?.focus?.();
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
