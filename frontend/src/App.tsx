@@ -14,6 +14,9 @@ import OrganizationDashboardPage from './pages/organization/OrganizationDashboar
 import MyWorkPage from './pages/worklist/MyWorkPage'
 import WorkListPage from './pages/worklist/WorkListPage'
 
+import TripSchedulePage from './pages/trip/TripSchedulePage'
+import TripMasterDataPage from './pages/trip/TripMasterDataPage'
+
 import NoAccessPage from './pages/system/NoAccessPage'
 import PlaceholderPage from './pages/system/PlaceholderPage'
 import LoginPage from './pages/system/LoginPage'
@@ -55,6 +58,11 @@ function App() {
           path="/organization/department/:departmentId/members"
           element={<EmployeeManagementPage />}
         />
+
+        {/* Dispatch. No department segment on purpose — the trip schedule is
+            company-wide data, so there is no unit to scope it to (§21). */}
+        <Route path="/dispatch/trip-schedule" element={<TripSchedulePage />} />
+        <Route path="/dispatch/master-data" element={<TripMasterDataPage />} />
 
         <Route path="/account/security" element={<AccountSecurityPage />} />
         <Route path="/system/approvals" element={<ApprovalsPage />} />

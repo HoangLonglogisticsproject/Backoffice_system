@@ -127,6 +127,11 @@ const PHRASES = {
   nextPage: { vi: 'Sau', en: 'Next' },
   perPage: { vi: 'trang', en: 'page' },
 
+  // Pagination — offset based. ONE list uses these: the trip schedule, whose
+  // mandatory date range is what makes a total affordable (ADR-0003).
+  page: { vi: 'Trang', en: 'Page' },
+  totalRows: { vi: 'Tổng số dòng', en: 'Total rows' },
+
   passwordMismatch: {
     vi: 'Mật khẩu xác nhận không khớp.',
     en: 'The confirmation does not match.',
@@ -224,6 +229,129 @@ const PHRASES = {
     vi: 'Vui lòng nhập email công ty hợp lệ.',
     en: 'Please enter a valid company email.',
   },
+
+  // ---------------------------------------------------------- Trip schedule --
+  // Replaces the shared workbook `LỊCH XE - CHI PHÍ XE.xlsx`. The Vietnamese
+  // side reuses the wording dispatch already uses on that sheet, deliberately:
+  // a screen that renames the columns is a screen people have to learn twice.
+  dispatchSection: { vi: 'ĐIỀU VẬN', en: 'DISPATCH' },
+  tripSchedule: { vi: 'Lịch xe', en: 'Trip schedule' },
+  tripMasterData: { vi: 'Xe & khách hàng', en: 'Vehicles & customers' },
+  tripScheduleTitle: { vi: 'Lịch xe trong ngày', en: 'Daily trip schedule' },
+  addTrip: { vi: 'Thêm chuyến', en: 'Add trip' },
+  editTrip: { vi: 'Sửa chuyến', en: 'Edit trip' },
+
+  // Filters. The date range is the only server-side filter this list has.
+  dateFrom: { vi: 'Từ ngày', en: 'From' },
+  dateTo: { vi: 'Đến ngày', en: 'To' },
+  thisMonth: { vi: 'Tháng này', en: 'This month' },
+  dateRangeTooWide: {
+    vi: 'Khoảng ngày tối đa là 366 ngày.',
+    en: 'A range may span at most 366 days.',
+  },
+  dateRangeBackwards: {
+    vi: 'Ngày kết thúc phải sau ngày bắt đầu.',
+    en: 'The end date must not be before the start date.',
+  },
+
+  // Columns — the twelve of the sheet, in its order.
+  colDate: { vi: 'Ngày', en: 'Date' },
+  colVehicle: { vi: 'Số xe', en: 'Vehicle' },
+  colCustomer: { vi: 'Khách hàng', en: 'Customer' },
+  colCargo: { vi: 'Thông tin lô hàng', en: 'Cargo' },
+  colPickup: { vi: 'Lấy hàng', en: 'Pickup' },
+  colDelivery: { vi: 'Giao hàng', en: 'Delivery' },
+  colNote: { vi: 'Ghi chú', en: 'Note' },
+  colCreatedBy: { vi: 'Người nhập', en: 'Entered by' },
+
+  // Form fields.
+  fieldDate: { vi: 'Ngày *', en: 'Date *' },
+  fieldVehicle: { vi: 'Số xe', en: 'Vehicle' },
+  fieldCustomer: { vi: 'Khách hàng', en: 'Customer' },
+  fieldCargo: { vi: 'Thông tin lô hàng', en: 'Cargo details' },
+  fieldPickupAddress: { vi: 'Địa chỉ lấy hàng', en: 'Pickup address' },
+  fieldDeliveryAddress: { vi: 'Địa chỉ giao hàng', en: 'Delivery address' },
+  fieldPickupContact: { vi: 'Liên hệ lấy hàng', en: 'Pickup contact' },
+  fieldDeliveryContact: { vi: 'Liên hệ giao hàng', en: 'Delivery contact' },
+  fieldPickupAt: { vi: 'Thời gian lấy hàng', en: 'Pickup time' },
+  fieldDeliveryAt: { vi: 'Thời gian giao hàng', en: 'Delivery time' },
+  fieldStatus: { vi: 'Trạng thái', en: 'Status' },
+  fieldNote: { vi: 'Ghi chú', en: 'Note' },
+  // Delivery legitimately runs to the next day; the form says so rather than
+  // letting somebody assume the two times share a date.
+  deliveryMayBeLater: {
+    vi: 'Giao hàng có thể sang ngày khác ngày lấy hàng.',
+    en: 'Delivery may fall on a later day than pickup.',
+  },
+
+  // The five statuses — the row colours of the workbook, with its own wording.
+  tripAwaitingProduction: { vi: 'Đang đợi SX', en: 'Awaiting production' },
+  tripAwaitingVehicle: { vi: 'SX rồi, đợi xe', en: 'Awaiting a vehicle' },
+  tripNeedsConfirmation: { vi: 'Cần xác nhận lại', en: 'Needs confirmation' },
+  tripExternalBooking: { vi: 'Book xe ngoài', en: 'External booking' },
+  tripDone: { vi: 'Đã xong', en: 'Done' },
+  // The inline control on the board. "Đổi trạng thái" rather than "Trạng thái":
+  // the column header already says what the value is, and this names the ACTION
+  // for a screen reader that reaches the control without the header.
+  changeStatus: { vi: 'Đổi trạng thái', en: 'Change status' },
+  statusChangeFailed: {
+    vi: 'Không đổi được trạng thái.',
+    en: 'Could not change the status.',
+  },
+
+  // Catalogue.
+  vehicles: { vi: 'Xe', en: 'Vehicles' },
+  customers: { vi: 'Khách hàng', en: 'Customers' },
+  addVehicle: { vi: 'Thêm xe', en: 'Add vehicle' },
+  addCustomer: { vi: 'Thêm khách hàng', en: 'Add customer' },
+  plateLabel: { vi: 'Biển số *', en: 'Plate *' },
+  platePlaceholder: { vi: '51D-60088', en: '51D-60088' },
+  customerNameLabel: { vi: 'Tên khách hàng *', en: 'Customer name *' },
+  customerNamePlaceholder: { vi: 'WWL', en: 'WWL' },
+  noteOptional: { vi: 'Ghi chú', en: 'Note' },
+  notSelected: { vi: '— Chưa chọn —', en: '— Not set —' },
+  selectVehicle: { vi: 'Chọn xe', en: 'Select a vehicle' },
+  selectCustomer: { vi: 'Chọn khách hàng', en: 'Select a customer' },
+  // The catalogue exists because the sheet accumulated two spellings of one
+  // truck. Saying so at the point of entry is what stops it happening again.
+  catalogueHint: {
+    vi: 'Chọn từ danh mục thay vì gõ tay — đó là thứ tránh được hai cách viết cho cùng một xe.',
+    en: 'Pick from the catalogue rather than typing — that is what prevents one truck under two spellings.',
+  },
+
+  // Actions.
+  edit: { vi: 'Sửa', en: 'Edit' },
+  archive: { vi: 'Lưu trữ', en: 'Archive' },
+  restore: { vi: 'Dùng lại', en: 'Restore' },
+  save: { vi: 'Lưu', en: 'Save' },
+  saving: { vi: 'Đang lưu…', en: 'Saving…' },
+  saveFailed: { vi: 'Không lưu được.', en: 'Could not save.' },
+  showArchived: { vi: 'Hiện mục đã lưu trữ', en: 'Show archived' },
+  statusArchived: { vi: 'Đã lưu trữ', en: 'Archived' },
+
+  // ★ The confirmation says what archiving ACTUALLY does. A dialog that says
+  // "delete permanently" over an operation that keeps the row is a lie, and a
+  // dialog that says "remove" leaves people guessing which one it is.
+  confirmArchiveTripTitle: { vi: 'Lưu trữ chuyến này?', en: 'Archive this trip?' },
+  confirmArchiveTripBody: {
+    vi: 'Chuyến sẽ không còn hiện trên lịch xe. Bản ghi vẫn được giữ lại — đây không phải xoá vĩnh viễn.',
+    en: 'The trip leaves the schedule. The record is kept — this is not a permanent delete.',
+  },
+  confirmArchiveVehicleBody: {
+    vi: 'Xe sẽ không còn được chọn khi nhập chuyến mới. Các chuyến cũ vẫn hiện đúng biển số này.',
+    en: 'The vehicle stops being offered for new trips. Past trips keep showing this plate.',
+  },
+  confirmArchiveCustomerBody: {
+    vi: 'Khách hàng sẽ không còn được chọn khi nhập chuyến mới. Các chuyến cũ vẫn hiện đúng tên này.',
+    en: 'The customer stops being offered for new trips. Past trips keep showing this name.',
+  },
+
+  emptyTrips: {
+    vi: 'Không có chuyến nào trong khoảng ngày này.',
+    en: 'No trips in this date range.',
+  },
+  emptyVehicles: { vi: 'Danh mục xe còn trống.', en: 'The vehicle catalogue is empty.' },
+  emptyCustomers: { vi: 'Danh mục khách hàng còn trống.', en: 'The customer catalogue is empty.' },
 } as const satisfies Record<string, Phrase>;
 
 export type TranslationKey = keyof typeof PHRASES;

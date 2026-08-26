@@ -12,7 +12,9 @@ import {
   Menu,
   Settings,
   Sparkles,
+  Truck,
   Users,
+  Warehouse,
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
@@ -280,6 +282,27 @@ export default function MainLayout() {
                 ))}
               </SidebarSection>
             )}
+
+            {/* Dispatch. Shown to everybody with a session and no `can()` check,
+                because `trip.read` and `trip.create` are held by every signed-in
+                caller — a permission test here would be a condition that is
+                always true. The catalogue entry is shown for the same reason:
+                anybody may add a vehicle, and the edit controls INSIDE that
+                screen are what `trip.write` hides. */}
+            <SidebarSection title={t('dispatchSection')} isSidebarOpen={isSidebarOpen}>
+              <NavItem
+                to="/dispatch/trip-schedule"
+                icon={Truck}
+                label={t('tripSchedule')}
+                isSidebarOpen={isSidebarOpen}
+              />
+              <NavItem
+                to="/dispatch/master-data"
+                icon={Warehouse}
+                label={t('tripMasterData')}
+                isSidebarOpen={isSidebarOpen}
+              />
+            </SidebarSection>
 
             <SidebarSection title={t('system')} isSidebarOpen={isSidebarOpen}>
               <NavItem
