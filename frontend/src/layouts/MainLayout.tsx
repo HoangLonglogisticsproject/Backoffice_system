@@ -148,9 +148,33 @@ const initialsOf = (name: string | null): string =>
 export default function MainLayout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const { language, setLanguage, t } = useLanguage();
-  const { state, signOut } = useSession();
+  const { state, signOut, can } = useSession();
   const { departments } = useMyDepartments();
   const navigate = useNavigate();
+
+  /**
+   * ★ WHO THIS MENU IS FOR — and the two roles do NOT get the same one.
+   *
+   * `user.write` is GLOBAL-only, so `can()` answers "is this a deployment-wide
+   * administrator" exactly. Being a head is RELATIONAL and has no permission
+   * key at all, so the session can only say role plus membership — exact in
+   * practice, because a head must be an active member of the unit they lead
+   * (invariant #6) and holds at most one active membership, so `departmentIds`
+   * IS the unit they head.
+   *
+   * ⚠ NAVIGATION IS NOT AUTHORIZATION (§13). Every endpoint behind these links
+   * re-decides on its own; hiding a row spares somebody a guaranteed 403, it
+   * never prevents anything.
+   */
+  const isGlobal = can('user.write');
+  const authorization = state?.status === 'ready' ? state.authorization : null;
+  const headDepartmentId =
+    authorization?.role === 'DEPARTMENT_HEAD' ? authorization.departmentIds[0] : undefined;
+  // ★ A ROSTER IS NOT PUBLIC. `GET /departments/:id/members` answers 403 to an
+  // ordinary member of that very department — the decided default, not an
+  // oversight. Linking them there offered a destination whose only outcome was
+  // a refusal page, which is why this is gated on reading it, not on belonging.
+  const canReadARoster = isGlobal || headDepartmentId !== undefined;
 
   // `RequireSession` guarantees a ready session above this component, so the
   // non-ready branch is defensive rather than a state a user can actually see.
@@ -264,11 +288,24 @@ export default function MainLayout() {
               />
             </SidebarSection>
 
-            {/* Real departments, from `departmentIds` on the session. A user who
-                belongs to none simply has no section — better than offering a
-                destination the server will refuse. */}
-            {departments.length > 0 && (
-              <SidebarSection title={t('departmentsSection')} isSidebarOpen={isSidebarOpen}>
+            {/*
+              Real departments, from `departmentIds` on the session.
+
+              ★ TITLED FOR THE ROLE, because it is not the same area for both. A
+              head's entry into their unit IS their personnel screen — the
+              roster plus "Đề nghị mở tài khoản" — so it is called NHÂN SỰ. A
+              global administrator reaches units from "Phòng ban" instead, and
+              in practice never sees this section at all: `departmentIds` is
+              empty for a SUPERADMIN, who sits above units.
+
+              A member gets no section: they may not read a roster, and offering
+              a destination the server refuses is worse than offering none.
+            */}
+            {canReadARoster && departments.length > 0 && (
+              <SidebarSection
+                title={headDepartmentId ? t('hrSection') : t('departmentsSection')}
+                isSidebarOpen={isSidebarOpen}
+              >
                 {departments.map((department) => (
                   <NavItem
                     key={department.id}
@@ -282,12 +319,22 @@ export default function MainLayout() {
             )}
 
             <SidebarSection title={t('system')} isSidebarOpen={isSidebarOpen}>
-              <NavItem
-                to="/system/approvals"
-                icon={CheckSquare}
-                label={t('approvals')}
-                isSidebarOpen={isSidebarOpen}
-              />
+              {/*
+                ★ GLOBAL ONLY, AND THAT IS THE INFORMATION ARCHITECTURE.
+                "Phê duyệt" is the deployment-wide decision queue: it approves
+                and rejects, across every unit. A head decides nothing — they
+                propose, and a SUPERADMIN decides — so showing them this row
+                offered a screen whose entire purpose is an action they do not
+                have. Their equivalent is NHÂN SỰ above, scoped to their unit.
+              */}
+              {isGlobal && (
+                <NavItem
+                  to="/system/approvals"
+                  icon={CheckSquare}
+                  label={t('approvals')}
+                  isSidebarOpen={isSidebarOpen}
+                />
+              )}
               <NavItem
                 to="/system/requests"
                 icon={Inbox}

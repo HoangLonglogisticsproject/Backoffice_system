@@ -531,8 +531,24 @@ function DepartmentPicker({
         ))}
       </select>
       {failed && <p className="text-xs text-red-600">{t('loadDepartmentsFailed')}</p>}
+      {/*
+        ★ WHY THE MENU IS EMPTY DEPENDS ON WHO IS ASKING, and saying the wrong
+        one is not a wording nit — it sends the reader to fix the wrong thing.
+
+        A head's menu is empty because of THEIR SCOPE: they lead no department,
+        and the fix is an appointment. A SUPERADMIN has no scope at all — that
+        is what global means — so `departmentIds` is empty for them BY DESIGN
+        (`AuthorizationMeResponse`: "empty for a SuperAdmin, who sits above
+        units"). Their menu can only be empty because the deployment has no
+        ACTIVE department yet, and the fix is to create or unarchive one.
+
+        Telling an administrator they "lead no department" reported a scope
+        problem they cannot have, for an inventory problem they can fix.
+      */}
       {!loading && !failed && departments.length === 0 && (
-        <p className="text-xs text-gray-500">{t('noDepartmentScope')}</p>
+        <p className="text-xs text-gray-500">
+          {isGlobal ? t('noActiveDepartments') : t('noDepartmentScope')}
+        </p>
       )}
     </div>
   );

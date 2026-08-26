@@ -628,6 +628,81 @@ describe('AddEmployeeModal', () => {
       );
     });
 
+    /**
+     * ★ A SUPERADMIN IS SCOPED TO NOTHING, AND THAT IS NOT THE SAME AS HAVING
+     * NOTHING. `departmentIds` is empty for them by contract, so any code that
+     * reads emptiness as "no access" gets this role exactly backwards.
+     */
+    it('lets a SUPERADMIN choose from the whole active list', async () => {
+      can.mockReturnValue(true);
+      renderModalWithoutDepartment();
+
+      const picker = await screen.findByLabelText('Phòng ban *');
+      await screen.findByRole('option', { name: 'Sales' });
+
+      // The global list is READ, and read from the endpoint only a global
+      // caller passes.
+      expect(fetchDepartments).toHaveBeenCalled();
+      // Enabled, not "you lead no department".
+      expect(picker).toBeEnabled();
+      expect(
+        screen.queryByText('Tài khoản của bạn không phụ trách phòng ban nào.'),
+      ).not.toBeInTheDocument();
+
+      // And the choice actually takes.
+      fireEvent.change(picker, { target: { value: OTHER_DEPARTMENT } });
+      expect(picker).toHaveValue(OTHER_DEPARTMENT);
+    });
+
+    it('offers a SUPERADMIN the placeholder while the list is still loading', async () => {
+      can.mockReturnValue(true);
+      // A read that has not answered yet — the state the screen is in for the
+      // first moment every time.
+      fetchDepartments.mockReturnValue(new Promise(() => {}));
+      renderModalWithoutDepartment();
+
+      const picker = screen.getByLabelText('Phòng ban *');
+      // Disabled only WHILE loading, and it says so rather than claiming the
+      // account leads nothing.
+      expect(picker).toBeDisabled();
+      expect(screen.getByRole('option', { name: 'Đang tải…' })).toBeInTheDocument();
+      expect(
+        screen.queryByText('Tài khoản của bạn không phụ trách phòng ban nào.'),
+      ).not.toBeInTheDocument();
+    });
+
+    /**
+     * ⚠ REGRESSION: the screenshot from staging.
+     *
+     * A SUPERADMIN whose deployment has no active department was told "Tài khoản
+     * của bạn không phụ trách phòng ban nào." — a SCOPE rule that cannot apply
+     * to a global caller. The menu is empty because there is nothing to put
+     * anybody into, which is a different problem with a different fix.
+     */
+    it('tells a SUPERADMIN the deployment is empty, not that they lead nothing', async () => {
+      can.mockReturnValue(true);
+      fetchDepartments.mockResolvedValue([]);
+      renderModalWithoutDepartment();
+
+      expect(await screen.findByText('Chưa có phòng ban nào đang hoạt động.')).toBeInTheDocument();
+      expect(
+        screen.queryByText('Tài khoản của bạn không phụ trách phòng ban nào.'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('says the same when every department the SUPERADMIN can see is archived', async () => {
+      can.mockReturnValue(true);
+      fetchDepartments.mockResolvedValue([
+        { ...active(DEPARTMENT, 'Closed Unit'), status: 'archived' },
+      ]);
+      renderModalWithoutDepartment();
+
+      expect(await screen.findByText('Chưa có phòng ban nào đang hoạt động.')).toBeInTheDocument();
+      expect(
+        screen.queryByText('Tài khoản của bạn không phụ trách phòng ban nào.'),
+      ).not.toBeInTheDocument();
+    });
+
     it('says so when the caller leads nothing, instead of an empty menu', async () => {
       can.mockReturnValue(false);
       useMyDepartments.mockReturnValue({ departments: [], loading: false });
