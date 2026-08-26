@@ -10,6 +10,7 @@ import { OrganizationModule } from './core/organization/organization.module';
 import { UsersModule } from './core/users/users.module';
 import { AccountInvitationModule } from './capabilities/account-invitation/account-invitation.module';
 import { MembershipApprovalModule } from './capabilities/membership-approval/membership-approval.module';
+import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.module';
 
 /**
  * THE COMPOSITION ROOT — the only file that knows the whole system.
@@ -49,6 +50,7 @@ import { MembershipApprovalModule } from './capabilities/membership-approval/mem
     // project capabilities — a deployment without them is still valid
     MembershipApprovalModule,
     AccountInvitationModule,
+    TripScheduleModule,
   ],
 })
 export class AppModule {}

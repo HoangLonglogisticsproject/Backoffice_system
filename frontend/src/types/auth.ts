@@ -16,7 +16,14 @@ export type PermissionKey =
   | 'unit.member.read'
   | 'unit.member.write'
   | 'role.assign'
-  | 'user.write';
+  | 'user.write'
+  // The trip schedule (§21). The only permissions here that ask nothing about a
+  // department: dispatch is company-wide data, so `trip.read` and `trip.create`
+  // appear for every signed-in caller, including one who is between departments.
+  // `trip.write` — correcting somebody else's row — stays global.
+  | 'trip.read'
+  | 'trip.create'
+  | 'trip.write';
 
 export type UserStatus = 'active' | 'disabled';
 

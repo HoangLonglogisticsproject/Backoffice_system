@@ -132,6 +132,11 @@ const PHRASES = {
   nextPage: { vi: 'Sau', en: 'Next' },
   perPage: { vi: 'trang', en: 'page' },
 
+  // Pagination — offset based. ONE list uses these: the trip schedule, whose
+  // mandatory date range is what makes a total affordable (ADR-0003).
+  page: { vi: 'Trang', en: 'Page' },
+  totalRows: { vi: 'Tổng số dòng', en: 'Total rows' },
+
   passwordMismatch: {
     vi: 'Mật khẩu xác nhận không khớp.',
     en: 'The confirmation does not match.',

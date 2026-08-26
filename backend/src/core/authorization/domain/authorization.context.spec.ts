@@ -26,6 +26,14 @@ const superadmin = () => context({ global: true });
 const headOfA = () => context({ headOf: [A], memberOf: [A] });
 const memberOfA = () => context({ memberOf: [A] });
 
+/**
+ * Permissions whose requirement is 'any' — held by every authenticated caller,
+ * with or without a department. Listed once here so the fail-closed suites can
+ * say "everything EXCEPT these" and stay true when a key is added.
+ */
+const UNRESTRICTED: PermissionKey[] = ['trip.read', 'trip.create'];
+const RESTRICTED = PERMISSIONS.filter((p) => !UNRESTRICTED.includes(p));
+
 describe('can()', () => {
   describe('SUPERADMIN', () => {
     it('holds every permission, in every department', () => {
@@ -85,9 +93,55 @@ describe('can()', () => {
         'unit.member.write',
         'role.assign',
         'user.write',
+        'trip.write',
       ] as PermissionKey[]) {
         expect(can(memberOfA(), permission, { departmentId: A })).toBe(false);
       }
+    });
+  });
+
+  describe("'any' permissions — the trip schedule", () => {
+    it('lets every authenticated caller read and add rows, with no target at all', () => {
+      // No `{ departmentId }` argument: that is the point. The trip schedule
+      // belongs to no department, so there is nothing to scope it to.
+      for (const caller of [memberOfA(), headOfA(), superadmin(), context()]) {
+        expect(can(caller, 'trip.read')).toBe(true);
+        expect(can(caller, 'trip.create')).toBe(true);
+      }
+    });
+
+    it('is unaffected by which department is named, when one is named anyway', () => {
+      expect(can(memberOfA(), 'trip.read', { departmentId: B })).toBe(true);
+    });
+
+    it('★ lets a head correct a row, and still refuses an ordinary member', () => {
+      // 'head-anywhere'. Correcting a row changes what a past trip appears to
+      // say, so it stays administration — but administration the shift senior
+      // performs, rather than one that waits for a GLOBAL administrator.
+      expect(can(memberOfA(), 'trip.write')).toBe(false);
+      expect(can(headOfA(), 'trip.write')).toBe(true);
+      expect(can(superadmin(), 'trip.write')).toBe(true);
+    });
+
+    it('★ asks a head for no department, because the trip schedule has none', () => {
+      // The trap this tier exists to avoid: were `trip.write` marked 'head',
+      // `can()` would fail closed here — no target — while grantedPermissions
+      // listed it anyway, so the client would draw a button the server refuses.
+      expect(can(headOfA(), 'trip.write')).toBe(true);
+      // Naming a department the caller does NOT head changes nothing either:
+      // the requirement is about the caller's seniority, not about this target.
+      expect(can(headOfA(), 'trip.write', { departmentId: B })).toBe(true);
+      expect(grantedPermissions(headOfA())).toContain('trip.write');
+    });
+
+    it('refuses a head whose only assignment is a membership', () => {
+      expect(can(context({ memberOf: [A, B] }), 'trip.write')).toBe(false);
+    });
+
+    it('is refused while a temporary credential is unchanged — the gate runs first', () => {
+      const gated = context({ memberOf: [A], mustChangeSecret: true });
+      expect(can(gated, 'trip.read')).toBe(false);
+      expect(can(gated, 'trip.create')).toBe(false);
     });
   });
 
@@ -99,8 +153,8 @@ describe('can()', () => {
       expect(can(memberOfA(), 'unit.read')).toBe(false);
     });
 
-    it('denies everything to a context with no relations at all', () => {
-      for (const permission of PERMISSIONS) {
+    it('denies every RESTRICTED permission to a context with no relations at all', () => {
+      for (const permission of RESTRICTED) {
         expect(can(context(), permission, { departmentId: A })).toBe(false);
       }
     });
@@ -137,12 +191,28 @@ describe('grantedPermissions()', () => {
     expect(grantedPermissions(superadmin()).sort()).toEqual([...PERMISSIONS].sort());
   });
 
-  it('lists what a head holds somewhere, and nothing administrative', () => {
-    expect(grantedPermissions(headOfA()).sort()).toEqual(['unit.member.read', 'unit.read']);
+  it('lists what a head holds somewhere, including correcting the board', () => {
+    expect(grantedPermissions(headOfA()).sort()).toEqual([
+      'trip.create',
+      'trip.read',
+      'trip.write',
+      'unit.member.read',
+      'unit.read',
+    ]);
   });
 
-  it('lists only unit.read for a member', () => {
-    expect(grantedPermissions(memberOfA())).toEqual(['unit.read']);
+  it('lists unit.read plus the unrestricted trip permissions for a member', () => {
+    expect(grantedPermissions(memberOfA()).sort()).toEqual([
+      'trip.create',
+      'trip.read',
+      'unit.read',
+    ]);
+  });
+
+  it('lists the unrestricted permissions even for somebody in no department', () => {
+    // A person between transfers still reads the trip schedule; nothing about
+    // it depends on a membership.
+    expect(grantedPermissions(context()).sort()).toEqual(['trip.create', 'trip.read']);
   });
 
   it('lists nothing while a temporary credential is unchanged', () => {
