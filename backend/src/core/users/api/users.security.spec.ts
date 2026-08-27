@@ -384,7 +384,19 @@ describe('users HTTP security', () => {
       context = asContext({ headOf: [A], memberOf: [A] });
       activeMembership = { departmentId: B };
 
-      await detail().expect(403);
+      // The status is asserted EXPLICITLY rather than only through supertest's
+      // `.expect(403)`. Both refuse a wrong status; only this one is visible to
+      // a static analyser, which otherwise reads the test as assertion-free.
+      const response = await detail();
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      // ★ AND THE REFUSAL CAME FIRST. The shared department is only in the
+      // target's past, so nothing was read on their behalf: history is what a
+      // caller may be shown AFTER they are authorized, never the reason they
+      // are. A guard that consulted it would have reached these services.
+      expect(employment.listEmployeeHistory).not.toHaveBeenCalled();
+      expect(users.requireById).not.toHaveBeenCalled();
     });
 
     /**
