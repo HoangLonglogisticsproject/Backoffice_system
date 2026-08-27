@@ -120,7 +120,9 @@ export class TripScheduleService {
    */
   async create(input: CreateTripInput & { createdBy: string }): Promise<TripSchedule> {
     return this.db.transaction(async (tx) => {
-      const values = await this.resolve(input, 'awaiting_production', tx);
+      // No previous row, so every reference here is newly assigned and every
+      // one of them is checked against the catalogue.
+      const values = await this.resolve(input, 'awaiting_production', tx, null);
       return this.trips.create({ ...values, createdBy: input.createdBy }, tx);
     });
   }
@@ -161,7 +163,14 @@ export class TripScheduleService {
         status: patch.status ?? current.status,
       };
 
-      const values = await this.resolve(merged, current.status, tx);
+      // ★ THE ROW'S EXISTING REFERENCES GO WITH IT. `resolve` checks a
+      // reference against the catalogue only where it CHANGES, so retiring a
+      // truck does not freeze every trip that ever used it — see the comment
+      // on `resolve`.
+      const values = await this.resolve(merged, current.status, tx, {
+        vehicleId: current.vehicleId,
+        customerId: current.customerId,
+      });
 
       const updated = await this.trips.replace(id, values, tx);
       // The row was locked two statements ago, so this cannot be a concurrent
@@ -204,14 +213,32 @@ export class TripScheduleService {
    * is a mistake the database is happy to store. The check runs inside the
    * caller's transaction so a truck cannot be retired between the check and the
    * insert.
+   *
+   * ★ AND IT CHECKS ONLY WHAT IS BEING ASSIGNED. `previous` is the pair of
+   * references the row already held — `null` on create, where everything is new.
+   * A reference that is UNCHANGED is not re-checked, because it was already
+   * accepted once and the row is a record of what happened, not a claim about
+   * what is still available. Without that, archiving a truck made every trip
+   * that ever used it uneditable: the merged row still names it, so correcting
+   * an unrelated note answered 409 and the history could never be corrected
+   * again. Retiring a truck is routine, so that was every historical row.
+   *
+   * ⚠ WHAT IT DOES NOT RELAX. Assigning a DIFFERENT archived row is still
+   * refused, on create and on update alike — that is F-002, and it is the case
+   * this check exists for. Clearing a reference stays legal and always was: the
+   * `if (id)` guards below skip `null`, so "no truck yet" needs no catalogue at
+   * all.
    */
   private async resolve(
     input: CreateTripInput,
     fallbackStatus: TripStatus,
     tx: DatabaseQuery,
+    previous: { vehicleId: string | null; customerId: string | null } | null,
   ): Promise<TripScheduleValues> {
     const vehicleId = input.vehicleId ?? null;
-    if (vehicleId) {
+    // `previous` is null on create, so `previous?.vehicleId` is `undefined` and
+    // any id differs from it — every reference is checked, as it must be.
+    if (vehicleId && vehicleId !== previous?.vehicleId) {
       const vehicle = await this.vehicles.findById(vehicleId, tx);
       if (!vehicle) throw new NotFoundError('Vehicle not found.');
       if (vehicle.status !== 'active') {
@@ -220,7 +247,7 @@ export class TripScheduleService {
     }
 
     const customerId = input.customerId ?? null;
-    if (customerId) {
+    if (customerId && customerId !== previous?.customerId) {
       const customer = await this.customers.findById(customerId, tx);
       if (!customer) throw new NotFoundError('Customer not found.');
       if (customer.status !== 'active') {
