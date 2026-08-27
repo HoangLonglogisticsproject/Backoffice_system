@@ -31,5 +31,5 @@ module.exports = {
   testPathIgnorePatterns: ['/node_modules/'],
   // Fails the run when there is no database, instead of reporting 261 pending
   // tests and exiting 0.
-  globalSetup: '<rootDir>/tests/helpers/require-database.js',
+  globalSetup: '<rootDir>/tests/helpers/require-database.ts',
 };

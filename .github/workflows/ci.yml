@@ -246,13 +246,31 @@ jobs:
       # The other half of the suite, against the PostgreSQL service above. Kept
       # as its own step so a database failure reads as a database failure
       # instead of hiding among 671 unit results.
+      #
+      # ★ THE OPT-IN IS STATED HERE, NOT INHERITED. These specs truncate tables
+      # and drop schemas, so `require-database.ts` refuses to run without an
+      # explicit declaration that the target is disposable — and the target is
+      # `backoffice_itest`, which the step above drops and recreates for this
+      # run. Naming it at the one step that needs it keeps every other job
+      # unable to trigger a destructive suite by accident.
       - name: Integration tests (real PostgreSQL)
         working-directory: backend
+        env:
+          ALLOW_DESTRUCTIVE_DB_TESTS: '1'
         run: npm run test:integration -- --ci --json --outputFile=jest-integration-results.json
 
+      # ★ THE FLOOR IS DERIVED, NOT ROUND. The suite is 261 tests across 10 spec
+      # files, and the SMALLEST of those files is 11 tests
+      # (`migration-runner.integration.spec.ts`). 250 therefore sits closer to
+      # the current count than any single file is wide: losing one whole file to
+      # a discovery mistake drops the total below the floor and fails here.
+      #
+      # A rounder 200 would have tolerated the loss of five files. The other
+      # thresholds in this workflow are looser for historical reasons; this one
+      # is the shape they should all take.
       - name: Assert no integration test was skipped
         working-directory: backend
-        run: node ../.github/scripts/assert-tests-ran.mjs jest-integration-results.json 200 "backend integration"
+        run: node ../.github/scripts/assert-tests-ran.mjs jest-integration-results.json 250 "backend integration"
 
   # --------------------------------------------------------------- frontend --
   frontend:

@@ -25,7 +25,7 @@ These are deliberately independent.
 
 A spec lives in the folder its **subject** belongs to. Its **filename** declares whether it needs infrastructure. That is why `backend/tests/migrations/` can hold five DB-free schema specs beside one `*.integration.spec.ts` without either landing in the wrong command — discovery keys on the name, not the directory.
 
-```
+```text
 npm test              →  everything EXCEPT *.integration.spec.ts
 npm run test:integration  →  ONLY *.integration.spec.ts, and fails without a database
 ```
@@ -48,7 +48,21 @@ What *does* earn a move is the tests that need a database or a server. Those wer
 | `npm run test:integration`, no database | *(did not exist)* | **fails**, naming the variable |
 | `npm run test:integration`, with database | *(did not exist)* | **261 run** |
 
-`backend/tests/helpers/require-database.js` is what makes the failure explicit: it runs before any spec is collected. The per-file `TEST_URL ? describe : describe.skip` guards remain, because they are still right when somebody runs a single file directly — they are simply no longer how a whole suite decides.
+`backend/tests/helpers/require-database.ts` is what makes the failure explicit: it runs before any spec is collected. The per-file `TEST_URL ? describe : describe.skip` guards remain, because they are still right when somebody runs a single file directly — they are simply no longer how a whole suite decides.
+
+## The destructive-test safety contract
+
+These specs truncate tables and one drops the `public` schema, so "is a database reachable" is the wrong question. `require-database.ts` requires **all three**, and each is defeatable alone:
+
+| | Condition | Rules out |
+|---|---|---|
+| 1 | `ALLOW_DESTRUCTIVE_DB_TESTS=1` | an inherited `DATABASE_URL_TEST` from another shell |
+| 2 | host is loopback | staging, and any remote database however named |
+| 3 | database name in an **exact allowlist** — `backoffice_itest`, `backoffice_test` | `production_test`, `customer-testing`, `latest_backup` |
+
+A substring match on `test` accepts all three of those names; that is why the allowlist is a closed set and adding to it is a visible edit. CI states the opt-in on the single step that needs it, against the `backoffice_itest` it drops and recreates for that run.
+
+The same reasoning applies to where a password may be sent. `frontend/tests/helpers/integration-credentials.ts` posts a SuperAdmin credential to `/auth/login`, so it refuses plain HTTP to anything but loopback while allowing HTTPS anywhere — the rule is about the wire, not the word "localhost".
 
 ## Adding a test
 
