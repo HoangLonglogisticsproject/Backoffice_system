@@ -267,6 +267,20 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       expect(row?.createdByUser.displayName).toBe('Điều Độ');
     });
 
+    it('★ returns a trip with a truck but NO customer — an internal move', async () => {
+      // 0011 makes `customer_id` nullable for its own reason, separate from
+      // `ĐIỀN SAU`: a move between the company's own sites has no customer
+      // behind it. The row above happens to have neither reference, so it
+      // would still pass if the customer join were made INNER.
+      const vehicle = await catalogue.createVehicle({ plate: '51C-123.45', createdBy: author });
+      await trips.create({ scheduledOn: '2026-08-04', vehicleId: vehicle.id, createdBy: author });
+
+      const [row] = (await trips.list(asQuery({}))).items;
+      expect(row?.vehicle).toEqual({ id: vehicle.id, plate: '51C-123.45' });
+      expect(row?.customer).toBeNull();
+      expect(row?.customerId).toBeNull();
+    });
+
     it('does not let the joined user clobber the trip’s own id', async () => {
       // What `SELECT *` across this join would do.
       const created = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
@@ -319,6 +333,18 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       await expect(
         trips.create({ scheduledOn: '2026-08-04', vehicleId: vehicle.id, createdBy: author }),
+      ).rejects.toBeInstanceOf(ConflictError);
+    });
+
+    it('refuses a trip pointing at a retired customer', async () => {
+      // The twin of the case above, and it is NOT covered by it: `resolve()`
+      // checks the two catalogues in two separate branches, so a regression
+      // that dropped the customer half would leave the vehicle test green.
+      const customer = await catalogue.createCustomer({ name: 'VIỄN ĐẠT', createdBy: author });
+      await catalogue.archiveCustomer(customer.id);
+
+      await expect(
+        trips.create({ scheduledOn: '2026-08-04', customerId: customer.id, createdBy: author }),
       ).rejects.toBeInstanceOf(ConflictError);
     });
 
@@ -422,6 +448,26 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       expect(await catalogue.listVehicles(false)).toEqual([]);
       expect(await catalogue.listVehicles(true)).toHaveLength(1);
+    });
+
+    it('retires a customer, and hides it from the list unless asked for', async () => {
+      // The vehicle twin of this is tested above. Both are needed: the two
+      // catalogues are two repository classes with two literal statements —
+      // deliberately not one generic one — so neither covers the other.
+      const customer = await catalogue.createCustomer({ name: 'BLUE WATER', createdBy: author });
+      const archived = await catalogue.archiveCustomer(customer.id);
+
+      expect(archived.status).toBe('archived');
+      expect(await catalogue.listCustomers(false)).toEqual([]);
+      expect(await catalogue.listCustomers(true)).toHaveLength(1);
+    });
+
+    it('frees the customer name again once the row is retired', async () => {
+      const first = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
+      await catalogue.archiveCustomer(first.id);
+
+      const reissued = await catalogue.createCustomer({ name: 'W W L', createdBy: author });
+      expect(reissued.id).not.toBe(first.id);
     });
 
     it('refuses a rename that collides with another active row', async () => {

@@ -154,7 +154,7 @@ export class TripCatalogueService {
    * Finds an active row whose plate matches the way the DATABASE matches.
    *
    * ★ THE NORMALISATION IS DUPLICATED HERE ON PURPOSE, AND IT MUST STAY IN STEP
-   * WITH `plate_key` IN 0010. This is only ever used to produce a better error
+   * WITH `plate_key` IN 0011. This is only ever used to produce a better error
    * message; if it drifts, the worst outcome is a generic conflict from the
    * index instead of a specific one naming the existing spelling. The index is
    * what enforces uniqueness, never this.

@@ -24,7 +24,6 @@ import {
 } from '@/api/tripCatalogue';
 import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
-import type { TripCustomer, TripVehicle } from '@/types/trip';
 import type { TranslationKey } from '@/types/translate';
 
 /**
@@ -41,12 +40,33 @@ import type { TranslationKey } from '@/types/translate';
 
 type Tab = 'vehicles' | 'customers';
 
+/**
+ * One catalogue row, flattened to the shape the two lists share.
+ *
+ * `label` is the plate or the name; nothing else on the row differs, which is
+ * what lets the table below be written once for both tabs.
+ */
+type CatalogueRowData = { id: string; label: string; note: string | null; status: string };
+
 export default function TripMasterDataPage() {
   const { t } = useLanguage();
   const { can } = useSession();
 
   const [tab, setTab] = useState<Tab>('vehicles');
   const [includeArchived, setIncludeArchived] = useState(false);
+
+  /**
+   * ★ THE TWO DIALOGS BELONG TO THE PAGE, NOT TO THE ROW, AND THAT IS NOT
+   * TIDINESS. Rendered from inside `CatalogueRow` they were siblings of the
+   * `<tr>`, so an open dialog put a `<div>` directly inside `<tbody>` — invalid
+   * HTML, which React reports as a hydration error. It also mounted two
+   * `Modal`s per row, each with its own focus trap and keydown listener, on a
+   * screen that can only ever have one dialog open.
+   *
+   * The selected row IS the open state: `null` means no dialog.
+   */
+  const [editing, setEditing] = useState<CatalogueRowData | null>(null);
+  const [archiving, setArchiving] = useState<CatalogueRowData | null>(null);
 
   const canManage = can('trip.write');
   const canAdd = can('trip.create');
@@ -63,11 +83,10 @@ export default function TripMasterDataPage() {
 
   // One shape for both lists, so the table below is written once. `label` is the
   // plate or the name; nothing else on the row differs.
-  const rows = (
+  const rows: CatalogueRowData[] =
     tab === 'vehicles'
       ? catalogue.vehicles.items.map((row) => ({ ...row, label: row.plate }))
-      : catalogue.customers.items.map((row) => ({ ...row, label: row.name }))
-  ) as Array<(TripVehicle | TripCustomer) & { label: string }>;
+      : catalogue.customers.items.map((row) => ({ ...row, label: row.name }));
 
   return (
     <div className="space-y-6">
@@ -115,10 +134,10 @@ export default function TripMasterDataPage() {
             {rows.map((row) => (
               <CatalogueRow
                 key={row.id}
-                tab={tab}
                 row={row}
                 canManage={canManage}
-                onChanged={catalogue.reload}
+                onEdit={() => setEditing(row)}
+                onArchive={() => setArchiving(row)}
               />
             ))}
           </TableBody>
@@ -139,6 +158,28 @@ export default function TripMasterDataPage() {
           <p className="px-6 py-10 text-center text-sm text-red-600">{t('loadFailed')}</p>
         )}
       </div>
+
+      {/* Mounted only while open, so the form seeds from the row each time it
+          is reopened rather than showing an abandoned edit. */}
+      {editing && (
+        <CatalogueFormModal
+          isOpen
+          tab={tab}
+          editing={editing}
+          onClose={() => setEditing(null)}
+          onSaved={catalogue.reload}
+        />
+      )}
+
+      {archiving && (
+        <ArchiveDialog
+          isOpen
+          tab={tab}
+          row={archiving}
+          onClose={() => setArchiving(null)}
+          onArchived={catalogue.reload}
+        />
+      )}
     </div>
   );
 }
@@ -165,85 +206,65 @@ function TabButton({
 }
 
 function CatalogueRow({
-  tab,
   row,
   canManage,
-  onChanged,
+  onEdit,
+  onArchive,
 }: Readonly<{
-  tab: Tab;
-  row: { id: string; label: string; note: string | null; status: string };
+  row: CatalogueRowData;
   canManage: boolean;
-  onChanged: () => void;
+  onEdit: () => void;
+  onArchive: () => void;
 }>) {
   const { t } = useLanguage();
-  const [editOpen, setEditOpen] = useState(false);
-  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const archived = row.status !== 'active';
 
   return (
-    <>
-      <TableRow className={cn('transition-colors hover:bg-blue-50/30', archived && 'opacity-60')}>
-        <TableCell className="font-medium text-gray-900">{row.label}</TableCell>
-        <TableCell className="text-gray-600">{row.note ?? '—'}</TableCell>
+    <TableRow className={cn('transition-colors hover:bg-blue-50/30', archived && 'opacity-60')}>
+      <TableCell className="font-medium text-gray-900">{row.label}</TableCell>
+      <TableCell className="text-gray-600">{row.note ?? '—'}</TableCell>
+      <TableCell>
+        <span
+          className={cn(
+            'inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset',
+            archived
+              ? 'bg-gray-50 text-gray-600 ring-gray-500/10'
+              : 'bg-green-50 text-green-700 ring-green-600/20',
+          )}
+        >
+          {t(archived ? 'statusArchived' : 'statusActive')}
+        </span>
+      </TableCell>
+      {canManage && (
         <TableCell>
-          <span
-            className={cn(
-              'inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset',
-              archived
-                ? 'bg-gray-50 text-gray-600 ring-gray-500/10'
-                : 'bg-green-50 text-green-700 ring-green-600/20',
-            )}
-          >
-            {t(archived ? 'statusArchived' : 'statusActive')}
-          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2 text-gray-600"
+              onClick={onEdit}
+              // An archived row is refused edits by the server (409); the
+              // button is hidden rather than left to produce that error.
+              disabled={archived}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              <span className="sr-only">{t('edit')}</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2 text-gray-600"
+              onClick={onArchive}
+              disabled={archived}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              <span className="sr-only">{t('archive')}</span>
+            </Button>
+          </div>
         </TableCell>
-        {canManage && (
-          <TableCell>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2 text-gray-600"
-                onClick={() => setEditOpen(true)}
-                // An archived row is refused edits by the server (409); the
-                // button is hidden rather than left to produce that error.
-                disabled={archived}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-                <span className="sr-only">{t('edit')}</span>
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2 text-gray-600"
-                onClick={() => setArchiveOpen(true)}
-                disabled={archived}
-              >
-                <Archive className="h-3.5 w-3.5" />
-                <span className="sr-only">{t('archive')}</span>
-              </Button>
-            </div>
-          </TableCell>
-        )}
-      </TableRow>
-
-      <CatalogueFormModal
-        isOpen={editOpen}
-        tab={tab}
-        editing={row}
-        onClose={() => setEditOpen(false)}
-        onSaved={onChanged}
-      />
-
-      <ArchiveDialog
-        isOpen={archiveOpen}
-        tab={tab}
-        row={row}
-        onClose={() => setArchiveOpen(false)}
-        onArchived={onChanged}
-      />
-    </>
+      )}
+    </TableRow>
   );
 }
 
@@ -342,7 +363,17 @@ function CatalogueFormModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={t(isVehicle ? 'addVehicle' : 'addCustomer')}
+      // The one dialog both adds and renames, so the title has to say which.
+      // It said "add" in both, over a form pre-filled with an existing plate.
+      title={t(
+        editing
+          ? isVehicle
+            ? 'editVehicle'
+            : 'editCustomer'
+          : isVehicle
+            ? 'addVehicle'
+            : 'addCustomer',
+      )}
       footer={
         <>
           <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
