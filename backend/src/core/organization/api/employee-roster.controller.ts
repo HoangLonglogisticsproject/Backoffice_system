@@ -1,18 +1,11 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
-import { pageQuerySchema } from '../../../common/pagination/page-query.dto';
+import { rosterQuerySchema, type RosterQuery } from './roster-query.dto';
 import type { Page } from '../../../common/pagination/cursor';
 import { AuthGuard } from '../../identity/api/auth.guard';
 import { PermissionGuard, RequirePermission } from '../../authorization/api/permission.guard';
 import { EmployeeRosterRow } from '../domain/department.entity';
 import { MembershipService } from '../application/membership.service';
-
-const rosterQuerySchema = pageQuerySchema.extend({
-  membershipStatus: z.enum(['active', 'ended']).optional(),
-});
-
-type RosterQuery = z.infer<typeof rosterQuerySchema>;
 
 /**
  * The DEPLOYMENT-WIDE employee roster.

@@ -177,7 +177,7 @@ describe('EmployeeManagementPage — the roster the head reads', () => {
     await screen.findByText('Lê Gia Minh Phú');
 
     expect(screen.getByText('Đang làm việc')).toBeInTheDocument();
-    expect(screen.queryByText('Đã nghỉ việc')).not.toBeInTheDocument();
+    expect(screen.queryByText('Đã kết thúc')).not.toBeInTheDocument();
   });
 
   it('renders an ended membership as resigned when the server sends one', async () => {
@@ -189,7 +189,7 @@ describe('EmployeeManagementPage — the roster the head reads', () => {
     renderPage();
     await screen.findByText('Lê Gia Minh Phú');
 
-    expect(screen.getByText('Đã nghỉ việc')).toBeInTheDocument();
+    expect(screen.getByText('Đã kết thúc')).toBeInTheDocument();
   });
 });
 

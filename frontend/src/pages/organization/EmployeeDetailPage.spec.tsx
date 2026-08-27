@@ -95,7 +95,7 @@ describe('EmployeeDetailPage', () => {
     expect(within(account).getByText('Đã vô hiệu hóa')).toBeInTheDocument();
     // ★ The account section must never borrow the membership vocabulary.
     expect(within(account).queryByText('Đang làm việc')).not.toBeInTheDocument();
-    expect(within(account).queryByText('Đã nghỉ việc')).not.toBeInTheDocument();
+    expect(within(account).queryByText('Đã kết thúc')).not.toBeInTheDocument();
   });
 
   /**
@@ -202,7 +202,7 @@ describe('EmployeeDetailPage', () => {
       // header + two periods
       expect(rows).toHaveLength(3);
       expect(within(rows[1]!).getByText('Sales')).toBeInTheDocument();
-      expect(within(rows[1]!).getByText('Đã nghỉ việc')).toBeInTheDocument();
+      expect(within(rows[1]!).getByText('Đã kết thúc')).toBeInTheDocument();
       expect(within(rows[1]!).getByText('18/8/2026')).toBeInTheDocument();
       expect(within(rows[2]!).getByText('Operations')).toBeInTheDocument();
       expect(within(rows[2]!).getByText('Trưởng phòng')).toBeInTheDocument();

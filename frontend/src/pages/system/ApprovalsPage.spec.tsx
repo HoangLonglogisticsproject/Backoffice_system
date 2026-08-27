@@ -883,7 +883,7 @@ describe('ApprovalsPage', () => {
       // Scoped to the rows: the status filter's own <option> list carries the
       // same two words, and matching those would prove nothing about the table.
       const rows = screen.getAllByRole('row');
-      expect(within(rows[1]!).getByText('Đã nghỉ việc')).toBeInTheDocument();
+      expect(within(rows[1]!).getByText('Đã kết thúc')).toBeInTheDocument();
       expect(within(rows[1]!).getByText('Sales')).toBeInTheDocument();
       expect(within(rows[2]!).getByText('Đang làm việc')).toBeInTheDocument();
       expect(within(rows[2]!).getByText('Vận hành')).toBeInTheDocument();

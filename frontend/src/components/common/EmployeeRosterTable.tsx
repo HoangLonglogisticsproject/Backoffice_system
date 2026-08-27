@@ -118,7 +118,7 @@ function PositionLabel({ role }: Readonly<{ role: EmployeeRole }>) {
  * a single "Trạng thái" that sometimes meant one and sometimes the other is the
  * confusion this separation exists to prevent.
  */
-function MembershipStatusBadge({ status }: Readonly<{ status: MembershipStatus }>) {
+export function MembershipStatusBadge({ status }: Readonly<{ status: MembershipStatus }>) {
   const { t } = useLanguage();
   const styles =
     status === 'active'

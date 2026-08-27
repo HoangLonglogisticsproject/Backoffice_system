@@ -360,7 +360,11 @@ describe('users HTTP security', () => {
       const { NotFoundError } = await import('../../../common/errors/domain.error');
       users.requireById.mockRejectedValue(new NotFoundError('User not found.'));
 
-      await detail().expect(404);
+      // The status is asserted EXPLICITLY rather than only through supertest's
+      // `.expect(404)`. Both refuse a wrong status; only this one is visible to
+      // a static analyser, which otherwise reads the test as assertion-free.
+      const response = await detail();
+      expect(response.status).toBe(404);
     });
 
     it('10. hands the scope to the query rather than filtering rows afterwards', async () => {
@@ -443,8 +447,12 @@ describe('users HTTP security', () => {
     it('mounts nothing destructive under the detail route - GET only', async () => {
       context = asContext({ global: true });
 
-      await authed('post', `/users/${TARGET}/memberships`).expect(404);
-      await authed('patch', `/users/${TARGET}/memberships`).expect(404);
+      // Same reason as the 404 above: assert the status explicitly.
+      const posted = await authed('post', `/users/${TARGET}/memberships`);
+      const patched = await authed('patch', `/users/${TARGET}/memberships`);
+
+      expect(posted.status).toBe(404);
+      expect(patched.status).toBe(404);
     });
   });
 

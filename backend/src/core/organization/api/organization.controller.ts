@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
-import { pageQuerySchema, type PageQuery } from '../../../common/pagination/page-query.dto';
+import { rosterQuerySchema, type RosterQuery } from './roster-query.dto';
 import type { Page } from '../../../common/pagination/cursor';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
@@ -60,24 +60,6 @@ const renameDepartmentSchema = z.object({
  * wherever that person currently is — a fact read from the database, never a
  * value the caller supplies.
  */
-/**
- * `?membershipStatus=` on a roster read.
- *
- * ★ ABSENT MEANS BOTH, and the DEFAULT IS CHOSEN BY THE CLIENT, not here. A
- * server-side default of `active` would make "Tất cả" impossible to ask for —
- * there would be no value meaning "do not filter". The screens send
- * `membershipStatus=active` for their default view; this schema only says which
- * values are legal.
- *
- * The two values are `department_memberships.status`, not invented: 0003
- * CHECKs the column against exactly this pair.
- */
-const rosterQuerySchema = pageQuerySchema.extend({
-  membershipStatus: z.enum(['active', 'ended']).optional(),
-});
-
-type RosterQuery = z.infer<typeof rosterQuerySchema>;
-
 const transferIntoSchema = z.object({
   userId: z.string().uuid(),
 });

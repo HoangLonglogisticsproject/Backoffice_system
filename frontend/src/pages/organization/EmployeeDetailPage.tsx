@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { MembershipStatusBadge } from '@/components/common/EmployeeRosterTable';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useSessionResource } from '@/hooks/useSessionResource';
@@ -18,7 +19,7 @@ import { formatDate } from '@/utils/format/datetime';
 import { fetchEmployeeDetail } from '@/api/membership';
 import { disableUser } from '@/api/users';
 import { isApiError } from '@/utils/errors';
-import type { EmployeeDetail, EmployeeRole, MembershipStatus } from '@/types/organization';
+import type { EmployeeDetail, EmployeeRole } from '@/types/organization';
 
 /**
  * ONE EMPLOYEE — identity, account state, and employment history. READ ONLY.
@@ -341,23 +342,6 @@ function Field({ label, children }: Readonly<{ label: string; children: React.Re
 function PositionLabel({ role }: Readonly<{ role: EmployeeRole }>) {
   const { t } = useLanguage();
   return <>{role === 'DEPARTMENT_HEAD' ? t('roleDepartmentHead') : t('roleMember')}</>;
-}
-
-/** `department_memberships.status` — still in this unit, or no longer. */
-function MembershipStatusBadge({ status }: Readonly<{ status: MembershipStatus }>) {
-  const { t } = useLanguage();
-  const styles =
-    status === 'active'
-      ? 'bg-green-50 text-green-700 ring-green-600/20'
-      : 'bg-gray-50 text-gray-600 ring-gray-500/10';
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset ${styles}`}
-    >
-      {status === 'active' ? t('statusActive') : t('statusInactive')}
-    </span>
-  );
 }
 
 /**

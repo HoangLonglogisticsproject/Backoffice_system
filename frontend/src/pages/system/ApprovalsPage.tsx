@@ -46,6 +46,15 @@ import { fetchEmployeeRoster } from '@/api/membership';
 import { EmployeeRosterTable } from '@/components/common/EmployeeRosterTable';
 
 /**
+ * Which "nothing here" sentence a queue shows when it comes back empty.
+ *
+ * One alias rather than the same union written at each of the three components
+ * that pass it down: three copies drift, and the one that drifts is the one
+ * nobody reads.
+ */
+type EmptyStateKey = 'emptyRequests' | 'emptyInvitations' | 'emptyRoster';
+
+/**
  * The global decision queues.
  *
  * ★ GLOBAL ONLY, AND A HEAD GETS 403 — including for requests they raised
@@ -93,6 +102,28 @@ export default function ApprovalsPage() {
   // A MEMBER matches neither, and so is offered nothing — which is also what
   // every endpoint behind these buttons would tell them.
   const canAddSomeone = isGlobal || headDepartmentId !== undefined;
+
+  /*
+    THE SAME TWO TABS FOR EVERYONE, reading whichever endpoint the caller is
+    allowed to read. A head has no access to the two GLOBAL queues — those
+    answer 403, including for requests they raised themselves — but the
+    DEPARTMENT-scoped versions of both are open to them. Pointing a head at
+    the global queue would render "not permitted" on the one screen that is
+    supposed to show them their own pending request.
+
+    Read top to bottom instead of nested inside one expression. Precedence is
+    unchanged: the roster tab still wins over everything, and a caller who is
+    not global and leads nothing still falls to the global queue, which is the
+    only thing that can answer them.
+  */
+  let body: ReactNode;
+  if (tab === 'roster') {
+    body = <EmployeeRoster refresh={refresh} />;
+  } else if (isGlobal || !headDepartmentId) {
+    body = <GlobalQueue tab={tab} />;
+  } else {
+    body = <DepartmentQueue tab={tab} departmentId={headDepartmentId} refresh={refresh} />;
+  }
 
   return (
     <div className="space-y-6">
@@ -170,21 +201,7 @@ export default function ApprovalsPage() {
           ))}
         </div>
 
-        {/*
-          THE SAME TWO TABS FOR EVERYONE, reading whichever endpoint the caller is
-          allowed to read. A head has no access to the two GLOBAL queues — those
-          answer 403, including for requests they raised themselves — but the
-          DEPARTMENT-scoped versions of both are open to them. Pointing a head at
-          the global queue would render "not permitted" on the one screen that is
-          supposed to show them their own pending request.
-        */}
-        {tab === 'roster' ? (
-          <EmployeeRoster refresh={refresh} />
-        ) : isGlobal || !headDepartmentId ? (
-          <GlobalQueue tab={tab} />
-        ) : (
-          <DepartmentQueue tab={tab} departmentId={headDepartmentId} refresh={refresh} />
-        )}
+        {body}
       </div>
 
       <AddEmployeeModal
@@ -401,7 +418,7 @@ function ReadOnlyQueue<T extends { id: string }>({
   refresh: number;
   headers: string[];
   renderCells: (row: T) => ReactNode;
-  emptyKey: 'emptyRequests' | 'emptyInvitations' | 'emptyRoster';
+  emptyKey: EmptyStateKey;
 }>) {
   const page = useCursorPages<T>(read, [refresh]);
 
@@ -463,7 +480,7 @@ function QueueStates({
   forbidden: boolean;
   error: boolean;
   empty: boolean;
-  emptyKey: 'emptyRequests' | 'emptyInvitations' | 'emptyRoster';
+  emptyKey: EmptyStateKey;
 }>) {
   const { t } = useLanguage();
 
@@ -506,7 +523,7 @@ interface DecisionQueueProps<T> {
   headers: string[];
   /** The leading cells for one row — everything except the actions column. */
   renderCells: (row: T) => ReactNode;
-  emptyKey: 'emptyRequests' | 'emptyInvitations' | 'emptyRoster';
+  emptyKey: EmptyStateKey;
   onApprove: (row: T) => Promise<void>;
   onReject: (row: T, reason?: string) => Promise<void>;
 }

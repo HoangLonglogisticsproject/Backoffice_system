@@ -64,7 +64,13 @@ const PHRASES = {
   departmentAll: { vi: 'Phòng ban: Tất cả', en: 'Department: All' },
   statusAll: { vi: 'Trạng thái: Tất cả', en: 'Status: All' },
   statusActive: { vi: 'Đang làm việc', en: 'Active' },
-  statusInactive: { vi: 'Đã nghỉ việc', en: 'Resigned' },
+  // ★ NEUTRAL ON PURPOSE. This is `department_memberships.status === 'ended'`,
+  // and exactly two paths produce it: `MembershipService.transfer` and
+  // `AccountLifecycleService.disable`. A TRANSFERRED employee is still employed
+  // — their previous period simply closed — so "Đã nghỉ việc" / "Resigned"
+  // would state a reason the data does not carry, and would be plainly wrong on
+  // most rows of an employee's department history.
+  statusInactive: { vi: 'Đã kết thúc', en: 'Ended' },
   statusPause: { vi: 'Tạm nghỉ', en: 'On Leave' },
   filterBtn: { vi: 'Bộ lọc', en: 'Filter' },
   colIndex: { vi: '#', en: '#' },
