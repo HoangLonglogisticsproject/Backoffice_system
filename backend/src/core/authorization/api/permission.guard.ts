@@ -213,3 +213,77 @@ export class HeadOfRouteDepartmentGuard implements CanActivate {
     return true;
   }
 }
+
+/**
+ * May this caller read the employee named by `:userId`?
+ *
+ * ★ WHY A THIRD GUARD RATHER THAN A CHANGE TO `PermissionGuard`.
+ *
+ * `PermissionGuard` resolves its scope from a ROUTE PARAMETER, which is what
+ * makes it safe: the target is in the URL the caller asked for, and nothing the
+ * caller sends can widen it. `GET /users/:userId/memberships` names a PERSON,
+ * and the department that scopes it is a fact about that person's current
+ * employment — knowable only after a query. Teaching `PermissionGuard` to run
+ * queries would put a data-access strategy inside the one guard every route
+ * depends on, which is the God Guard this codebase deliberately does not have.
+ *
+ * So this follows the precedent `HeadOfRouteDepartmentGuard` already set: when a
+ * question cannot be expressed as permission + route scope, it gets its own
+ * small guard rather than making the shared one bigger.
+ *
+ * ★ THE RULE ITSELF IS NOT REIMPLEMENTED HERE. The decision is `can()`, the same
+ * pure function `PermissionGuard` calls, with the same permission
+ * (`unit.member.read`). This guard only RESOLVES the target; it does not decide
+ * what the target means. That is why there is no `if (global)` branch below —
+ * `can()` already answers that, and a copy here would be a second place for the
+ * rule to drift.
+ *
+ * ★ AUTHORIZATION IS ON THE ACTIVE MEMBERSHIP, AND ONLY THE ACTIVE ONE.
+ * A person who once belonged to a caller's unit and has since moved is NOT
+ * reachable by that caller: history is something you may be shown after you are
+ * authorized, never the reason you are authorized. `findActiveMembershipOf`
+ * returns null for somebody with no current employment, and `can()` fails closed
+ * on the absent target — so an offboarded person is unreachable by any head,
+ * which is the correct answer rather than an oversight.
+ *
+ * ⚠ COSTS ONE INDEXED LOOKUP FOR A GLOBAL CALLER TOO. Short-circuiting on
+ * `authorization.global` before the query would save it — and would be exactly
+ * the duplication of `can()` this guard exists to avoid. One single-row read is
+ * the cheaper mistake.
+ */
+@Injectable()
+export class HeadOfTargetUserDepartmentGuard implements CanActivate {
+  constructor(private readonly authorization: AuthorizationService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<Request>();
+    const user = (request as unknown as Record<string, unknown>)[REQUEST_USER] as
+      | SessionUser
+      | undefined;
+
+    if (!user) throw new UnauthorizedError('Authentication required.');
+
+    const authorization = await this.authorization.loadContext(user.id);
+    (request as unknown as Record<string, unknown>)[REQUEST_AUTHORIZATION] = authorization;
+
+    // Same gate as the other two guards: provisioning is not finished until the
+    // temporary credential is replaced. `can()` refuses such a caller anyway;
+    // raising it here gives them the actionable error instead of a flat 403.
+    if (authorization.mustChangeSecret) {
+      throw new PasswordChangeRequiredError('Password change required before using this deployment.');
+    }
+
+    const targetUserId = (request.params as Record<string, string | undefined>)['userId'];
+    if (!targetUserId) throw new ForbiddenError('You are not allowed to do that.');
+
+    // The MEMBERSHIP, then the department off it — never "the user's department".
+    // A department is one end of a relationship, not an attribute of a person.
+    const membership = await this.authorization.findActiveMembershipOf(targetUserId);
+
+    if (!can(authorization, 'unit.member.read', { departmentId: membership?.departmentId })) {
+      throw new ForbiddenError('You are not allowed to do that.');
+    }
+
+    return true;
+  }
+}

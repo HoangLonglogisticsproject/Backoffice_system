@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
-import { pageQuerySchema, type PageQuery } from '../../../common/pagination/page-query.dto';
+import { rosterQuerySchema, type RosterQuery } from './roster-query.dto';
 import type { Page } from '../../../common/pagination/cursor';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../identity/api/auth.guard';
@@ -21,7 +21,7 @@ import { PermissionGuard, RequirePermission } from '../../authorization/api/perm
 import {
   Department,
   DepartmentMembership,
-  DepartmentMembershipWithUser,
+  EmployeeRosterRow,
 } from '../domain/department.entity';
 import { DepartmentService } from '../application/department.service';
 import { MembershipService } from '../application/membership.service';
@@ -137,9 +137,16 @@ export class OrganizationController {
   @RequirePermission('unit.member.read', 'departmentId')
   async members(
     @Param('departmentId', UuidParam) departmentId: string,
-    @Query(new ZodValidationPipe(pageQuerySchema)) page: PageQuery,
-  ): Promise<Page<DepartmentMembershipWithUser>> {
-    return this.memberships.listActiveMembers(departmentId, page);
+    @Query(new ZodValidationPipe(rosterQuerySchema)) query: RosterQuery,
+  ): Promise<Page<EmployeeRosterRow>> {
+    // ★ THE SCOPE IS THE ROUTE PARAMETER, and it is not negotiable: the guard
+    // checked `unit.member.read` against THIS department, so the query is built
+    // from the same id it authorized. A head cannot widen it by sending
+    // anything, because there is nothing in the query string that names a unit.
+    return this.memberships.listRoster(
+      { departmentId, membershipStatus: query.membershipStatus },
+      query,
+    );
   }
 
   /**

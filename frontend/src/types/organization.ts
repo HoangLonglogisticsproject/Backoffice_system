@@ -63,17 +63,57 @@ export interface DepartmentMembership {
 }
 
 /**
- * The same membership as the LIST read returns it, with the member named.
+ * `users.status` — whether the BACKOFFICE ACCOUNT may operate.
  *
- * Separate from the base shape because the server only projects on the GET.
- * `POST /departments/:id/members` answers from the write path and returns
- * `DepartmentMembership` with no `user` — the caller of that just named the
- * person themselves, so the server does not join to tell them what they sent.
- * Declaring `user` on the base type would make it a promise the POST breaks.
+ * ⚠ NOT whether somebody still works here. That is `MembershipStatus`, and the
+ * two answer different questions off different columns. They move together
+ * during offboarding, but nothing in the schema ties them, so neither is ever
+ * derived from the other.
  */
-export interface DepartmentMembershipWithUser extends DepartmentMembership {
-  /** Who `userId` refers to. Always present — the join is INNER. */
+export type AccountStatus = 'active' | 'disabled';
+
+/**
+ * The position a roster shows — DERIVED from `role_assignments`, never stored.
+ *
+ * The table holds SUPERADMIN and DEPARTMENT_HEAD and nothing else: MEMBER is
+ * the ABSENCE of an active assignment. So the server answers this question, not
+ * a lookup, and there is no MEMBER row anywhere to go looking for.
+ */
+export type EmployeeRole = 'DEPARTMENT_HEAD' | 'MEMBER';
+
+/**
+ * One line of an employee roster — `GET /departments/:id/members` and
+ * `GET /memberships` both return exactly this shape.
+ *
+ * ★ ONE SHAPE, TWO AUDIENCES. The two endpoints differ in WHICH rows the caller
+ * may see, which the server decides; a row is the same thing either way. The
+ * screens differ only in which columns they draw.
+ *
+ * ★ TWO STATUSES, AND THEY ARE NOT INTERCHANGEABLE:
+ *
+ *   membershipStatus  is this person still in this unit    active | ended
+ *   accountStatus     may this person's account operate     active | disabled
+ *
+ * Neither is named `status`, because a single field would have to pick one
+ * meaning and lie about the other.
+ *
+ * ★ STILL A MEMBERSHIP, NOT A PERSON. `id` is the membership's; the person is
+ * `user.id`. One person legitimately has several rows here over time — an ended
+ * Sales membership beside an active Vận hành one is two lines of history for
+ * ONE employee, never two employees.
+ */
+export interface EmployeeRosterRow {
+  /** The MEMBERSHIP's id. The person is `user.id`. */
+  id: string;
   user: UserSummary;
+  department: { id: string; name: string };
+  role: EmployeeRole;
+  membershipStatus: MembershipStatus;
+  accountStatus: AccountStatus;
+  /** `department_memberships.created_at` — joining the unit IS the row's birth. */
+  joinedAt: string;
+  /** Set exactly when `membershipStatus` is `ended`; the database enforces the pair. */
+  endedAt: string | null;
 }
 
 /**
@@ -108,4 +148,26 @@ export interface DepartmentHead {
  */
 export interface DepartmentHeadWithUser extends DepartmentHead {
   user: UserSummary;
+}
+
+/**
+ * `GET /users/:userId/memberships` — one employee, read only.
+ *
+ * ★ KEYED BY THE PERSON. `user.id` is the canonical identity and survives every
+ * lifecycle event, which is what lets several employment periods appear as ONE
+ * employee. A membership id would scope this to a single period.
+ *
+ * ★ TWO STATUSES, NEVER MERGED. `accountStatus` is `users.status` — may this
+ * account operate. Each membership carries its own `membershipStatus` — is this
+ * person still in that unit. Neither is derived from the other.
+ *
+ * ⚠ `memberships` MAY BE PARTIAL, and the screen must say so. A department head
+ * is shown only the periods inside the units they lead; a global administrator
+ * is shown all of them. Presenting a filtered list as a complete history would
+ * be a lie the server cannot correct.
+ */
+export interface EmployeeDetail {
+  user: UserSummary;
+  accountStatus: AccountStatus;
+  memberships: EmployeeRosterRow[];
 }

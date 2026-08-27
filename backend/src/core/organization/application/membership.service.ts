@@ -1,11 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
+import { decodeCursor, toPage, MAX_LIMIT, type Page } from '../../../common/pagination/cursor';
 import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import {
   DepartmentMembership,
-  DepartmentMembershipWithUser,
+  EmployeeRosterRow,
+  MembershipStatus,
 } from '../domain/department.entity';
 import { DepartmentRepository } from '../persistence/department.repository';
 import { MembershipRepository } from '../persistence/membership.repository';
@@ -53,7 +54,12 @@ export class MembershipService {
     tx?: DatabaseQuery,
   ): Promise<DepartmentMembership> {
     const run = async (executor: DatabaseQuery): Promise<DepartmentMembership> => {
-      const department = await this.departments.findById(input.departmentId, executor);
+      // ★ LOCKED, NOT MERELY READ — the same row `DepartmentService.archive`
+      // locks. Reading it unlocked left the status check truthful and useless:
+      // archive could count zero active members, archive and commit while this
+      // transaction held an `active` snapshot, and the membership then landed in
+      // a closed unit. Contending for the row is what orders the two.
+      const department = await this.departments.lockById(input.departmentId, executor);
       if (!department) throw new NotFoundError('Department not found.');
       if (department.status !== 'active') {
         throw new ConflictError('That department is archived and cannot take new members.');
@@ -94,7 +100,10 @@ export class MembershipService {
     const now = input.now ?? new Date();
 
     const run = async (tx: DatabaseQuery): Promise<DepartmentMembership> => {
-      const target = await this.departments.findById(input.toDepartmentId, tx);
+      // Locked for the same reason as `enroll`, and BEFORE the source membership
+      // is touched: a transfer refused here must not already have ended
+      // somebody's current membership.
+      const target = await this.departments.lockById(input.toDepartmentId, tx);
       if (!target) throw new NotFoundError('Department not found.');
       if (target.status !== 'active') {
         throw new ConflictError('That department is archived and cannot take new members.');
@@ -128,27 +137,68 @@ export class MembershipService {
   }
 
   /**
-   * One page of a department's active members.
+   * One page of the employee roster, department-scoped or global.
    *
-   * The service still asserts the department exists before reading, so an
-   * unknown id is a 404 rather than an empty page — "no such unit" and "a unit
-   * with nobody in it" are different answers and a client renders them
-   * differently.
+   * ★ THE 404 IS ONLY FOR THE SCOPED READ. "No such unit" and "a unit with
+   * nobody in it" are different answers, so a named department is asserted to
+   * exist first. The GLOBAL read names no
+   * department, so there is nothing to assert and an empty deployment is an
+   * empty page, not a 404.
+   *
+   * ⚠ NO AUTHORIZATION HERE. Whether this caller may read globally or only
+   * their own unit was decided by `PermissionGuard` before the request reached
+   * this class — `unit.member.read` unscoped is global-only, scoped is head.
+   * Re-deciding it here would be a second copy of that rule.
    */
-  async listActiveMembers(
-    departmentId: string,
+  async listRoster(
+    scope: { departmentId?: string; membershipStatus?: MembershipStatus },
     page: PageQuery,
-  ): Promise<Page<DepartmentMembershipWithUser>> {
-    const department = await this.departments.findById(departmentId);
-    if (!department) throw new NotFoundError('Department not found.');
+  ): Promise<Page<EmployeeRosterRow>> {
+    if (scope.departmentId !== undefined) {
+      const department = await this.departments.findById(scope.departmentId);
+      if (!department) throw new NotFoundError('Department not found.');
+    }
+
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
-    const rows = await this.memberships.listActiveInDepartmentPage(
-      departmentId,
-      page.limit,
-      cursor,
-    );
+    const rows = await this.memberships.listRosterPage(scope, page.limit, cursor);
 
     return toPage(rows, page.limit);
+  }
+
+  /**
+   * One person's employment history — every period, oldest first.
+   *
+   * ★ ACCESS WAS ALREADY DECIDED. A guard authorized this caller against the
+   * target's ACTIVE membership before the request reached here. This method
+   * answers the second, different question: of the periods that exist, which
+   * may this caller be SHOWN.
+   *
+   * `visibleDepartmentIds` absent means unfiltered — the global caller, who may
+   * see every period. Present means the caller is a head, and the list is the
+   * units they lead: their history view then cannot so much as name a unit they
+   * have no authority over.
+   *
+   * ⚠ FILTERED IN SQL, NOT IN MEMORY. Loading the whole history and dropping
+   * rows afterwards would read every period this caller may not see into the
+   * process that is answering them — one bug away from disclosure, and it would
+   * make the wrong thing the easy thing for the next caller.
+   *
+   * ponytail: one page, no cursor. A person's history is one row per employment
+   * period — single digits in practice, and `MAX_LIMIT` is 200. If somebody ever
+   * accumulates more periods than that, this needs the cursor the roster
+   * already has; nothing else about it changes.
+   */
+  async listEmployeeHistory(
+    userId: string,
+    visibleDepartmentIds?: readonly string[],
+  ): Promise<EmployeeRosterRow[]> {
+    const rows = await this.memberships.listRosterPage(
+      { userId, departmentIds: visibleDepartmentIds },
+      MAX_LIMIT,
+      undefined,
+    );
+
+    return toPage(rows, MAX_LIMIT).items;
   }
 
   async findActive(userId: string): Promise<DepartmentMembership | null> {

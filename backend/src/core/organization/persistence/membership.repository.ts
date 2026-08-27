@@ -4,9 +4,10 @@ import { DATABASE, type Database, type DatabaseQuery } from '../../../common/typ
 import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
 import {
   DepartmentMembership,
-  DepartmentMembershipWithUser,
+  EmployeeRosterRow,
   MembershipStatus,
 } from '../domain/department.entity';
+import type { AccountStatus } from '../../../common/types/user-summary';
 
 const isUniqueViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '23505';
@@ -21,37 +22,85 @@ interface MembershipRow {
 }
 
 /**
- * A membership plus the anchor a cursor is built from.
+ * One roster line as PostgreSQL hands it back.
  *
- * `cursorAt` is `created_at` AS POSTGRESQL RENDERED IT. `createdAt` beside it is
- * the same instant parsed into a `Date` for display, and it has already lost the
- * microseconds — which is exactly why the cursor cannot be built from it.
+ * `is_head` is a BOOLEAN the query computes, not a role string: the assignment
+ * table has no MEMBER value to return, so the only thing SQL can honestly say
+ * is whether an active head assignment was found.
  */
-export interface MembershipPageRow extends DepartmentMembershipWithUser, CursorAnchored {}
+interface RosterRow {
+  membership_id: string;
+  membership_status: MembershipStatus;
+  joined_at: Date;
+  ended_at: Date | null;
+  cursor_at: string;
+  user_id: string;
+  user_display_name: string;
+  account_status: AccountStatus;
+  department_id: string;
+  department_name: string;
+  is_head: boolean;
+}
 
 /**
- * The member list, with the name of each member and the cursor anchor.
+ * The employee roster, as one query over the tables that already exist.
  *
- * ★ COLUMNS ARE LISTED, not `SELECT *`. Once `users` is in the query, a star
- * would let ITS `id`, `created_at` and `status` overwrite the membership's own,
- * so the mapper would read a user id as a membership id — and the cursor would
- * then encode the wrong row entirely.
+ * ★ NO EMPLOYEE TABLE, AND THERE MUST NOT BE ONE. Everything a roster line
+ * shows is already stored; the only thing missing was a read model that joins
+ * it. A table would be a second, copied source of truth that drifts the first
+ * time somebody transfers.
  *
- * ★ EVERY KEYSET COLUMN IS QUALIFIED `m.`, including `m.created_at::text` for
- * the anchor. Unqualified they are ambiguous, and ordering by anything but the
- * membership's own columns would cost the ordered index a sort.
+ * ★ THE ROLE JOIN IS ON `membership_id`, NOT ON (user, department). 0004 gives
+ * `role_assignments` a `membership_id` naming exactly which membership entitles
+ * the headship, and a composite FK holds the two in agreement — so this is the
+ * column the schema intends, it is indexed by 0008, and it cannot accidentally
+ * match a head assignment from a DIFFERENT membership of the same person in the
+ * same unit (a rejoin).
  *
- * INNER, not LEFT. `user_id` is NOT NULL and its foreign key is `NO ACTION`, so
- * PostgreSQL physically refuses to delete a user who still holds a membership.
- * The row on the other side is guaranteed to exist, and the join is 1:1 on a
- * primary key, so it cannot multiply a list row either.
+ * ★ `status = 'active'` ON THE ASSIGNMENT IS LOAD-BEARING. A revoked row is
+ * history — an ex-head — and counting it would keep calling somebody Trưởng
+ * phòng after they were stood down.
+ *
+ * ★ COLUMNS ARE ALIASED, not `SELECT *`. Three tables here carry `id`, `status`
+ * and `created_at`; a star would let the last one win and the mapper would read
+ * a user's id as a membership's.
+ *
+ * INNER on both joins: `user_id` and `department_id` are NOT NULL with FKs that
+ * refuse the delete, so both sides are guaranteed present, and both are 1:1 on
+ * a primary key so neither can multiply a row.
  */
-const MEMBERS_WITH_USER = `
-  SELECT m.id, m.user_id, m.department_id, m.status, m.created_at, m.ended_at,
+const ROSTER_SELECT = `
+  SELECT m.id            AS membership_id,
+         m.status        AS membership_status,
+         m.created_at    AS joined_at,
+         m.ended_at      AS ended_at,
          m.created_at::text AS cursor_at,
-         u.display_name AS user_display_name
+         u.id            AS user_id,
+         u.display_name  AS user_display_name,
+         u.status        AS account_status,
+         d.id            AS department_id,
+         d.name          AS department_name,
+         (ra.id IS NOT NULL) AS is_head
     FROM department_memberships m
-    JOIN users u ON u.id = m.user_id`;
+    JOIN users       u ON u.id = m.user_id
+    JOIN departments d ON d.id = m.department_id
+    LEFT JOIN role_assignments ra
+           ON ra.membership_id = m.id
+          AND ra.role_key = 'DEPARTMENT_HEAD'
+          AND ra.status   = 'active'`;
+
+const toRosterRow = (row: RosterRow): EmployeeRosterRow & CursorAnchored => ({
+  id: row.membership_id,
+  user: { id: row.user_id, displayName: row.user_display_name },
+  department: { id: row.department_id, name: row.department_name },
+  // The absence of an active assignment IS the MEMBER case — see `EmployeeRole`.
+  role: row.is_head ? 'DEPARTMENT_HEAD' : 'MEMBER',
+  membershipStatus: row.membership_status,
+  accountStatus: row.account_status,
+  joinedAt: row.joined_at,
+  endedAt: row.ended_at,
+  cursorAt: row.cursor_at,
+});
 
 const toMembership = (row: MembershipRow): DepartmentMembership => ({
   id: row.id,
@@ -105,59 +154,91 @@ export class MembershipRepository {
   }
 
   /**
-   * One page of the active members of a department, oldest first.
+   * One page of an employee roster, oldest first.
    *
-   * KEYSET, not OFFSET. `(created_at, id)` is a total order over an index that
-   * answers each page with a single seek, so page 16,000 costs what page 1
-   * costs. `OFFSET` would walk and discard every earlier row: measured at
-   * 888,000 memberships, `OFFSET 800000` took 941.9 ms and spilled 22 MB to
-   * disk against 0.279 ms for the keyset equivalent.
+   * ★ SCOPE IS A PARAMETER, AUTHORIZATION IS NOT. `departmentId` present means
+   * the department-scoped read; absent means the global one. WHICH of those a
+   * caller may ask for is decided by the permission guard before this runs —
+   * this method only builds the query it was asked for, and never inspects a
+   * session. Putting the scope decision here would be a second, weaker copy of
+   * a rule the guard already owns.
    *
-   * `id` is in the comparison because `created_at` is NOT unique — provisioning
-   * several people in one transaction gives them the same timestamp. Comparing
-   * the pair as a ROW makes the order total; comparing the timestamp alone
-   * silently loses rows at a page boundary that falls inside a tie.
+   * ★ `membershipStatus` IS A PARAMETER, NOT A HARDCODED `'active'`. The old
+   * member list pinned `m.status = 'active'` into the SQL, which made the
+   * status column a constant and left ended memberships unreachable by any
+   * query — the history was in the table and unqueryable. Passing it in is what
+   * lets a SuperAdmin ask for people who have left without a second endpoint.
+   * `undefined` means BOTH, for the "Tất cả" filter.
    *
-   * `LIMIT $n + 1` is how `hasMore` is answered without a `COUNT(*)` that would
-   * re-scan the partition on every page.
+   * KEYSET, not OFFSET. `(created_at, id)` is a total order answered by a
+   * single index seek, so the last page costs what the first does. `id` is in
+   * the comparison because `created_at` is NOT unique — provisioning several
+   * people in one transaction gives them the same timestamp, and comparing the
+   * timestamp alone silently loses rows at a page boundary inside a tie.
+   *
+   * `LIMIT $n + 1` answers `hasMore` without a `COUNT(*)`.
    */
-  async listActiveInDepartmentPage(
-    departmentId: string,
+  async listRosterPage(
+    scope: {
+      departmentId?: string;
+      /**
+       * ★ DISCLOSURE, NOT ACCESS. Whether the caller may read this employee at
+       * all was decided by a guard before this ran. This narrows WHICH of the
+       * rows they are shown — a head sees the periods inside the units they
+       * lead and no others, so a filtered history can never mention a unit they
+       * have no authority over. Absent means unfiltered, which is the global
+       * caller's case.
+       */
+      departmentIds?: readonly string[];
+      /** One person's employment history, oldest first. */
+      userId?: string;
+      membershipStatus?: MembershipStatus;
+    },
     limit: number,
     cursor: Cursor | undefined,
     executor: DatabaseQuery = this.db,
-  ): Promise<MembershipPageRow[]> {
-    // Row-wise comparison, not `created_at > $2 OR (created_at = $2 AND ...)`.
-    // Both are correct; this one the planner satisfies straight from the index,
-    // and it is far harder to get subtly wrong.
-    //
-    // `created_at::text` rides along as the cursor anchor. Reading the sort key
-    // back out of the parsed `Date` would round it to milliseconds and hand the
-    // next page a position EARLIER than the row it names, which returns that row
-    // a second time. The text never goes near a `Date`, so nothing is rounded.
-    type Row = MembershipRow & { cursor_at: string; user_display_name: string };
-    const rows = cursor
-      ? await executor.query<Row>(
-          `${MEMBERS_WITH_USER}
-            WHERE m.department_id = $1 AND m.status = 'active'
-              AND (m.created_at, m.id) > ($2::timestamptz, $3)
-            ORDER BY m.created_at ASC, m.id ASC
-            LIMIT $4`,
-          [departmentId, cursor.t, cursor.i, limit + 1],
-        )
-      : await executor.query<Row>(
-          `${MEMBERS_WITH_USER}
-            WHERE m.department_id = $1 AND m.status = 'active'
-            ORDER BY m.created_at ASC, m.id ASC
-            LIMIT $2`,
-          [departmentId, limit + 1],
-        );
+  ): Promise<(EmployeeRosterRow & CursorAnchored)[]> {
+    // Built positionally so the placeholders cannot drift from the values.
+    const conditions: string[] = [];
+    const values: unknown[] = [];
 
-    return rows.map((row) => ({
-      ...toMembership(row),
-      user: { id: row.user_id, displayName: row.user_display_name },
-      cursorAt: row.cursor_at,
-    }));
+    if (scope.userId !== undefined) {
+      values.push(scope.userId);
+      conditions.push(`m.user_id = $${values.length}`);
+    }
+    if (scope.departmentIds !== undefined) {
+      // `= ANY($n)` rather than an IN-list built by string concatenation: one
+      // placeholder whatever the length, and nothing to escape.
+      values.push([...scope.departmentIds]);
+      conditions.push(`m.department_id = ANY($${values.length}::uuid[])`);
+    }
+    if (scope.departmentId !== undefined) {
+      values.push(scope.departmentId);
+      conditions.push(`m.department_id = $${values.length}`);
+    }
+    if (scope.membershipStatus !== undefined) {
+      values.push(scope.membershipStatus);
+      conditions.push(`m.status = $${values.length}`);
+    }
+    if (cursor) {
+      values.push(cursor.t, cursor.i);
+      conditions.push(
+        `(m.created_at, m.id) > ($${values.length - 1}::timestamptz, $${values.length})`,
+      );
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    values.push(limit + 1);
+
+    const rows = await executor.query<RosterRow>(
+      `${ROSTER_SELECT}
+        ${where}
+        ORDER BY m.created_at ASC, m.id ASC
+        LIMIT $${values.length}`,
+      values,
+    );
+
+    return rows.map(toRosterRow);
   }
 
   async countActiveInDepartment(

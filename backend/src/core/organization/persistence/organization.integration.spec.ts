@@ -346,6 +346,97 @@ describeIntegration('Organization against real PostgreSQL', () => {
       ).rejects.toThrow(/archived/);
     });
 
+    /**
+     * ⚠ V12 — ARCHIVE RACING AN INBOUND MEMBERSHIP, against a real server.
+     *
+     * The unit specs pin that each path TAKES the department lock. Only a real
+     * PostgreSQL can prove what the lock then does: that two transactions
+     * contend for the row, that the loser re-reads the status the winner
+     * committed, and that no combination commits an active membership into an
+     * archived unit.
+     *
+     * The interleaving this closes:
+     *
+     *   T2 enroll   reads dep as active
+     *   T1 archive  locks dep, counts 0 members, archives, COMMITS
+     *   T2          inserts the membership  → active member of an ARCHIVED unit
+     *
+     * ★ EITHER ORDER IS ACCEPTABLE, ONE OUTCOME IS NOT. Whichever transaction
+     * arrives second may win or lose — that is a scheduling detail. What must
+     * never hold afterwards is an active membership in an archived department,
+     * so that is what is asserted, not who won.
+     */
+    const activeMembersOfArchivedUnits = async (): Promise<number> => {
+      const [row] = await database.query<{ count: string }>(
+        `SELECT count(*) AS count
+           FROM department_memberships m
+           JOIN departments d ON d.id = m.department_id
+          WHERE m.status = 'active' AND d.status = 'archived'`,
+      );
+      return Number(row!.count);
+    };
+
+    it('never enrolls into a unit being archived concurrently', async () => {
+      const empty = await departments.create({ slug: 'race-a', name: 'Race A' });
+      const newcomer = await createUser('Newcomer');
+
+      const [archiving, enrolling] = await Promise.allSettled([
+        departments.archive(empty.id),
+        memberships.enroll({ userId: newcomer, departmentId: empty.id }),
+      ]);
+
+      // At least one must fail: they cannot both be true of the same unit.
+      const settled = [archiving, enrolling];
+      expect(settled.some((r) => r.status === 'rejected')).toBe(true);
+      // ★ THE INVARIANT ITSELF, regardless of which one won.
+      expect(await activeMembersOfArchivedUnits()).toBe(0);
+    });
+
+    it('never transfers into a unit being archived concurrently', async () => {
+      const source = await departments.create({ slug: 'race-src', name: 'Source' });
+      const target = await departments.create({ slug: 'race-dst', name: 'Target' });
+      const person = await createUser('Mover');
+      await memberships.enroll({ userId: person, departmentId: source.id });
+
+      const [, transferring] = await Promise.allSettled([
+        departments.archive(target.id),
+        memberships.transfer({ userId: person, toDepartmentId: target.id }),
+      ]);
+
+      expect(await activeMembersOfArchivedUnits()).toBe(0);
+
+      // ★ NO PARTIAL DATA. A refused transfer must leave the person where they
+      // were — ending the old membership and failing to open the new one would
+      // be worse than the race it replaced.
+      const [membership] = await database.query<{ department_id: string }>(
+        "SELECT department_id FROM department_memberships WHERE user_id = $1 AND status = 'active'",
+        [person],
+      );
+      if (transferring.status === 'rejected') {
+        expect(membership?.department_id).toBe(source.id);
+      } else {
+        expect(membership?.department_id).toBe(target.id);
+      }
+      // Either way they belong to exactly one unit.
+      expect(membership).toBeDefined();
+    });
+
+    it('holds the invariant under repeated contention', async () => {
+      // One pass can pass by luck; the window is small. Ten independent races
+      // make a missing lock very unlikely to survive.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const unit = await departments.create({ slug: `race-${attempt}`, name: `R${attempt}` });
+        const person = await createUser(`Person ${attempt}`);
+
+        await Promise.allSettled([
+          departments.archive(unit.id),
+          memberships.enroll({ userId: person, departmentId: unit.id }),
+        ]);
+      }
+
+      expect(await activeMembersOfArchivedUnits()).toBe(0);
+    });
+
     it('keeps updated_at honest on rename', async () => {
       const a = await departments.create({ slug: 'a', name: 'A' });
       const renamed = await departments.rename(a.id, 'A renamed');

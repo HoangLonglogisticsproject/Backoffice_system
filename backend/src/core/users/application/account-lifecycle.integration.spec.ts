@@ -525,6 +525,63 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       expect(history.rows[0]!['ended_at']).toBeInstanceOf(Date);
     });
 
+    /**
+     * DISABLING A DEPARTMENT HEAD, through the DIRECT path this feature uses.
+     *
+     * The approval flow already covers offboarding a head; this pins the same
+     * outcome for the entry point Employee Detail calls, because both converge
+     * on this one service. Invariant #6 is what makes the ORDER load-bearing: an
+     * active head assignment is held to an active membership by a composite FK,
+     * so the role has to be revoked before the membership can be ended.
+     */
+    it('offboards a DEPARTMENT_HEAD, revoking the role before ending the membership', async () => {
+      const dept = await departments.create({ slug: 'sales', name: 'Sales' });
+      const head = await provisionInto('head@example.com', dept.id);
+      const admin = await provisionInto('admin@example.com', dept.id);
+      await authorization.bootstrapSuperAdmin(admin.user.id);
+      await authorization.assignDepartmentHead({
+        userId: head.user.id,
+        departmentId: dept.id,
+        grantedBy: admin.user.id,
+      });
+
+      await lifecycle.disable({ userId: head.user.id, actingUserId: admin.user.id });
+
+      // The account is closed...
+      const user = await pool.query<{ status: string }>('SELECT status FROM users WHERE id = $1', [
+        head.user.id,
+      ]);
+      expect(user.rows[0]!.status).toBe('disabled');
+
+      // ...the headship is revoked rather than deleted, keeping its provenance...
+      const roles = await pool.query<{ status: string; revoked_at: Date | null }>(
+        'SELECT status, revoked_at FROM role_assignments WHERE user_id = $1',
+        [head.user.id],
+      );
+      expect(roles.rowCount).toBe(1);
+      expect(roles.rows[0]!.status).toBe('revoked');
+      expect(roles.rows[0]!.revoked_at).toBeInstanceOf(Date);
+
+      // ...the membership is ended rather than removed...
+      expect(await memberships.findActive(head.user.id)).toBeNull();
+      const history = await pool.query('SELECT * FROM department_memberships WHERE user_id = $1', [
+        head.user.id,
+      ]);
+      expect(history.rowCount).toBe(1);
+      expect(history.rows[0]!['status']).toBe('ended');
+
+      // ...and the person and their credential are untouched. ONE identity, one
+      // user row - no duplicate was created to represent the departure.
+      const identity = await pool.query('SELECT * FROM identities WHERE user_id = $1', [
+        head.user.id,
+      ]);
+      expect(identity.rowCount).toBe(1);
+      const users = await pool.query('SELECT * FROM users WHERE id = $1', [head.user.id]);
+      expect(users.rowCount).toBe(1);
+
+      expect(await forbiddenStates()).toEqual({ activeNoDept: 0, disabledWithDept: 0 });
+    });
+
     it('refuses to disable the only SuperAdmin, changing nothing', async () => {
       const dept = await departments.create({ slug: 'a', name: 'A' });
       const account = await provisionInto('admin@example.com', dept.id);

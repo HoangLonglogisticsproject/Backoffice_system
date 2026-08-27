@@ -14,6 +14,7 @@ import { SESSION_COOKIE } from '../../identity/api/session.cookie';
 import { SessionService } from '../../identity/application/session.service';
 import { DepartmentService } from '../application/department.service';
 import { MembershipService } from '../application/membership.service';
+import { EmployeeRosterController } from './employee-roster.controller';
 import { OrganizationController } from './organization.controller';
 
 /**
@@ -40,7 +41,7 @@ describe('organization HTTP security', () => {
     rename: jest.Mock;
     archive: jest.Mock;
   };
-  let memberships: { listActiveMembers: jest.Mock; transfer: jest.Mock };
+  let memberships: { listRoster: jest.Mock; transfer: jest.Mock };
   let context: AuthorizationContext;
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
@@ -64,7 +65,7 @@ describe('organization HTTP security', () => {
       archive: jest.fn().mockResolvedValue({ ...department, status: 'archived' }),
     };
     memberships = {
-      listActiveMembers: jest.fn().mockResolvedValue({
+      listRoster: jest.fn().mockResolvedValue({
         items: [
           {
             id: 'm1',
@@ -83,7 +84,7 @@ describe('organization HTTP security', () => {
     };
 
     const moduleRef = await Test.createTestingModule({
-      controllers: [OrganizationController],
+      controllers: [OrganizationController, EmployeeRosterController],
       providers: [
         Reflector,
         PermissionGuard,
@@ -136,6 +137,7 @@ describe('organization HTTP security', () => {
       ['get', '/departments'],
       ['get', `/departments/${A}`],
       ['get', `/departments/${A}/members`],
+      ['get', '/memberships'],
       ['post', '/departments'],
       ['patch', `/departments/${A}`],
       ['post', `/departments/${A}/archive`],
@@ -184,7 +186,7 @@ describe('organization HTTP security', () => {
 
     it('cannot see who else is in its own unit — the decided default', async () => {
       await authed('get', `/departments/${A}/members`).expect(403);
-      expect(memberships.listActiveMembers).not.toHaveBeenCalled();
+      expect(memberships.listRoster).not.toHaveBeenCalled();
     });
 
     it('cannot write anything', async () => {
@@ -212,7 +214,10 @@ describe('organization HTTP security', () => {
       const roster = await authed('get', `/departments/${A}/members`).expect(200);
 
       expect(roster.body.items).toHaveLength(1);
-      expect(memberships.listActiveMembers).toHaveBeenCalledWith(A, { limit: 50 });
+      expect(memberships.listRoster).toHaveBeenCalledWith(
+        { departmentId: A, membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
     });
 
     it('gets each member named, and the scalar id it always had', async () => {
@@ -232,14 +237,17 @@ describe('organization HTTP security', () => {
       // the caller. A user id in the query string changes nothing.
       await authed('get', `/departments/${A}/members?userId=${ACTOR}`).expect(200);
 
-      expect(memberships.listActiveMembers).toHaveBeenCalledWith(A, { limit: 50 });
+      expect(memberships.listRoster).toHaveBeenCalledWith(
+        { departmentId: A, membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
     });
 
     it('cannot read another unit’s roster — IDOR on the route parameter', async () => {
       const refused = await authed('get', `/departments/${B}/members`).expect(403);
       await authed('get', `/departments/${B}`).expect(403);
 
-      expect(memberships.listActiveMembers).not.toHaveBeenCalled();
+      expect(memberships.listRoster).not.toHaveBeenCalled();
       expect(departments.require).not.toHaveBeenCalled();
       // Refused BEFORE any query runs, so there is no row and therefore no name
       // to leak. The projection cannot outlive the authorization decision.
@@ -269,6 +277,88 @@ describe('organization HTTP security', () => {
 
   // ----------------------------------------------------------- SUPERADMIN --
 
+  /**
+   * ★ THE GLOBAL ROSTER'S AUTHORIZATION IS THE ABSENCE OF A SCOPE.
+   *
+   * `unit.member.read` is declared 'head' in PERMISSION_REQUIREMENT, and `can()`
+   * refuses a scoped permission asked WITHOUT a target — so an unscoped check
+   * passes for a global caller and for nobody else. That is the entire
+   * difference between this route and `/departments/:id/members`, and it is why
+   * "all departments" could not be a query parameter on the scoped one.
+   */
+  describe('the global employee roster', () => {
+    it('answers a SuperAdmin, who belongs to no department at all', async () => {
+      context = asContext({ global: true });
+
+      await authed('get', '/memberships').expect(200);
+
+      // No department is named — that is what makes it global.
+      expect(memberships.listRoster).toHaveBeenCalledWith(
+        { membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
+    });
+
+    it('refuses a department head, who has a scope and therefore not this one', async () => {
+      context = asContext({ headOf: [A], memberOf: [A] });
+
+      await authed('get', '/memberships').expect(403);
+
+      // ★ Refused BEFORE the query — not filtered afterwards.
+      expect(memberships.listRoster).not.toHaveBeenCalled();
+    });
+
+    it('refuses a plain member', async () => {
+      context = asContext({ memberOf: [A] });
+
+      await authed('get', '/memberships').expect(403);
+      expect(memberships.listRoster).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unauthenticated caller before any query', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/memberships')
+        .set('X-Requested-With', 'XMLHttpRequest');
+
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
+      expect(memberships.listRoster).not.toHaveBeenCalled();
+    });
+
+    it('passes the membership status through, so ended employees are reachable', async () => {
+      context = asContext({ global: true });
+
+      await authed('get', '/memberships?membershipStatus=ended').expect(200);
+
+      expect(memberships.listRoster).toHaveBeenCalledWith(
+        { membershipStatus: 'ended' },
+        expect.objectContaining({ limit: 50 }),
+      );
+    });
+
+    it('refuses a status that is not one the column can hold', async () => {
+      context = asContext({ global: true });
+
+      // 'archived' is a DEPARTMENT status, not a membership one. Accepting it
+      // would return an empty page and look like "nobody has left".
+      await authed('get', '/memberships?membershipStatus=archived').expect(422);
+      expect(memberships.listRoster).not.toHaveBeenCalled();
+    });
+
+    it('takes no departmentId — the scoped read is the only way to ask that', async () => {
+      context = asContext({ global: true });
+
+      await authed('get', `/memberships?departmentId=${A}`).expect(200);
+
+      // The parameter is ignored rather than honoured: if it were read here it
+      // would be a scoped query behind the GLOBAL guard.
+      expect(memberships.listRoster).toHaveBeenCalledWith(
+        { membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
+    });
+  });
+
   describe('a SuperAdmin', () => {
     beforeEach(() => {
       context = asContext({ global: true });
@@ -279,7 +369,10 @@ describe('organization HTTP security', () => {
       await authed('get', `/departments/${B}`).expect(200);
       await authed('get', `/departments/${B}/members`).expect(200);
 
-      expect(memberships.listActiveMembers).toHaveBeenCalledWith(B, { limit: 50 });
+      expect(memberships.listRoster).toHaveBeenCalledWith(
+        { departmentId: B, membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
     });
 
     it('creates, renames and archives', async () => {

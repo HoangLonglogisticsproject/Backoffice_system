@@ -153,7 +153,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     let cursor: string | undefined;
 
     for (;;) {
-      const page = await memberships.listActiveMembers(departmentId, { limit, cursor });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit, cursor });
       seen.push(...page.items.map((m) => m.id));
       if (!page.hasMore) {
         expect(page.nextCursor).toBeNull();
@@ -220,7 +220,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
       let cursor: string | undefined;
 
       for (let guard = 0; guard < 10; guard++) {
-        const page = await memberships.listActiveMembers(departmentId, { limit: 10, cursor });
+        const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10, cursor });
         sizes.push(page.items.length);
         seen.push(...page.items.map((m) => m.id));
         if (!page.hasMore) break;
@@ -248,12 +248,12 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     it('page 2 begins AFTER page 1 ends, with no shared row', async () => {
       await seedMembersWithRealClock(25);
 
-      const first = await memberships.listActiveMembers(departmentId, { limit: 10 });
-      const second = await memberships.listActiveMembers(departmentId, {
+      const first = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10 });
+      const second = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, {
         limit: 10,
         cursor: first.nextCursor as string,
       });
-      const third = await memberships.listActiveMembers(departmentId, {
+      const third = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, {
         limit: 10,
         cursor: second.nextCursor as string,
       });
@@ -270,7 +270,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     it('round-trips the exact PostgreSQL sort key, microseconds and all', async () => {
       await seedMembersWithRealClock(3);
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 2 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 2 });
       const { t, i } = decodeCursor(page.nextCursor as string);
 
       // The cursor must name the row it points at EXACTLY — not a rounded
@@ -307,7 +307,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     it('does not put the raw sort key in the payload', async () => {
       await seedMembersWithRealClock(2);
 
-      const page = await memberships.listActiveMembers(departmentId, { limit: 10 });
+      const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10 });
 
       // The anchor is internal. A client gets the opaque cursor, nothing else.
       expect(page.items[0]).not.toHaveProperty('cursorAt');
@@ -320,7 +320,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
   it('returns the first page and a cursor when more rows exist', async () => {
     await seedMembers(30);
 
-    const page = await memberships.listActiveMembers(departmentId, { limit: 10 });
+    const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10 });
 
     expect(page.items).toHaveLength(10);
     expect(page.hasMore).toBe(true);
@@ -330,7 +330,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
   it('ends with hasMore false and a null cursor', async () => {
     await seedMembers(10);
 
-    const page = await memberships.listActiveMembers(departmentId, { limit: 10 });
+    const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10 });
 
     // Exactly `limit` rows and nothing beyond: `limit + 1` came back short.
     expect(page.items).toHaveLength(10);
@@ -339,7 +339,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
   });
 
   it('returns an empty page rather than an error when there is nothing', async () => {
-    const page = await memberships.listActiveMembers(departmentId, { limit: 10 });
+    const page = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10 });
 
     expect(page.items).toEqual([]);
     expect(page.hasMore).toBe(false);
@@ -385,7 +385,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
   it('a row inserted at the head mid-walk does not appear on a later page', async () => {
     await seedMembers(30);
 
-    const first = await memberships.listActiveMembers(departmentId, { limit: 10 });
+    const first = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10 });
 
     // Someone joins with a timestamp BEFORE everything already read.
     const { rows } = await pool.query<{ id: string }>(
@@ -397,7 +397,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
       [rows[0]!.id, departmentId],
     );
 
-    const second = await memberships.listActiveMembers(departmentId, {
+    const second = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, {
       limit: 10,
       cursor: first.nextCursor as string,
     });
@@ -413,10 +413,10 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     // pulls an unseen row into a position already consumed, and it is skipped.
     await seedMembers(30);
 
-    const first = await memberships.listActiveMembers(departmentId, { limit: 10 });
+    const first = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10 });
     await pool.query('DELETE FROM department_memberships WHERE id = $1', [first.items[0]!.id]);
 
-    const second = await memberships.listActiveMembers(departmentId, {
+    const second = await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, {
       limit: 10,
       cursor: first.nextCursor as string,
     });
@@ -432,7 +432,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     // parameter, which the guard already checked; replaying a cursor elsewhere
     // can produce a strange-looking page but never another unit's rows.
     await seedMembers(20);
-    const stolen = (await memberships.listActiveMembers(departmentId, { limit: 5 }))
+    const stolen = (await memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 5 }))
       .nextCursor as string;
 
     const { rows } = await pool.query<{ id: string }>(
@@ -440,11 +440,11 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     );
     const otherId = rows[0]!.id;
 
-    const page = await memberships.listActiveMembers(otherId, { limit: 5, cursor: stolen });
+    const page = await memberships.listRoster({ departmentId: otherId, membershipStatus: 'active' }, { limit: 5, cursor: stolen });
 
     // The other department has no members at all; the cursor cannot conjure any.
     expect(page.items).toEqual([]);
-    expect(page.items.every((m) => m.departmentId === otherId)).toBe(true);
+    expect(page.items.every((m) => m.department.id === otherId)).toBe(true);
   });
 
   // ---------------------------------------------------- cursor codec --
@@ -455,21 +455,21 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
     for (const bad of ['not-base64!!', 'eyJicm9rZW4iOnRydWV9', '', 'abc']) {
       if (bad === '') continue;
       await expect(
-        memberships.listActiveMembers(departmentId, { limit: 10, cursor: bad }),
+        memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, { limit: 10, cursor: bad }),
       ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
     }
   });
 
   it('rejects a structurally valid cursor whose parts are wrong', async () => {
     await expect(
-      memberships.listActiveMembers(departmentId, {
+      memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, {
         limit: 10,
         cursor: encodeCursor({ t: 'not-a-date', i: '11111111-1111-1111-1111-111111111111' }),
       }),
     ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
 
     await expect(
-      memberships.listActiveMembers(departmentId, {
+      memberships.listRoster({ departmentId: departmentId, membershipStatus: 'active' }, {
         limit: 10,
         cursor: encodeCursor({ t: '2026-01-01T00:00:00.000Z', i: 'not-a-uuid' }),
       }),

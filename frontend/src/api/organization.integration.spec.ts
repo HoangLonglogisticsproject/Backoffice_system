@@ -232,16 +232,28 @@ describe('organization read paths (§5, §6)', () => {
       expect(response.data).toHaveProperty('nextCursor');
       // The head and the member provisioned into A.
       expect(response.data.items.length).toBeGreaterThanOrEqual(2);
+      // ★ THE ROSTER PROJECTION, over real HTTP. `id` is the MEMBERSHIP's; the
+      // person is `user.id`; the unit is `department`. The two statuses are
+      // separate fields and neither is named `status`, because one field would
+      // have to pick a meaning and lie about the other.
       expect(response.data.items[0]).toMatchObject({
         id: expect.any(String),
-        userId: expect.any(String),
-        departmentId: departmentA,
-        status: 'active',
-        createdAt: expect.any(String),
+        user: { id: expect.any(String), displayName: expect.any(String) },
+        department: { id: departmentA, name: expect.any(String) },
+        // Derived from `role_assignments`, never stored: MEMBER is the absence
+        // of an active DEPARTMENT_HEAD assignment.
+        role: expect.stringMatching(/^(DEPARTMENT_HEAD|MEMBER)$/),
+        membershipStatus: 'active',
+        accountStatus: 'active',
+        joinedAt: expect.any(String),
+        endedAt: null,
       });
       // A membership is still not a person: the name lives under `user`, never
       // flattened onto the membership itself.
       expect(response.data.items[0]).not.toHaveProperty('displayName');
+      // ⚠ AND THE TWO STATUSES ARE NOT COLLAPSED BACK INTO ONE. A bare `status`
+      // here would be exactly the merge this projection exists to prevent.
+      expect(response.data.items[0]).not.toHaveProperty('status');
     });
 
     it('★ each member arrives NAMED, over real HTTP (ADR-0001)', async () => {
@@ -249,8 +261,11 @@ describe('organization read paths (§5, §6)', () => {
 
       expect(response.status).toBe(200);
       for (const item of response.data.items) {
-        // The scalar id is untouched, and the projection belongs to it.
-        expect(item.user.id).toBe(item.userId);
+        // ★ THE MEMBERSHIP'S id IS NOT THE PERSON'S. Three tables in this query
+        // carry `id`; if one overwrote another the row would name the wrong
+        // thing, and over real HTTP that is the only place it would show.
+        expect(typeof item.user.id).toBe('string');
+        expect(item.user.id).not.toBe(item.id);
         expect(typeof item.user.displayName).toBe('string');
         expect(item.user.displayName.length).toBeGreaterThan(0);
         // displayName ONLY. An email is not a display name.
@@ -265,8 +280,11 @@ describe('organization read paths (§5, §6)', () => {
       // ADR-0001 rejected a bulk/arbitrary lookup: a bare user id belongs to no
       // department, so the permission model has no answer for it. The absence
       // of the route IS the security property.
+      // ⚠ READ FROM `user.id`. This used to read a scalar `userId` that the
+      // roster projection no longer carries — so it probed `/users/undefined`
+      // and passed without ever testing the property it names.
       const someUserId = (await headOfA.get(`/departments/${departmentA}/members`)).data.items[0]
-        .userId;
+        .user.id;
 
       const direct = await boss.get(`/users/${someUserId}`);
       expect([403, 404]).toContain(direct.status);
@@ -276,8 +294,11 @@ describe('organization read paths (§5, §6)', () => {
       const response = await boss.get(`/departments/${departmentB}/members`);
 
       expect(response.status).toBe(200);
-      expect(response.data.items.every((m: { departmentId: string }) => m.departmentId === departmentB))
-        .toBe(true);
+      expect(
+        response.data.items.every(
+          (m: { department: { id: string } }) => m.department.id === departmentB,
+        ),
+      ).toBe(true);
     });
 
     it('★ an ordinary MEMBER is REFUSED, even for their OWN department (§6)', async () => {
@@ -348,6 +369,210 @@ describe('organization read paths (§5, §6)', () => {
         expect(response.status).toBe(403);
         expect(toApiError(response.status, response.data).code).toBe('PASSWORD_CHANGE_REQUIRED');
       }
+    });
+  });
+
+  // --------------------- GET /users/:userId/memberships (employee detail) --
+
+  /**
+   * ★ HISTORICAL MEMBERSHIP MUST NEVER GRANT CURRENT AUTHORIZATION.
+   *
+   * The unit specs prove this against a mocked `findActiveMembershipOf`, which
+   * can only ever agree with whatever the author believed. THESE rows are real:
+   * the ended membership in A and the active one in B are written by the real
+   * transfer path (`POST /departments/:id/members`, which ends the old
+   * membership and opens a new one in one transaction), stored in PostgreSQL,
+   * and read back through the real guard over real HTTP.
+   *
+   * That is the difference that matters. If somebody ever changes the guard from
+   * "the target's ACTIVE membership" to "any membership the target has ever
+   * held", every mocked test would keep passing — the mock returns one
+   * membership either way. Only a target with GENUINE history can tell the two
+   * implementations apart, and that is exactly what this fixture builds.
+   */
+  describe('GET /users/:userId/memberships — history never authorizes', () => {
+    /** Provisioned into A, then transferred away: A is ENDED, B is ACTIVE. */
+    let movedAway: string;
+    /** Provisioned into A, transferred to B, then back: A ended, B ended, A ACTIVE. */
+    let returned: string;
+    /**
+     * Provisioned into A and then OFFBOARDED: one membership, in A, ENDED — and
+     * no active membership at all.
+     *
+     * ★ THIS IS THE TARGET THAT SEPARATES THE IMPLEMENTATIONS. For somebody who
+     * merely moved, the newest membership happens to be the active one, so a
+     * guard that read "the newest membership" and one that read "the ACTIVE
+     * membership" would agree and a test could not tell them apart. Here the
+     * newest membership IS the ended one, so the two answers differ: `active`
+     * says nobody, `newest` says the head of A.
+     */
+    let offboarded: string;
+
+    /** The periods the SUPERADMIN can see, oldest first — the full truth. */
+    const historyOf = async (userId: string) => {
+      const response = await boss.get(`/users/${userId}/memberships`);
+      expect(response.status).toBe(200);
+      return response.data.memberships as Array<{
+        department: { id: string };
+        membershipStatus: 'active' | 'ended';
+      }>;
+    };
+
+    beforeAll(async () => {
+      const moved = await provision(
+        `moved-away-${unique}@hoanglonglti.com`,
+        departmentA,
+        'Moved Away',
+      );
+      movedAway = moved.userId;
+      // The REAL transfer: ends the membership in A, opens one in B.
+      expect(
+        (await boss.post(`/departments/${departmentB}/members`, { userId: movedAway })).status,
+      ).toBe(201);
+
+      const back = await provision(
+        `returned-${unique}@hoanglonglti.com`,
+        departmentA,
+        'Returned Later',
+      );
+      returned = back.userId;
+      expect(
+        (await boss.post(`/departments/${departmentB}/members`, { userId: returned })).status,
+      ).toBe(201);
+      expect(
+        (await boss.post(`/departments/${departmentA}/members`, { userId: returned })).status,
+      ).toBe(201);
+
+      const left = await provision(
+        `offboarded-${unique}@hoanglonglti.com`,
+        departmentA,
+        'Left The Company',
+      );
+      offboarded = left.userId;
+      // The REAL offboarding path: revokes roles, disables the account, cuts
+      // sessions and ENDS the active membership, in one transaction.
+      expect(
+        (await boss.patch(`/users/${offboarded}/status`, { status: 'disabled' })).status,
+      ).toBe(200);
+    });
+
+    /**
+     * ⚠ THE FIXTURE IS ASSERTED BEFORE THE SECURITY QUESTION IS ASKED. A 403 is
+     * also what a target with no history at all would produce, so without this
+     * the test could pass while proving nothing.
+     */
+    it('really did persist an ENDED membership in A and an ACTIVE one in B', async () => {
+      const periods = await historyOf(movedAway);
+
+      const inA = periods.filter((p) => p.department.id === departmentA);
+      const inB = periods.filter((p) => p.department.id === departmentB);
+
+      expect(inA).toHaveLength(1);
+      expect(inA[0]!.membershipStatus).toBe('ended');
+      expect(inB).toHaveLength(1);
+      expect(inB[0]!.membershipStatus).toBe('active');
+    });
+
+    it('the caller really is head of A, and really is not head of B', async () => {
+      // Reading A's roster is the head's own right; reading B's is not.
+      expect((await headOfA.get(`/departments/${departmentA}/members`)).status).toBe(200);
+      expect((await headOfA.get(`/departments/${departmentB}/members`)).status).toBe(403);
+    });
+
+    /**
+     * ★ THE INVARIANT. The head of A shares a department with this person ONLY
+     * in the past. That must not be a key to anything.
+     */
+    it('refuses a department head when the shared department is only historical', async () => {
+      const response = await headOfA.get(`/users/${movedAway}/memberships`);
+
+      expect(response.status).toBe(403);
+      expect(toApiError(response.status, response.data).code).toBe('FORBIDDEN');
+    });
+
+    it('refuses a head of B for somebody whose only tie to B is in the future of A', async () => {
+      // The mirror image: `returned` is ACTIVE in A and ENDED in B, so B's head
+      // is the one holding nothing but history now.
+      const response = await headOfB.get(`/users/${returned}/memberships`);
+
+      expect(response.status).toBe(403);
+      expect(toApiError(response.status, response.data).code).toBe('FORBIDDEN');
+    });
+
+    it('really did leave the offboarded person with an ENDED membership in A and no active one', async () => {
+      const periods = await historyOf(offboarded);
+
+      expect(periods).toHaveLength(1);
+      expect(periods[0]!.department.id).toBe(departmentA);
+      expect(periods[0]!.membershipStatus).toBe('ended');
+      expect(periods.some((p) => p.membershipStatus === 'active')).toBe(false);
+    });
+
+    /**
+     * ★ THE CASE A MOCK CANNOT STAGE. This person's ONLY membership is in the
+     * caller's own department — and it is over. "The department they were last
+     * in" and "the department they are in" give different answers here, and only
+     * the second may authorize anybody.
+     */
+    it('refuses the head of A for somebody whose only membership in A has ended', async () => {
+      const response = await headOfA.get(`/users/${offboarded}/memberships`);
+
+      expect(response.status).toBe(403);
+      expect(toApiError(response.status, response.data).code).toBe('FORBIDDEN');
+    });
+
+    it('still shows the offboarded person to a SUPERADMIN — disabled is not deleted', async () => {
+      const response = await boss.get(`/users/${offboarded}/memberships`);
+
+      expect(response.status).toBe(200);
+      expect(response.data.accountStatus).toBe('disabled');
+      expect(response.data.memberships).toHaveLength(1);
+    });
+
+    it('refuses an ordinary member outright', async () => {
+      const response = await memberOfA.get(`/users/${movedAway}/memberships`);
+
+      expect(response.status).toBe(403);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const response = await makeClient().get(`/users/${movedAway}/memberships`);
+
+      expect(response.status).toBe(401);
+    });
+
+    /**
+     * The positive counterpart, on a target whose history spans BOTH units.
+     * Access is granted by the ACTIVE membership in A — and the periods in B are
+     * filtered out by the server, so a scoped history cannot even name a unit
+     * this caller has no authority over.
+     */
+    it('allows the head of A once the membership in A is the current one', async () => {
+      const response = await headOfA.get(`/users/${returned}/memberships`);
+
+      expect(response.status).toBe(200);
+      expect(response.data.user.id).toBe(returned);
+      expect(response.data.accountStatus).toBe('active');
+
+      const periods = response.data.memberships as Array<{
+        department: { id: string };
+        membershipStatus: 'active' | 'ended';
+      }>;
+      // Both A periods — the ended one and the current one — and NOTHING from B.
+      expect(periods.every((p) => p.department.id === departmentA)).toBe(true);
+      expect(periods.some((p) => p.membershipStatus === 'active')).toBe(true);
+      expect(periods.some((p) => p.membershipStatus === 'ended')).toBe(true);
+      expect(periods.some((p) => p.department.id === departmentB)).toBe(false);
+    });
+
+    it('shows a SUPERADMIN every period, across both units', async () => {
+      const periods = await historyOf(returned);
+
+      expect(periods.filter((p) => p.department.id === departmentA)).toHaveLength(2);
+      expect(periods.filter((p) => p.department.id === departmentB)).toHaveLength(1);
+      // One person, three employment periods — never three employees.
+      const response = await boss.get(`/users/${returned}/memberships`);
+      expect(response.data.user.id).toBe(returned);
     });
   });
 

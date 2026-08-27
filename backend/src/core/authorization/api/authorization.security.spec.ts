@@ -43,7 +43,7 @@ describe('authorization HTTP security', () => {
     archive: jest.Mock;
   }
   interface MembershipDouble {
-    listActiveMembers: jest.Mock;
+    listRoster: jest.Mock;
     transfer: jest.Mock;
   }
 
@@ -69,7 +69,7 @@ describe('authorization HTTP security', () => {
       create: jest.fn().mockResolvedValue({ id: A }),
       rename: jest.fn().mockResolvedValue({ id: A }),
       archive: jest.fn().mockResolvedValue({ id: A }),
-      listActiveMembers: jest.fn().mockResolvedValue([]),
+      listRoster: jest.fn().mockResolvedValue([]),
       transfer: jest.fn().mockResolvedValue({ id: 'mem-1' }),
     };
 
@@ -158,13 +158,19 @@ describe('authorization HTTP security', () => {
       expect(unit.status).toBe(200);
       expect(roster.status).toBe(200);
       expect(organization.require).toHaveBeenCalledWith(A);
-      expect(organization.listActiveMembers).toHaveBeenCalledWith(A, { limit: 50 });
+      expect(organization.listRoster).toHaveBeenCalledWith(
+        { departmentId: A, membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
     });
 
     it('is refused the SAME routes for another department — IDOR', async () => {
       await authed('get', `/departments/${B}`).expect(403);
       await authed('get', `/departments/${B}/members`).expect(403);
-      expect(organization.listActiveMembers).not.toHaveBeenCalledWith(B, { limit: 50 });
+      expect(organization.listRoster).not.toHaveBeenCalledWith(
+        { departmentId: B, membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
     });
 
     it('cannot create, rename or archive a department', async () => {
@@ -211,7 +217,7 @@ describe('authorization HTTP security', () => {
       // decided default, not an oversight.
       expect(response.status).toBe(403);
       expect(response.body.error.code).toBe('FORBIDDEN');
-      expect(organization.listActiveMembers).not.toHaveBeenCalled();
+      expect(organization.listRoster).not.toHaveBeenCalled();
     });
 
     it('cannot reach another department at all', async () => {
@@ -249,7 +255,10 @@ describe('authorization HTTP security', () => {
       // B is a department this caller has no membership of, which is the point:
       // GLOBAL is not scoped, so membership never enters the decision.
       expect(organization.require).toHaveBeenCalledWith(B);
-      expect(organization.listActiveMembers).toHaveBeenCalledWith(B, { limit: 50 });
+      expect(organization.listRoster).toHaveBeenCalledWith(
+        { departmentId: B, membershipStatus: undefined },
+        expect.objectContaining({ limit: 50 }),
+      );
     });
 
     it('creates, renames, archives and transfers directly', async () => {

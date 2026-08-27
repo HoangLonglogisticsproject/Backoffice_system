@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { AuthorizationModule } from '../authorization/authorization.module';
 import { IdentityModule } from '../identity/identity.module';
+import { EmployeeRosterController } from './api/employee-roster.controller';
 import { OrganizationController } from './api/organization.controller';
 import { DepartmentService } from './application/department.service';
 import { MembershipService } from './application/membership.service';
@@ -23,7 +24,7 @@ import { MembershipRepository } from './persistence/membership.repository';
  */
 @Module({
   imports: [forwardRef(() => AuthorizationModule), IdentityModule],
-  controllers: [OrganizationController],
+  controllers: [OrganizationController, EmployeeRosterController],
   providers: [DepartmentService, MembershipService, DepartmentRepository, MembershipRepository],
   exports: [DepartmentService, MembershipService, DepartmentRepository, MembershipRepository],
 })

@@ -3,6 +3,7 @@ import { ConflictError, NotFoundError } from '../../../common/errors/domain.erro
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import { DepartmentRepository } from '../../organization/persistence/department.repository';
 import { MembershipRepository } from '../../organization/persistence/membership.repository';
+import type { DepartmentMembership } from '../../organization/domain/department.entity';
 import { SessionService } from '../../identity/application/session.service';
 import type { AuthorizationContext } from '../domain/authorization.context';
 import {
@@ -42,6 +43,29 @@ export class AuthorizationService {
 
   async loadContext(userId: string): Promise<AuthorizationContext> {
     return this.repository.loadContext(userId);
+  }
+
+  /**
+   * The MEMBERSHIP a user currently holds, or null.
+   *
+   * ★ NAMED FOR THE MEMBERSHIP, NOT FOR "THE USER'S DEPARTMENT", and the
+   * distinction is not pedantry. A department is not an attribute of a person —
+   * it is one end of a relationship that starts, ends, and can be replaced. A
+   * method called `departmentOf(user)` would read like identity and invite a
+   * caller to cache it, compare it, or store it on the person. The caller takes
+   * `departmentId` off the membership it was handed, so what they hold is
+   * visibly a fact about one employment period.
+   *
+   * ⚠ ACTIVE ONLY, which is what makes it safe to authorize on. An ended
+   * membership is history; treating it as a scope would let a head reach
+   * somebody who left their unit years ago.
+   *
+   * Returns null for a user who has no active membership — somebody offboarded,
+   * or a SuperAdmin, who sits above units and holds none by design. Null is a
+   * normal answer here, and `can()` fails closed on it.
+   */
+  async findActiveMembershipOf(userId: string): Promise<DepartmentMembership | null> {
+    return this.memberships.findActiveForUser(userId);
   }
 
   /** The caller's login name, for display. Never an authorization input. */

@@ -41,6 +41,18 @@ import type {
   DecisionStatus,
   MembershipChangeRequestWithUsers,
 } from '@/types/approval';
+import type { EmployeeRosterRow, MembershipStatus } from '@/types/organization';
+import { fetchEmployeeRoster } from '@/api/membership';
+import { EmployeeRosterTable } from '@/components/common/EmployeeRosterTable';
+
+/**
+ * Which "nothing here" sentence a queue shows when it comes back empty.
+ *
+ * One alias rather than the same union written at each of the three components
+ * that pass it down: three copies drift, and the one that drifts is the one
+ * nobody reads.
+ */
+type EmptyStateKey = 'emptyRequests' | 'emptyInvitations' | 'emptyRoster';
 
 /**
  * The global decision queues.
@@ -60,7 +72,10 @@ import type {
 export default function ApprovalsPage() {
   const { t } = useLanguage();
   const { state, can } = useSession();
-  const [tab, setTab] = useState<'requests' | 'invitations'>('requests');
+  // ★ THE THIRD TAB IS NOT A THIRD QUEUE. `roster` answers "who works here";
+  // the other two answer "what is waiting for a decision". They share a screen
+  // because an administrator does both, never because they are the same thing.
+  const [tab, setTab] = useState<'requests' | 'invitations' | 'roster'>('requests');
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [notice, setNotice] = useState<{ outcome: AddEmployeeOutcome; email: string } | null>(null);
   // Bumped after a create or a request so the head's own queue re-reads and the
@@ -87,6 +102,28 @@ export default function ApprovalsPage() {
   // A MEMBER matches neither, and so is offered nothing — which is also what
   // every endpoint behind these buttons would tell them.
   const canAddSomeone = isGlobal || headDepartmentId !== undefined;
+
+  /*
+    THE SAME TWO TABS FOR EVERYONE, reading whichever endpoint the caller is
+    allowed to read. A head has no access to the two GLOBAL queues — those
+    answer 403, including for requests they raised themselves — but the
+    DEPARTMENT-scoped versions of both are open to them. Pointing a head at
+    the global queue would render "not permitted" on the one screen that is
+    supposed to show them their own pending request.
+
+    Read top to bottom instead of nested inside one expression. Precedence is
+    unchanged: the roster tab still wins over everything, and a caller who is
+    not global and leads nothing still falls to the global queue, which is the
+    only thing that can answer them.
+  */
+  let body: ReactNode;
+  if (tab === 'roster') {
+    body = <EmployeeRoster refresh={refresh} />;
+  } else if (isGlobal || !headDepartmentId) {
+    body = <GlobalQueue tab={tab} />;
+  } else {
+    body = <DepartmentQueue tab={tab} departmentId={headDepartmentId} refresh={refresh} />;
+  }
 
   return (
     <div className="space-y-6">
@@ -140,6 +177,11 @@ export default function ApprovalsPage() {
             [
               ['requests', t('tabMembershipRequests')],
               ['invitations', t('tabInvitations')],
+              // ★ GLOBAL ONLY. `GET /memberships` is authorized without a
+              // department, which only a global caller survives — a head asking
+              // for it gets 403, so offering them the tab would be a guaranteed
+              // refusal. Their roster is their own department's screen.
+              ...(isGlobal ? ([['roster', t('tabEmployeeRoster')]] as const) : []),
             ] as const
           ).map(([id, label]) => (
             <button
@@ -159,19 +201,7 @@ export default function ApprovalsPage() {
           ))}
         </div>
 
-        {/*
-          THE SAME TWO TABS FOR EVERYONE, reading whichever endpoint the caller is
-          allowed to read. A head has no access to the two GLOBAL queues — those
-          answer 403, including for requests they raised themselves — but the
-          DEPARTMENT-scoped versions of both are open to them. Pointing a head at
-          the global queue would render "not permitted" on the one screen that is
-          supposed to show them their own pending request.
-        */}
-        {isGlobal || !headDepartmentId ? (
-          <GlobalQueue tab={tab} />
-        ) : (
-          <DepartmentQueue tab={tab} departmentId={headDepartmentId} refresh={refresh} />
-        )}
+        {body}
       </div>
 
       <AddEmployeeModal
@@ -187,6 +217,89 @@ export default function ApprovalsPage() {
 }
 
 /** The decision queues. GLOBAL only — a head gets 403 and it is rendered as one. */
+/**
+ * THE DEPLOYMENT-WIDE EMPLOYEE ROSTER — every unit, read only.
+ *
+ * ★ IT IS NOT AN APPROVAL QUEUE, and the difference is the reason it earns its
+ * own tab rather than a filter on one of the others. The queues hold things
+ * waiting for a decision and offer Approve and Reject; this holds people and
+ * offers nothing. Nothing here is decided, edited, disabled or transferred.
+ *
+ * ★ ONE SERVER-SIDE QUERY, NOT A FAN-OUT. `GET /memberships` is a single keyset
+ * page over a join. Listing departments and fetching each unit's members would
+ * be N+1, would leave every unit with its own cursor so the merged list could
+ * not be ordered or paginated, and would put a scope decision in the browser.
+ *
+ * ★ THE FILTER IS SERVER-SIDE. `membershipStatus` reaches the query, so "Đã
+ * nghỉ việc" reads ended memberships out of the database rather than hiding
+ * rows the server already sent — which would page wrongly and lie about counts.
+ */
+function EmployeeRoster({ refresh }: Readonly<{ refresh: number }>) {
+  const { t } = useLanguage();
+  // Active first: "who works here now" is the question this screen is usually
+  // asked. `undefined` is the "Tất cả" case — no filter rather than a magic value.
+  const [status, setStatus] = useState<MembershipStatus | undefined>('active');
+
+  const page = useCursorPages<EmployeeRosterRow>(
+    (request) => fetchEmployeeRoster(request, status),
+    [status, refresh],
+  );
+
+  return (
+    <>
+      <div className="flex items-center gap-3 border-b border-gray-100 bg-gray-50/50 px-6 py-3">
+        <label htmlFor="roster-status" className="text-sm font-medium text-gray-600">
+          {t('filterMembershipStatus')}
+        </label>
+        {/*
+          ponytail: a native <select>. Three fixed options, no state of its own,
+          and the keyboard and screen-reader behaviour is the platform's.
+        */}
+        <select
+          id="roster-status"
+          value={status ?? 'all'}
+          onChange={(event) =>
+            setStatus(
+              event.target.value === 'all' ? undefined : (event.target.value as MembershipStatus),
+            )
+          }
+          className="h-8 rounded-lg border border-input bg-white px-2.5 py-1 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <option value="active">{t('statusActive')}</option>
+          <option value="ended">{t('statusInactive')}</option>
+          <option value="all">{t('filterAllStatuses')}</option>
+        </select>
+      </div>
+
+      <div className="overflow-x-auto">
+        {/* ★ THE DEPARTMENT COLUMN IS WHAT MAKES THIS THE GLOBAL VIEW. Without
+            it the rows would be ambiguous across units. */}
+        <EmployeeRosterTable rows={page.items} showDepartment />
+
+        <QueueStates
+          loading={page.loading}
+          forbidden={page.forbidden}
+          error={Boolean(page.error) && !page.forbidden}
+          empty={page.items.length === 0}
+          emptyKey="emptyRoster"
+        />
+      </div>
+
+      <CursorPagination
+        shown={page.items.length}
+        hasMore={page.hasMore}
+        canGoBack={page.canGoBack}
+        onNext={page.next}
+        onPrevious={page.previous}
+        pageSize={page.pageSize}
+        onPageSizeChange={page.setPageSize}
+        isLoading={page.loading}
+        className="border-t border-gray-100 bg-gray-50/30"
+      />
+    </>
+  );
+}
+
 function GlobalQueue({ tab }: Readonly<{ tab: 'requests' | 'invitations' }>) {
   return tab === 'requests' ? <MembershipRequestQueue /> : <InvitationQueue />;
 }
@@ -305,7 +418,7 @@ function ReadOnlyQueue<T extends { id: string }>({
   refresh: number;
   headers: string[];
   renderCells: (row: T) => ReactNode;
-  emptyKey: 'emptyRequests' | 'emptyInvitations';
+  emptyKey: EmptyStateKey;
 }>) {
   const page = useCursorPages<T>(read, [refresh]);
 
@@ -367,7 +480,7 @@ function QueueStates({
   forbidden: boolean;
   error: boolean;
   empty: boolean;
-  emptyKey: 'emptyRequests' | 'emptyInvitations';
+  emptyKey: EmptyStateKey;
 }>) {
   const { t } = useLanguage();
 
@@ -410,7 +523,7 @@ interface DecisionQueueProps<T> {
   headers: string[];
   /** The leading cells for one row — everything except the actions column. */
   renderCells: (row: T) => ReactNode;
-  emptyKey: 'emptyRequests' | 'emptyInvitations';
+  emptyKey: EmptyStateKey;
   onApprove: (row: T) => Promise<void>;
   onReject: (row: T, reason?: string) => Promise<void>;
 }
