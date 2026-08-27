@@ -1,13 +1,13 @@
 import axios, { AxiosHeaders, type AxiosInstance } from 'axios';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { toApiError } from '@/utils/errors';
-import { CSRF_HEADER, CSRF_HEADER_VALUE } from './client';
+import { CSRF_HEADER, CSRF_HEADER_VALUE } from '@/api/client';
 import {
   BASE_URL,
   fixturePassword,
   requireBossCredentials,
   type BossCredentials,
-} from '@/test/integration-credentials';
+} from '../helpers/integration-credentials';
 
 /**
  * The bootstrap credential, read in `beforeAll` — which is also where a

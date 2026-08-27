@@ -1,17 +1,17 @@
 import { Pool } from 'pg';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Database, DatabaseQuery } from '../../../common/types/database.port';
-import { DepartmentRepository } from './department.repository';
-import { MembershipRepository } from './membership.repository';
-import { MembershipService } from '../application/membership.service';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import { DepartmentRepository } from '@core/organization/persistence/department.repository';
+import { MembershipRepository } from '@core/organization/persistence/membership.repository';
+import { MembershipService } from '@core/organization/application/membership.service';
 import {
   DEFAULT_LIMIT,
   MAX_LIMIT,
   decodeCursor,
   encodeCursor,
-} from '../../../common/pagination/cursor';
-import { pageQuerySchema } from '../../../common/pagination/page-query.dto';
+} from '@common/pagination/cursor';
+import { pageQuerySchema } from '@common/pagination/page-query.dto';
 
 /**
  * Keyset pagination against a REAL PostgreSQL.
@@ -64,7 +64,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 6, options: `-c search_path=${SCHEMA}` });
 
-    const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
+    const migrations = join(__dirname, '..', '..', 'migrations');
     // The FULL chain, in order. 0009 indexes tables that 0006 and 0007 create,
     // so a subset cannot apply it — and running exactly what production runs is
     // the point of an integration suite anyway.

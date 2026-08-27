@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
-import { MigrationRunner } from './migration-runner';
+import { MigrationRunner } from '@infrastructure/database/migration-runner';
 
 /**
  * The migration runner against a REAL PostgreSQL.
@@ -183,7 +183,7 @@ describeIntegration('MigrationRunner against real PostgreSQL', () => {
    * trigger fires.
    */
   describe('the shipped migrations', () => {
-    const realMigrations = join(__dirname, '..', '..', '..', 'migrations');
+    const realMigrations = join(__dirname, '..', '..', 'migrations');
 
     beforeEach(async () => {
       await new MigrationRunner(pool, realMigrations).run();

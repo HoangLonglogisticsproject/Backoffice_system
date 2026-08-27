@@ -1,17 +1,17 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
-import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
-import type { Database, DatabaseQuery } from '../../../common/types/database.port';
-import { buildDateRangePageQuerySchema } from '../../../common/pagination/date-range-page-query.dto';
-import { UserRepository } from '../../../core/users/persistence/user.repository';
+import { ConflictError, NotFoundError } from '@common/errors/domain.error';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import { buildDateRangePageQuerySchema } from '@common/pagination/date-range-page-query.dto';
+import { UserRepository } from '@core/users/persistence/user.repository';
 import {
   TripCustomerRepository,
   TripVehicleRepository,
-} from '../persistence/trip-catalogue.repository';
-import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
-import { TripCatalogueService } from './trip-catalogue.service';
-import { TripScheduleService } from './trip-schedule.service';
+} from '../../src/capabilities/trip-schedule/persistence/trip-catalogue.repository';
+import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
+import { TripCatalogueService } from '../../src/capabilities/trip-schedule/application/trip-catalogue.service';
+import { TripScheduleService } from '../../src/capabilities/trip-schedule/application/trip-schedule.service';
 
 /**
  * The dispatch board against a REAL PostgreSQL.
@@ -72,7 +72,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       options: `-c search_path=${SCHEMA} -c timezone=America/New_York`,
     });
 
-    const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
+    const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of [
       '0001_identity.sql',
       '0002_users_updated_at.sql',

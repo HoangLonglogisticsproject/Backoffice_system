@@ -1,16 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
-import type { Database, DatabaseQuery } from '../../../common/types/database.port';
-import { SessionRepository } from '../../identity/persistence/session.repository';
-import { SessionService } from '../../identity/application/session.service';
-import { DepartmentRepository } from '../../organization/persistence/department.repository';
-import { MembershipRepository } from '../../organization/persistence/membership.repository';
-import { DepartmentService } from '../../organization/application/department.service';
-import { MembershipService } from '../../organization/application/membership.service';
-import { AuthorizationRepository } from './authorization.repository';
-import { AuthorizationService } from '../application/authorization.service';
-import { can } from '../domain/authorization.context';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import { SessionRepository } from '@core/identity/persistence/session.repository';
+import { SessionService } from '@core/identity/application/session.service';
+import { DepartmentRepository } from '@core/organization/persistence/department.repository';
+import { MembershipRepository } from '@core/organization/persistence/membership.repository';
+import { DepartmentService } from '@core/organization/application/department.service';
+import { MembershipService } from '@core/organization/application/membership.service';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
+import { AuthorizationService } from '@core/authorization/application/authorization.service';
+import { can } from '@core/authorization/domain/authorization.context';
 
 /**
  * Authorization against a REAL PostgreSQL.
@@ -63,7 +63,7 @@ describeIntegration('Authorization against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
 
-    const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
+    const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of [
       '0001_identity.sql',
       '0002_users_updated_at.sql',

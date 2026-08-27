@@ -225,7 +225,14 @@ jobs:
 
       # `--ci` so a missing snapshot is a failure rather than a file the runner
       # helpfully writes. The JSON report is what the next step reads.
-      - name: Tests (unit + integration, real PostgreSQL)
+      #
+      # ★ THIS COMMAND NO LONGER RUNS THE INTEGRATION SPECS. They live under
+      # `tests/` and are addressed by their own config, so this suite is unit +
+      # security + DB-free race and cannot report a pending test at all. The
+      # integration step below is what exercises PostgreSQL, and it FAILS rather
+      # than skips when the database is missing — see
+      # `backend/tests/helpers/require-database.js`.
+      - name: Tests (unit, security, race)
         working-directory: backend
         run: npm test -- --ci --json --outputFile=jest-results.json
 
@@ -235,6 +242,17 @@ jobs:
       - name: Assert no test was skipped
         working-directory: backend
         run: node ../.github/scripts/assert-tests-ran.mjs jest-results.json 500 "backend"
+
+      # The other half of the suite, against the PostgreSQL service above. Kept
+      # as its own step so a database failure reads as a database failure
+      # instead of hiding among 671 unit results.
+      - name: Integration tests (real PostgreSQL)
+        working-directory: backend
+        run: npm run test:integration -- --ci --json --outputFile=jest-integration-results.json
+
+      - name: Assert no integration test was skipped
+        working-directory: backend
+        run: node ../.github/scripts/assert-tests-ran.mjs jest-integration-results.json 200 "backend integration"
 
   # --------------------------------------------------------------- frontend --
   frontend:

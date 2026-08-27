@@ -2,6 +2,17 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
+ * The migration directory these specs read.
+ *
+ * The specs live under `tests/migrations/` while the SQL they assert on stays
+ * in `migrations/` — the deployable artefact, which holds nothing but `.sql`.
+ * `__dirname` therefore no longer IS the migration directory, so it is named
+ * once here rather than rebuilt at each call site.
+ */
+const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations');
+
+
+/**
  * The SHAPE of the authorization migrations, without a database.
  *
  * The behaviour is proven in `src/core/authorization/authorization.integration.spec.ts`
@@ -13,7 +24,7 @@ describe('0004_authorization.sql', () => {
   let sql: string;
 
   beforeAll(async () => {
-    sql = await readFile(join(__dirname, '0004_authorization.sql'), 'utf8');
+    sql = await readFile(join(MIGRATIONS_DIR, '0004_authorization.sql'), 'utf8');
   });
 
   const normalized = (): string => sql.replace(/\s+/g, ' ');
@@ -106,7 +117,7 @@ describe('0005_identity_credential_state.sql', () => {
   let sql: string;
 
   beforeAll(async () => {
-    sql = await readFile(join(__dirname, '0005_identity_credential_state.sql'), 'utf8');
+    sql = await readFile(join(MIGRATIONS_DIR, '0005_identity_credential_state.sql'), 'utf8');
   });
 
   it('adds the flag to identities, not to users', () => {

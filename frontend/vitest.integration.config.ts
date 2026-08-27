@@ -22,7 +22,7 @@ export default defineConfig({
     // first login, exactly as an operator does, or every guarded route answers
     // 403 PASSWORD_CHANGE_REQUIRED. See the file for why this is not a
     // workaround — the gate itself is still tested in session.integration.
-    globalSetup: ['./src/test/integration-global-setup.ts'],
+    globalSetup: ['./tests/helpers/integration-global-setup.ts'],
     globals: true,
     include: ['**/*.integration.spec.ts'],
     // One server, one database: parallel files would race on the single

@@ -1,12 +1,12 @@
 import { Pool } from 'pg';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Database, DatabaseQuery } from '../../../common/types/database.port';
-import { DepartmentRepository } from './department.repository';
-import { MembershipRepository } from './membership.repository';
-import { MembershipService } from '../application/membership.service';
-import { AuthorizationRepository } from '../../authorization/persistence/authorization.repository';
-import { decodeCursor } from '../../../common/pagination/cursor';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import { DepartmentRepository } from '@core/organization/persistence/department.repository';
+import { MembershipRepository } from '@core/organization/persistence/membership.repository';
+import { MembershipService } from '@core/organization/application/membership.service';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
+import { decodeCursor } from '@common/pagination/cursor';
 
 /**
  * The user identity projection against a REAL PostgreSQL (ADR-0001).
@@ -60,7 +60,7 @@ describeIntegration('user identity projection against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 6, options: `-c search_path=${SCHEMA}` });
 
-    const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
+    const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of [
       '0001_identity.sql',
       '0002_users_updated_at.sql',
