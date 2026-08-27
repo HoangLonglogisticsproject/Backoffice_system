@@ -634,11 +634,28 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     });
 
     it('frees the customer name again once the row is retired', async () => {
+      // ★ THE TWO NAMES MUST NORMALISE TO THE SAME KEY, or this proves
+      // nothing. `name_key` collapses runs of whitespace and upper-cases, so
+      // `WWL` and `W W L` are two DIFFERENT keys — an earlier version of this
+      // test used that pair and passed whether or not archived rows were
+      // exempt from the uniqueness check. `WWL` and `  wwl  ` both normalise to
+      // `WWL`, so the second insert is refused unless retiring the first one
+      // really did free the name.
       const first = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
       await catalogue.archiveCustomer(first.id);
 
-      const reissued = await catalogue.createCustomer({ name: 'W W L', createdBy: author });
+      const reissued = await catalogue.createCustomer({ name: '  wwl  ', createdBy: author });
+
+      // It genuinely resolved: a live row, not a rejection swallowed somewhere.
+      expect(reissued.status).toBe('active');
+      // Stored as typed, minus the surrounding whitespace — formatting is the
+      // user's, only matching is ours.
+      expect(reissued.name).toBe('wwl');
       expect(reissued.id).not.toBe(first.id);
+      // And the retired row is still there, still archived: this is a reuse of
+      // the name, not a resurrection of the row.
+      const archived = (await catalogue.listCustomers(true)).find((row) => row.id === first.id);
+      expect(archived?.status).toBe('archived');
     });
 
     it('refuses a rename that collides with another active row', async () => {

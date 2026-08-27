@@ -359,21 +359,24 @@ function CatalogueFormModal({
   const formId = 'catalogue-form';
   const isVehicle = tab === 'vehicles';
 
+  // The one dialog both adds and renames, so the title has to say which. It
+  // said "add" in both, over a form pre-filled with an existing plate.
+  //
+  // Declared and assigned rather than nested in the JSX: two levels of ternary
+  // inside an attribute is read by nobody, and the same shape is spelled this
+  // way in `ApprovalsPage`.
+  let titleKey: TranslationKey;
+  if (editing) {
+    titleKey = isVehicle ? 'editVehicle' : 'editCustomer';
+  } else {
+    titleKey = isVehicle ? 'addVehicle' : 'addCustomer';
+  }
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      // The one dialog both adds and renames, so the title has to say which.
-      // It said "add" in both, over a form pre-filled with an existing plate.
-      title={t(
-        editing
-          ? isVehicle
-            ? 'editVehicle'
-            : 'editCustomer'
-          : isVehicle
-            ? 'addVehicle'
-            : 'addCustomer',
-      )}
+      title={t(titleKey)}
       footer={
         <>
           <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
