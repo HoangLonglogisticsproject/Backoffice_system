@@ -2,23 +2,23 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
-import type { Database, DatabaseQuery } from '../../../common/types/database.port';
-import type { AppConfig } from '../../../config/app.config';
-import type { PasswordHasher } from '../../../core/identity/domain/password-hasher.port';
-import { IdentityRepository } from '../../../core/identity/persistence/identity.repository';
-import { SessionRepository } from '../../../core/identity/persistence/session.repository';
-import { SessionService } from '../../../core/identity/application/session.service';
-import { AuthorizationRepository } from '../../../core/authorization/persistence/authorization.repository';
-import { AuthorizationService } from '../../../core/authorization/application/authorization.service';
-import { DepartmentRepository } from '../../../core/organization/persistence/department.repository';
-import { MembershipRepository } from '../../../core/organization/persistence/membership.repository';
-import { DepartmentService } from '../../../core/organization/application/department.service';
-import { MembershipService } from '../../../core/organization/application/membership.service';
-import { AccountProvisioningService } from '../../../core/users/application/account-provisioning.service';
-import { UserRepository } from '../../../core/users/persistence/user.repository';
-import { AccountInvitationRepository } from '../persistence/account-invitation.repository';
-import { AccountInvitationService } from './account-invitation.service';
-import { decodeCursor } from '../../../common/pagination/cursor';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import type { AppConfig } from '@config/app.config';
+import type { PasswordHasher } from '@core/identity/domain/password-hasher.port';
+import { IdentityRepository } from '@core/identity/persistence/identity.repository';
+import { SessionRepository } from '@core/identity/persistence/session.repository';
+import { SessionService } from '@core/identity/application/session.service';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
+import { AuthorizationService } from '@core/authorization/application/authorization.service';
+import { DepartmentRepository } from '@core/organization/persistence/department.repository';
+import { MembershipRepository } from '@core/organization/persistence/membership.repository';
+import { DepartmentService } from '@core/organization/application/department.service';
+import { MembershipService } from '@core/organization/application/membership.service';
+import { AccountProvisioningService } from '@core/users/application/account-provisioning.service';
+import { UserRepository } from '@core/users/persistence/user.repository';
+import { AccountInvitationRepository } from '../../src/capabilities/account-invitation/persistence/account-invitation.repository';
+import { AccountInvitationService } from '../../src/capabilities/account-invitation/application/account-invitation.service';
+import { decodeCursor } from '@common/pagination/cursor';
 
 /**
  * Onboarding against a REAL PostgreSQL.
@@ -78,7 +78,7 @@ describeIntegration('Account invitation against real PostgreSQL', () => {
     // `canonical_identity()`, which only exists from 0010. A hand-kept list
     // silently tests a stale schema the day somebody adds a migration and
     // forgets this file; it already did, between 0008 and 0010.
-    const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
+    const migrations = join(__dirname, '..', '..', 'migrations');
     const files = (await readdir(migrations)).filter((f) => f.endsWith('.sql')).sort();
     for (const file of files) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));

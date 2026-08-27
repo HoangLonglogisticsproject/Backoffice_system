@@ -1,7 +1,18 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
-import { normalizeEmail } from '../src/core/users/domain/email';
+import { normalizeEmail } from '@core/users/domain/email';
+
+/**
+ * The migration directory these specs read.
+ *
+ * The specs live under `tests/migrations/` while the SQL they assert on stays
+ * in `migrations/` — the deployable artefact, which holds nothing but `.sql`.
+ * `__dirname` therefore no longer IS the migration directory, so it is named
+ * once here rather than rebuilt at each call site.
+ */
+const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations');
+
 
 /**
  * The canonical-identity invariant, enforced by REAL PostgreSQL.
@@ -84,7 +95,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
 
   const applyMigrations = async (target: Pool, files: readonly string[]): Promise<void> => {
     for (const file of files) {
-      await target.query(await readFile(join(__dirname, file), 'utf8'));
+      await target.query(await readFile(join(MIGRATIONS_DIR, file), 'utf8'));
     }
   };
 
@@ -100,7 +111,7 @@ describeIntegration('Canonical identity against real PostgreSQL', () => {
     // schema this invariant is defined on; requiring 0010 to stay the newest
     // file in the repo would make every future migration fail here for no
     // reason. Anything landing at or BEFORE it still has to be listed.
-    const onDisk = (await readdir(__dirname)).filter((f) => f.endsWith('.sql')).sort();
+    const onDisk = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
 
     expect(onDisk).toContain(CANONICAL);
     expect(MIGRATIONS).toEqual(onDisk.slice(0, onDisk.indexOf(CANONICAL) + 1));

@@ -36,7 +36,58 @@ import { randomBytes } from 'node:crypto';
  * travelled through a command line, and the gate exists to retire it.
  */
 
-export const BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
+/** Hosts that cannot leave this machine, so plaintext there reaches nobody. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * The address the suite is allowed to send a SuperAdmin credential to.
+ *
+ * ★ THE PASSWORD IS POSTED TO `${BASE_URL}/auth/login`, so the scheme is not a
+ * cosmetic detail. Over plain HTTP to a remote host that credential crosses the
+ * network in clear text — and `API_BASE_URL` is an environment variable, which
+ * is exactly the kind of thing that gets pointed at staging "just to check
+ * something" and then stays pointed there.
+ *
+ * ★ HTTP IS NOT BANNED, because the whole local workflow is
+ * `http://localhost:3000` and refusing it would only teach people to disable
+ * the check. It is confined to loopback, where there is no wire to sniff.
+ * HTTPS is allowed anywhere: the credential is protected by the transport.
+ *
+ * Exported as a pure function so the rule can be tested without touching the
+ * environment.
+ */
+export function assertCredentialSafeBaseUrl(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    // Refused rather than guessed at: a URL that cannot be parsed cannot be
+    // shown to be safe, and this function guards a password.
+    throw new Error(`API_BASE_URL is not a valid URL: ${JSON.stringify(raw)}`);
+  }
+
+  if (parsed.protocol === 'https:') return raw;
+
+  if (parsed.protocol !== 'http:') {
+    throw new Error(
+      `API_BASE_URL uses ${parsed.protocol}, which is neither http nor https.`,
+    );
+  }
+
+  if (!LOOPBACK_HOSTS.has(parsed.hostname)) {
+    throw new Error(
+      `API_BASE_URL is plain HTTP to "${parsed.hostname}", which is not this machine. ` +
+        'This suite posts a SuperAdmin password to /auth/login, so it refuses to send one ' +
+        'in clear text to anything but loopback. Use https:// for a remote host.',
+    );
+  }
+
+  return raw;
+}
+
+export const BASE_URL = assertCredentialSafeBaseUrl(
+  process.env.API_BASE_URL ?? 'http://localhost:3000',
+);
 
 export interface BossCredentials {
   email: string;

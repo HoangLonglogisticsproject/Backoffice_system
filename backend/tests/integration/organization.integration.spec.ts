@@ -1,11 +1,11 @@
 import { Pool } from 'pg';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Database, DatabaseQuery } from '../../../common/types/database.port';
-import { DepartmentRepository } from './department.repository';
-import { MembershipRepository } from './membership.repository';
-import { DepartmentService } from '../application/department.service';
-import { MembershipService } from '../application/membership.service';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import { DepartmentRepository } from '@core/organization/persistence/department.repository';
+import { MembershipRepository } from '@core/organization/persistence/membership.repository';
+import { DepartmentService } from '@core/organization/application/department.service';
+import { MembershipService } from '@core/organization/application/membership.service';
 
 /**
  * Organization against a REAL PostgreSQL.
@@ -79,7 +79,7 @@ describeIntegration('Organization against real PostgreSQL', () => {
 
     // The real schema, applied from the real files: a test that hand-writes its
     // own DDL proves something about the hand-written DDL, not about what ships.
-    const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
+    const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of ['0001_identity.sql', '0002_users_updated_at.sql', '0003_organization.sql']) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }

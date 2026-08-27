@@ -19,7 +19,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['./src/test/setup.ts'],
+    setupFiles: ['./tests/helpers/setup.ts'],
     // Integration specs talk to a real backend and are run by their own config.
     exclude: ['**/node_modules/**', '**/*.integration.spec.*'],
     /**

@@ -2,6 +2,17 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
+ * The migration directory these specs read.
+ *
+ * The specs live under `tests/migrations/` while the SQL they assert on stays
+ * in `migrations/` — the deployable artefact, which holds nothing but `.sql`.
+ * `__dirname` therefore no longer IS the migration directory, so it is named
+ * once here rather than rebuilt at each call site.
+ */
+const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations');
+
+
+/**
  * Asserts the SHAPE of the identity migration without a database.
  *
  * This is not a substitute for running it against PostgreSQL — that is the
@@ -14,7 +25,7 @@ describe('0001_identity.sql', () => {
   let sql: string;
 
   beforeAll(async () => {
-    sql = await readFile(join(__dirname, '0001_identity.sql'), 'utf8');
+    sql = await readFile(join(MIGRATIONS_DIR, '0001_identity.sql'), 'utf8');
   });
 
   const normalized = () => sql.replace(/\s+/g, ' ');

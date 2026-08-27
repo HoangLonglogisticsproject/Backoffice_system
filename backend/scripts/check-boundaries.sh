@@ -97,11 +97,13 @@ report "B5  không có thư mục top-level theo loại file" \
 #                        Đó là credential dùng một lần, không phải cấu hình
 #                        deployment; đưa vào schema là để mật khẩu sống trong
 #                        AppConfig suốt vòng đời tiến trình.
-#   *.integration.spec   DATABASE_URL_TEST chỉ để test tự tắt khi máy không có
-#                        PostgreSQL. Không phải đường chạy thật.
+#   (Mục *.integration.spec đã được bỏ: integration spec không còn nằm trong
+#    src/ — chúng sống ở tests/integration/ và tests/migrations/, ngoài phạm vi
+#    quét của rule này. Giữ lại allowlist sẽ là mô tả một cấu trúc không còn
+#    tồn tại, và sẽ âm thầm cho phép một integration spec quay lại src/.)
 report "B6  không đọc process.env.X ngoài validate" \
   "$(grep -rnE "process\.env(\.[A-Za-z_]|\[)" --include=*.ts src 2>/dev/null \
-     | grep -vE "(src/core/users/cli/create-user\.cli\.ts|\.integration\.spec\.ts):")"
+     | grep -vE "(src/core/users/cli/create-user\.cli\.ts):")"
 
 # --- B7 ── foundation không mang từ vựng nghiệp vụ -------------------------
 # Danh sách này là ví dụ, không phải giới hạn: nếu một domain mới rò rỉ vào
@@ -188,6 +190,17 @@ report "B12 không có forwardRef mới ngoài cặp đã biết"   "$(found=$(g
 # cron của deployment, và một checker vấp vào chính tài liệu của nó là checker
 # sẽ bị tắt. Bài học thứ tư cùng loại, sau B7, B11 và B12.
 report "B13 runtime ↛ DELETE"                  "$(grep -rniE "delete[[:space:]]+from" --include=*.ts src 2>/dev/null      | grep -v '\.spec\.ts'      | grep -vE "$COMMENT_LINE")"
+
+# --- B14 ── src ↛ test cần hạ tầng ----------------------------------------
+# Quy ước test (docs/architecture/test-placement.md): unit, component, security
+# và race spec KHÔNG cần hạ tầng thì nằm cạnh code; spec nào cần PostgreSQL hoặc
+# một server thật thì sống ở tests/integration/ và tests/migrations/.
+#
+# Rule này là thứ giữ cho quy ước đó đúng. Không có nó, một `*.integration.spec.ts`
+# mới trong src/ sẽ bị `npm test` bỏ qua trong im lặng (testPathIgnorePatterns)
+# và KHÔNG được `test:integration` nhặt lên (testMatch chỉ soi tests/) — nghĩa là
+# một bài test không bao giờ chạy, mà không ai thấy đỏ ở đâu cả.
+report "B14 src ↛ integration spec"   "$(find src -name '*.integration.spec.ts' 2>/dev/null)"
 
 echo
 if [[ $fail -eq 0 ]]; then

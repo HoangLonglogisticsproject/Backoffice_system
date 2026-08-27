@@ -2,21 +2,21 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
-import type { Database, DatabaseQuery } from '../../../common/types/database.port';
-import type { AppConfig } from '../../../config/app.config';
-import type { PasswordHasher } from '../../identity/domain/password-hasher.port';
-import { IdentityRepository } from '../../identity/persistence/identity.repository';
-import { SessionRepository } from '../../identity/persistence/session.repository';
-import { SessionService } from '../../identity/application/session.service';
-import { AuthorizationRepository } from '../../authorization/persistence/authorization.repository';
-import { AuthorizationService } from '../../authorization/application/authorization.service';
-import { DepartmentRepository } from '../../organization/persistence/department.repository';
-import { MembershipRepository } from '../../organization/persistence/membership.repository';
-import { DepartmentService } from '../../organization/application/department.service';
-import { MembershipService } from '../../organization/application/membership.service';
-import { UserRepository } from '../persistence/user.repository';
-import { AccountLifecycleService } from './account-lifecycle.service';
-import { AccountProvisioningService } from './account-provisioning.service';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import type { AppConfig } from '@config/app.config';
+import type { PasswordHasher } from '@core/identity/domain/password-hasher.port';
+import { IdentityRepository } from '@core/identity/persistence/identity.repository';
+import { SessionRepository } from '@core/identity/persistence/session.repository';
+import { SessionService } from '@core/identity/application/session.service';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
+import { AuthorizationService } from '@core/authorization/application/authorization.service';
+import { DepartmentRepository } from '@core/organization/persistence/department.repository';
+import { MembershipRepository } from '@core/organization/persistence/membership.repository';
+import { DepartmentService } from '@core/organization/application/department.service';
+import { MembershipService } from '@core/organization/application/membership.service';
+import { UserRepository } from '@core/users/persistence/user.repository';
+import { AccountLifecycleService } from '@core/users/application/account-lifecycle.service';
+import { AccountProvisioningService } from '@core/users/application/account-provisioning.service';
 
 /**
  * Account lifecycle against a REAL PostgreSQL.
@@ -84,7 +84,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
 
-    const migrations = join(__dirname, '..', '..', '..', '..', 'migrations');
+    const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of [
       '0001_identity.sql',
       '0002_users_updated_at.sql',
