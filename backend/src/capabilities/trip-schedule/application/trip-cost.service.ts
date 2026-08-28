@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConflictError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
 import {
   isRecordableAmount,
-  type MoneyAmount,
+  TRIP_COST_CATEGORIES,
   type OutsourceHire,
   type TripCost,
   type TripCostCategory,
@@ -56,11 +56,12 @@ export class TripCostService {
   async createCost(input: {
     tripId: string;
     category: TripCostCategory;
-    amount: MoneyAmount;
+    amount: string;
     note?: string | null;
     createdBy: string;
   }): Promise<TripCost> {
     await this.requireTrip(input.tripId);
+    requireCategory(input.category);
     requireAmount(input.amount);
 
     return this.costs.create({
@@ -82,7 +83,7 @@ export class TripCostService {
   async listCosts(
     tripId: string,
     includeVoided = false,
-  ): Promise<{ items: TripCost[]; total: MoneyAmount }> {
+  ): Promise<{ items: TripCost[]; total: string }> {
     await this.requireTrip(tripId);
 
     const items = includeVoided
@@ -125,7 +126,7 @@ export class TripCostService {
   async createHire(input: {
     tripId: string;
     carrierName: string;
-    agreedAmount: MoneyAmount;
+    agreedAmount: string;
     amountIncludesVat?: boolean;
     documentRef?: string | null;
     note?: string | null;
@@ -151,7 +152,7 @@ export class TripCostService {
   async listHires(
     tripId: string,
     includeVoided = false,
-  ): Promise<{ items: OutsourceHire[]; total: MoneyAmount }> {
+  ): Promise<{ items: OutsourceHire[]; total: string }> {
     await this.requireTrip(tripId);
 
     const items = includeVoided
@@ -217,10 +218,27 @@ export class TripCostService {
  * naming the field. Note what it does NOT do: parse the value. A `Number()`
  * here would be the very rounding the column exists to avoid.
  */
-const requireAmount = (value: MoneyAmount): void => {
+const requireAmount = (value: string): void => {
   if (isRecordableAmount(value)) return;
   throw new ValidationError(
     'An amount must be greater than zero, with at most 2 decimal places and 12 digits before them.',
+  );
+};
+
+/**
+ * Refuses a heading the workbook does not have.
+ *
+ * The zod enum in the controller already catches an HTTP caller, and the
+ * database says the same thing a third time with a CHECK — but that one reaches
+ * a client as a 500, and the service is reachable from a script or another
+ * module that never passes through zod. Reads the list from the domain rather
+ * than repeating it, so a sixth heading cannot be added in one place and missed
+ * in another.
+ */
+const requireCategory = (value: TripCostCategory): void => {
+  if (TRIP_COST_CATEGORIES.includes(value)) return;
+  throw new ValidationError(
+    `A cost line needs one of: ${TRIP_COST_CATEGORIES.join(', ')}.`,
   );
 };
 

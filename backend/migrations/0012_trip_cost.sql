@@ -111,15 +111,25 @@ CREATE TABLE IF NOT EXISTS trip_costs (
     CHECK (void_reason IS NULL OR length(trim(void_reason)) > 0)
 );
 
--- The only read: this trip's LIVE lines, and their total.
+-- Every read of this table, all of which filter by trip.
 --
--- Partial on `voided_at IS NULL` because a voided line is excluded from every
--- total, so it has no business occupying the index that computes them. Not
--- unique on `(trip_id, category)`: two fuel fills on one run is ordinary data,
--- and a unique index there would refuse the second one.
+-- ★ NOT PARTIAL ON `voided_at IS NULL`, THOUGH IT LOOKS LIKE IT SHOULD BE.
+-- Two of the three reads carry that predicate — the live list and the totals —
+-- but the third does not: the AUDIT read deliberately returns voided lines too,
+-- because a withdrawn figure has to stay explicable. A partial index cannot
+-- serve that read at all, so it fell back to a sequential scan of the whole
+-- table: measured at 20,000 rows, reading one trip's history discarded 19,990
+-- of them to return 10.
+--
+-- A plain index on `(trip_id)` serves all three. The live read and the totals
+-- pay for it by touching the voided entries and filtering them out, which is a
+-- handful of rows on the same heap pages they were already reading — far
+-- cheaper than a second index on the same column, and cheaper than the scan.
+--
+-- Not unique on `(trip_id, category)`: two fuel fills on one run is ordinary
+-- data, and a unique index there would refuse the second one.
 CREATE INDEX IF NOT EXISTS idx_trip_cost_trip
-  ON trip_costs (trip_id)
-  WHERE voided_at IS NULL;
+  ON trip_costs (trip_id);
 
 -- --------------------------------------------------- trip_outsource_hires ----
 CREATE TABLE IF NOT EXISTS trip_outsource_hires (
@@ -188,7 +198,7 @@ CREATE TABLE IF NOT EXISTS trip_outsource_hires (
     CHECK (void_reason IS NULL OR length(trim(void_reason)) > 0)
 );
 
--- Same read, same shape as the cost index above.
+-- Same reads, same shape, and plain for the same reason as the cost index.
 --
 -- ⚠ NOT UNIQUE ON `trip_id`. Whether a run may carry more than one hire — a
 -- second lorry, waiting time agreed separately — is not settled, and a unique
@@ -197,5 +207,4 @@ CREATE TABLE IF NOT EXISTS trip_outsource_hires (
 -- adding the constraint later is a migration, whereas data never entered is
 -- gone.
 CREATE INDEX IF NOT EXISTS idx_trip_outsource_hire_trip
-  ON trip_outsource_hires (trip_id)
-  WHERE voided_at IS NULL;
+  ON trip_outsource_hires (trip_id);

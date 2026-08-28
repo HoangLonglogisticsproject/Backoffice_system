@@ -19,22 +19,22 @@ import type { UserSummary } from '../../../common/types/user-summary';
  */
 
 /**
- * ★ MONEY IS A STRING, AND THIS IS THE MOST IMPORTANT LINE IN THE FILE.
+ * ★ EVERY AMOUNT IN THIS FILE IS A `string`, AND THAT IS THE MOST IMPORTANT
+ * FACT IN IT.
  *
- * The column is `NUMERIC(14,2)`, chosen because binary floating point cannot
+ * The columns are `NUMERIC(14,2)`, chosen because binary floating point cannot
  * hold `0.1` and a hundred fuel lines drift by an amount nobody can reproduce.
  * `pg` hands `NUMERIC` back as a STRING for exactly that reason — verified, not
- * assumed — and the moment this becomes a `number` the precision the column was
+ * assumed — and the moment one becomes a `number` the precision the column was
  * chosen for is gone, silently, on the way out of the repository.
  *
  * So it stays text the whole way: text in the row, text in the domain, text in
- * the JSON. Totals are computed by PostgreSQL with `SUM`, never by adding these
+ * the JSON. Totals are computed by PostgreSQL with `SUM`, never by adding them
  * in JavaScript. If a caller needs arithmetic, that arithmetic belongs in SQL
  * or in a decimal library — never in `+`.
  *
  * Always rendered by PostgreSQL with both decimal places: `"1000000.00"`.
  */
-export type MoneyAmount = string;
 
 /**
  * A positive amount that `NUMERIC(14,2)` can hold exactly.
@@ -115,7 +115,7 @@ interface FinancialRecord {
 /** One line of what running our own lorry cost. */
 export interface TripCost extends FinancialRecord {
   category: TripCostCategory;
-  amount: MoneyAmount;
+  amount: string;
 }
 
 /**
@@ -131,7 +131,7 @@ export interface TripCost extends FinancialRecord {
  */
 export interface OutsourceHire extends FinancialRecord {
   carrierName: string;
-  agreedAmount: MoneyAmount;
+  agreedAmount: string;
   /**
    * Whether `agreedAmount` already contains VAT.
    *
@@ -157,9 +157,9 @@ export interface OutsourceHire extends FinancialRecord {
  */
 export interface TripCostTotals {
   /** Live `trip_costs` lines. */
-  costs: MoneyAmount;
+  costs: string;
   /** Live `trip_outsource_hires`. */
-  hires: MoneyAmount;
+  hires: string;
   /** Both, because a caller must never add the two above itself. */
-  combined: MoneyAmount;
+  combined: string;
 }

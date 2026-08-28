@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type {
-  MoneyAmount,
   OutsourceHire,
   TripCost,
   TripCostCategory,
@@ -173,7 +172,7 @@ export class TripCostRepository {
     input: {
       tripId: string;
       category: TripCostCategory;
-      amount: MoneyAmount;
+      amount: string;
       note: string | null;
       createdBy: string;
     },
@@ -257,7 +256,7 @@ export class OutsourceHireRepository {
     input: {
       tripId: string;
       carrierName: string;
-      agreedAmount: MoneyAmount;
+      agreedAmount: string;
       amountIncludesVat: boolean;
       documentRef: string | null;
       note: string | null;

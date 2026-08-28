@@ -10,20 +10,19 @@ import type { UserSummary } from './organization';
  */
 
 /**
- * ★ AN AMOUNT IS A STRING, AND MUST STAY ONE.
+ * ★ EVERY AMOUNT BELOW IS A `string`, AND MUST STAY ONE.
  *
- * The column is `NUMERIC(14,2)`, chosen because binary floating point cannot
+ * The columns are `NUMERIC(14,2)`, chosen because binary floating point cannot
  * hold `0.1` exactly and a hundred fuel lines drift by an amount nobody can
- * reproduce. The server sends it as text for that reason.
+ * reproduce. The server sends them as text for that reason.
  *
- * ⚠ NEVER `Number(amount)`, AND NEVER `a + b` ON TWO OF THESE. Adding them in
+ * ⚠ NEVER `Number(amount)`, AND NEVER `a + b` ON TWO OF THEM. Adding them in
  * JavaScript either concatenates two strings or silently goes through float64 —
  * both wrong, one of them invisibly. Totals come from the server, which adds
  * them in PostgreSQL. Format for display with `formatMoney`, which never parses.
  *
  * Always arrives with both decimal places: `"1500000.00"`.
  */
-export type MoneyAmount = string;
 
 /**
  * The five headings the workbook's cost block has.
@@ -70,14 +69,14 @@ interface FinancialRecord {
 /** One line of what running our own lorry cost. */
 export interface TripCost extends FinancialRecord {
   category: TripCostCategory;
-  amount: MoneyAmount;
+  amount: string;
 }
 
 /** What we agreed to pay somebody else's lorry for one run. */
 export interface OutsourceHire extends FinancialRecord {
   /** As typed. There is no carrier catalogue yet — the shape is not settled. */
   carrierName: string;
-  agreedAmount: MoneyAmount;
+  agreedAmount: string;
   /** Whether the agreed figure already contains VAT. A record, not a calculation. */
   amountIncludesVat: boolean;
   documentRef: string | null;
@@ -89,14 +88,14 @@ export interface OutsourceHire extends FinancialRecord {
  * `combined` is sent rather than derived so a client never adds the other two.
  */
 export interface TripCostTotals {
-  costs: MoneyAmount;
-  hires: MoneyAmount;
-  combined: MoneyAmount;
+  costs: string;
+  hires: string;
+  combined: string;
 }
 
 /** What the two list endpoints return: the records, and their live total. */
 export interface TripCostList<T> {
   items: T[];
   /** Live records only — a voided one is never counted, whatever `items` holds. */
-  total: MoneyAmount;
+  total: string;
 }

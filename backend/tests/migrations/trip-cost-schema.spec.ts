@@ -178,11 +178,22 @@ describe('0012_trip_cost.sql', () => {
     it.each([
       ['idx_trip_cost_trip', 'trip_costs'],
       ['idx_trip_outsource_hire_trip', 'trip_outsource_hires'],
-    ])('%s covers the live rows of one trip only', (index, table) => {
+    ])('%s indexes one trip\u2019s records', (index, table) => {
       expect(normalized()).toContain(
-        `CREATE INDEX IF NOT EXISTS ${index} ON ${table} (trip_id) WHERE voided_at IS NULL`,
+        `CREATE INDEX IF NOT EXISTS ${index} ON ${table} (trip_id)`,
       );
     });
+
+    it.each(['idx_trip_cost_trip', 'idx_trip_outsource_hire_trip'])(
+      '\u2605 %s is NOT partial, so the audit read can use it',
+      (index) => {
+        // A partial index on `voided_at IS NULL` cannot serve the read that
+        // deliberately INCLUDES voided records, which then falls back to a
+        // sequential scan of the whole table.
+        const definition = normalized().slice(normalized().indexOf(index));
+        expect(definition.slice(0, definition.indexOf(';'))).not.toContain('WHERE voided_at IS NULL');
+      },
+    );
 
     it('★ does NOT make (trip_id, category) unique', () => {
       // Two fuel fills on one run is ordinary data. A unique index there would

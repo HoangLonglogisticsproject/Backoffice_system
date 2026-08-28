@@ -273,6 +273,20 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
+    it('\u2605 refuses a category outside the five, even bypassing the HTTP layer', async () => {
+      // The controller's enum catches an HTTP caller; a script calling the
+      // service directly would otherwise reach the database CHECK, which
+      // surfaces as a 500 rather than as "that heading does not exist".
+      await expect(
+        money.createCost({
+          tripId: trip,
+          category: 'allowance' as never,
+          amount: '100',
+          createdBy: author,
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
     it('refuses a hire with a blank carrier', async () => {
       await expect(
         money.createHire({ tripId: trip, carrierName: '   ', agreedAmount: '100', createdBy: author }),

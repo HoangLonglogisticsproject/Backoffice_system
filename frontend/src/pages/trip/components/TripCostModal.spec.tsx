@@ -76,18 +76,29 @@ const hire = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const renderPanel = (tripId: string | null = TRIP) => {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
+const makeClient = () =>
+  new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <LanguageProvider>
-        <TripCostModal tripId={tripId} onClose={() => {}} />
-      </LanguageProvider>
-    </QueryClientProvider>,
-  );
+/**
+ * The panel as an element, so a case can RE-RENDER it against the same cache.
+ *
+ * That is what the permission-loss cases need: the amounts must disappear
+ * because the permission changed, not because the cache was thrown away with
+ * the component.
+ */
+let activeClient: QueryClient;
+
+const panel = (tripId: string | null = TRIP, client: QueryClient = activeClient) => (
+  <QueryClientProvider client={client}>
+    <LanguageProvider>
+      <TripCostModal tripId={tripId} onClose={() => {}} />
+    </LanguageProvider>
+  </QueryClientProvider>
+);
+
+const renderPanel = (tripId: string | null = TRIP, client?: QueryClient) => {
+  activeClient = client ?? makeClient();
+  return render(panel(tripId, activeClient));
 };
 
 const ALL = ['cost.read', 'cost.create', 'cost.void'];
@@ -196,6 +207,68 @@ describe('TripCostModal', () => {
     it('fetches nothing while no trip is selected', async () => {
       renderPanel(null);
       await waitFor(() => expect(fetchTripCosts).not.toHaveBeenCalled());
+    });
+  });
+
+  /**
+   * ★ CACHED MONEY MUST NOT OUTLIVE THE PERMISSION.
+   *
+   * A disabled React Query still hands back whatever is in its cache. Without
+   * an explicit gate, a caller who held `cost.read` a moment ago and has since
+   * lost it — a revoked assignment, a switched account on a shared machine, a
+   * session that ended — would keep seeing the amounts they were shown before,
+   * from memory, with no request and nothing left to refuse them.
+   */
+  describe('★ losing cost.read hides money that was already fetched', () => {
+    it('★ shows nothing once the permission goes away, without refetching', async () => {
+      const { rerender } = renderPanel();
+      await settled();
+      expect(within(costTable()).getByText('1.500.000')).toBeTruthy();
+
+      // Same cache, same trip — only the permission changed.
+      useSession.mockReturnValue(session(['trip.read']));
+      rerender(panel());
+
+      // The refusal, not a set of empty tables that would read as "this trip
+      // cost nothing".
+      expect(await screen.findByText('Không có quyền')).toBeTruthy();
+      expect(document.body.textContent).not.toContain('1.500.000');
+      expect(document.body.textContent).not.toContain('4.500.000');
+      expect(document.body.textContent).not.toContain('6.000.000');
+    });
+
+    it('★ shows nothing when the session itself ends', async () => {
+      const { rerender } = renderPanel();
+      await settled();
+
+      useSession.mockReturnValue({
+        state: null,
+        can: () => false,
+        loading: false,
+      });
+      rerender(panel());
+
+      expect(await screen.findByText('Không có quyền')).toBeTruthy();
+      expect(document.body.textContent).not.toContain('1.500.000');
+    });
+
+    it('★ purges the figures from the cache, not merely from the render', async () => {
+      // Gating the output alone would leave the amounts resident in memory for
+      // any later render — or a devtools panel — to surface.
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+      const { rerender } = renderPanel(TRIP, client);
+      await settled();
+
+      expect(
+        client.getQueriesData({ queryKey: ['trip', 'money'] }).some(([, data]) => data !== undefined),
+      ).toBe(true);
+
+      useSession.mockReturnValue(session(['trip.read']));
+      rerender(panel(TRIP, client));
+
+      await waitFor(() =>
+        expect(client.getQueriesData({ queryKey: ['trip', 'money'] })).toHaveLength(0),
+      );
     });
   });
 

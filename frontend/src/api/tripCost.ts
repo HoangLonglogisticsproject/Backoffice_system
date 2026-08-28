@@ -1,6 +1,5 @@
 import { httpClient } from './client';
 import type {
-  MoneyAmount,
   OutsourceHire,
   TripCost,
   TripCostCategory,
@@ -48,13 +47,13 @@ export interface CreateTripCostInput {
    * refuses a number outright, and it refuses a third decimal place too —
    * `NUMERIC(14,2)` would ROUND that rather than reject it.
    */
-  amount: MoneyAmount;
+  amount: string;
   note?: string | null;
 }
 
 export interface CreateOutsourceHireInput {
   carrierName: string;
-  agreedAmount: MoneyAmount;
+  agreedAmount: string;
   /** Whether the agreed figure already contains VAT. Recorded, never computed. */
   amountIncludesVat?: boolean;
   documentRef?: string | null;

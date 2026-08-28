@@ -129,7 +129,7 @@ export function TripCostModal({
                   )}
                 </div>
 
-                {money.costs && money.costs.items.length === 0 ? (
+                {money.costs?.items.length === 0 ? (
                   <p className="py-4 text-center text-sm text-gray-500">{t('emptyCosts')}</p>
                 ) : (
                   <Table>
@@ -175,7 +175,7 @@ export function TripCostModal({
                   )}
                 </div>
 
-                {money.hires && money.hires.items.length === 0 ? (
+                {money.hires?.items.length === 0 ? (
                   <p className="py-4 text-center text-sm text-gray-500">{t('emptyHires')}</p>
                 ) : (
                   <Table>

@@ -24,7 +24,6 @@ import { TripCostService } from '../application/trip-cost.service';
 import {
   isRecordableAmount,
   TRIP_COST_CATEGORIES,
-  type MoneyAmount,
   type OutsourceHire,
   type TripCost,
   type TripCostTotals,
@@ -117,7 +116,7 @@ export class TripCostController {
   async listCosts(
     @Param('tripId', UuidParam) tripId: string,
     @Query(new ZodValidationPipe(listQuerySchema)) query: ListQuery,
-  ): Promise<{ items: TripCost[]; total: MoneyAmount }> {
+  ): Promise<{ items: TripCost[]; total: string }> {
     return this.money.listCosts(tripId, wantsVoided(query));
   }
 
@@ -160,7 +159,7 @@ export class TripCostController {
   async listHires(
     @Param('tripId', UuidParam) tripId: string,
     @Query(new ZodValidationPipe(listQuerySchema)) query: ListQuery,
-  ): Promise<{ items: OutsourceHire[]; total: MoneyAmount }> {
+  ): Promise<{ items: OutsourceHire[]; total: string }> {
     return this.money.listHires(tripId, wantsVoided(query));
   }
 

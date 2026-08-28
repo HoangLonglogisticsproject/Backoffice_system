@@ -430,14 +430,44 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
     it.each([
       ['idx_trip_cost_trip', 'trip_costs'],
       ['idx_trip_outsource_hire_trip', 'trip_outsource_hires'],
-    ])('%s exists and covers live rows only', async (index, table) => {
+    ])('%s indexes the table by trip, without a partial predicate', async (index, table) => {
       const { rows } = await pool.query<{ indexdef: string }>(
         'SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2',
         [SCHEMA, index],
       );
       expect(rows[0]?.indexdef).toContain(`ON ${SCHEMA}.${table}`);
       expect(rows[0]?.indexdef).toContain('(trip_id)');
-      expect(rows[0]?.indexdef).toContain('WHERE (voided_at IS NULL)');
+      // Partial on `voided_at IS NULL` would exclude exactly the rows the audit
+      // read asks for, sending it to a sequential scan.
+      expect(rows[0]?.indexdef).not.toContain('WHERE');
+    });
+
+    it('\u2605 serves the AUDIT read \u2014 the one that includes voided records', async () => {
+      for (let n = 0; n < 20; n += 1) await addCost();
+      const { rows } = await addCost();
+      await pool.query(
+        `UPDATE trip_costs SET voided_at = now(), voided_by = $2, void_reason = 'x'
+          WHERE id = $1`,
+        [rows[0].id, author],
+      );
+      await pool.query('ANALYZE trip_costs');
+
+      const plan = await pool.query<{ 'QUERY PLAN': string }>(
+        `EXPLAIN SELECT * FROM trip_costs WHERE trip_id = $1`,
+        [trip],
+      );
+      const text = plan.rows.map((row) => row['QUERY PLAN']).join(' ');
+
+      // The planner may still prefer a scan on a tiny table; what matters is
+      // that an index EXISTS which covers this predicate without excluding
+      // voided rows. Asserted on the definition rather than on the plan.
+      expect(text.length).toBeGreaterThan(0);
+      const { rows: def } = await pool.query<{ indexdef: string }>(
+        `SELECT indexdef FROM pg_indexes
+          WHERE schemaname = $1 AND indexname = 'idx_trip_cost_trip'`,
+        [SCHEMA],
+      );
+      expect(def[0]?.indexdef).not.toContain('voided_at');
     });
 
     it('★ has no unique index on either table', async () => {

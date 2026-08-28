@@ -406,6 +406,16 @@ describe('TripSchedulePage', () => {
       await screen.findByText('50H-49266');
 
       expect(screen.queryByRole('button', { name: 'Chi phí chuyến' })).toBeNull();
+      // The column is still there — `trip.write` earns it on its own.
+      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
+    });
+
+    it('★ hides the actions column entirely from a caller with neither permission', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.create']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      expect(screen.queryByRole('columnheader', { name: 'Thao tác' })).toBeNull();
     });
 
     it('★ shows the actions column for cost.read ALONE, without trip.write', async () => {
@@ -415,6 +425,8 @@ describe('TripSchedulePage', () => {
       renderPage();
       await screen.findByText('50H-49266');
 
+      // The column itself must appear, not just the button inside it.
+      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
       // …and still no edit or archive, which are a different permission.
       expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();

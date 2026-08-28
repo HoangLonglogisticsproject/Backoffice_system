@@ -171,7 +171,10 @@ describe('trip-cost HTTP security', () => {
 
   describe('without authentication', () => {
     it.each(ALL_ROUTES)('refuses %s %s', async (method, path) => {
-      await request(app.getHttpServer())[method](path).send(anyBody).expect(401);
+      const response = await request(app.getHttpServer())[method](path).send(anyBody);
+
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
     });
 
     it('calls nothing on the service', async () => {
@@ -353,7 +356,10 @@ describe('trip-cost HTTP security', () => {
     });
 
     it('answers 422 for a malformed trip id', async () => {
-      await authed('get', '/trip-schedules/not-a-uuid/costs').expect(422);
+      const response = await authed('get', '/trip-schedules/not-a-uuid/costs');
+
+      expect(response.status).toBe(422);
+      expect(money.listCosts).not.toHaveBeenCalled();
     });
 
     it('refuses includeVoided=false being read as true', async () => {
@@ -367,7 +373,10 @@ describe('trip-cost HTTP security', () => {
     });
 
     it('refuses any other spelling of includeVoided', async () => {
-      await authed('get', `/trip-schedules/${TRIP}/costs?includeVoided=yes`).expect(422);
+      const response = await authed('get', `/trip-schedules/${TRIP}/costs?includeVoided=yes`);
+
+      expect(response.status).toBe(422);
+      expect(money.listCosts).not.toHaveBeenCalled();
     });
   });
 
@@ -381,12 +390,15 @@ describe('trip-cost HTTP security', () => {
     ] as const)('%s %s does not exist', async (method, path) => {
       // A correction is a void plus a new record. No route offers anything else,
       // and this fails loudly if one is ever added.
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         [method](path)
         .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
         .set('X-Requested-With', 'XMLHttpRequest')
-        .send({ amount: '1' })
-        .expect(404);
+        .send({ amount: '1' });
+
+      expect(response.status).toBe(404);
+      // Nothing on the service is reachable by these verbs.
+      for (const call of Object.values(money)) expect(call).not.toHaveBeenCalled();
     });
   });
 });

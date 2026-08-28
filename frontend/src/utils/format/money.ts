@@ -15,6 +15,27 @@
  * A non-zero fraction is shown rather than hidden, because dropping it would
  * silently disagree with what is stored.
  */
+
+/**
+ * Inserts a `.` every three digits, from the right.
+ *
+ * ★ A LOOP RATHER THAN A LOOKAHEAD REGEX. The obvious spelling is
+ * `/\B(?=(\d{3})+(?!\d))/g`, and it is the one to avoid: a `+` wrapped around a
+ * fixed-width group makes the matcher try every grouping of the digits before
+ * settling, so its cost grows super-linearly with the length of the number.
+ * Money is attacker-influenced input in the general case, and a formatter is a
+ * silly place to spend that. Walking the string backwards in threes is linear,
+ * obvious, and needs no regex engine at all.
+ */
+const group = (digits: string): string => {
+  let out = '';
+  for (let end = digits.length; end > 0; end -= 3) {
+    const chunk = digits.slice(Math.max(0, end - 3), end);
+    out = out === '' ? chunk : `${chunk}.${out}`;
+  }
+  return out;
+};
+
 export function formatMoney(amount: string): string {
   const trimmed = amount.trim();
   if (trimmed === '') return '';
@@ -26,7 +47,7 @@ export function formatMoney(amount: string): string {
   // not the place to discover a contract change.
   if (!/^\d+$/.test(whole)) return trimmed;
 
-  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const grouped = group(whole);
 
   return fraction && /[1-9]/.test(fraction) ? `${grouped},${fraction}` : grouped;
 }
