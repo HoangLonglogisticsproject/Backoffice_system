@@ -31,6 +31,13 @@ export const PERMISSIONS = [
    * table below for why "any department" is the honest reading here.
    */
   'trip.write',
+
+  /** See the money on a trip: its cost lines, its hires, and their totals. */
+  'cost.read',
+  /** Record a cost line or an outsourced hire against a trip. */
+  'cost.create',
+  /** Withdraw one, with a reason. There is no edit — a correction is a void. */
+  'cost.void',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];
@@ -118,6 +125,29 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'trip.read': 'any',
   'trip.create': 'any',
   'trip.write': 'head-anywhere',
+
+  /**
+   * ★ MONEY IS 'global' — THE MOST RESTRICTIVE TIER — AND THIS IS A DELIBERATE
+   * PLACEHOLDER, NOT A FINISHED ANSWER.
+   *
+   * The requirement on record is that price visibility is RESTRICTED, and that
+   * the people who need it are a small group. Which group, expressed as which
+   * holders, is a role-mapping decision nobody has taken yet.
+   *
+   * Until it is taken this fails CLOSED. 'any' would hand every finished
+   * account the company's cost base, and the difference between the two
+   * mistakes is not symmetric: a tier that is too tight blocks work until
+   * somebody widens it, while a tier that is too loose has already disclosed
+   * the figures by the time anyone notices. Relaxing this later is one edit to
+   * this table; un-disclosing is not possible.
+   *
+   * ⚠ NO ROLE IS NAMED HERE OR ANYWHERE ELSE. 'global' is a RELATION — a
+   * caller whose authorization is not scoped to a department — and which
+   * accounts hold it stays data, exactly as it is for every other permission.
+   */
+  'cost.read': 'global',
+  'cost.create': 'global',
+  'cost.void': 'global',
 };
 
 export function isPermissionKey(value: string): value is PermissionKey {
