@@ -23,7 +23,14 @@ export type PermissionKey =
   // `trip.write` — correcting somebody else's row — stays global.
   | 'trip.read'
   | 'trip.create'
-  | 'trip.write';
+  | 'trip.write'
+  // The money on a trip (§21). Separate keys from `trip.*` on purpose: the
+  // board is read by everybody and the amounts on it are not, so a caller
+  // without `cost.read` is never sent a figure at all. All three are GLOBAL
+  // today — a fail-closed placeholder until role mapping is designed.
+  | 'cost.read'
+  | 'cost.create'
+  | 'cost.void';
 
 export type UserStatus = 'active' | 'disabled';
 

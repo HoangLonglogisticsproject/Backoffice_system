@@ -21,6 +21,21 @@ export const tripKeys = {
   scheduleList: (range: { from: string; to: string }) =>
     [...tripKeys.schedules(), range] as const,
 
+  /**
+   * Everything money-related for ONE trip.
+   *
+   * A prefix rather than three separate roots so that recording or voiding
+   * something invalidates the cost list, the hire list, both `includeVoided`
+   * variants and the summary together — they all change at the same instant,
+   * and refreshing one would leave the others contradicting it.
+   */
+  money: (tripId: string) => [...tripKeys.all, 'money', tripId] as const,
+  costs: (tripId: string, includeVoided: boolean) =>
+    [...tripKeys.money(tripId), 'costs', { includeVoided }] as const,
+  hires: (tripId: string, includeVoided: boolean) =>
+    [...tripKeys.money(tripId), 'hires', { includeVoided }] as const,
+  costSummary: (tripId: string) => [...tripKeys.money(tripId), 'summary'] as const,
+
   catalogues: () => [...tripKeys.all, 'catalogue'] as const,
   vehicles: (includeArchived: boolean) =>
     [...tripKeys.catalogues(), 'vehicles', { includeArchived }] as const,

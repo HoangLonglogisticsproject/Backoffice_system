@@ -503,6 +503,48 @@ const PHRASES = {
     vi: 'Lưu trữ khách hàng này? Các chuyến cũ vẫn giữ nguyên tên khách — khách chỉ không còn được chọn cho chuyến mới.',
     en: 'Archive this customer? Past trips keep the name — they are only no longer offered for new trips.',
   },
+  // Trip cost — the CHI PHÍ block of the workbook, behind `cost.read`
+  tripCost: { vi: 'Chi phí chuyến', en: 'Trip cost' },
+  costOwnVehicle: { vi: 'Chi phí xe nhà', en: 'Own-vehicle cost' },
+  costOutsource: { vi: 'Xe thuê ngoài', en: 'Outsourced hire' },
+  // The five headings, exactly as the sheet writes them.
+  costFuel: { vi: 'Dầu', en: 'Fuel' },
+  costToll: { vi: 'Cầu trạm', en: 'Tolls' },
+  costWarehouse: { vi: 'Phí kho', en: 'Warehouse' },
+  costLoading: { vi: 'Bốc xếp', en: 'Loading' },
+  costOvertime: { vi: 'Tăng ca', en: 'Overtime' },
+  totalOwnVehicle: { vi: 'Tổng chi phí xe nhà', en: 'Own-vehicle total' },
+  totalOutsource: { vi: 'Tổng xe thuê ngoài', en: 'Outsourced total' },
+  totalTripCost: { vi: 'Tổng chi phí chuyến', en: 'Trip total' },
+  addCost: { vi: 'Thêm chi phí', en: 'Add cost' },
+  addHire: { vi: 'Thêm xe ngoài', en: 'Add hire' },
+  colCategory: { vi: 'Khoản mục', en: 'Category' },
+  colAmount: { vi: 'Số tiền (VND)', en: 'Amount (VND)' },
+  colCarrier: { vi: 'Nhà xe', en: 'Carrier' },
+  colDocumentRef: { vi: 'Chứng từ', en: 'Document' },
+  fieldCategory: { vi: 'Khoản mục *', en: 'Category *' },
+  fieldAmount: { vi: 'Số tiền (VND) *', en: 'Amount (VND) *' },
+  fieldCarrier: { vi: 'Nhà xe *', en: 'Carrier *' },
+  fieldAgreedAmount: { vi: 'Giá thỏa thuận (VND) *', en: 'Agreed price (VND) *' },
+  fieldDocumentRef: { vi: 'Số chứng từ', en: 'Document reference' },
+  vatIncluded: { vi: 'Đã bao gồm VAT', en: 'VAT included' },
+  vatIncludedShort: { vi: 'Có VAT', en: 'incl. VAT' },
+  // ★ SAYS WHAT VOID IS NOT. A withdrawn line is not deleted — it stays on
+  // the record with a reason, and only stops counting.
+  voidRecord: { vi: 'Hủy khoản', en: 'Void' },
+  voidReason: { vi: 'Lý do hủy *', en: 'Reason for voiding *' },
+  confirmVoidBody: {
+    vi: 'Hủy khoản này? Bản ghi vẫn được giữ lại kèm lý do — chỉ là không còn tính vào tổng.',
+    en: 'Void this record? It is kept, with the reason — it simply stops counting.',
+  },
+  statusVoided: { vi: 'Đã hủy', en: 'Voided' },
+  showVoided: { vi: 'Hiện cả khoản đã hủy', en: 'Show voided' },
+  emptyCosts: { vi: 'Chưa có chi phí xe nhà.', en: 'No own-vehicle cost yet.' },
+  emptyHires: { vi: 'Chưa có xe thuê ngoài.', en: 'No outsourced hire yet.' },
+  amountHint: {
+    vi: 'Nhập số tiền, tối đa 2 số lẻ. Ví dụ: 1500000',
+    en: 'A positive amount, at most 2 decimals. e.g. 1500000',
+  },
 } as const satisfies Record<string, Phrase>;
 
 export type TranslationKey = keyof typeof PHRASES;
