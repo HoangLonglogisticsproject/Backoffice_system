@@ -26,6 +26,15 @@ interface TripFormModalProps {
   trip?: TripScheduleWithRefs | null;
   vehicles: TripVehicle[];
   customers: TripCustomer[];
+  /**
+   * Have both catalogue reads come back?
+   *
+   * Needed only to tell "this truck is retired" from "the list has not loaded
+   * yet" — the two look identical from an empty options array, and labelling an
+   * active truck as archived for the first few hundred milliseconds would be a
+   * statement that is simply untrue.
+   */
+  cataloguesLoaded: boolean;
   onClose: () => void;
   onSaved: () => void;
   /** A new catalogue row was added from inside the form; reload the lists. */
@@ -62,6 +71,40 @@ const emptyForm = (): FormState => ({
   note: '',
   status: 'awaiting_production',
 });
+
+/** What a `CatalogueSelect` offers. Mirrors its own prop type. */
+interface Option {
+  id: string;
+  label: string;
+}
+
+/**
+ * ★ THE ROW'S OWN REFERENCE IS NOT AN OPTION — IT IS THE CURRENT VALUE.
+ *
+ * The catalogue endpoints return ACTIVE rows only, which is right: a retired
+ * truck must not be offered for tomorrow's work. But a trip entered before that
+ * truck was retired still names it, and a `<select>` whose value matches none of
+ * its options renders BLANK — so the plate vanished from the form, and touching
+ * the control at all silently replaced a historical assignment with something
+ * else.
+ *
+ * So the row's own current reference is appended when the catalogue no longer
+ * carries it, marked as retired. It is reachable only from the trip that
+ * already holds it: a new trip passes `current = null`, and another trip passes
+ * its own. No archived row is ever offered as an ordinary choice.
+ */
+const withCurrentReference = (
+  options: Option[],
+  current: Option | null,
+  loaded: boolean,
+  archivedLabel: string,
+): Option[] => {
+  if (!current || options.some((option) => option.id === current.id)) return options;
+  // Still loading: keep the value selectable so nothing is lost, but do not
+  // call it retired until the catalogue has actually said so.
+  const label = loaded ? `${current.label} (${archivedLabel})` : current.label;
+  return [...options, { id: current.id, label }];
+};
 
 const formFor = (trip: TripScheduleWithRefs): FormState => ({
   // Copied through as the STRING it is. Never `new Date(trip.scheduledOn)` —
@@ -101,6 +144,7 @@ export function TripFormModal({
   trip = null,
   vehicles,
   customers,
+  cataloguesLoaded,
   onClose,
   onSaved,
   onCatalogueChanged,
@@ -241,7 +285,12 @@ export function TripFormModal({
             label={t('fieldVehicle')}
             placeholder={t('addVehicle')}
             newPlaceholder={t('platePlaceholder')}
-            options={vehicles.map((vehicle) => ({ id: vehicle.id, label: vehicle.plate }))}
+            options={withCurrentReference(
+              vehicles.map((vehicle) => ({ id: vehicle.id, label: vehicle.plate })),
+              trip?.vehicle ? { id: trip.vehicle.id, label: trip.vehicle.plate } : null,
+              cataloguesLoaded,
+              t('statusArchived'),
+            )}
             value={form.vehicleId}
             onChange={(id) => set('vehicleId', id)}
             onCreate={async (plate) => {
@@ -256,7 +305,12 @@ export function TripFormModal({
             label={t('fieldCustomer')}
             placeholder={t('addCustomer')}
             newPlaceholder={t('customerNamePlaceholder')}
-            options={customers.map((customer) => ({ id: customer.id, label: customer.name }))}
+            options={withCurrentReference(
+              customers.map((customer) => ({ id: customer.id, label: customer.name })),
+              trip?.customer ? { id: trip.customer.id, label: trip.customer.name } : null,
+              cataloguesLoaded,
+              t('statusArchived'),
+            )}
             value={form.customerId}
             onChange={(id) => set('customerId', id)}
             onCreate={async (name) => {

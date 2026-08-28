@@ -267,6 +267,20 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       expect(row?.createdByUser.displayName).toBe('Điều Độ');
     });
 
+    it('★ returns a trip with a truck but NO customer — an internal move', async () => {
+      // 0011 makes `customer_id` nullable for its own reason, separate from
+      // `ĐIỀN SAU`: a move between the company's own sites has no customer
+      // behind it. The row above happens to have neither reference, so it
+      // would still pass if the customer join were made INNER.
+      const vehicle = await catalogue.createVehicle({ plate: '51C-123.45', createdBy: author });
+      await trips.create({ scheduledOn: '2026-08-04', vehicleId: vehicle.id, createdBy: author });
+
+      const [row] = (await trips.list(asQuery({}))).items;
+      expect(row?.vehicle).toEqual({ id: vehicle.id, plate: '51C-123.45' });
+      expect(row?.customer).toBeNull();
+      expect(row?.customerId).toBeNull();
+    });
+
     it('does not let the joined user clobber the trip’s own id', async () => {
       // What `SELECT *` across this join would do.
       const created = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
@@ -322,6 +336,18 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       ).rejects.toBeInstanceOf(ConflictError);
     });
 
+    it('refuses a trip pointing at a retired customer', async () => {
+      // The twin of the case above, and it is NOT covered by it: `resolve()`
+      // checks the two catalogues in two separate branches, so a regression
+      // that dropped the customer half would leave the vehicle test green.
+      const customer = await catalogue.createCustomer({ name: 'VIỄN ĐẠT', createdBy: author });
+      await catalogue.archiveCustomer(customer.id);
+
+      await expect(
+        trips.create({ scheduledOn: '2026-08-04', customerId: customer.id, createdBy: author }),
+      ).rejects.toBeInstanceOf(ConflictError);
+    });
+
     it('refuses a vehicle id that names nothing', async () => {
       await expect(
         trips.create({
@@ -330,6 +356,177 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
           createdBy: author,
         }),
       ).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  /**
+   * ★ RETIRING A TRUCK MUST NOT FREEZE THE TRIPS THAT USED IT.
+   *
+   * Archiving is chosen over deleting precisely so the record survives, and a
+   * record that can no longer be corrected is only half a record. `update()`
+   * merges the patch onto the stored row, so the merged row still names the
+   * retired truck — and re-checking it against the catalogue turned every
+   * historical trip into a 409 on any edit at all, including a typo in a note.
+   *
+   * The line these cases hold: an UNCHANGED reference is kept, a CHANGED one is
+   * still checked (F-002).
+   */
+  describe('★ a reference already on the row survives its catalogue row being retired', () => {
+    it('edits a trip whose vehicle has since been retired, and keeps the vehicle', async () => {
+      const vehicle = await catalogue.createVehicle({ plate: '50H-49266', createdBy: author });
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        vehicleId: vehicle.id,
+        note: 'trước',
+        createdBy: author,
+      });
+
+      await catalogue.archiveVehicle(vehicle.id);
+
+      const updated = await trips.update(trip.id, { note: 'sau' });
+
+      expect(updated.note).toBe('sau');
+      // The historical assignment is intact — not cleared, not swapped.
+      expect(updated.vehicleId).toBe(vehicle.id);
+    });
+
+    it('edits a trip whose customer has since been retired, and keeps the customer', async () => {
+      const customer = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        customerId: customer.id,
+        createdBy: author,
+      });
+
+      await catalogue.archiveCustomer(customer.id);
+
+      const updated = await trips.update(trip.id, { cargoInfo: '17CTN / 1.22CBM' });
+
+      expect(updated.cargoInfo).toBe('17CTN / 1.22CBM');
+      expect(updated.customerId).toBe(customer.id);
+    });
+
+    it('keeps BOTH retired references through an edit that mentions neither', async () => {
+      const vehicle = await catalogue.createVehicle({ plate: '51D.65233', createdBy: author });
+      const customer = await catalogue.createCustomer({ name: 'VIỄN ĐẠT', createdBy: author });
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        vehicleId: vehicle.id,
+        customerId: customer.id,
+        createdBy: author,
+      });
+
+      await catalogue.archiveVehicle(vehicle.id);
+      await catalogue.archiveCustomer(customer.id);
+
+      const updated = await trips.update(trip.id, { status: 'done' });
+
+      expect(updated.status).toBe('done');
+      expect(updated.vehicleId).toBe(vehicle.id);
+      expect(updated.customerId).toBe(customer.id);
+    });
+
+    it('re-sending the SAME retired id explicitly is still not a change', async () => {
+      // The form sends every field on every save, so the retired id arrives in
+      // the body rather than being absent. That has to read as "unchanged", not
+      // as "assign this retired truck".
+      const vehicle = await catalogue.createVehicle({ plate: '50H-27314', createdBy: author });
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        vehicleId: vehicle.id,
+        createdBy: author,
+      });
+      await catalogue.archiveVehicle(vehicle.id);
+
+      const updated = await trips.update(trip.id, { vehicleId: vehicle.id, note: 'sau' });
+
+      expect(updated.vehicleId).toBe(vehicle.id);
+      expect(updated.note).toBe('sau');
+    });
+
+    it('★ still refuses assigning a DIFFERENT retired vehicle — F-002 is intact', async () => {
+      const inUse = await catalogue.createVehicle({ plate: '50H-49266', createdBy: author });
+      const retired = await catalogue.createVehicle({ plate: '51C-123.45', createdBy: author });
+      await catalogue.archiveVehicle(retired.id);
+
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        vehicleId: inUse.id,
+        note: 'trước',
+        createdBy: author,
+      });
+
+      await expect(
+        trips.update(trip.id, { vehicleId: retired.id }),
+      ).rejects.toBeInstanceOf(ConflictError);
+
+      // The refusal is a refusal: the transaction rolled back and nothing moved.
+      const after = await trips.findById(trip.id);
+      expect(after?.vehicleId).toBe(inUse.id);
+      expect(after?.note).toBe('trước');
+    });
+
+    it('★ still refuses assigning a DIFFERENT retired customer — F-002 is intact', async () => {
+      const inUse = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
+      const retired = await catalogue.createCustomer({ name: 'BLUE WATER', createdBy: author });
+      await catalogue.archiveCustomer(retired.id);
+
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        customerId: inUse.id,
+        createdBy: author,
+      });
+
+      await expect(
+        trips.update(trip.id, { customerId: retired.id }),
+      ).rejects.toBeInstanceOf(ConflictError);
+
+      const after = await trips.findById(trip.id);
+      expect(after?.customerId).toBe(inUse.id);
+    });
+
+    it('refuses a retired vehicle on a trip that had none — nothing to preserve', async () => {
+      // The exemption is about a reference the row ALREADY held. Going from
+      // null to a retired truck is a new assignment like any other.
+      const retired = await catalogue.createVehicle({ plate: '51D-60088', createdBy: author });
+      await catalogue.archiveVehicle(retired.id);
+
+      const trip = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
+
+      await expect(
+        trips.update(trip.id, { vehicleId: retired.id }),
+      ).rejects.toBeInstanceOf(ConflictError);
+    });
+
+    it('lets a retired reference be CLEARED, which was always legal', async () => {
+      // Null semantics are untouched by the fix: the catalogue is never
+      // consulted for a reference that is being removed.
+      const vehicle = await catalogue.createVehicle({ plate: '50H44266', createdBy: author });
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        vehicleId: vehicle.id,
+        createdBy: author,
+      });
+      await catalogue.archiveVehicle(vehicle.id);
+
+      const updated = await trips.update(trip.id, { vehicleId: null });
+
+      expect(updated.vehicleId).toBeNull();
+    });
+
+    it('lets the retired reference be replaced by an ACTIVE one', async () => {
+      const retired = await catalogue.createVehicle({ plate: '50H44266', createdBy: author });
+      const replacement = await catalogue.createVehicle({ plate: '50H49266', createdBy: author });
+      const trip = await trips.create({
+        scheduledOn: '2026-08-04',
+        vehicleId: retired.id,
+        createdBy: author,
+      });
+      await catalogue.archiveVehicle(retired.id);
+
+      const updated = await trips.update(trip.id, { vehicleId: replacement.id });
+
+      expect(updated.vehicleId).toBe(replacement.id);
     });
   });
 
@@ -422,6 +619,43 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       expect(await catalogue.listVehicles(false)).toEqual([]);
       expect(await catalogue.listVehicles(true)).toHaveLength(1);
+    });
+
+    it('retires a customer, and hides it from the list unless asked for', async () => {
+      // The vehicle twin of this is tested above. Both are needed: the two
+      // catalogues are two repository classes with two literal statements —
+      // deliberately not one generic one — so neither covers the other.
+      const customer = await catalogue.createCustomer({ name: 'BLUE WATER', createdBy: author });
+      const archived = await catalogue.archiveCustomer(customer.id);
+
+      expect(archived.status).toBe('archived');
+      expect(await catalogue.listCustomers(false)).toEqual([]);
+      expect(await catalogue.listCustomers(true)).toHaveLength(1);
+    });
+
+    it('frees the customer name again once the row is retired', async () => {
+      // ★ THE TWO NAMES MUST NORMALISE TO THE SAME KEY, or this proves
+      // nothing. `name_key` collapses runs of whitespace and upper-cases, so
+      // `WWL` and `W W L` are two DIFFERENT keys — an earlier version of this
+      // test used that pair and passed whether or not archived rows were
+      // exempt from the uniqueness check. `WWL` and `  wwl  ` both normalise to
+      // `WWL`, so the second insert is refused unless retiring the first one
+      // really did free the name.
+      const first = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
+      await catalogue.archiveCustomer(first.id);
+
+      const reissued = await catalogue.createCustomer({ name: '  wwl  ', createdBy: author });
+
+      // It genuinely resolved: a live row, not a rejection swallowed somewhere.
+      expect(reissued.status).toBe('active');
+      // Stored as typed, minus the surrounding whitespace — formatting is the
+      // user's, only matching is ours.
+      expect(reissued.name).toBe('wwl');
+      expect(reissued.id).not.toBe(first.id);
+      // And the retired row is still there, still archived: this is a reuse of
+      // the name, not a resurrection of the row.
+      const archived = (await catalogue.listCustomers(true)).find((row) => row.id === first.id);
+      expect(archived?.status).toBe('archived');
     });
 
     it('refuses a rename that collides with another active row', async () => {

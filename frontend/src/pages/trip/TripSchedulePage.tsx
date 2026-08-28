@@ -284,6 +284,9 @@ export default function TripSchedulePage() {
         trip={editing}
         vehicles={catalogue.vehicles.items}
         customers={catalogue.customers.items}
+        // `data` is null until the read lands; `items` defaults to [], which
+        // cannot tell an empty catalogue from an unread one.
+        cataloguesLoaded={catalogue.vehicles.data !== null && catalogue.customers.data !== null}
         onClose={() => setFormOpen(false)}
         onSaved={trips.reload}
         onCatalogueChanged={catalogue.reload}

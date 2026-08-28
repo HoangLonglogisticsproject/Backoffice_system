@@ -8,6 +8,7 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 const fetchTripSchedules = vi.fn();
 const archiveTripSchedule = vi.fn();
 const updateTripStatus = vi.fn();
+const updateTripSchedule = vi.fn();
 const fetchTripVehicles = vi.fn();
 const fetchTripCustomers = vi.fn();
 const useSession = vi.fn();
@@ -16,7 +17,7 @@ vi.mock('@/api/tripSchedule', () => ({
   fetchTripSchedules: (...a: unknown[]) => fetchTripSchedules(...a),
   archiveTripSchedule: (...a: unknown[]) => archiveTripSchedule(...a),
   createTripSchedule: vi.fn(),
-  updateTripSchedule: vi.fn(),
+  updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),
   updateTripStatus: (...a: unknown[]) => updateTripStatus(...a),
 }));
 vi.mock('@/api/tripCatalogue', () => ({
@@ -111,6 +112,7 @@ describe('TripSchedulePage', () => {
     });
     archiveTripSchedule.mockReset().mockResolvedValue(trip());
     updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'done' }));
+    updateTripSchedule.mockReset().mockResolvedValue(trip());
     fetchTripVehicles.mockReset().mockResolvedValue([]);
     fetchTripCustomers.mockReset().mockResolvedValue([]);
     useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create']));
@@ -253,6 +255,131 @@ describe('TripSchedulePage', () => {
       expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull();
       // Still readable — the status is not hidden, only not editable.
       expect(screen.getByText('SX rồi, đợi xe')).toBeTruthy();
+    });
+  });
+
+  /**
+   * ★ A RETIRED TRUCK STILL HAS TO SHOW ON THE TRIP THAT USED IT.
+   *
+   * The catalogue endpoints return ACTIVE rows only, so the picker's options
+   * never contain a retired plate. A `<select>` whose value matches none of its
+   * options renders BLANK — so the plate disappeared from the edit form, and
+   * touching the control silently replaced a historical assignment.
+   *
+   * These assert the two halves that matter: the reference SURVIVES a save that
+   * did not touch it, and a retired row is never offered as an ordinary choice.
+   */
+  describe('★ editing a trip whose vehicle or customer has been retired', () => {
+    const write = ['trip.read', 'trip.create', 'trip.write'];
+
+    // The board still joins the plate, because the read does not filter the
+    // catalogue by status — only the OPTIONS list does.
+    const retiredRefs = () =>
+      trip({
+        vehicleId: 'gone-v',
+        vehicle: { id: 'gone-v', plate: '51D.65233' },
+        customerId: 'gone-c',
+        customer: { id: 'gone-c', name: 'VIỄN ĐẠT' },
+      });
+
+    const openEditor = async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripSchedules.mockResolvedValue({
+        items: [retiredRefs()],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      // The catalogues have loaded and simply do not contain the retired rows.
+      fetchTripVehicles.mockResolvedValue([
+        { id: 'v9', plate: '50H-49266', note: null, status: 'active' },
+      ]);
+      fetchTripCustomers.mockResolvedValue([
+        { id: 'c9', name: 'WWL', note: null, status: 'active' },
+      ]);
+
+      renderPage();
+      await screen.findByText('51D.65233');
+      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await screen.findByLabelText('Xe');
+    };
+
+    it('renders the retired vehicle as the selected value, not a blank box', async () => {
+      await openEditor();
+
+      const select = screen.getByLabelText('Xe') as HTMLSelectElement;
+      expect(select.value).toBe('gone-v');
+      // Marked, so nobody reads it as a truck still in service.
+      expect(screen.getByRole('option', { name: '51D.65233 (Đã lưu trữ)' })).toBeTruthy();
+    });
+
+    it('renders the retired customer the same way', async () => {
+      await openEditor();
+
+      const select = screen.getByLabelText('Khách hàng') as HTMLSelectElement;
+      expect(select.value).toBe('gone-c');
+      expect(screen.getByRole('option', { name: 'VIỄN ĐẠT (Đã lưu trữ)' })).toBeTruthy();
+    });
+
+    it('★ keeps both references through a save that did not touch them', async () => {
+      await openEditor();
+
+      fireEvent.change(screen.getByLabelText('Ghi chú'), { target: { value: 'sửa ghi chú' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+
+      const [, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+      expect(payload.vehicleId).toBe('gone-v');
+      expect(payload.customerId).toBe('gone-c');
+      expect(payload.note).toBe('sửa ghi chú');
+    });
+
+    it('★ offers the retired rows to NO other trip — they are a value, not an option', async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripVehicles.mockResolvedValue([
+        { id: 'v9', plate: '50H-49266', note: null, status: 'active' },
+      ]);
+      fetchTripCustomers.mockResolvedValue([
+        { id: 'c9', name: 'WWL', note: null, status: 'active' },
+      ]);
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      // "Add", so the form carries no current reference of its own.
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+      await screen.findByLabelText('Xe');
+
+      expect(screen.queryByRole('option', { name: /51D\.65233/ })).toBeNull();
+      expect(screen.queryByRole('option', { name: /VIỄN ĐẠT/ })).toBeNull();
+      // The active fleet is still offered.
+      expect(screen.getByRole('option', { name: '50H-49266' })).toBeTruthy();
+    });
+
+    it('does not call an unread catalogue "retired" while it is still loading', async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripSchedules.mockResolvedValue({
+        items: [retiredRefs()],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      // Never resolves: the read is in flight for the whole test.
+      fetchTripVehicles.mockReturnValue(new Promise(() => {}));
+      fetchTripCustomers.mockReturnValue(new Promise(() => {}));
+
+      renderPage();
+      await screen.findByText('51D.65233');
+      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await screen.findByLabelText('Xe');
+
+      // Selectable, so nothing is lost — but not labelled with a status the
+      // client has not been told yet.
+      expect((screen.getByLabelText('Xe') as HTMLSelectElement).value).toBe('gone-v');
+      expect(screen.getByRole('option', { name: '51D.65233' })).toBeTruthy();
+      expect(screen.queryByRole('option', { name: /Đã lưu trữ/ })).toBeNull();
     });
   });
 

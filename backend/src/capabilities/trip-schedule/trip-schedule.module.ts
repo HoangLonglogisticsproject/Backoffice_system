@@ -14,7 +14,7 @@ import { TripScheduleRepository } from './persistence/trip-schedule.repository';
 /**
  * Hoàng Long's dispatch board.
  *
- * A CAPABILITY: another deployment deletes this folder, drops `0010`, and never
+ * A CAPABILITY: another deployment deletes this folder, drops `0011`, and never
  * knows lorries existed.
  *
  * Note how little it imports. `AuthorizationModule` and `IdentityModule` are

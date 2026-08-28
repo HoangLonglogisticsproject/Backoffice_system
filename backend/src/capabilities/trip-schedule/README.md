@@ -3,7 +3,7 @@
 Thay thế file Excel `LỊCH XE - CHI PHÍ XE.xlsx`: mỗi tháng một sheet, mỗi chuyến
 một dòng.
 
-**PROJECT-OWNED.** Một deployment khác xoá cả thư mục này, bỏ `0010`, và không
+**PROJECT-OWNED.** Một deployment khác xoá cả thư mục này, bỏ `0011`, và không
 bao giờ biết đến xe tải.
 
 ## Ba bảng, và vì sao là ba

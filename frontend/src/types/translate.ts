@@ -478,6 +478,11 @@ const PHRASES = {
   customers: { vi: 'Khách hàng', en: 'Customers' },
   addVehicle: { vi: 'Thêm xe', en: 'Add vehicle' },
   addCustomer: { vi: 'Thêm khách hàng', en: 'Add customer' },
+  // ★ SEPARATE FROM THE "ADD" TITLES, because the dialog is the same component
+  // in both modes and a rename titled "Thêm xe" reads as though it will create
+  // a second row — which is the exact mistake the catalogue exists to prevent.
+  editVehicle: { vi: 'Sửa xe', en: 'Edit vehicle' },
+  editCustomer: { vi: 'Sửa khách hàng', en: 'Edit customer' },
   plateLabel: { vi: 'Biển số *', en: 'Plate *' },
   platePlaceholder: { vi: '51C-123.45', en: '51C-123.45' },
   customerNameLabel: { vi: 'Tên khách hàng *', en: 'Customer name *' },
