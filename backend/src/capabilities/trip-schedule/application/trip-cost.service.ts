@@ -109,7 +109,7 @@ export class TripCostService {
     const reason = requireReason(input.reason);
 
     const current = await this.costs.findById(costId);
-    if (!current || current.tripId !== tripId) throw new NotFoundError('Cost line not found.');
+    if (current?.tripId !== tripId) throw new NotFoundError('Cost line not found.');
     if (current.voidedAt) throw new ConflictError('That cost line has already been voided.');
 
     const voided = await this.costs.void(costId, input.by, reason, new Date());
@@ -170,7 +170,7 @@ export class TripCostService {
     const reason = requireReason(input.reason);
 
     const current = await this.hires.findById(hireId);
-    if (!current || current.tripId !== tripId) throw new NotFoundError('Hire not found.');
+    if (current?.tripId !== tripId) throw new NotFoundError('Hire not found.');
     if (current.voidedAt) throw new ConflictError('That hire has already been voided.');
 
     const voided = await this.hires.void(hireId, input.by, reason, new Date());
