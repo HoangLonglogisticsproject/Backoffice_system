@@ -223,6 +223,21 @@ describe('trip-cost HTTP security', () => {
     });
   });
 
+  describe('★ a caller with no relations at all sees no money', () => {
+    beforeEach(() => {
+      // Authenticated, provisioning finished, and holding nothing: no
+      // membership, no head assignment, no global. The shape a new employee
+      // has on their first day.
+      context = asContext();
+    });
+
+    it.each(ALL_ROUTES)('refuses %s %s', async (method, path) => {
+      const response = await authed(method, path).send(anyBody);
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+    });
+  });
+
   describe('★ a department head sees no money either — cost is not `head-anywhere`', () => {
     beforeEach(() => {
       // The tier that lets a head correct the BOARD deliberately does not let

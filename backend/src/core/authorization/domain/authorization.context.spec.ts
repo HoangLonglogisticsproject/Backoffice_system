@@ -186,6 +186,63 @@ describe('roleOf()', () => {
   });
 });
 
+/**
+ * ★ THE MONEY PERMISSIONS, VERIFIED PER CALLER SHAPE.
+ *
+ * The requirement on record is that price visibility is RESTRICTED. `cost.*` is
+ * marked 'global', which is the most restrictive tier this model has — and
+ * 'global' is satisfied by exactly one thing: an active SUPERADMIN assignment.
+ *
+ * ⚠ SO IT IS NOT "GRANTED TO NOBODY". A SuperAdmin reaches cost automatically,
+ * because `can()` short-circuits on `global` before it ever reads the
+ * requirement table. That is the deliberate meaning of GLOBAL here ("full
+ * authority, everywhere"), and it is what makes SuperAdmin able to grant the
+ * capability onward later — but it is worth stating out loud rather than
+ * discovering.
+ */
+describe('★ cost.* is refused to everybody except a global administrator', () => {
+  const MONEY = ['cost.read', 'cost.create', 'cost.void'] as const;
+
+  it.each(MONEY)('refuses %s to somebody in no department at all', (permission) => {
+    expect(can(context(), permission)).toBe(false);
+  });
+
+  it.each(MONEY)('refuses %s to an ordinary member', (permission) => {
+    expect(can(memberOfA(), permission)).toBe(false);
+  });
+
+  it.each(MONEY)('★ refuses %s to a DEPARTMENT HEAD', (permission) => {
+    // The tier that lets a head correct the board ('head-anywhere') is
+    // deliberately NOT the tier that shows them the company's cost base.
+    expect(can(headOfA(), permission)).toBe(false);
+  });
+
+  it.each(MONEY)('refuses %s to a head even when a department is named', (permission) => {
+    expect(can(headOfA(), permission, { departmentId: A })).toBe(false);
+  });
+
+  it.each(MONEY)('allows %s to a global administrator', (permission) => {
+    expect(can(superadmin(), permission)).toBe(true);
+  });
+
+  it.each(MONEY)('★ refuses %s while a temporary credential is unchanged', (permission) => {
+    // The provisioning gate runs first, so it beats even global.
+    expect(can(context({ global: true, mustChangeSecret: true }), permission)).toBe(false);
+  });
+
+  it('★ does not even ADVERTISE cost to a head or a member', () => {
+    // `grantedPermissions` is what the client renders from. Listing cost here
+    // would draw a panel that the server then answers 403 to — and would read
+    // to the user as though they had access.
+    for (const caller of [context(), memberOfA(), headOfA()]) {
+      const granted = grantedPermissions(caller);
+      expect(granted).not.toContain('cost.read');
+      expect(granted).not.toContain('cost.create');
+      expect(granted).not.toContain('cost.void');
+    }
+  });
+});
+
 describe('grantedPermissions()', () => {
   it('lists everything for a SuperAdmin', () => {
     expect(grantedPermissions(superadmin()).sort()).toEqual([...PERMISSIONS].sort());
