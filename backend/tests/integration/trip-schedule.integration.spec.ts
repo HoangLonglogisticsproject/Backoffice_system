@@ -12,6 +12,7 @@ import {
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripCatalogueService } from '../../src/capabilities/trip-schedule/application/trip-catalogue.service';
 import { TripScheduleService } from '../../src/capabilities/trip-schedule/application/trip-schedule.service';
+import type { TripStatus } from '../../src/capabilities/trip-schedule/domain/trip-schedule';
 
 /**
  * The dispatch board against a REAL PostgreSQL.
@@ -527,6 +528,158 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const updated = await trips.update(trip.id, { vehicleId: replacement.id });
 
       expect(updated.vehicleId).toBe(replacement.id);
+    });
+  });
+
+  /**
+   * ★ BD-01 — `done` IS TERMINAL, AND NOTHING ELSE IS CONSTRAINED.
+   *
+   * The one transition rule the business has settled. The other four statuses
+   * come from the workbook's colour legend and are NOT a pipeline: two of them
+   * leave the line entirely (`external_booking` is a route, `needs_confirmation`
+   * an exception reachable from anywhere), so moves between them stay free.
+   * These cases pin both halves — the rule that exists, and the freedom that
+   * deliberately still exists around it.
+   */
+  describe('★ BD-01 the status machine', () => {
+    const OTHERS = [
+      'awaiting_production',
+      'awaiting_vehicle',
+      'needs_confirmation',
+      'external_booking',
+    ] as const;
+
+    const tripWith = async (status: TripStatus) =>
+      trips.create({ scheduledOn: '2026-08-04', status, createdBy: author });
+
+    describe('reaching done', () => {
+      it.each(OTHERS)('accepts %s → done', async (from) => {
+        const trip = await tripWith(from);
+        const moved = await trips.updateStatus(trip.id, 'done');
+        expect(moved.status).toBe('done');
+      });
+    });
+
+    describe('★ leaving done — refused, whichever door is used', () => {
+      it.each(OTHERS)('refuses done → %s through the status endpoint', async (to) => {
+        const trip = await tripWith('done');
+
+        await expect(trips.updateStatus(trip.id, to)).rejects.toBeInstanceOf(ConflictError);
+
+        // Refused means unchanged, not partially applied.
+        expect((await trips.findById(trip.id))?.status).toBe('done');
+      });
+
+      it('★ refuses it through the FULL PATCH too — the rule is not bypassable', async () => {
+        // Guarding only `updateStatus` would leave the edit form as an open
+        // second door onto the same column.
+        const trip = await tripWith('done');
+
+        await expect(
+          trips.update(trip.id, { status: 'awaiting_vehicle' }),
+        ).rejects.toBeInstanceOf(ConflictError);
+
+        expect((await trips.findById(trip.id))?.status).toBe('done');
+      });
+
+      it('★ rolls the WHOLE edit back, not just the status', async () => {
+        // The refusal happens inside the transaction, so a patch that also
+        // carried legitimate field edits must leave none of them behind.
+        const trip = await trips.create({
+          scheduledOn: '2026-08-04',
+          status: 'done',
+          note: 'trước',
+          createdBy: author,
+        });
+
+        await expect(
+          trips.update(trip.id, { status: 'awaiting_vehicle', note: 'sau', cargoInfo: '17CTN' }),
+        ).rejects.toBeInstanceOf(ConflictError);
+
+        const after = await trips.findById(trip.id);
+        expect(after?.status).toBe('done');
+        expect(after?.note).toBe('trước');
+        expect(after?.cargoInfo).toBeNull();
+      });
+    });
+
+    describe('what the rule does NOT forbid', () => {
+      it('accepts done → done, because it moves nothing', async () => {
+        const trip = await tripWith('done');
+        const again = await trips.updateStatus(trip.id, 'done');
+        expect(again.status).toBe('done');
+      });
+
+      it('★ still edits every OTHER field of a finished trip', async () => {
+        // Only the STATUS is frozen. Whether a finished trip should be
+        // otherwise read-only is a separate decision nobody has taken, so
+        // correcting a delivery address on it stays legal.
+        const trip = await tripWith('done');
+
+        const updated = await trips.update(trip.id, { note: 'giao lúc 18h', deliveryAddress: 'TCS' });
+
+        expect(updated.note).toBe('giao lúc 18h');
+        expect(updated.deliveryAddress).toBe('TCS');
+        expect(updated.status).toBe('done');
+      });
+
+      it('★ leaves the four non-terminal statuses freely interchangeable', async () => {
+        // Deliberately NOT a pipeline. Walking them in an order the legend does
+        // not describe must succeed, or somebody has invented a workflow.
+        const trip = await tripWith('awaiting_production');
+
+        for (const next of ['external_booking', 'needs_confirmation', 'awaiting_production', 'awaiting_vehicle'] as const) {
+          const moved = await trips.updateStatus(trip.id, next);
+          expect(moved.status).toBe(next);
+        }
+      });
+    });
+
+    describe('interaction with the rules that already existed', () => {
+      it('answers 404 for an archived trip before it ever considers the status', async () => {
+        const trip = await tripWith('awaiting_vehicle');
+        await trips.archive(trip.id, author);
+
+        await expect(trips.updateStatus(trip.id, 'done')).rejects.toBeInstanceOf(NotFoundError);
+      });
+
+      it('answers 404 for a trip that never existed', async () => {
+        await expect(
+          trips.updateStatus('00000000-0000-4000-8000-000000000000', 'done'),
+        ).rejects.toBeInstanceOf(NotFoundError);
+      });
+    });
+
+    /**
+     * ★ THE RACE THE LOCK EXISTS FOR.
+     *
+     * `updateStatus` used to be one unconditional UPDATE. A rule that depends
+     * on where the row already is turns it into read-then-write, and without
+     * `FOR UPDATE` two callers could both read a non-terminal status and both
+     * write — the later one moving a row that was `done` by the time it landed.
+     */
+    it('★ serialises two concurrent moves, so one cannot step over a finished trip', async () => {
+      const trip = await tripWith('awaiting_vehicle');
+
+      const results = await Promise.allSettled([
+        trips.updateStatus(trip.id, 'done'),
+        trips.updateStatus(trip.id, 'external_booking'),
+      ]);
+
+      const settled = await trips.findById(trip.id);
+
+      // Whichever won, the row is never left in a state neither caller asked
+      // for, and if `done` landed first the other MUST have been refused.
+      if (settled?.status === 'done') {
+        const refused = results.filter(
+          (r) => r.status === 'rejected' && r.reason instanceof ConflictError,
+        );
+        expect(refused).toHaveLength(1);
+      } else {
+        // `external_booking` won the lock; both writes were legal in that order.
+        expect(settled?.status).toBe('external_booking');
+        expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+      }
     });
   });
 

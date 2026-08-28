@@ -194,8 +194,15 @@ export default function TripSchedulePage() {
                       gets it as a label; a dispatcher gets it as the control
                       that moves the trip along the board — one click, its own
                       endpoint, no form.
+
+                      ★ AND A FINISHED TRIP IS A LABEL FOR EVERYBODY. `done` is
+                      terminal (BD-01), so the server refuses every move away
+                      from it — offering the dropdown here would be offering a
+                      control whose only possible outcome is a 409. The server
+                      still decides; this just stops asking it a settled
+                      question.
                     */}
-                    {canManage ? (
+                    {canManage && trip.status !== 'done' ? (
                       <TripStatusSelect tripId={trip.id} status={trip.status} />
                     ) : (
                       <TripStatusBadge status={trip.status} />

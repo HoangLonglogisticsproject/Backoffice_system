@@ -35,6 +35,29 @@ export const TRIP_STATUSES = [
 export type TripStatus = (typeof TRIP_STATUSES)[number];
 
 /**
+ * ★ `done` IS TERMINAL. THAT IS THE WHOLE STATE MACHINE, AND DELIBERATELY SO.
+ *
+ * A trip that has been delivered and closed does not go back to waiting for a
+ * truck; reopening one is a different operation, and one nobody has specified.
+ * So the only transition this refuses is a move AWAY from `done`.
+ *
+ * ⚠ THE OTHER FOUR ARE NOT ORDERED, AND MUST NOT BE. The legend they come from
+ * lists them in roughly the order work moves — nothing produced yet, then
+ * produced and waiting for a truck, then done — but two of them leave that line
+ * entirely: `external_booking` is a ROUTE (subcontracted out), not a stage, and
+ * `needs_confirmation` is an exception reachable from anywhere, including from
+ * a trip that was otherwise ready. Constraining moves between those four would
+ * be inventing a workflow the workbook does not describe, and the first thing
+ * it would break is a dispatcher correcting a mis-click.
+ *
+ * Setting `done` on a trip that is already `done` is allowed: it changes
+ * nothing, so it is not a move away from anything, and refusing it would make a
+ * retried request fail for no reason.
+ */
+export const isStatusChangeAllowed = (from: TripStatus, to: TripStatus): boolean =>
+  from !== 'done' || to === 'done';
+
+/**
  * One row of the dispatch board.
  *
  * The eight free-text fields are free text ON PURPOSE. They are the parts of

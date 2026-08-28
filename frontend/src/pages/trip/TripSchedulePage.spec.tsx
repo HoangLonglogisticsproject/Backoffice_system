@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
@@ -226,7 +226,17 @@ describe('TripSchedulePage', () => {
       const select = await screen.findByLabelText('Đổi trạng thái');
       fireEvent.change(select, { target: { value: 'done' } });
 
-      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('done'));
+      // ★ ASSERTED ON WHAT THE USER SEES, not on the node that was replaced.
+      // The optimistic row is already `done`, and BD-01 makes `done` terminal,
+      // so the dropdown correctly gives way to a label in the same render —
+      // the old `select` node is detached and keeps its stale value forever.
+      // The dropdown going away IS the signal: waiting on the text alone would
+      // match the <option> inside the select that is still mounted.
+      await waitFor(() => expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull());
+      expect(screen.getByText('Đã xong')).toBeTruthy();
+      // …and all of that happened while the request is still in flight.
+      expect(updateTripStatus).toHaveBeenCalledWith('t1', 'done');
+
       settle(trip({ status: 'done' }));
     });
 
@@ -380,6 +390,85 @@ describe('TripSchedulePage', () => {
       expect((screen.getByLabelText('Xe') as HTMLSelectElement).value).toBe('gone-v');
       expect(screen.getByRole('option', { name: '51D.65233' })).toBeTruthy();
       expect(screen.queryByRole('option', { name: /Đã lưu trữ/ })).toBeNull();
+    });
+  });
+
+  /**
+   * ★ BD-01 — a finished trip is a label, not a control.
+   *
+   * `done` is terminal on the server, so every move away from it answers 409.
+   * The board must not offer a dropdown whose only possible outcome is that
+   * error. This is NOT the frontend deciding business validity: the server
+   * still refuses the request if one is made — the UI just stops asking a
+   * question that has already been settled.
+   */
+  describe('★ BD-01 a finished trip', () => {
+    const write = ['trip.read', 'trip.create', 'trip.write'];
+
+    const boardWith = (status: string) => {
+      useSession.mockReturnValue(session(write));
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ status })],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+    };
+
+    it('shows the status as a label, with no control to change it', async () => {
+      boardWith('done');
+      renderPage();
+
+      expect(await screen.findByText('Đã xong')).toBeTruthy();
+      expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull();
+    });
+
+    it('still offers the control on a trip that is NOT finished', async () => {
+      // The guard is about `done` specifically, not about locking the board.
+      boardWith('awaiting_vehicle');
+      renderPage();
+
+      expect(await screen.findByLabelText('Đổi trạng thái')).toBeTruthy();
+    });
+
+    it('★ freezes the status field in the edit form, and nothing else', async () => {
+      boardWith('done');
+      renderPage();
+      await screen.findByText('Đã xong');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await screen.findByLabelText('Trạng thái');
+
+      expect((screen.getByLabelText('Trạng thái') as HTMLSelectElement).disabled).toBe(true);
+      // Every other field stays editable — only the status is terminal.
+      expect((screen.getByLabelText('Ghi chú') as HTMLTextAreaElement).disabled).toBe(false);
+    });
+
+    it('leaves the status field editable when the trip is not finished', async () => {
+      boardWith('awaiting_vehicle');
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await screen.findByLabelText('Trạng thái');
+
+      expect((screen.getByLabelText('Trạng thái') as HTMLSelectElement).disabled).toBe(false);
+    });
+
+    it('offers every status when ADDING, because entering done is not leaving it', async () => {
+      boardWith('awaiting_vehicle');
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+      await screen.findByLabelText('Trạng thái');
+
+      const field = screen.getByLabelText('Trạng thái') as HTMLSelectElement;
+      expect(field.disabled).toBe(false);
+      // Scoped to the form: the board row behind the modal has its own status
+      // dropdown carrying the same five options.
+      expect(within(field).getByRole('option', { name: 'Đã xong' })).toBeTruthy();
     });
   });
 

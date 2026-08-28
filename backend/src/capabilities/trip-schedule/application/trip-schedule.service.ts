@@ -3,7 +3,12 @@ import { ConflictError, NotFoundError } from '../../../common/errors/domain.erro
 import { toOffsetPage, type OffsetPage } from '../../../common/pagination/offset-page';
 import type { DateRangePageQuery } from '../../../common/pagination/date-range-page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import type { TripSchedule, TripScheduleWithRefs, TripStatus } from '../domain/trip-schedule';
+import {
+  isStatusChangeAllowed,
+  type TripSchedule,
+  type TripScheduleWithRefs,
+  type TripStatus,
+} from '../domain/trip-schedule';
 import {
   TripCustomerRepository,
   TripVehicleRepository,
@@ -167,6 +172,11 @@ export class TripScheduleService {
       // reference against the catalogue only where it CHANGES, so retiring a
       // truck does not freeze every trip that ever used it — see the comment
       // on `resolve`.
+      // ★ THE FULL PATCH CAN MOVE THE STATUS TOO, so the terminal rule is
+      // checked here as well. Guarding only `updateStatus` would leave the rule
+      // bypassable by sending the same change through the edit form instead.
+      this.assertStatusChange(current.status, merged.status ?? current.status);
+
       const values = await this.resolve(merged, current.status, tx, {
         vehicleId: current.vehicleId,
         customerId: current.customerId,
@@ -182,11 +192,46 @@ export class TripScheduleService {
     });
   }
 
-  /** Moves a row along the board and touches nothing else. */
+  /**
+   * Moves a row along the board and touches nothing else.
+   *
+   * ★ READ-THEN-WRITE UNDER `FOR UPDATE`, WHICH IT DID NOT NEED BEFORE. The
+   * old version was one unconditional UPDATE, because there was no rule that
+   * depended on where the row already was. `done` being terminal introduces
+   * exactly such a rule, and checking it outside the lock would let two
+   * concurrent callers both read a non-terminal status and both write — one of
+   * them moving a row that was `done` by the time it landed.
+   *
+   * Same shape as `update()`, so both status paths serialise on the same lock.
+   */
   async updateStatus(id: string, status: TripStatus): Promise<TripSchedule> {
-    const updated = await this.trips.updateStatus(id, status);
-    if (!updated) throw new NotFoundError('Trip not found.');
-    return updated;
+    return this.db.transaction(async (tx) => {
+      const current = await this.trips.lockActive(id, tx);
+      if (!current) throw new NotFoundError('Trip not found.');
+
+      this.assertStatusChange(current.status, status);
+
+      const updated = await this.trips.updateStatus(id, status, tx);
+      // Locked two statements ago, so this is a programming error rather than a
+      // concurrent archive — the same reasoning as in `update()`.
+      if (!updated) throw new Error('Locked trip disappeared during status change.');
+
+      return updated;
+    });
+  }
+
+  /**
+   * The one transition rule the business has settled: `done` is terminal.
+   *
+   * Lives here rather than in the repository because it is a decision, and the
+   * repository decides nothing — it is the same split that keeps the catalogue
+   * check in `resolve()` rather than in a WHERE clause.
+   */
+  private assertStatusChange(from: TripStatus, to: TripStatus): void {
+    if (isStatusChangeAllowed(from, to)) return;
+    throw new ConflictError(
+      'That trip is already finished, so its status can no longer be changed.',
+    );
   }
 
   /**
