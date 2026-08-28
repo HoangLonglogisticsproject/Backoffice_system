@@ -2,13 +2,20 @@ import { Module } from '@nestjs/common';
 import { AuthorizationModule } from '../../core/authorization/authorization.module';
 import { IdentityModule } from '../../core/identity/identity.module';
 import { TripCatalogueController } from './api/trip-catalogue.controller';
+import { TripCostController } from './api/trip-cost.controller';
 import { TripScheduleController } from './api/trip-schedule.controller';
 import { TripCatalogueService } from './application/trip-catalogue.service';
+import { TripCostService } from './application/trip-cost.service';
 import { TripScheduleService } from './application/trip-schedule.service';
 import {
   TripCustomerRepository,
   TripVehicleRepository,
 } from './persistence/trip-catalogue.repository';
+import {
+  OutsourceHireRepository,
+  TripCostRepository,
+  TripCostTotalsRepository,
+} from './persistence/trip-cost.repository';
 import { TripScheduleRepository } from './persistence/trip-schedule.repository';
 
 /**
@@ -24,14 +31,18 @@ import { TripScheduleRepository } from './persistence/trip-schedule.repository';
  */
 @Module({
   imports: [AuthorizationModule, IdentityModule],
-  controllers: [TripScheduleController, TripCatalogueController],
+  controllers: [TripScheduleController, TripCatalogueController, TripCostController],
   providers: [
     TripScheduleService,
     TripCatalogueService,
+    TripCostService,
     TripScheduleRepository,
     TripVehicleRepository,
     TripCustomerRepository,
+    TripCostRepository,
+    OutsourceHireRepository,
+    TripCostTotalsRepository,
   ],
-  exports: [TripScheduleService, TripCatalogueService],
+  exports: [TripScheduleService, TripCatalogueService, TripCostService],
 })
 export class TripScheduleModule {}

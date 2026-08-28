@@ -58,6 +58,7 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0009_list_pagination_indexes.sql` | core | 3 index keyset cho các list phòng ban (ADR-0002) |
 | `0010_canonical_email_identity.sql` | core | email canonical: CHECK + unique index trên dạng đã chuẩn hoá |
 | `0011_trip_schedule.sql` | project | trip_vehicles · trip_customers · trip_schedules · 2 unique index chuẩn hoá |
+| `0012_trip_cost.sql` | project | trip_costs · trip_outsource_hires · 2 partial index · void-state CHECK |
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
 gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0011`

@@ -11,6 +11,7 @@ export { ApiError, isApiError, toApiError, type ApiErrorCode } from './errors';
 
 // Format utilities
 export { formatDate, formatDateTime } from './format/datetime';
+export { formatMoney } from './format/money';
 
 // Validation utilities
 export { toLocalPart, toCompanyEmail } from './validation/companyEmail';

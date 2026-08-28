@@ -383,6 +383,68 @@ describe('TripSchedulePage', () => {
     });
   });
 
+  /**
+   * ★ THE MONEY IS NOT ON THE BOARD, AND ITS CONTROL HAS ITS OWN PERMISSION.
+   *
+   * `trip.read` is unrestricted — every signed-in account reads this list. So
+   * no amount may appear in it, and the way in is a dialog gated on `cost.read`
+   * rather than a column. These cases pin both halves.
+   */
+  describe('★ cost is a separate permission and a separate fetch', () => {
+    it('offers the cost control to a caller holding cost.read', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      expect(screen.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
+    });
+
+    it('★ offers it to NOBODY without cost.read, however senior they are', async () => {
+      // `trip.write` corrects the board; it does not reveal the cost base.
+      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      expect(screen.queryByRole('button', { name: 'Chi phí chuyến' })).toBeNull();
+      // The column is still there — `trip.write` earns it on its own.
+      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
+    });
+
+    it('★ hides the actions column entirely from a caller with neither permission', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.create']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      expect(screen.queryByRole('columnheader', { name: 'Thao tác' })).toBeNull();
+    });
+
+    it('★ shows the actions column for cost.read ALONE, without trip.write', async () => {
+      // An accountant may hold cost.read and no right to correct the board.
+      // Gating the column on trip.write alone would hide their only control.
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      // The column itself must appear, not just the button inside it.
+      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
+      // …and still no edit or archive, which are a different permission.
+      expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+    });
+
+    it('★ renders no amount anywhere on the board', async () => {
+      // The list endpoint returns no money at all. This asserts the page never
+      // starts showing one, which is what a "just add a total column" change
+      // would break.
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      expect(document.body.textContent).not.toMatch(/1\.500\.000|4\.500\.000/);
+    });
+  });
+
   describe('the date filter', () => {
     it('★ does not fire a request per keystroke of the date input', async () => {
       // `<input type="date">` reports every COMPONENT of the date separately, so
