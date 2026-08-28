@@ -1,3 +1,5 @@
+import type { UserSummary } from './organization';
+
 /**
  * The money on a trip.
  *
@@ -52,6 +54,14 @@ interface FinancialRecord {
   note: string | null;
   createdBy: string;
   createdAt: string;
+  /**
+   * The author, spelled out.
+   *
+   * ★ A UUID CANNOT BE SHOWN TO ANYONE. `createdBy` is kept beside this because
+   * an id is what code compares; `createdByUser.displayName` is what a person
+   * reads. Both are needed, and neither substitutes for the other.
+   */
+  createdByUser: UserSummary;
   voidedAt: string | null;
   voidedBy: string | null;
   voidReason: string | null;

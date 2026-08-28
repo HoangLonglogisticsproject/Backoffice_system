@@ -1,3 +1,5 @@
+import type { UserSummary } from '../../../common/types/user-summary';
+
 /**
  * The money a trip cost, as data.
  *
@@ -93,6 +95,16 @@ interface FinancialRecord {
 
   createdBy: string;
   createdAt: Date;
+
+  /**
+   * The author, spelled out.
+   *
+   * ★ A UUID CANNOT BE SHOWN TO ANYONE — `user-summary` states the rule, and a
+   * financial record is where it matters most: "who entered this" is the second
+   * question asked of any figure. `createdBy` is kept beside it because callers
+   * compare ids, never names.
+   */
+  createdByUser: UserSummary;
 
   /** All three are null together, or all three are set together. */
   voidedAt: Date | null;

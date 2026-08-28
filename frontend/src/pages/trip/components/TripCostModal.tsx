@@ -22,6 +22,7 @@ import {
 } from '@/api/tripCost';
 import { isApiError } from '@/utils/errors';
 import { formatMoney } from '@/utils/format/money';
+import { formatDateTime } from '@/utils/format/datetime';
 import { cn } from '@/utils/cn';
 import {
   TRIP_COST_CATEGORIES,
@@ -263,7 +264,7 @@ function RecordRow({
   canVoid: boolean;
   onVoid: () => void;
 }>) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const voided = record.voidedAt !== null;
 
   return (
@@ -275,6 +276,15 @@ function RecordRow({
             {t('statusVoided')}
           </span>
         )}
+        {/*
+          ★ WHO WROTE THIS FIGURE, AND WHEN — shown on EVERY record, voided ones
+          included. A withdrawn line is kept precisely so it stays answerable,
+          and a line whose author disappeared when it was voided would defeat
+          that. The name comes from the server; a UUID would say nothing.
+        */}
+        <p className="mt-0.5 text-xs font-normal text-gray-500">
+          {record.createdByUser.displayName} · {formatDateTime(record.createdAt, language)}
+        </p>
         {/* Why it was withdrawn, kept beside it — the whole point of voiding. */}
         {voided && record.voidReason && (
           <p className="mt-0.5 text-xs text-gray-500">{record.voidReason}</p>

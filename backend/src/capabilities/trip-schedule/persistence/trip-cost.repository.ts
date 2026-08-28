@@ -24,16 +24,27 @@ import type {
  * amount, a category or a trip — a correction is a void plus a new row.
  */
 
-/** Columns every financial row shares, in the order both mappers read them. */
-const AUDIT_COLUMNS = 'note, created_by, created_at, voided_at, voided_by, void_reason';
-
-const COST_COLUMNS = `id, trip_id, category, amount::text AS amount, ${AUDIT_COLUMNS}`;
-const HIRE_COLUMNS =
-  `id, trip_id, carrier_name, agreed_amount::text AS agreed_amount, ` +
-  `amount_includes_vat, document_ref, ${AUDIT_COLUMNS}`;
+/**
+ * ★ EVERY READ JOINS `users`, BECAUSE `created_by` IS A UUID.
+ *
+ * `common/types/user-summary` states the rule this follows: a UUID cannot be
+ * shown to anyone. A financial record whose author is an id is a record nobody
+ * can actually audit — "who entered this" is the second question asked of any
+ * figure, after "how much". The trip read already solves it this way, and this
+ * borrows that shape rather than inventing a second one.
+ *
+ * INNER JOIN, not LEFT: `created_by` is NOT NULL with a foreign key to a table
+ * whose rows are never deleted, so the author always exists and the join cannot
+ * drop a row.
+ *
+ * ⚠ THE NAME CARRIES NO AUTHORIZATION OF ITS OWN. It rides inside a resource
+ * `cost.read` already gated, so it is visible exactly when the amount beside it
+ * is — the same argument `user-summary` makes for every other projection.
+ */
+const AUDIT = ['note', 'created_by', 'created_at', 'voided_at', 'voided_by', 'void_reason'] as const;
 
 /**
- * ★ `::text` ON EVERY MONEY COLUMN, AND ON EVERY SUM.
+ * ★ `::text` ON EVERY MONEY COLUMN.
  *
  * `pg` already returns `NUMERIC` as a string, so this cast changes nothing
  * today. It is written anyway because that behaviour is a driver default a
@@ -41,12 +52,67 @@ const HIRE_COLUMNS =
  * `parseFloat` — at which point every amount silently loses precision and
  * nothing fails. Casting in SQL makes the value text before the driver ever
  * decides, so no configuration can reach it.
+ *
+ * `alias` is `'c.'` / `'h.'` inside a joined read, `''` in a RETURNING clause.
  */
+const costColumns = (alias = ''): string =>
+  [
+    `${alias}id`,
+    `${alias}trip_id`,
+    `${alias}category`,
+    `${alias}amount::text AS amount`,
+    ...AUDIT.map((column) => `${alias}${column}`),
+  ].join(', ');
+
+const hireColumns = (alias = ''): string =>
+  [
+    `${alias}id`,
+    `${alias}trip_id`,
+    `${alias}carrier_name`,
+    `${alias}agreed_amount::text AS agreed_amount`,
+    `${alias}amount_includes_vat`,
+    `${alias}document_ref`,
+    ...AUDIT.map((column) => `${alias}${column}`),
+  ].join(', ');
+
+/**
+ * A read of one table with the author's name attached.
+ *
+ * `SELECT *` is impossible across this join: `users.id` would clobber the
+ * record's own `id` and every row would come back identified as its author.
+ */
+const costsWithAuthor = `
+  SELECT ${costColumns('c.')}, u.display_name AS created_by_display_name
+    FROM trip_costs c
+    JOIN users u ON u.id = c.created_by`;
+
+const hiresWithAuthor = `
+  SELECT ${hireColumns('h.')}, u.display_name AS created_by_display_name
+    FROM trip_outsource_hires h
+    JOIN users u ON u.id = h.created_by`;
+
+/**
+ * A write, then the same projection over exactly what it wrote.
+ *
+ * ★ A DATA-MODIFYING CTE RATHER THAN TWO ROUND TRIPS. `INSERT … RETURNING`
+ * cannot join, and a follow-up `SELECT` would read a row another transaction
+ * could have voided in between — so the record handed back would not be the
+ * record that was written. One statement removes the gap.
+ *
+ * `written.*` is safe here where `SELECT *` is not: the CTE holds only the
+ * columns listed, and `users` contributes one aliased name.
+ */
+const writeReturningAuthor = (write: string, columns: string): string => `
+  WITH written AS (${write} RETURNING ${columns})
+  SELECT written.*, u.display_name AS created_by_display_name
+    FROM written
+    JOIN users u ON u.id = written.created_by`;
 
 interface AuditRow {
   note: string | null;
   created_by: string;
   created_at: Date;
+  created_by_display_name: string;
   voided_at: Date | null;
   voided_by: string | null;
   void_reason: string | null;
@@ -72,6 +138,7 @@ const toAudit = (row: AuditRow) => ({
   note: row.note,
   createdBy: row.created_by,
   createdAt: row.created_at,
+  createdByUser: { id: row.created_by, displayName: row.created_by_display_name },
   voidedAt: row.voided_at,
   voidedBy: row.voided_by,
   voidReason: row.void_reason,
@@ -95,7 +162,7 @@ const toHire = (row: HireRow): OutsourceHire => ({
   ...toAudit(row),
 });
 
-/** Newest first, then by id so a page boundary inside one second is stable. */
+/** Newest first, then by id so two records written in one second stay ordered. */
 const ORDER = 'ORDER BY created_at DESC, id DESC';
 
 @Injectable()
@@ -113,9 +180,11 @@ export class TripCostRepository {
     executor: DatabaseQuery = this.db,
   ): Promise<TripCost> {
     const rows = await executor.query<CostRow>(
-      `INSERT INTO trip_costs (trip_id, category, amount, note, created_by)
-       VALUES ($1, $2, $3::numeric, $4, $5)
-       RETURNING ${COST_COLUMNS}`,
+      writeReturningAuthor(
+        `INSERT INTO trip_costs (trip_id, category, amount, note, created_by)
+         VALUES ($1, $2, $3::numeric, $4, $5)`,
+        costColumns(),
+      ),
       [input.tripId, input.category, input.amount, input.note, input.createdBy],
     );
 
@@ -126,10 +195,7 @@ export class TripCostRepository {
   }
 
   async findById(id: string, executor: DatabaseQuery = this.db): Promise<TripCost | null> {
-    const rows = await executor.query<CostRow>(
-      `SELECT ${COST_COLUMNS} FROM trip_costs WHERE id = $1`,
-      [id],
-    );
+    const rows = await executor.query<CostRow>(`${costsWithAuthor} WHERE c.id = $1`, [id]);
     return rows[0] ? toCost(rows[0]) : null;
   }
 
@@ -140,18 +206,16 @@ export class TripCostRepository {
    * `GET /departments`: a day's spending on one lorry is bounded small.
    */
   async listByTrip(tripId: string, executor: DatabaseQuery = this.db): Promise<TripCost[]> {
-    const rows = await executor.query<CostRow>(
-      `SELECT ${COST_COLUMNS} FROM trip_costs WHERE trip_id = $1 ${ORDER}`,
-      [tripId],
-    );
+    const rows = await executor.query<CostRow>(`${costsWithAuthor} WHERE c.trip_id = $1 ${ORDER}`, [
+      tripId,
+    ]);
     return rows.map(toCost);
   }
 
   /** Only the lines that still count. Served by `idx_trip_cost_trip`. */
   async listActiveByTrip(tripId: string, executor: DatabaseQuery = this.db): Promise<TripCost[]> {
     const rows = await executor.query<CostRow>(
-      `SELECT ${COST_COLUMNS} FROM trip_costs
-        WHERE trip_id = $1 AND voided_at IS NULL ${ORDER}`,
+      `${costsWithAuthor} WHERE c.trip_id = $1 AND c.voided_at IS NULL ${ORDER}`,
       [tripId],
     );
     return rows.map(toCost);
@@ -173,10 +237,12 @@ export class TripCostRepository {
     executor: DatabaseQuery = this.db,
   ): Promise<TripCost | null> {
     const rows = await executor.query<CostRow>(
-      `UPDATE trip_costs
-          SET voided_at = $4, voided_by = $2, void_reason = $3
-        WHERE id = $1 AND voided_at IS NULL
-        RETURNING ${COST_COLUMNS}`,
+      writeReturningAuthor(
+        `UPDATE trip_costs
+            SET voided_at = $4, voided_by = $2, void_reason = $3
+          WHERE id = $1 AND voided_at IS NULL`,
+        costColumns(),
+      ),
       [id, by, reason, now],
     );
     return rows[0] ? toCost(rows[0]) : null;
@@ -200,10 +266,12 @@ export class OutsourceHireRepository {
     executor: DatabaseQuery = this.db,
   ): Promise<OutsourceHire> {
     const rows = await executor.query<HireRow>(
-      `INSERT INTO trip_outsource_hires
-         (trip_id, carrier_name, agreed_amount, amount_includes_vat, document_ref, note, created_by)
-       VALUES ($1, $2, $3::numeric, $4, $5, $6, $7)
-       RETURNING ${HIRE_COLUMNS}`,
+      writeReturningAuthor(
+        `INSERT INTO trip_outsource_hires
+           (trip_id, carrier_name, agreed_amount, amount_includes_vat, document_ref, note, created_by)
+         VALUES ($1, $2, $3::numeric, $4, $5, $6, $7)`,
+        hireColumns(),
+      ),
       [
         input.tripId,
         input.carrierName,
@@ -222,18 +290,14 @@ export class OutsourceHireRepository {
   }
 
   async findById(id: string, executor: DatabaseQuery = this.db): Promise<OutsourceHire | null> {
-    const rows = await executor.query<HireRow>(
-      `SELECT ${HIRE_COLUMNS} FROM trip_outsource_hires WHERE id = $1`,
-      [id],
-    );
+    const rows = await executor.query<HireRow>(`${hiresWithAuthor} WHERE h.id = $1`, [id]);
     return rows[0] ? toHire(rows[0]) : null;
   }
 
   async listByTrip(tripId: string, executor: DatabaseQuery = this.db): Promise<OutsourceHire[]> {
-    const rows = await executor.query<HireRow>(
-      `SELECT ${HIRE_COLUMNS} FROM trip_outsource_hires WHERE trip_id = $1 ${ORDER}`,
-      [tripId],
-    );
+    const rows = await executor.query<HireRow>(`${hiresWithAuthor} WHERE h.trip_id = $1 ${ORDER}`, [
+      tripId,
+    ]);
     return rows.map(toHire);
   }
 
@@ -242,8 +306,7 @@ export class OutsourceHireRepository {
     executor: DatabaseQuery = this.db,
   ): Promise<OutsourceHire[]> {
     const rows = await executor.query<HireRow>(
-      `SELECT ${HIRE_COLUMNS} FROM trip_outsource_hires
-        WHERE trip_id = $1 AND voided_at IS NULL ${ORDER}`,
+      `${hiresWithAuthor} WHERE h.trip_id = $1 AND h.voided_at IS NULL ${ORDER}`,
       [tripId],
     );
     return rows.map(toHire);
@@ -257,10 +320,12 @@ export class OutsourceHireRepository {
     executor: DatabaseQuery = this.db,
   ): Promise<OutsourceHire | null> {
     const rows = await executor.query<HireRow>(
-      `UPDATE trip_outsource_hires
-          SET voided_at = $4, voided_by = $2, void_reason = $3
-        WHERE id = $1 AND voided_at IS NULL
-        RETURNING ${HIRE_COLUMNS}`,
+      writeReturningAuthor(
+        `UPDATE trip_outsource_hires
+            SET voided_at = $4, voided_by = $2, void_reason = $3
+          WHERE id = $1 AND voided_at IS NULL`,
+        hireColumns(),
+      ),
       [id, by, reason, now],
     );
     return rows[0] ? toHire(rows[0]) : null;

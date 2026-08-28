@@ -198,6 +198,61 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     });
   });
 
+  describe('★ provenance: who wrote the figure, spelled out', () => {
+    it('names the author of a cost line, not just their id', async () => {
+      const line = await money.createCost({
+        tripId: trip,
+        category: 'fuel',
+        amount: '1500000',
+        createdBy: author,
+      });
+
+      // A UUID cannot be shown to anyone — `user-summary` states the rule, and
+      // an unauditable financial record is the case it exists for.
+      expect(line.createdBy).toBe(author);
+      expect(line.createdByUser).toEqual({ id: author, displayName: 'Kế Toán' });
+      expect(line.createdAt).toBeInstanceOf(Date);
+    });
+
+    it('names the author of an outsourced hire too', async () => {
+      const hire = await money.createHire({
+        tripId: trip,
+        carrierName: 'Hai Thành',
+        agreedAmount: '4500000',
+        createdBy: author,
+      });
+
+      expect(hire.createdByUser).toEqual({ id: author, displayName: 'Kế Toán' });
+      expect(hire.createdAt).toBeInstanceOf(Date);
+    });
+
+    it('carries the author through the LIST reads', async () => {
+      await money.createCost({ tripId: trip, category: 'toll', amount: '50000', createdBy: author });
+      await money.createHire({ tripId: trip, carrierName: 'xe Út', agreedAmount: '90000', createdBy: author });
+
+      expect((await money.listCosts(trip)).items[0]?.createdByUser.displayName).toBe('Kế Toán');
+      expect((await money.listHires(trip)).items[0]?.createdByUser.displayName).toBe('Kế Toán');
+    });
+
+    it('★ keeps the author on a VOIDED record', async () => {
+      // Provenance is exactly what a withdrawn record is kept FOR: the figure
+      // stops counting, and who entered it stays answerable.
+      const line = await money.createCost({
+        tripId: trip,
+        category: 'fuel',
+        amount: '500000',
+        createdBy: author,
+      });
+      const voided = await money.voidCost(trip, line.id, { by: author, reason: 'sai' });
+
+      expect(voided.createdByUser).toEqual({ id: author, displayName: 'Kế Toán' });
+
+      const [listed] = (await money.listCosts(trip, true)).items;
+      expect(listed?.createdByUser.displayName).toBe('Kế Toán');
+      expect(listed?.voidReason).toBe('sai');
+    });
+  });
+
   // ------------------------------------------------------------ refusals ----
 
   describe('what the service refuses', () => {

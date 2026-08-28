@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TripCostModal } from './TripCostModal';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { formatDateTime } from '@/utils/format/datetime';
 
 const fetchTripCosts = vi.fn();
 const fetchOutsourceHires = vi.fn();
@@ -51,6 +52,7 @@ const cost = (over: Record<string, unknown> = {}) => ({
   note: null,
   createdBy: 'u9',
   createdAt: '2026-08-04T02:00:00.000Z',
+  createdByUser: { id: 'u9', displayName: 'Kế Toán' },
   voidedAt: null,
   voidedBy: null,
   voidReason: null,
@@ -67,6 +69,7 @@ const hire = (over: Record<string, unknown> = {}) => ({
   note: null,
   createdBy: 'u9',
   createdAt: '2026-08-04T02:00:00.000Z',
+  createdByUser: { id: 'u9', displayName: 'Điều Độ' },
   voidedAt: null,
   voidedBy: null,
   voidReason: null,
@@ -100,6 +103,16 @@ const settled = () => screen.findByText('Tổng chi phí chuyến');
 
 /** The two tables, in render order: own-vehicle cost, then outsourced hire. */
 const costTable = () => screen.getAllByRole('table')[0] as HTMLElement;
+
+/**
+ * The timestamp as the SHARED helper renders it.
+ *
+ * Asserted against `formatDateTime` rather than a hard-coded string: that is
+ * the actual requirement — provenance must not become the one place on the
+ * screen with its own date format — and it keeps the case independent of the
+ * timezone the suite happens to run in.
+ */
+const WRITTEN_AT = formatDateTime('2026-08-04T02:00:00.000Z', 'vi');
 /**
  * The void dialog's submit button.
  *
@@ -238,6 +251,58 @@ describe('TripCostModal', () => {
 
       expect(within(hireTable()).getByText('Hai Thành')).toBeTruthy();
       expect(within(hireTable()).getByText('HD-2026-08-04')).toBeTruthy();
+    });
+  });
+
+  /**
+   * ★ WHO WROTE THIS FIGURE, AND WHEN.
+   *
+   * The second question asked of any amount, after "how much". The server sends
+   * a name rather than the raw `createdBy` UUID, because a UUID answers nobody
+   * — and the timestamp is formatted with the same helper every other date on
+   * the screen uses, so provenance does not become the one place with its own
+   * date format.
+   */
+  describe('★ provenance on every record', () => {
+    it('names who entered a cost line, and when', async () => {
+      renderPanel();
+      await settled();
+
+      const row = within(costTable());
+      expect(row.getByText(`Kế Toán · ${WRITTEN_AT}`)).toBeTruthy();
+    });
+
+    it('names who entered an outsourced hire, and when', async () => {
+      renderPanel();
+      await settled();
+
+      const row = within(hireTable());
+      expect(row.getByText(`Điều Độ · ${WRITTEN_AT}`)).toBeTruthy();
+    });
+
+    it('★ shows the raw id to nobody', async () => {
+      // `createdBy` is still in the payload because code compares ids; it must
+      // never reach the screen.
+      renderPanel();
+      await settled();
+
+      expect(document.body.textContent).not.toContain('u9');
+    });
+
+    it('★ keeps provenance on a VOIDED record', async () => {
+      // A withdrawn record is kept precisely so it stays answerable. Losing its
+      // author when it is voided would defeat the reason for keeping it.
+      fetchTripCosts.mockResolvedValue({
+        items: [cost({ voidedAt: '2026-08-05T00:00:00.000Z', voidReason: 'nhập nhầm' })],
+        total: '0.00',
+      });
+      renderPanel();
+      await settled();
+
+      const row = within(costTable());
+      expect(row.getByText('Đã hủy')).toBeTruthy();
+      expect(row.getByText(`Kế Toán · ${WRITTEN_AT}`)).toBeTruthy();
+      expect(row.getByText('nhập nhầm')).toBeTruthy();
     });
   });
 
