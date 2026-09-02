@@ -209,9 +209,12 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'done' } });
+      // ★ NOT `done`. The board cannot set it — a trip is finished by approving
+      // its completion request — so a case that moved a row to `done` was
+      // asserting an interaction the server answers with 409.
+      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
 
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'done'));
+      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'needs_confirmation'));
     });
 
     it('shows the new status immediately, before the server answers', async () => {
@@ -224,10 +227,52 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'done' } });
+      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
 
-      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('done'));
-      settle(trip({ status: 'done' }));
+      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('needs_confirmation'));
+      settle(trip({ status: 'needs_confirmation' }));
+    });
+
+    /**
+     * ★ THE TWO THINGS BD-01 EXISTS TO STOP OFFERING.
+     *
+     * The server refuses both with 409 — `requireNotCompletionOnly` on the way
+     * in, `canTransition` on the way out, and a trigger in 0017 behind them. A
+     * control whose only possible outcome is a refusal is not a control.
+     */
+    it('★ never offers `done` on the board — a trip is finished by approval', async () => {
+      useSession.mockReturnValue(session(write));
+      renderPage();
+
+      const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
+      const options = [...select.options].map((option) => option.value);
+
+      expect(options).not.toContain('done');
+      // The four that ARE a dispatcher's to choose are all still there.
+      expect(options).toEqual(
+        expect.arrayContaining([
+          'awaiting_production',
+          'awaiting_vehicle',
+          'needs_confirmation',
+          'external_booking',
+        ]),
+      );
+    });
+
+    it('★ shows a finished trip as a badge, not a dropdown', async () => {
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ status: 'done' })],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      useSession.mockReturnValue(session(write));
+      renderPage();
+
+      // The label the badge carries, and no control to change it.
+      expect(await screen.findByText('Đã xong')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Đổi trạng thái')).not.toBeInTheDocument();
     });
 
     it('★ puts the old status back when the server refuses, and says why', async () => {
@@ -240,10 +285,11 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'done' } });
+      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
 
       expect(await screen.findByText('This trip has been archived.')).toBeTruthy();
-      // The optimistic guess is gone, not left on screen as if it had worked.
+      // The optimistic guess is gone, not left on screen as if it had worked —
+      // back to the status the row actually holds.
       await waitFor(() => expect((select as HTMLSelectElement).value).toBe('awaiting_vehicle'));
     });
 
