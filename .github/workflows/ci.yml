@@ -309,9 +309,15 @@ jobs:
       # `npm test`, not `npx`: npx will fetch and execute a package that is not
       # installed, so the version that runs is whatever the registry offers that
       # day. The script resolves the vitest already pinned by package-lock.
+      # ★ TWO REPORTERS, AND THE FIRST ONE IS THE POINT. `--reporter=json`
+      # REPLACES the console reporter rather than adding to it, so a failing
+      # run printed nothing at all and exited 1 — the diagnosis was written to
+      # a file the job then threw away. A red run that cannot say what broke
+      # costs more than the run itself. `default` prints; `json` still feeds
+      # the skip check below.
       - name: Unit tests
         working-directory: frontend
-        run: npm test -- --reporter=json --outputFile=vitest-results.json
+        run: npm test -- --reporter=default --reporter=json --outputFile=vitest-results.json
 
       - name: Assert no test was skipped
         working-directory: frontend
