@@ -5,6 +5,7 @@ import {
   Identity,
   LOCAL_PROVIDER,
   User,
+  AccountType,
   UserStatus,
   normalizeSubject,
 } from '../../users/domain/user.entity';
@@ -70,6 +71,7 @@ export class IdentityRepository {
       `SELECT i.*,
               u.id           AS u_id,
               u.display_name AS u_display_name,
+              u.account_type AS u_account_type,
               u.status       AS u_status,
               u.created_at   AS u_created_at,
               u.updated_at   AS u_updated_at
@@ -87,6 +89,7 @@ export class IdentityRepository {
       user: {
         id: row['u_id'] as string,
         displayName: row['u_display_name'] as string,
+        accountType: row['u_account_type'] as AccountType,
         status: row['u_status'] as UserStatus,
         createdAt: row['u_created_at'] as Date,
         updatedAt: row['u_updated_at'] as Date,

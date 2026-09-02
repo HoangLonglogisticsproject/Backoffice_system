@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseQuery } from '../../../common/types/database.port';
 import { SessionRepository } from '../persistence/session.repository';
-import { User, UserStatus } from '../../users/domain/user.entity';
+import { AccountType, User, UserStatus } from '../../users/domain/user.entity';
 
 /**
  * Server-side sessions, addressed by an opaque bearer token.
@@ -41,6 +41,15 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export interface SessionUser {
   id: string;
   displayName: string;
+  /**
+   * ★ CARRIED ON THE SESSION SO THE BACKOFFICE BOUNDARY COSTS NO QUERY.
+   *
+   * The session lookup already joins `users`; reading one more column there is
+   * free, and it means the guard that keeps drivers out of the Backoffice reads
+   * a value it was handed rather than going back to the database on every
+   * request to ask what kind of account is calling.
+   */
+  accountType: AccountType;
   status: UserStatus;
 }
 
@@ -85,7 +94,12 @@ export class SessionService {
     // take effect now, not when their session happens to expire.
     if (row.u_status !== 'active') return null;
 
-    return { id: row.user_id, displayName: row.u_display_name, status: row.u_status };
+    return {
+      id: row.user_id,
+      displayName: row.u_display_name,
+      accountType: row.u_account_type,
+      status: row.u_status,
+    };
   }
 
   /** Logout. Idempotent: revoking an unknown or already-revoked token is a no-op. */
@@ -136,5 +150,6 @@ export const __hashTokenForTest = hashToken;
 export const toSessionUser = (user: User): SessionUser => ({
   id: user.id,
   displayName: user.displayName,
+  accountType: user.accountType,
   status: user.status,
 });

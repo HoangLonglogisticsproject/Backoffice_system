@@ -115,6 +115,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       '0015_trip_execution_event.sql',
       '0016_trip_cost_lifecycle.sql',
       '0017_trip_completion_and_history.sql',
+      // 0018 adds `users.account_type`, which provisioning now writes on every
+      // insert — so every spec that creates a user needs it.
+      '0018_driver_account.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }

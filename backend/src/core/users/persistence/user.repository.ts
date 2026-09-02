@@ -1,10 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import { User, UserStatus } from '../domain/user.entity';
+import { AccountType, User, UserStatus } from '../domain/user.entity';
 
 interface UserRow {
   id: string;
   display_name: string;
+  account_type: AccountType;
   status: UserStatus;
   created_at: Date;
   updated_at: Date;
@@ -13,6 +14,7 @@ interface UserRow {
 const toUser = (row: UserRow): User => ({
   id: row.id,
   displayName: row.display_name,
+  accountType: row.account_type,
   status: row.status,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -46,12 +48,15 @@ export class UserRepository {
    * created it and blocks the address from being registered again.
    */
   async insertUser(
-    input: { displayName: string },
+    input: { displayName: string; accountType?: AccountType },
     executor: DatabaseQuery = this.db,
   ): Promise<User> {
     const rows = await executor.query<UserRow>(
-      'INSERT INTO users (display_name) VALUES ($1) RETURNING *',
-      [input.displayName],
+      'INSERT INTO users (display_name, account_type) VALUES ($1, $2) RETURNING *',
+      // Defaulted here rather than relied on from the column so the two callers
+      // read the same: employee provisioning says nothing, the driver path says
+      // 'driver'.
+      [input.displayName, input.accountType ?? 'employee'],
     );
 
     const user = rows[0];

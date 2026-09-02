@@ -7,6 +7,7 @@ import {
   RequirePermission,
 } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
+import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
@@ -58,7 +59,7 @@ export class TripCompletionController {
    * times was this sent back, and why" has an answer.
    */
   @Get('trip-schedules/:tripId/completion-requests')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async list(@Param('tripId', UuidParam) tripId: string): Promise<CompletionRequest[]> {
     return this.completion.listRequests(tripId);
@@ -82,7 +83,7 @@ export class TripCompletionController {
    * request rather than creating a resource, and the decided record comes back.
    */
   @Post('trip-schedules/:tripId/completion-requests/approve')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.complete.review')
   @HttpCode(HttpStatus.OK)
   async approve(
@@ -104,7 +105,7 @@ export class TripCompletionController {
    * is nothing to reopen.
    */
   @Post('trip-schedules/:tripId/completion-requests/reject')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.complete.review')
   @HttpCode(HttpStatus.OK)
   async reject(

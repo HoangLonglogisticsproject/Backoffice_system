@@ -7,6 +7,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useMyDepartments } from '@/hooks/useMyDepartments';
 import { createUser } from '@/api/users';
+import { createDriver, requestDriver } from '@/api/driverAccounts';
 import { fetchDepartments } from '@/api/department';
 import { assignDepartmentHead } from '@/api/department-head';
 import { requestAccountInvitation } from '@/api/account-invitation';
@@ -34,6 +35,36 @@ export type AddEmployeeOutcome = 'created' | 'requested';
  * `localStorage` or to `sessionStorage`. It lives for as long as the dialog is
  * open and no longer.
  */
+/** Which of the two kinds of account this form is producing. */
+type AccountType = 'employee' | 'driver';
+
+/**
+ * One of the two account kinds, as a button rather than a dropdown.
+ *
+ * `aria-pressed` rather than a radio group: two large targets, and a screen
+ * reader still hears which one is chosen.
+ */
+function AccountTypeChoice({
+  label,
+  selected,
+  onSelect,
+}: Readonly<{ label: string; selected: boolean; onSelect: () => void }>) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={
+        selected
+          ? 'h-9 w-full rounded-lg border border-blue-600 bg-blue-600 text-sm font-medium text-white'
+          : 'h-9 w-full rounded-lg border border-input bg-transparent text-sm text-gray-700 hover:bg-gray-50'
+      }
+    >
+      {label}
+    </button>
+  );
+}
+
 interface PendingAppointment {
   /** From `POST /users`. What makes a retry an appointment and not a create. */
   userId: string;
@@ -116,7 +147,23 @@ export function AddEmployeeModal({
   const { t } = useLanguage();
   const { can } = useSession();
   const isGlobal = can('user.write');
-  const needsDepartmentChoice = departmentId === undefined;
+  const mayProposeDriver = can('driver.account.request');
+
+  /**
+   * ★ WHAT KIND OF ACCOUNT IS BEING CREATED, ASKED FIRST.
+   *
+   * The two answers do not differ by a field or two — they are different
+   * objects. An employee lands in a department and may be appointed its head; a
+   * driver belongs to no unit at all and never will. Asking for a department
+   * and then ignoring it, or offering a department called "Tài xế", would put
+   * that difference somewhere a reader has to infer it.
+   */
+  const [accountType, setAccountType] = useState<AccountType>('employee');
+  const creatingDriver = accountType === 'driver';
+
+  // ★ A DRIVER HAS NO UNIT, so the picker is not merely hidden — it is not part
+  // of the form at all, and nothing downstream reads a department for one.
+  const needsDepartmentChoice = departmentId === undefined && !creatingDriver;
 
   const [displayName, setDisplayName] = useState('');
   // The LOCAL PART. `email` is built from it at submit, and only there.
@@ -174,6 +221,11 @@ export function AddEmployeeModal({
     const email = toCompanyEmail(localPart);
     if (email === null) return { error: t('invalidCompanyEmail') };
 
+    // ★ A DRIVER HAS NO DEPARTMENT TO RESOLVE. Returning an empty string here
+    // would be a placeholder that later code could mistake for a real unit, so
+    // the driver path returns the address and nothing else.
+    if (creatingDriver) return { email, department: '' };
+
     const department = departmentId ?? chosenDepartment;
     if (!department) return { error: t('selectDepartment') };
 
@@ -216,6 +268,21 @@ export function AddEmployeeModal({
     setBusy(true);
 
     try {
+      if (creatingDriver) {
+        // ★ THE SAME CHOICE, TWO OUTCOMES, DECIDED BY WHAT THE CALLER HOLDS.
+        // A global administrator creates the driver outright; a head can only
+        // propose one. The server enforces both — this only avoids offering an
+        // action that would be refused.
+        if (isGlobal) {
+          await createDriver({ displayName, email: target.email, initialPassword });
+          finish('created', target.email);
+        } else {
+          await requestDriver({ displayName, email: target.email });
+          finish('requested', target.email);
+        }
+        return;
+      }
+
       if (!isGlobal) {
         await requestAccountInvitation(target.department, target.email);
         finish('requested', target.email);
@@ -316,9 +383,45 @@ export function AddEmployeeModal({
           does not, is worse than one that says it is finished.
         */}
         <fieldset disabled={pending !== null} className="space-y-4 m-0 min-w-0 border-0 p-0">
-        {!isGlobal && <p className="text-sm text-gray-500">{t('requestAccountBody')}</p>}
 
-        {isGlobal && (
+        {/* ★ ASKED FIRST, BECAUSE IT CHANGES WHAT THE REST OF THE FORM IS.
+            Offered only to somebody who may actually produce a driver one way
+            or the other — a member who holds neither key sees the employee form
+            unchanged, exactly as before. */}
+        {(isGlobal || mayProposeDriver) && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-gray-700">{t('accountTypeLabel')}</p>
+            <div className="grid grid-cols-2 gap-2">
+              <AccountTypeChoice
+                label={t('accountTypeEmployee')}
+                selected={accountType === 'employee'}
+                onSelect={() => setAccountType('employee')}
+              />
+              <AccountTypeChoice
+                label={t('accountTypeDriver')}
+                selected={creatingDriver}
+                onSelect={() => setAccountType('driver')}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ★ SAID PLAINLY RATHER THAN IMPLIED BY AN ABSENT FIELD. A form that
+            simply drops the department picker leaves the reader to guess
+            whether it was forgotten. */}
+        {creatingDriver && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+            <p className="text-sm font-medium text-blue-900">{t('driverNoDepartmentNote')}</p>
+            <p className="mt-1 text-xs text-blue-800">{t('driverNoDepartmentWhy')}</p>
+            {!isGlobal && <p className="mt-1 text-xs text-blue-800">{t('driverProposeNote')}</p>}
+          </div>
+        )}
+
+        {!isGlobal && !creatingDriver && (
+          <p className="text-sm text-gray-500">{t('requestAccountBody')}</p>
+        )}
+
+        {(isGlobal || creatingDriver) && (
           <div className="space-y-2">
             <label htmlFor="employee-name" className="text-sm font-medium text-gray-700">
               {t('fullNameLabel')}

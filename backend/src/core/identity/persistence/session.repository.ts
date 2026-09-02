@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import type { UserStatus } from '../../users/domain/user.entity';
+import type { AccountType, UserStatus } from '../../users/domain/user.entity';
 
 /**
  * The row `resolve` needs: the session, plus enough of its owner to decide
@@ -13,6 +13,7 @@ export interface SessionOwnerRow {
   expires_at: Date;
   revoked_at: Date | null;
   u_display_name: string;
+  u_account_type: AccountType;
   u_status: UserStatus;
 }
 
@@ -52,6 +53,7 @@ export class SessionRepository {
     const rows = await executor.query<SessionOwnerRow>(
       `SELECT s.id, s.user_id, s.expires_at, s.revoked_at,
               u.display_name AS u_display_name,
+              u.account_type AS u_account_type,
               u.status       AS u_status
          FROM sessions s
          JOIN users u ON u.id = s.user_id

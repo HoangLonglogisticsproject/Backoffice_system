@@ -8,7 +8,7 @@ import { PASSWORD_HASHER, type PasswordHasher } from '../../identity/domain/pass
 import { IdentityRepository } from '../../identity/persistence/identity.repository';
 import { MembershipService } from '../../organization/application/membership.service';
 import { assertProvisionableEmail, localPartOfEmail } from '../domain/email';
-import { LOCAL_PROVIDER, User } from '../domain/user.entity';
+import { AccountType, LOCAL_PROVIDER, User } from '../domain/user.entity';
 import { UserRepository } from '../persistence/user.repository';
 
 export interface ProvisionedAccount {
@@ -72,7 +72,21 @@ export class AccountProvisioningService {
     input: {
       displayName: string;
       email: string;
-      departmentId: string;
+      /**
+       * ★ OMITTED MEANS "THIS ACCOUNT BELONGS TO NO UNIT", WHICH IS A DRIVER.
+       *
+       * Every employee lands in a department and this stayed required for
+       * years because of it. A driver is the first account that legitimately
+       * has none — they are not staff of Operations or of Accounting, and
+       * inventing a department named "Tài xế" to satisfy the signature would
+       * put a fiction in the org chart to spare this line a branch.
+       *
+       * So absence is the input, and `enroll` is simply not called. Nothing
+       * else about provisioning changes: same user row, same credential, same
+       * `must_change_secret` first-login.
+       */
+      departmentId?: string;
+      accountType?: AccountType;
       initialPassword?: string;
     },
     tx?: DatabaseQuery,
@@ -105,13 +119,21 @@ export class AccountProvisioningService {
 
     const secretHash = await this.hasher.hash(password);
 
+    const departmentId = input.departmentId;
+
     const run = async (executor: DatabaseQuery): Promise<User> => {
-      const user = await this.users.insertUser({ displayName }, executor);
+      const user = await this.users.insertUser(
+        { displayName, ...(input.accountType ? { accountType: input.accountType } : {}) },
+        executor,
+      );
       await this.identities.insertLocal(
         { userId: user.id, subject: email, secretHash, mustChangeSecret: true },
         executor,
       );
-      await this.memberships.enroll({ userId: user.id, departmentId: input.departmentId }, executor);
+      // ★ NO MEMBERSHIP FOR AN ACCOUNT WITH NO UNIT. Skipped, never faked.
+      if (departmentId !== undefined) {
+        await this.memberships.enroll({ userId: user.id, departmentId }, executor);
+      }
       return user;
     };
 

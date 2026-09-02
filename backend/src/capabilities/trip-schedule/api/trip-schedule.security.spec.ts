@@ -12,6 +12,8 @@ import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { SESSION_COOKIE } from '../../../core/identity/api/session.cookie';
 import { SessionService } from '../../../core/identity/application/session.service';
+import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
+import type { AccountType } from '../../../core/users/domain/user.entity';
 import { TripCatalogueService } from '../application/trip-catalogue.service';
 import { OperationalBoardService } from '../application/operational-board.service';
 import { TripExecutionService } from '../application/trip-execution.service';
@@ -54,6 +56,7 @@ describe('trip-schedule HTTP security', () => {
     update: jest.Mock;
     updateStatus: jest.Mock;
     archive: jest.Mock;
+    statusHistory: jest.Mock;
   }
 
   interface CatalogueServiceMock {
@@ -73,6 +76,8 @@ describe('trip-schedule HTTP security', () => {
   let operations: { list: jest.Mock; listUnresolvedCompletions: jest.Mock };
   let execution: { listEvents: jest.Mock };
   let context: AuthorizationContext;
+  /** What KIND of account is calling. Drivers are refused the Backoffice. */
+  let accountType: AccountType;
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: ACTOR,
@@ -103,6 +108,7 @@ describe('trip-schedule HTTP security', () => {
   };
 
   beforeEach(async () => {
+    accountType = 'employee';
     context = asContext();
 
     trips = {
@@ -118,6 +124,7 @@ describe('trip-schedule HTTP security', () => {
       update: jest.fn().mockResolvedValue(storedTrip),
       updateStatus: jest.fn().mockResolvedValue({ ...storedTrip, status: 'done' }),
       archive: jest.fn().mockResolvedValue(storedTrip),
+      statusHistory: jest.fn().mockResolvedValue([]),
     };
 
     operations = {
@@ -143,6 +150,7 @@ describe('trip-schedule HTTP security', () => {
         Reflector,
         PermissionGuard,
         AuthGuard,
+        BackofficeOnlyGuard,
         CsrfGuard,
         { provide: TripScheduleService, useValue: trips },
         { provide: OperationalBoardService, useValue: operations },
@@ -152,9 +160,12 @@ describe('trip-schedule HTTP security', () => {
         {
           provide: SessionService,
           useValue: {
-            resolve: jest
-              .fn()
-              .mockResolvedValue({ id: ACTOR, displayName: 'Actor', status: 'active' }),
+            resolve: jest.fn().mockImplementation(async () => ({
+              id: ACTOR,
+              displayName: 'Actor',
+              accountType,
+              status: 'active',
+            })),
           },
         },
         {
@@ -471,6 +482,69 @@ describe('trip-schedule HTTP security', () => {
       // `z.coerce.boolean()` would make this pass archived rows through.
       await authed('get', '/trip-vehicles?includeArchived=false').expect(200);
       expect(catalogue.listVehicles).toHaveBeenCalledWith(false);
+    });
+  });
+
+  // ============================================ ★ THE BACKOFFICE BOUNDARY ==
+
+  /**
+   * ★ WHY THIS BLOCK EXISTS, AND WHY A TIER COULD NOT DO ITS JOB.
+   *
+   * `trip.read` and `trip.create` are `'any'` — company-wide dispatch data with
+   * no departmental owner, readable by any authenticated caller. That was a
+   * safe reading while every account belonged to a department. Driver accounts
+   * break it: they authenticate, they hold no membership, and `'any'` would
+   * hand them the whole board — every customer, address, contact and cargo note
+   * on every trip, plus the ability to CREATE trips.
+   *
+   * Narrowing the tier would have refused the same routes to any employee
+   * outside a department, which is a different rule about different people. So
+   * the boundary names the one account type that does not belong here.
+   */
+  describe('★ a driver account holding Backoffice URLs', () => {
+    beforeEach(() => {
+      // A driver is not a member or a head of anything. The context is empty,
+      // which is exactly why `'any'` would otherwise have let them through.
+      accountType = 'driver';
+      context = asContext();
+    });
+
+    it.each([...READS])('refuses %s %s with 403, and reaches no service', async (method, path) => {
+      const response = await authed(method, path);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+
+      for (const mock of [
+        ...Object.values(trips),
+        ...Object.values(catalogue),
+        ...Object.values(operations),
+        ...Object.values(execution),
+      ]) {
+        expect(mock).not.toHaveBeenCalled();
+      }
+    });
+
+    it('★ cannot CREATE a trip either — `trip.create` is `any` too', async () => {
+      const response = await authed('post', '/trip-schedules').send({});
+
+      expect(response.status).toBe(403);
+      expect(trips.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('★ an employee reading the same routes is unaffected', () => {
+    beforeEach(() => {
+      accountType = 'employee';
+      // An ordinary member: no headship, no global. `trip.read` is `'any'`, so
+      // this is the weakest caller the boundary must still let through.
+      context = asContext({ memberOf: [DEPT] });
+    });
+
+    it.each([...READS])('still allows %s %s', async (method, path) => {
+      const response = await authed(method, path);
+
+      expect(response.status).toBe(200);
     });
   });
 });

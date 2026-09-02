@@ -9,6 +9,7 @@ import { IdentityModule } from './core/identity/identity.module';
 import { OrganizationModule } from './core/organization/organization.module';
 import { UsersModule } from './core/users/users.module';
 import { AccountInvitationModule } from './capabilities/account-invitation/account-invitation.module';
+import { DriverAccountModule } from './capabilities/driver-account/driver-account.module';
 import { MembershipApprovalModule } from './capabilities/membership-approval/membership-approval.module';
 import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.module';
 
@@ -50,6 +51,7 @@ import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.m
     // project capabilities — a deployment without them is still valid
     MembershipApprovalModule,
     AccountInvitationModule,
+    DriverAccountModule,
     TripScheduleModule,
   ],
 })
