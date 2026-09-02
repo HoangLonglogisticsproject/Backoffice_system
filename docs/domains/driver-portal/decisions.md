@@ -8,7 +8,13 @@
 > phân tích kỹ thuật sống ở [`design.md`](design.md).
 > Đây là quy tắc chống-hai-nguồn-sự-thật của [`../../README.md`](../../README.md) §5.1.
 >
-> **Ngày:** 2026-08-30 · **Migration cao nhất:** `0012_trip_cost.sql`
+> **Ngày:** 2026-08-30 · **Migration cao nhất:** `0017_trip_completion_and_history.sql`
+>
+> ★ **Trạng thái implementation:** §17 Phase 1–3 của [`contract.md`](contract.md) đã
+> được implement — migration `0013`–`0017` (assignment có history · execution events ·
+> vòng đời chi phí · completion request + review · lịch sử trạng thái). Việc này
+> **không** đổi trạng thái của bất kỳ `DL` nào bên dưới: mục nào còn `CEO DECISION`
+> hay `WORKIK` thì vẫn còn nguyên, và implementation không được tự quyết thay.
 >
 > **Mục đích:** gộp **mọi** quyết định rải rác qua nhiều vòng thảo luận thành **một sổ
 > duy nhất**, và trả lời câu *"đã đủ để Workik review chưa"*.
@@ -452,21 +458,23 @@ nằm trong tầm nhìn không, và migration từ (b) sang (a) đắt tới đ�
 | — | Chiến lược index cho *"chuyến của tôi"* + phân trang |
 | — | Thứ tự migration, ảnh hưởng khoá lên bảng có dữ liệu |
 
-## D. LEGACY CONFLICT — source hiện tại vi phạm contract
+## D. LEGACY CONFLICT — trạng thái sau khi implement
 
-| ID | Contract nói | Source làm | Mức |
+Chi tiết và bằng chứng nằm ở [`contract.md`](contract.md) §16. Bảng này là con trỏ.
+
+| ID | Contract nói | Trạng thái | Bằng chứng |
 |---|---|---|---|
-| **L-1** | Driver chỉ thấy trip của mình | `trip.read` = `'any'` → **mọi account đọc toàn bộ lịch xe** | **CHẶN** |
-| **L-2** | Trip ↔ Driver có history | Không tồn tại quan hệ Trip ↔ người | **CHẶN** |
-| **L-3** | Ranh giới ở mức trường | Bốn ô văn bản tự do, nội dung không kiểm soát | **CHẶN** |
-| **L-4** | Vùng chỉ dẫn riêng | Không tồn tại | **CHẶN** |
-| **L-5** | ★ DONE **vĩnh viễn** | `PATCH .../status` cho rời `done`, **không lưu dấu vết** | **CHẶN** |
-| **L-6** | Reject reason phải lưu | Không có completion request. ⚠ Tiền lệ ngược: hai luồng duyệt hiện có **vứt** lý do từ chối | **CHẶN** |
-| **L-7** | Chi phí truy về lượt assignment | Chỉ ghi *ai gõ* | CAO |
-| **L-8** | Driver không thấy tổng chi phí | Tổng **bao gồm** giá thuê ngoài | CAO |
-| **L-9** | Expense có trạng thái editable | **Không có đường sửa nào ở bất kỳ tầng nào** — cố ý | **CHẶN** |
-| **L-10** | Execution Event hạng nhất | Không tồn tại | **CHẶN** |
-| **L-11** | Audit các lần sửa trước khoá | Không tồn tại | CAO |
+| **L-1** | Driver chỉ thấy trip của mình | ✅ đã xử lý | Routes `/driver` + read model riêng, quyền theo lượt phân công |
+| **L-2** | Trip ↔ Driver có history | ✅ đã xử lý | `0014` `trip_driver_assignments` |
+| **L-3** | Ranh giới ở mức trường | ⚠ **còn mở một nửa** | Ranh giới mức trường đã có; nội dung văn bản tự do vẫn không kiểm soát được |
+| **L-4** | Vùng chỉ dẫn riêng | ✅ đã xử lý | `0017` `trip_schedules.driver_instructions` |
+| **L-5** | ★ DONE **vĩnh viễn** | ✅ đã xử lý | `0017` `trip_status_history` + trigger `trip_schedules_guard_done` |
+| **L-6** | Reject reason phải lưu | ✅ đã xử lý | `0017` `trip_completion_requests`, CHECK trên lý do từ chối |
+| **L-7** | Chi phí truy về lượt assignment | ✅ đã xử lý | `0016` `trip_costs.driver_assignment_id` |
+| **L-8** | Driver không thấy tổng chi phí | ✅ đã xử lý | Read model không có trường tổng; chỉ trả dòng của chính Driver |
+| **L-9** | Expense có trạng thái editable | ✅ đã xử lý | `0016` vòng đời trên chính `trip_costs` |
+| **L-10** | Execution Event hạng nhất | ✅ đã xử lý | `0015` `trip_execution_events` |
+| **L-11** | Audit các lần sửa trước khoá | ✅ đã xử lý | `0016` `trip_cost_edits` |
 
 ---
 
@@ -479,7 +487,7 @@ nằm trong tầm nhìn không, và migration từ (b) sang (a) đắt tới đ�
 | **CEO DECISION** | **26** — trong đó **6 chặn schema** |
 | **WORKIK** | **8** (+1 vừa CONFIRMED vừa WORKIK: DL-54) |
 | **FUTURE** | **2** |
-| **LEGACY CONFLICT** | **11** (L-1 … L-11) |
+| **LEGACY CONFLICT** | **11** (L-1 … L-11) — 10 đã xử lý, **L-3 còn mở một nửa** |
 
 ★ **Chưa đủ để Workik review toàn bộ.** Vùng **A** đủ; nhưng expense và completion —
 hai vùng phức tạp nhất — phụ thuộc sáu câu ở **B**.

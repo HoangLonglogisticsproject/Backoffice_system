@@ -1,13 +1,30 @@
 # DRIVER PORTAL — BUSINESS CONTRACT
 
-> **Trạng thái: CONTRACT ĐÃ CHỐT — BẢN 2. CHƯA IMPLEMENT.**
+> **Trạng thái: CONTRACT ĐÃ CHỐT — BẢN 2. ĐÃ IMPLEMENT PHASE 1–3.**
 >
 > Tài liệu này là **source of truth về nghiệp vụ** cho Driver Portal. Nó mô tả
 > *cái gì* và *vì sao*, **không** mô tả *làm thế nào* — thiết kế kỹ thuật thuộc về
 > architecture phase và phải tuân theo tài liệu này.
 >
 > **Ngày chốt bản 2:** 2026-08-30 · **Người chốt:** CEO
-> **Trạng thái code:** chưa có dòng nào cho Driver Portal.
+>
+> **Trạng thái code:** §17 Phase 1–3 đã được implement. Migration `0013`–`0017`;
+> Driver Portal routes dưới `/driver`; Completion Review dưới `/trip-schedules`.
+>
+> | Đã có | Bằng chứng |
+> |---|---|
+> | Assignment Trip ↔ Driver, có history, 1 active | `0014` `trip_driver_assignments` |
+> | Execution Event là khái niệm hạng nhất | `0015` `trip_execution_events` |
+> | Vòng đời chi phí editable → locked → approve/reject | `0016` `trip_costs` + `trip_cost_edits` |
+> | Completion Request + Review, lý do từ chối được lưu | `0017` `trip_completion_requests` |
+> | DONE là điểm đóng vĩnh viễn, có lịch sử trạng thái | `0017` `trip_status_history` + trigger `trip_schedules_guard_done` |
+> | Vùng "Chỉ dẫn cho tài xế" tách khỏi ghi chú nội bộ | `0017` `trip_schedules.driver_instructions` |
+>
+> ★ **Các mục [FUTURE] ở §11, §12 và §17 vẫn CHƯA IMPLEMENT** và không phải điều
+> kiện của MVP: GPS/geofencing, face verification, ràng buộc thiết bị, OCR chứng
+> từ, AI anomaly detection, quy trình Kế toán, quyền đọc commercial pricing.
+> Các mục **[DEFERRED]** (E-4…E-8 ở §9.5, giới hạn resubmit, ánh xạ Dispatch ↔
+> Execution) vẫn **chưa được quyết** — implementation không tự quyết thay.
 >
 > ### ⚠ Bản 2 thay thế bản 1 ở hai điểm
 >
@@ -1049,9 +1066,11 @@ Confirmation** — không phải một thao tác đổi trạng thái đứng m�
 ★ *"Check-in / check-out"* **không** được dùng làm tên của lifecycle hay của business
 status. Từ vựng chuẩn ở §6 là bắt buộc.
 
-⚠ **[LEGACY] Source hiện tại VI PHẠM điều này.** `PATCH /trip-schedules/:id/status`
-không kiểm tra thứ tự chuyển trạng thái, nên chuyến "ĐÃ XONG" **đặt ngược lại được và
-không để dấu vết nào**. Architecture phase phải xử lý.
+✅ **[LEGACY — ĐÃ XỬ LÝ]** `PATCH /trip-schedules/:id/status` từng không kiểm tra
+thứ tự, nên chuyến "ĐÃ XONG" đặt ngược lại được và không để dấu vết. Nay `done`
+không đặt được qua board ở cả hai đường ghi status, mọi lần chuyển đều ghi vào
+`trip_status_history`, và trigger `trip_schedules_guard_done` (`0017`) chốt lại ở
+tầng cơ sở dữ liệu. Trip chỉ đóng bằng cách duyệt Completion Request.
 
 ### 10.6 ★ Thời gian: dự kiến và thực tế
 
@@ -1220,29 +1239,40 @@ THỜI ĐIỂM do MÁY CHỦ ghi, không lấy từ thiết bị
 
 ## 16. Những điểm hệ thống hiện tại chưa đáp ứng contract
 
-Ghi nhận để architecture phase xử lý. **Không** tự sửa ở giai đoạn này.
+Bảng này mô tả **hiện trạng**, không phải quyết định nghiệp vụ. Cột *Hiện trạng*
+được cập nhật theo code trên nhánh, kèm bằng chứng.
 
 | # | Contract yêu cầu | Hiện trạng | Mức |
 |---|---|---|---|
-| **L-1** | Driver chỉ thấy Trip của mình; Driver Portal có data boundary riêng | Mọi tài khoản đã kích hoạt đọc được **toàn bộ** lịch xe | **CHẶN** |
-| **L-2** | Quan hệ Trip ↔ Driver có history | **Không tồn tại** quan hệ Trip ↔ người. Tên tài xế nằm trong văn bản tự do | **CHẶN** |
-| **L-3** | Ranh giới dữ liệu ở mức trường | Thông tin hàng hoá, địa chỉ, liên hệ, ghi chú là **văn bản tự do**, nội dung không kiểm soát được | **CHẶN** |
-| **L-4** | Vùng "Chỉ dẫn cho tài xế" riêng | **Không tồn tại** | **CHẶN** |
-| **L-5** | Hai lifecycle tách biệt; Completed phải qua duyệt | Chỉ có một trục trạng thái. Đổi trạng thái là thao tác một bước, **không kiểm tra thứ tự**, **không lưu lịch sử**. Chuyến "ĐÃ XONG" đặt ngược lại được mà không để dấu vết | **CHẶN** |
-| **L-6** | Completion Request có history, rejection reason được persist | **Không tồn tại**. ⚠ Tiền lệ ngược: hai luồng duyệt hiện có **bỏ đi** lý do từ chối | **CHẶN** |
-| **L-7** | Chi phí truy được về người khai **và** lượt assignment | Ghi được *ai gõ*; **không** ghi lượt phân công nào đang hiệu lực | CAO |
-| **L-8** | Driver không thấy tổng chi phí chuyến | Con số tổng hiện **bao gồm** chi phí thuê xe ngoài | CAO |
-| **L-9** | Khoản chi có trạng thái **editable** rồi mới khoá (§9) | **Không tồn tại** khái niệm bản nháp. Bản ghi tài chính hiện **không có đường sửa nào ở bất kỳ tầng nào** — cố ý. Không có `updated_at`, không có trigger | **CHẶN** *(mới ở bản 2)* |
-| **L-10** | Execution Event là khái niệm hạng nhất | **Không tồn tại** | **CHẶN** *(mới ở bản 2)* |
-| **L-11** | Audit lưu cả các lần sửa trước khi khoá | **Không tồn tại** | CAO *(mới ở bản 2)* |
+| **L-1** | Driver chỉ thấy Trip của mình; Driver Portal có data boundary riêng | ✅ **Đã xử lý.** Routes riêng dưới `/driver`, đọc qua Driver Execution Read Model; quyền theo lượt phân công đang hiệu lực, không dùng đường đọc lịch xe của Backoffice | — |
+| **L-2** | Quan hệ Trip ↔ Driver có history | ✅ **Đã xử lý.** `0014` `trip_driver_assignments`, 1 assignment `active` mỗi Trip, lượt cũ không bị ghi đè | — |
+| **L-3** | Ranh giới dữ liệu ở mức trường | ⚠ **Đã xử lý một nửa.** Ranh giới **ở mức trường** đã có: read model whitelist từng trường, `note` nội bộ không lọt sang Driver. Nhưng địa chỉ · liên hệ · thông tin hàng hoá vẫn là **văn bản tự do**, nội dung vẫn không kiểm soát được | TRUNG BÌNH |
+| **L-4** | Vùng "Chỉ dẫn cho tài xế" riêng | ✅ **Đã xử lý.** `0017` thêm `trip_schedules.driver_instructions`, tách hẳn khỏi `note` nội bộ | — |
+| **L-5** | Hai lifecycle tách biệt; Completed phải qua duyệt | ✅ **Đã xử lý.** `done` không đặt được qua board ở cả hai đường ghi status; mọi lần chuyển ghi vào `trip_status_history`; trigger `trip_schedules_guard_done` (`0017`) chốt ở tầng CSDL | — |
+| **L-6** | Completion Request có history, rejection reason được persist | ✅ **Đã xử lý.** `0017` `trip_completion_requests`; mỗi lần gửi là một bản ghi riêng; lý do từ chối bắt buộc bằng CHECK, không bị bỏ đi | — |
+| **L-7** | Chi phí truy được về người khai **và** lượt assignment | ✅ **Đã xử lý.** `0016` thêm `trip_costs.driver_assignment_id`, bắt buộc với dòng do Driver khai | — |
+| **L-8** | Driver không thấy tổng chi phí chuyến | ✅ **Đã xử lý.** Read model **không có trường tổng nào**, và chỉ trả về dòng do chính Driver khai — lọc theo cả `source` lẫn tác giả | — |
+| **L-9** | Khoản chi có trạng thái **editable** rồi mới khoá (§9) | ✅ **Đã xử lý.** `0016` thêm vòng đời trên chính `trip_costs`; `state` mặc định `immutable` nên các dòng cũ giữ nguyên quy tắc của `0012` | — |
+| **L-10** | Execution Event là khái niệm hạng nhất | ✅ **Đã xử lý.** `0015` `trip_execution_events` | — |
+| **L-11** | Audit lưu cả các lần sửa trước khi khoá | ✅ **Đã xử lý.** `0016` `trip_cost_edits` | — |
 
 ★ **Không có mâu thuẫn nào ở ranh giới tiền.** Chi phí vận hành của Driver và tiền
-thương mại của khách hàng đang nằm ở hai chỗ khác nhau, và nhóm thứ hai chưa được
+thương mại của khách hàng nằm ở hai chỗ khác nhau, và nhóm thứ hai vẫn chưa được
 xây. Contract §8.1 khớp với hệ thống hiện tại.
 
-★ **L-9 là điểm căng nhất của bản 2.** Contract mới yêu cầu một trạng thái sửa được,
-trong khi thiết kế hiện tại cố ý làm cho việc sửa **không phát biểu được** ở mọi
-tầng. Đề xuất hoà giải nằm ở §9.5 và nó là **[PROPOSED]**, không phải quyết định.
+★ **L-9 đã hết là mâu thuẫn.** Cách hoà giải trên thực tế là mở rộng chính
+`trip_costs` thay vì dựng bảng thứ hai; bản ghi tài chính cũ giữ nguyên tính bất
+biến vì `state` mặc định là `immutable`.
+
+⚠ Điều đó **không** nâng cấp §9.5 thành quyết định. Đề xuất ở §9.5 vẫn là
+**[PROPOSED]**, và các mục **[DEFERRED]** E-4…E-8 của nó — void sau DONE, duyệt,
+chứng từ, Ops nhập thay — vẫn **chưa được quyết**. Tài liệu này ghi *cái đã được
+xây*, không tự chốt thay CEO.
+
+★ **L-3 là mục duy nhất còn mở.** Contract yêu cầu ranh giới ở mức trường và điều
+đó đã có; nhưng nội dung *bên trong* các trường văn bản tự do vẫn phụ thuộc vào
+người nhập. Đây là vấn đề quy trình, không phải schema, và chưa có quyết định
+nghiệp vụ nào cho nó.
 
 ---
 

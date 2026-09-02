@@ -179,6 +179,13 @@ token.
 | Account invitation | `capabilities/account-invitation/` |
 | Trip schedule (lịch xe) + danh mục xe/khách | `capabilities/trip-schedule/` |
 | Trip cost (5 khoản chi phí) + outsourced hire (thuê xe ngoài) | cùng capability, controller riêng |
+| Trip driver assignment (phân công, có lịch sử) | cùng capability |
+| Trip execution event (đến / xác nhận lấy · giao) | cùng capability |
+| Driver expense lifecycle (editable → locked → approve/reject) | cùng capability |
+| Completion request + review, trip status history | cùng capability, controller riêng |
+| Driver Portal — routes riêng dưới `/driver`, read model riêng | cùng capability, controller riêng |
+
+★ Nghiệp vụ Driver Portal: [`docs/domains/driver-portal/`](docs/domains/driver-portal/).
 
 **Chưa triển khai** — xem §16.
 
@@ -188,8 +195,8 @@ token.
 
 PostgreSQL 17. SQL viết tay; không ORM.
 
-Migration ở `backend/migrations/`, đánh số tuần tự, **forward-only**. Hiện có 12
-file, cao nhất là `0012_trip_cost.sql`.
+Migration ở `backend/migrations/`, đánh số tuần tự, **forward-only**. Hiện có 17
+file, cao nhất là `0017_trip_completion_and_history.sql`.
 
 ```text
 0001 identity          users · identities · sessions
@@ -204,6 +211,11 @@ file, cao nhất là `0012_trip_cost.sql`.
 0010 canonical_email_identity
 0011 trip_schedule     trip_vehicles · trip_customers · trip_schedules
 0012 trip_cost         trip_costs · trip_outsource_hires
+0013 trip_carrier_and_vehicle_ownership  trip_carriers · trip_vehicles.ownership
+0014 trip_driver_assignment              trip_driver_assignments
+0015 trip_execution_event                trip_execution_events
+0016 trip_cost_lifecycle                 trip_costs.state · trip_cost_edits
+0017 trip_completion_and_history         trip_completion_requests · trip_status_history
 ```
 
 **Sửa sai bằng một file mới, không sửa file đã chạy** — runner lưu checksum và từ
@@ -472,15 +484,15 @@ cùng một origin, và CORS không bao giờ vào cuộc.
 
 ## 16. Chưa triển khai
 
-### Driver Portal — **DISCOVERY / SPECIFICATION ONLY**
+### Driver Portal — phần `[FUTURE]`
 
-Chưa có dòng code nào. Không có bảng, không có route, không có permission, không
-có thực thể tài xế trong data model.
+Bản thân Driver Portal **đã triển khai** — xem §6. Chưa có, và không phải điều kiện
+của MVP (contract §11, §12, §17 `[FUTURE]`): GPS / geofencing, face verification,
+ràng buộc thiết bị, OCR chứng từ, AI anomaly detection, quy trình Kế toán, quyền
+đọc commercial pricing.
 
-Tài liệu khảo sát và thiết kế:
-[`docs/domains/driver-portal/`](docs/domains/driver-portal/).
-
-Đừng đọc tài liệu đó thành "đã có nhưng chưa bật".
+Một số quyết định nghiệp vụ vẫn `[DEFERRED]` — sổ quyết định giữ nguyên trạng thái
+của chúng: [`docs/domains/driver-portal/`](docs/domains/driver-portal/).
 
 ### AI — **PLANNED, SERVICE RIÊNG**
 
