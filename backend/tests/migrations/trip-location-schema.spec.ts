@@ -58,6 +58,19 @@ describe('0019 — destination coordinates and milestone location evidence', () 
     expect(body).toContain('accuracy_m >= 0');
   });
 
+  it('★ bounds accuracy and distance from ABOVE too, because NaN and Infinity pass `>= 0`', () => {
+    // PostgreSQL sorts NaN above every float, Infinity included, so a
+    // one-sided check lets both through. The BETWEENs on the axes already
+    // carry an upper bound; these two must spell it out.
+    expect(body).toContain("accuracy_m >= 0 AND accuracy_m < 'Infinity'::DOUBLE PRECISION");
+    expect(body).toContain("distance_m >= 0 AND distance_m < 'Infinity'::DOUBLE PRECISION");
+  });
+
+  it('adds every constraint plainly — the runner’s one-transaction-per-file makes NOT VALID moot', () => {
+    expect(body).not.toMatch(/NOT VALID/i);
+    expect(body).not.toMatch(/VALIDATE CONSTRAINT/i);
+  });
+
   it('★ creates no location-history table: evidence lives on the milestone, never as a track', () => {
     expect(body).not.toMatch(/CREATE TABLE/i);
   });

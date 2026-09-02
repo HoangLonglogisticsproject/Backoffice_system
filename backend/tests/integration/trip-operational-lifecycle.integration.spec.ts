@@ -1318,6 +1318,53 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         ).toBe(CHECK_VIOLATION);
       });
 
+      /**
+       * ★ NaN AND Infinity ARE REAL FLOATS TO POSTGRESQL, and it orders NaN
+       * above everything — so `>= 0` accepts both. These pin that the CHECKs
+       * keep them out of every column, with the actual server deciding.
+       */
+      const validReading = async (): Promise<string> => {
+        const { trip, assignment } = await runningTrip();
+        await sql(
+          `INSERT INTO trip_execution_events
+             (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by,
+              latitude, longitude, accuracy_m, location_captured_at, geofence_passed, distance_m)
+           VALUES ($1, $2, 'ARRIVED_PICKUP', now(), 'raw', $3, 10.8, 106.6, 12, now(), true, 0)`,
+          [trip, assignment, driverA],
+        );
+        return trip;
+      };
+
+      it.each([
+        ['NaN accuracy', "accuracy_m = 'NaN'::double precision"],
+        ['infinite accuracy', "accuracy_m = 'Infinity'::double precision"],
+        ['NaN distance', "distance_m = 'NaN'::double precision"],
+        ['infinite distance', "distance_m = 'Infinity'::double precision"],
+        ['NaN latitude', "latitude = 'NaN'::double precision"],
+        ['infinite longitude', "longitude = '-Infinity'::double precision"],
+      ])('★ refuses a reading with %s', async (_label, assignment) => {
+        const trip = await validReading();
+
+        expect(
+          await codeOf(() =>
+            sql(
+              `UPDATE trip_execution_events SET ${assignment}
+                WHERE trip_id = $1 AND client_event_id = 'raw'`,
+              [trip],
+            ),
+          ),
+        ).toBe(CHECK_VIOLATION);
+      });
+
+      it('refuses NaN on a trip’s pickup, which `BETWEEN` already bounds from above', async () => {
+        const { trip } = await runningTrip();
+        expect(
+          await codeOf(() =>
+            sql(`UPDATE trip_schedules SET pickup_latitude = 'NaN'::double precision WHERE id = $1`, [trip]),
+          ),
+        ).toBe(CHECK_VIOLATION);
+      });
+
       it('refuses a reading missing its accuracy', async () => {
         const { trip, assignment } = await runningTrip();
         expect(

@@ -23,6 +23,21 @@
 -- 91 is not a value with a meaning nobody has decided yet; it is not a
 -- latitude. The application validates first, for a readable message, and the
 -- column refuses regardless of which script wrote it.
+--
+-- ⚠ AND `>= 0` ALONE DOES NOT REFUSE `NaN` OR `Infinity`. PostgreSQL orders
+-- NaN ABOVE every other float, Infinity included, so `'NaN' >= 0` is TRUE and
+-- so is `'Infinity' >= 0`. A BETWEEN with an upper bound already excludes both
+-- (NaN is above 90 as well); the one-sided checks on `accuracy_m` and
+-- `distance_m` need the upper bound spelled out: `< 'Infinity'` is false for
+-- Infinity and false for NaN, which is exactly the pair to keep out of a
+-- column something will one day take an average of.
+--
+-- ★ PLAIN `ADD CONSTRAINT`, NOT `NOT VALID` + `VALIDATE`. That split lets the
+-- table be validated under a weaker lock — but only when the two run in
+-- DIFFERENT transactions. The runner wraps every migration file in one
+-- transaction, so the ACCESS EXCLUSIVE lock `ADD CONSTRAINT` takes is held to
+-- COMMIT whatever follows it, and a VALIDATE in the same file scans under that
+-- same lock. Two statements for the price of one, and the tables are small.
 
 -- ------------------------------------------ trip_schedules: the destinations ----
 
@@ -101,8 +116,9 @@ ALTER TABLE trip_execution_events
         AND accuracy_m IS NOT NULL AND location_captured_at IS NOT NULL
         AND latitude  BETWEEN -90  AND 90
         AND longitude BETWEEN -180 AND 180
-        AND accuracy_m >= 0
-        AND (distance_m IS NULL OR distance_m >= 0)
+        AND accuracy_m >= 0 AND accuracy_m < 'Infinity'::DOUBLE PRECISION
+        AND (distance_m IS NULL
+             OR (distance_m >= 0 AND distance_m < 'Infinity'::DOUBLE PRECISION))
         AND ((geofence_passed IS NULL) = (distance_m IS NULL))
       )
     );

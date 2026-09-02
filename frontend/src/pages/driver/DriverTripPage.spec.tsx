@@ -1064,20 +1064,35 @@ describe('★ confirming a pickup with the phone’s location', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/vị trí đã cũ/i);
   });
 
-  it('★ says it is the office’s problem when the pickup point has no coordinates', async () => {
+  it('★ says it is the office’s problem when the pickup point has no coordinates, and offers no tap', async () => {
     fetchMyTrip.mockResolvedValue(
       trip({ events: [event('ARRIVED_PICKUP')], pickupLocation: null }),
     );
+    phoneSays(FIX);
     renderDetail();
 
-    // Warned before the tap…
+    // Said before any tap…
     expect(await screen.findByText(/chưa có toạ độ/i)).toBeInTheDocument();
 
-    // …and if they tap anyway, the server's refusal is worded the same way.
+    // …and the button cannot be tapped: the server refuses this without
+    // exception, so asking the phone and sending a request would only teach
+    // the driver to retry something that cannot succeed.
+    const button = screen.getByRole('button', { name: /đã lấy hàng xong/i });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(geolocation.getCurrentPosition).not.toHaveBeenCalled();
+    expect(recordExecutionEvent).not.toHaveBeenCalled();
+  });
+
+  it('words the server’s "no coordinates" refusal the same way — the office cleared them after the screen loaded', async () => {
+    arrived();
     phoneSays(FIX);
     recordExecutionEvent.mockRejectedValue(
       new ApiError(422, 'VALIDATION_FAILED', 'No coordinates.', { location: 'DESTINATION_MISSING' }),
     );
+    renderDetail();
+
     await confirm();
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/liên hệ điều độ/i);

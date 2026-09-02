@@ -59,13 +59,6 @@ export function ExecutionTimeline({
   const steps = executionSteps(trip);
   const next = nextEvent(trip.events);
 
-  // ★ THE PICKUP CHECK IS ANNOUNCED BEFORE THE TAP. A permission prompt that
-  // appears with no warning gets refused; and a pickup point the office has
-  // not located yet is the office's problem, said here so the driver rings
-  // them rather than retrying a button that cannot succeed.
-  const pickupIsNext = next === 'PICKUP_CONFIRMED';
-  const pickupUnlocated = pickupIsNext && trip.pickupLocation === null;
-
   return (
     <section className="rounded-xl border border-border bg-background p-4">
       <h2 className="mb-4 text-sm font-semibold">{t('driverProgress')}</h2>
@@ -133,37 +126,76 @@ export function ExecutionTimeline({
       </ol>
 
       {next ? (
-        <>
-          {pickupIsNext ? (
-            <p
-              className={cn(
-                'mt-5 flex items-start gap-1.5 rounded-lg px-3 py-2 text-xs',
-                pickupUnlocated
-                  ? 'bg-destructive/5 font-medium text-destructive'
-                  : 'bg-muted/60 text-muted-foreground',
-              )}
-            >
-              <MapPin className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-              {t(pickupUnlocated ? 'driverPickupNoCoordinates' : 'driverPickupNeedsLocation')}
-            </p>
-          ) : null}
-          <Button
-            size="lg"
-            // Full width and tall: this is the primary action of the whole
-            // screen and it is pressed with a thumb, outdoors.
-            className={cn('h-12 w-full text-base', pickupIsNext ? 'mt-3' : 'mt-5')}
-            disabled={reporting || locating}
-            onClick={() => onReport(next)}
-          >
-            {reporting || locating ? <Loader2 className="animate-spin" aria-hidden /> : null}
-            {locating ? t('driverLocating') : t(ACTION_LABEL[next])}
-          </Button>
-        </>
+        <NextAction
+          next={next}
+          pickupLocated={trip.pickupLocation !== null}
+          reporting={reporting}
+          locating={locating}
+          onReport={onReport}
+        />
       ) : (
         <p className="mt-5 rounded-lg bg-muted/60 px-3 py-2 text-center text-sm text-muted-foreground">
           {t('driverAllStepsDone')}
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The one button, and what is said above it.
+ *
+ * ★ THE PICKUP CHECK IS ANNOUNCED BEFORE THE TAP. A permission prompt that
+ * appears with no warning gets refused; and a pickup point the office has not
+ * located yet is the office's problem — said here, and the button is DISABLED
+ * for it, because the server refuses that confirmation without exception and
+ * a driver retrying a button that cannot succeed learns nothing.
+ */
+function NextAction({
+  next,
+  pickupLocated,
+  reporting,
+  locating,
+  onReport,
+}: Readonly<{
+  next: ExecutionEventType;
+  pickupLocated: boolean;
+  reporting: boolean;
+  locating: boolean;
+  onReport: (type: ExecutionEventType) => void;
+}>) {
+  const { t } = useLanguage();
+
+  const pickupIsNext = next === 'PICKUP_CONFIRMED';
+  const pickupUnlocated = pickupIsNext && !pickupLocated;
+  const busy = reporting || locating;
+
+  return (
+    <>
+      {pickupIsNext ? (
+        <p
+          className={cn(
+            'mt-5 flex items-start gap-1.5 rounded-lg px-3 py-2 text-xs',
+            pickupUnlocated
+              ? 'bg-destructive/5 font-medium text-destructive'
+              : 'bg-muted/60 text-muted-foreground',
+          )}
+        >
+          <MapPin className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          {t(pickupUnlocated ? 'driverPickupNoCoordinates' : 'driverPickupNeedsLocation')}
+        </p>
+      ) : null}
+      <Button
+        size="lg"
+        // Full width and tall: this is the primary action of the whole
+        // screen and it is pressed with a thumb, outdoors.
+        className={cn('h-12 w-full text-base', pickupIsNext ? 'mt-3' : 'mt-5')}
+        disabled={busy || pickupUnlocated}
+        onClick={() => onReport(next)}
+      >
+        {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
+        {locating ? t('driverLocating') : t(ACTION_LABEL[next])}
+      </Button>
+    </>
   );
 }

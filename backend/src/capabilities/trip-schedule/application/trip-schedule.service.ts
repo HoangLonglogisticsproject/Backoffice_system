@@ -60,6 +60,9 @@ export type UpdateTripInput = Partial<CreateTripInput> & {
   status?: TripStatus;
 };
 
+/** The fields a patch may CLEAR with `null` — everything but the day and the status. */
+type NullableTripField = Exclude<keyof CreateTripInput, 'scheduledOn' | 'status'>;
+
 /**
  * Trims a text field, and treats a field that is only whitespace as empty.
  *
@@ -171,31 +174,37 @@ export class TripScheduleService {
       const current = await this.trips.lockActive(id, tx);
       if (!current) throw new NotFoundError('Trip not found.');
 
-      // ★ `key in patch` RATHER THAN `patch.key !== undefined`, for the eight
+      // ★ `key in patch` RATHER THAN `patch.key !== undefined`, for the twelve
       // nullable fields. The two differ for a key sent explicitly as `null`,
       // which is exactly how a client CLEARS a field — collapsing them would
       // make "remove the delivery address" indistinguishable from "leave it
-      // alone", so the address could never be removed.
+      // alone", so the address could never be removed. `sent` is that rule,
+      // written once.
       //
       // The two non-nullable fields use `??`, because for them there is no
       // difference to preserve: `null` is not a value either column accepts.
+      // The cast only tells the checker what `in` already guarantees: a key
+      // that is present is typed as the patch has it, and an absent one comes
+      // from the stored row.
+      const sent = <K extends NullableTripField>(key: K): CreateTripInput[K] =>
+        (key in patch ? patch[key] : current[key]) as CreateTripInput[K];
+
       const merged: CreateTripInput = {
         scheduledOn: patch.scheduledOn ?? current.scheduledOn,
-        vehicleId: 'vehicleId' in patch ? patch.vehicleId : current.vehicleId,
-        customerId: 'customerId' in patch ? patch.customerId : current.customerId,
-        cargoInfo: 'cargoInfo' in patch ? patch.cargoInfo : current.cargoInfo,
-        pickupAddress: 'pickupAddress' in patch ? patch.pickupAddress : current.pickupAddress,
-        deliveryAddress: 'deliveryAddress' in patch ? patch.deliveryAddress : current.deliveryAddress,
-        pickupContact: 'pickupContact' in patch ? patch.pickupContact : current.pickupContact,
-        deliveryContact: 'deliveryContact' in patch ? patch.deliveryContact : current.deliveryContact,
-        pickupAt: 'pickupAt' in patch ? patch.pickupAt : current.pickupAt,
-        deliveryAt: 'deliveryAt' in patch ? patch.deliveryAt : current.deliveryAt,
-        pickupLatitude: 'pickupLatitude' in patch ? patch.pickupLatitude : current.pickupLatitude,
-        pickupLongitude: 'pickupLongitude' in patch ? patch.pickupLongitude : current.pickupLongitude,
-        deliveryLatitude: 'deliveryLatitude' in patch ? patch.deliveryLatitude : current.deliveryLatitude,
-        deliveryLongitude:
-          'deliveryLongitude' in patch ? patch.deliveryLongitude : current.deliveryLongitude,
-        note: 'note' in patch ? patch.note : current.note,
+        vehicleId: sent('vehicleId'),
+        customerId: sent('customerId'),
+        cargoInfo: sent('cargoInfo'),
+        pickupAddress: sent('pickupAddress'),
+        deliveryAddress: sent('deliveryAddress'),
+        pickupContact: sent('pickupContact'),
+        deliveryContact: sent('deliveryContact'),
+        pickupAt: sent('pickupAt'),
+        deliveryAt: sent('deliveryAt'),
+        pickupLatitude: sent('pickupLatitude'),
+        pickupLongitude: sent('pickupLongitude'),
+        deliveryLatitude: sent('deliveryLatitude'),
+        deliveryLongitude: sent('deliveryLongitude'),
+        note: sent('note'),
         status: patch.status ?? current.status,
       };
 
@@ -429,25 +438,24 @@ export class TripScheduleService {
  */
 const coordinatePair = <End extends 'pickup' | 'delivery'>(
   end: End,
-  latitude: number | null | undefined,
-  longitude: number | null | undefined,
+  // Absent means "no point", exactly as `null` does — a default parameter says
+  // so without a second name for the same value.
+  latitude: number | null = null,
+  longitude: number | null = null,
 ): Record<`${End}Latitude` | `${End}Longitude`, number | null> => {
-  const lat = latitude ?? null;
-  const lng = longitude ?? null;
-
-  if ((lat === null) !== (lng === null)) {
+  if ((latitude === null) !== (longitude === null)) {
     throw new ValidationError(`The ${end} location needs both a latitude and a longitude, or neither.`, {
       [`${end}Latitude`]: 'Both halves of a location are required together.',
     });
   }
-  if (lat !== null && (!isLatitude(lat) || !isLongitude(lng))) {
+  if (latitude !== null && (!isLatitude(latitude) || !isLongitude(longitude))) {
     throw new ValidationError(`The ${end} location is not a place on Earth.`, {
       [`${end}Latitude`]: 'Latitude must be within [-90, 90] and longitude within [-180, 180].',
     });
   }
 
   return {
-    [`${end}Latitude`]: lat,
-    [`${end}Longitude`]: lng,
+    [`${end}Latitude`]: latitude,
+    [`${end}Longitude`]: longitude,
   } as Record<`${End}Latitude` | `${End}Longitude`, number | null>;
 };
