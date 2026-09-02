@@ -79,6 +79,18 @@ export const canonicalEventOf = (
  * are always ascending — they exist to make the answer reproducible, not to
  * express a preference — so the same events resolve the same way on every
  * render and on the server.
+ *
+ * ★ THE STRINGS ARE COMPARED AS STRINGS, AND THAT IS ONLY SAFE BECAUSE OF AN
+ * INVARIANT WORTH WRITING DOWN: every stamp here is serialised by
+ * `Date.toJSON`, so it is always `YYYY-MM-DDTHH:mm:ss.sssZ` — UTC, one fixed
+ * width, no offset. For that shape lexicographic order IS chronological order,
+ * which is why no parsing happens on a path that runs for every event on every
+ * render. Both fields are non-null in `ExecutionEvent`; the server stamps them.
+ *
+ * ⚠ Send an offset like `+07:00`, or a variable number of fractional digits,
+ * and this silently starts ordering by text. The invariant lives in the API
+ * serialisation, so it is not this file that would break first — but it is
+ * this file that would give the wrong answer.
  */
 const beats = (
   candidate: ExecutionEvent,

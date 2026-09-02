@@ -78,15 +78,7 @@ export function CompletionPanel({
         <Clock className="mx-auto mb-2 size-7 text-muted-foreground" aria-hidden />
         <p className="font-semibold">{t('driverCompletionPending')}</p>
         <p className="mt-1 text-sm text-muted-foreground">{t('driverCompletionPendingHint')}</p>
-        {request ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t('driverAttempt')} {request.attemptNo} ·{' '}
-            {formatDateTime(request.submittedAt, language)} ·{' '}
-            {request.expenseDeclaration === 'expenses'
-              ? t('driverDeclaredExpenses')
-              : t('driverDeclaredNone')}
-          </p>
-        ) : null}
+        <AttemptLine request={request} language={language} />
       </section>
     );
   }
@@ -147,67 +139,136 @@ export function CompletionPanel({
           {t('driverFinishStepsFirst')}
         </p>
       ) : (
-        <>
-          <p className="mb-2 text-sm font-medium">{t('driverDeclareQuestion')}</p>
-
-          <div className="mb-3 grid gap-2 sm:grid-cols-2">
-            <DeclarationChoice
-              label={
-                declared.length > 0
-                  ? `${t('driverDeclareExpenses')} — ${declared.length} ${t('driverLineCount')}`
-                  : t('driverDeclareExpenses')
-              }
-              selected={chosen === 'expenses'}
-              onSelect={chooseExpenses}
-            />
-            <DeclarationChoice
-              label={t('driverDeclareNone')}
-              selected={chosen === 'none'}
-              onSelect={chooseNone}
-            />
-          </div>
-
-          {/*
-            ★ THE ONE PLACE A DRIVER CAN CONTRADICT THEMSELVES, so it is the one
-            place that asks twice. Nothing is deleted or withdrawn on their
-            behalf — voiding a figure is not the driver's to do — the question
-            simply sends them back to the list or lets them confirm.
-          */}
-          {confirmingNone && chosen === 'none' ? (
-            <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
-              <p className="text-sm">
-                {t('driverDeclareConflict')} ({declared.length} {t('driverLineCount')})
-              </p>
-              <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                <Button variant="outline" size="lg" className="h-11 flex-1" onClick={onReviewExpenses}>
-                  {t('driverReviewExpenses')}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="lg"
-                  className="h-11"
-                  onClick={() => setConfirmingNone(false)}
-                >
-                  {t('driverConfirmAnyway')}
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          <Button
-            size="lg"
-            className="h-12 w-full text-base"
-            // While the contradiction stands there is nothing to send that the
-            // server would accept.
-            disabled={submitting || confirmingNone}
-            onClick={() => onSubmit(chosen)}
-          >
-            {submitting ? <Loader2 className="animate-spin" aria-hidden /> : null}
-            {stage === 'rejected' ? t('driverResubmit') : t('driverSubmitCompletion')}
-          </Button>
-        </>
+        <DeclarationSection
+          chosen={chosen}
+          declaredCount={declared.length}
+          confirmingNone={confirmingNone}
+          resubmit={stage === 'rejected'}
+          submitting={submitting}
+          onChooseExpenses={chooseExpenses}
+          onChooseNone={chooseNone}
+          onReviewExpenses={onReviewExpenses}
+          onConfirmAnyway={() => setConfirmingNone(false)}
+          onSubmit={() => onSubmit(chosen)}
+        />
       )}
     </section>
+  );
+}
+
+/**
+ * Which attempt this was, and what it declared.
+ *
+ * ★ SPLIT OUT BECAUSE IT IS THE ONLY BRANCHING IN AN OTHERWISE FLAT PANEL, and
+ * it was nested two deep inside a status card that says one thing.
+ */
+function AttemptLine({
+  request,
+  language,
+}: Readonly<{ request: DriverTripDetail['completion']; language: 'vi' | 'en' }>) {
+  const { t } = useLanguage();
+  if (!request) return null;
+
+  return (
+    <p className="mt-2 text-xs text-muted-foreground">
+      {t('driverAttempt')} {request.attemptNo} · {formatDateTime(request.submittedAt, language)} ·{' '}
+      {request.expenseDeclaration === 'expenses'
+        ? t('driverDeclaredExpenses')
+        : t('driverDeclaredNone')}
+    </p>
+  );
+}
+
+/**
+ * The question, the contradiction guard, and the button that sends it.
+ *
+ * ★ THE STATE STAYS WITH THE PANEL, AND THAT IS NOT AN OVERSIGHT. `declaration`
+ * and `confirmingNone` are passed in rather than held here because the panel
+ * early-returns while a request is pending: state living in this component
+ * would be unmounted for the whole wait and rebuilt empty on a rejection,
+ * quietly discarding the choice the driver had already made. This component
+ * renders; it decides nothing.
+ */
+function DeclarationSection({
+  chosen,
+  declaredCount,
+  confirmingNone,
+  resubmit,
+  submitting,
+  onChooseExpenses,
+  onChooseNone,
+  onReviewExpenses,
+  onConfirmAnyway,
+  onSubmit,
+}: Readonly<{
+  chosen: ExpenseDeclaration;
+  declaredCount: number;
+  confirmingNone: boolean;
+  resubmit: boolean;
+  submitting: boolean;
+  onChooseExpenses: () => void;
+  onChooseNone: () => void;
+  onReviewExpenses: () => void;
+  onConfirmAnyway: () => void;
+  onSubmit: () => void;
+}>) {
+  const { t } = useLanguage();
+
+  return (
+    <>
+      <p className="mb-2 text-sm font-medium">{t('driverDeclareQuestion')}</p>
+
+      <div className="mb-3 grid gap-2 sm:grid-cols-2">
+        <DeclarationChoice
+          label={
+            declaredCount > 0
+              ? `${t('driverDeclareExpenses')} — ${declaredCount} ${t('driverLineCount')}`
+              : t('driverDeclareExpenses')
+          }
+          selected={chosen === 'expenses'}
+          onSelect={onChooseExpenses}
+        />
+        <DeclarationChoice
+          label={t('driverDeclareNone')}
+          selected={chosen === 'none'}
+          onSelect={onChooseNone}
+        />
+      </div>
+
+      {/*
+        ★ THE ONE PLACE A DRIVER CAN CONTRADICT THEMSELVES, so it is the one
+        place that asks twice. Nothing is deleted or withdrawn on their
+        behalf — voiding a figure is not the driver's to do — the question
+        simply sends them back to the list or lets them confirm.
+      */}
+      {confirmingNone && chosen === 'none' ? (
+        <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+          <p className="text-sm">
+            {t('driverDeclareConflict')} ({declaredCount} {t('driverLineCount')})
+          </p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+            <Button variant="outline" size="lg" className="h-11 flex-1" onClick={onReviewExpenses}>
+              {t('driverReviewExpenses')}
+            </Button>
+            <Button variant="ghost" size="lg" className="h-11" onClick={onConfirmAnyway}>
+              {t('driverConfirmAnyway')}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <Button
+        size="lg"
+        className="h-12 w-full text-base"
+        // While the contradiction stands there is nothing to send that the
+        // server would accept.
+        disabled={submitting || confirmingNone}
+        onClick={onSubmit}
+      >
+        {submitting ? <Loader2 className="animate-spin" aria-hidden /> : null}
+        {resubmit ? t('driverResubmit') : t('driverSubmitCompletion')}
+      </Button>
+    </>
   );
 }
 

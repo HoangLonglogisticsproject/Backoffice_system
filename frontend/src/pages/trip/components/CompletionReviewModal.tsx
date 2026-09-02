@@ -55,13 +55,39 @@ interface Props {
   onClose: () => void;
 }
 
+/**
+ * Which of the four endings this trip has reached.
+ *
+ * ★ A NAMED STAGE RATHER THAN A CHAIN OF TERNARIES IN THE MARKUP. The four
+ * cases were spelled as `approved ? … : !pending ? … : !mayReview ? … : …`,
+ * nested three deep inside the JSX. That reads as one decision but counts as
+ * three, and it put the branch that matters — may this person close the trip —
+ * at the bottom of a stack a reader has to unwind.
+ *
+ * The ORDER is the behaviour and is unchanged: an approved trip says so even
+ * to a reviewer without the permission, because it is settled and there is
+ * nothing left to decide.
+ */
+type ReviewStage = 'approved' | 'nothing-pending' | 'no-permission' | 'decide';
+
+const reviewStage = (approved: boolean, pending: boolean, mayReview: boolean): ReviewStage => {
+  if (approved) return 'approved';
+  if (!pending) return 'nothing-pending';
+  if (!mayReview) return 'no-permission';
+  return 'decide';
+};
+
+/** The two stages that are just a sentence. */
+const STAGE_NOTE: Partial<Record<ReviewStage, TranslationKey>> = {
+  'nothing-pending': 'reviewNothingPending',
+  'no-permission': 'reviewNoPermission',
+};
+
 export function CompletionReviewModal({ tripId, row, mayReview, onClose }: Readonly<Props>) {
   const { t, language } = useLanguage();
   const { requests, events, expenses, expensesHidden, loading } = useCompletionEvidence(tripId);
   const { approve, reject } = useCompletionDecision(tripId);
 
-  const [reason, setReason] = useState('');
-  const [reasonTouched, setReasonTouched] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
 
   const latest: CompletionRequest | null = requests[0] ?? null;
@@ -80,8 +106,8 @@ export function CompletionReviewModal({ tripId, row, mayReview, onClose }: Reado
     }
   };
 
-  const decide = approve.isPending || reject.isPending;
-  const reasonMissing = reason.trim() === '';
+  const stage = reviewStage(approved, pending, mayReview);
+  const note = STAGE_NOTE[stage];
 
   if (loading) {
     return <p className="py-8 text-center text-sm text-muted-foreground">{t('driverLoading')}</p>;
@@ -106,76 +132,113 @@ export function CompletionReviewModal({ tripId, row, mayReview, onClose }: Reado
         </p>
       ) : null}
 
-      {approved ? (
+      {/* ★ THREE SIBLINGS, NOT ONE CHAIN NESTED THREE DEEP. `reviewStage` has
+          already made the decision; each branch below only asks whether it is
+          the one that happened. Exactly one can be true. */}
+      {stage === 'approved' ? (
         <p className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <CheckCircle2 className="size-4 shrink-0 text-primary" aria-hidden />
           {t('driverCompletionApproved')} — {t('driverCompletionApprovedHint')}
         </p>
-      ) : !pending ? (
-        <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-          {t('reviewNothingPending')}
-        </p>
-      ) : !mayReview ? (
-        <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-          {t('reviewNoPermission')}
-        </p>
-      ) : (
-        <div className="space-y-3 rounded-lg border border-border p-3">
-          <div>
-            <label
-              htmlFor="review-reject-reason"
-              className="mb-1.5 block text-xs font-medium text-muted-foreground"
-            >
-              {t('reviewRejectReasonLabel')}
-            </label>
-            <Input
-              id="review-reject-reason"
-              value={reason}
-              placeholder={t('reviewRejectPlaceholder')}
-              onChange={(event) => setReason(event.target.value)}
-              onBlur={() => setReasonTouched(true)}
-            />
-            {reasonTouched && reasonMissing ? (
-              <p className="mt-1 text-xs text-destructive">{t('reviewReasonRequired')}</p>
-            ) : null}
-          </div>
+      ) : null}
 
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Button
-              variant="destructive"
-              size="lg"
-              className="flex-1"
-              // ★ A BLANK REASON IS UNSENDABLE. The server refuses one with a
-              // CHECK the row cannot exist without; this stops the round trip.
-              disabled={decide || reasonMissing}
-              onClick={() => {
-                setReasonTouched(true);
-                if (!reasonMissing) void run(() => reject.mutateAsync(reason.trim()));
-              }}
-            >
-              {reject.isPending ? <Loader2 className="animate-spin" aria-hidden /> : <XCircle aria-hidden />}
-              {t('reviewReject')}
-            </Button>
+      {note ? (
+        <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">{t(note)}</p>
+      ) : null}
 
-            <Button
-              size="lg"
-              className="flex-1"
-              disabled={decide}
-              onClick={() => void run(() => approve.mutateAsync())}
-            >
-              {approve.isPending ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
-              {t('reviewApprove')}
-            </Button>
-          </div>
+      {stage === 'decide' ? (
+        <DecisionForm
+          approving={approve.isPending}
+          rejecting={reject.isPending}
+          onApprove={() => void run(() => approve.mutateAsync())}
+          onReject={(reason) => void run(() => reject.mutateAsync(reason))}
+        />
+      ) : null}
+    </div>
+  );
+}
 
-          {/* ★ SAID BEFORE THE CLICK, because there is no screen after it that
-              can undo anything. */}
-          <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            {t('reviewApproveWarning')}
-          </p>
-        </div>
-      )}
+/**
+ * The reason box and the two irreversible buttons.
+ *
+ * ★ ITS OWN COMPONENT SO THE REASON DRAFT IS ITS OWN CONCERN. `reason` and
+ * `reasonTouched` are of no interest to anything outside this box, and while
+ * they lived in the modal they sat beside evidence loading and mutation
+ * failure in one function that had grown past reading.
+ *
+ * ★ THE MUTATIONS STAY WITH THE PARENT, AND DELIBERATELY. `run` is what closes
+ * the modal only after the server agrees, and the failure it catches renders
+ * ABOVE this box — moving either down here would put the conflict message
+ * inside the thing a conflict makes disappear.
+ */
+function DecisionForm({
+  approving,
+  rejecting,
+  onApprove,
+  onReject,
+}: Readonly<{
+  approving: boolean;
+  rejecting: boolean;
+  onApprove: () => void;
+  onReject: (reason: string) => void;
+}>) {
+  const { t } = useLanguage();
+  const [reason, setReason] = useState('');
+  const [reasonTouched, setReasonTouched] = useState(false);
+
+  const deciding = approving || rejecting;
+  const reasonMissing = reason.trim() === '';
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3">
+      <div>
+        <label
+          htmlFor="review-reject-reason"
+          className="mb-1.5 block text-xs font-medium text-muted-foreground"
+        >
+          {t('reviewRejectReasonLabel')}
+        </label>
+        <Input
+          id="review-reject-reason"
+          value={reason}
+          placeholder={t('reviewRejectPlaceholder')}
+          onChange={(event) => setReason(event.target.value)}
+          onBlur={() => setReasonTouched(true)}
+        />
+        {reasonTouched && reasonMissing ? (
+          <p className="mt-1 text-xs text-destructive">{t('reviewReasonRequired')}</p>
+        ) : null}
+      </div>
+
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button
+          variant="destructive"
+          size="lg"
+          className="flex-1"
+          // ★ A BLANK REASON IS UNSENDABLE. The server refuses one with a
+          // CHECK the row cannot exist without; this stops the round trip.
+          disabled={deciding || reasonMissing}
+          onClick={() => {
+            setReasonTouched(true);
+            if (!reasonMissing) onReject(reason.trim());
+          }}
+        >
+          {rejecting ? <Loader2 className="animate-spin" aria-hidden /> : <XCircle aria-hidden />}
+          {t('reviewReject')}
+        </Button>
+
+        <Button size="lg" className="flex-1" disabled={deciding} onClick={onApprove}>
+          {approving ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
+          {t('reviewApprove')}
+        </Button>
+      </div>
+
+      {/* ★ SAID BEFORE THE CLICK, because there is no screen after it that
+          can undo anything. */}
+      <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+        {t('reviewApproveWarning')}
+      </p>
     </div>
   );
 }
