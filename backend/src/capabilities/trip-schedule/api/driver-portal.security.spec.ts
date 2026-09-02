@@ -178,7 +178,7 @@ describe('driver-portal HTTP security', () => {
 
   describe('without authentication', () => {
     it.each<Route>([['get', '/driver/trips'], ...scopedRoutes(TRIP_A)])(
-      'refuses %s %s with 401',
+      'refuses %s %s with 401, and reaches no service at all',
       async (method, path) => {
         const response = await request(app.getHttpServer())
           [method](path)
@@ -187,12 +187,16 @@ describe('driver-portal HTTP security', () => {
 
         expect(response.status).toBe(401);
         expect(response.body.error.code).toBe('UNAUTHORIZED');
+
+        // ★ IN THE SAME CASE AS THE REQUEST — see the sibling describe below,
+        // which already had this right. `beforeEach` builds new mocks for each
+        // test, so as a standalone case this asserted that objects created
+        // seconds earlier had not been called: true no matter what the guards
+        // do. Here it says what it means — this anonymous request reached no
+        // service.
+        noWriteHappened();
       },
     );
-
-    it('reaches no service at all', () => {
-      noWriteHappened();
-    });
   });
 
   // ------------------------------------------- ★ ANOTHER DRIVER'S TRIP --

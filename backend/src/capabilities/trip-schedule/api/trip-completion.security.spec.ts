@@ -108,18 +108,31 @@ describe('trip-completion HTTP security', () => {
   const anyBody = { reason: 'Thiếu chứng từ dầu.' };
 
   describe('without authentication', () => {
-    it.each([['get', LIST], ...DECISIONS] as const)('refuses %s %s', async (method, path) => {
-      const response = await request(app.getHttpServer())
-        [method](path)
-        .set('X-Requested-With', 'XMLHttpRequest')
-        .send(anyBody);
+    it.each([['get', LIST], ...DECISIONS] as const)(
+      'refuses %s %s, and reaches no service',
+      async (method, path) => {
+        const response = await request(app.getHttpServer())
+          [method](path)
+          .set('X-Requested-With', 'XMLHttpRequest')
+          .send(anyBody);
 
-      expect(response.status).toBe(401);
-    });
+        expect(response.status).toBe(401);
 
-    it('reaches no service', () => {
-      for (const mock of Object.values(completion)) expect(mock).not.toHaveBeenCalled();
-    });
+        // ★ THE SAME TEST CASE AS THE REQUEST, DELIBERATELY.
+        //
+        // This lived in an `it` of its own and asserted nothing at all:
+        // `beforeEach` mints a fresh set of `jest.fn()`s for EVERY test, so by
+        // the time that case ran it held mocks no request had ever touched.
+        // `not.toHaveBeenCalled()` on a brand-new mock is true by construction
+        // — it would have passed just as happily with the guard removed and
+        // the service called on every anonymous request.
+        //
+        // Asserting here, against the instance THIS request was served by, is
+        // what makes it evidence: the refusal happened before the controller
+        // body, not after it did the work and threw the answer away.
+        for (const mock of Object.values(completion)) expect(mock).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('a global administrator', () => {

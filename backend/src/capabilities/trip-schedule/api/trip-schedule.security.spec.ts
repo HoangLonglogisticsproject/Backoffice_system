@@ -211,26 +211,34 @@ describe('trip-schedule HTTP security', () => {
   // ------------------------------------------------------------ anonymous --
 
   describe('without authentication', () => {
-    it.each([...READS, ...WRITES])('refuses %s %s with 401', async (method, path) => {
-      const response = await request(app.getHttpServer())
-        [method](path)
-        .set('X-Requested-With', 'XMLHttpRequest')
-        .send({});
+    it.each([...READS, ...WRITES])(
+      'refuses %s %s with 401, and calls nothing on the services',
+      async (method, path) => {
+        const response = await request(app.getHttpServer())
+          [method](path)
+          .set('X-Requested-With', 'XMLHttpRequest')
+          .send({});
 
-      expect(response.status).toBe(401);
-      expect(response.body.error.code).toBe('UNAUTHORIZED');
-    });
+        expect(response.status).toBe(401);
+        expect(response.body.error.code).toBe('UNAUTHORIZED');
 
-    it('calls nothing on the services', () => {
-      for (const mock of [
-        ...Object.values(trips),
-        ...Object.values(catalogue),
-        ...Object.values(operations),
-        ...Object.values(execution),
-      ]) {
-        expect(mock).not.toHaveBeenCalled();
-      }
-    });
+        // ★ ASSERTED HERE BECAUSE `beforeEach` REBUILDS THE MOCKS PER TEST.
+        //
+        // As its own case this checked a set of `jest.fn()`s created moments
+        // earlier and never handed to a request — vacuously true, and it would
+        // have stayed green with the guard deleted. Against the instances that
+        // served THIS request it is the real claim: the refusal came before
+        // any service was reached, on every route in the table.
+        for (const mock of [
+          ...Object.values(trips),
+          ...Object.values(catalogue),
+          ...Object.values(operations),
+          ...Object.values(execution),
+        ]) {
+          expect(mock).not.toHaveBeenCalled();
+        }
+      },
+    );
   });
 
   // ------------------------------------------------- temporary credential --
