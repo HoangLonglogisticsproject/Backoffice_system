@@ -546,5 +546,15 @@ describe('trip-schedule HTTP security', () => {
 
       expect(response.status).toBe(200);
     });
+
+    it('★ still CREATES a trip — `trip.create` is untouched for employees', async () => {
+      // The boundary refuses an account TYPE, not a permission tier. An
+      // ordinary member held `trip.create` before this guard existed and holds
+      // it now; if that ever stops being true, this fails rather than the
+      // change being noticed in production.
+      await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(201);
+
+      expect(trips.create).toHaveBeenCalled();
+    });
   });
 });

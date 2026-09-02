@@ -176,6 +176,9 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
   const membershipsOf = (userId: string) =>
     sql(`SELECT id FROM department_memberships WHERE user_id = $1`, [userId]);
 
+  const assignmentsOf = (userId: string) =>
+    sql(`SELECT id FROM trip_driver_assignments WHERE driver_user_id = $1`, [userId]);
+
   const accountOf = (userId: string) =>
     sql<{ account_type: string; status: string }>(
       `SELECT account_type, status FROM users WHERE id = $1`,
@@ -199,6 +202,12 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       // ★ THE ABSENCE THAT IS THE WHOLE POINT. Not an empty department, not a
       // unit called "Tài xế" — no row at all.
       expect(await membershipsOf(created.userId)).toHaveLength(0);
+
+      // ★ AND NO TRIP EITHER. Creating an account is the IDENTITY layer;
+      // putting somebody on a trip is a separate act by a different person at a
+      // different time. An account that arrived already crewed would be this
+      // module quietly deciding dispatch.
+      expect(await assignmentsOf(created.userId)).toHaveLength(0);
     });
 
     it('★ reuses the ordinary first-login credential, and never returns the password', async () => {
