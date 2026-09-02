@@ -16,8 +16,15 @@ import { useSession } from '@/contexts/SessionProvider';
 import { useCompletionQueue } from '@/hooks/trip/useCompletionReview';
 import { formatCalendarDay } from '@/utils/format/datetime';
 import { reviewErrorKey } from '@/utils/driverErrors';
+import type { ExpenseDeclaration } from '@/types/driver';
 import type { OperationalBoardRow, OperationalStage } from '@/types/operationalBoard';
 import type { TranslationKey } from '@/types/translate';
+
+/** The two answers a driver can give. `null` is the absence of a request. */
+const DECLARATION_LABEL: Record<ExpenseDeclaration, TranslationKey> = {
+  expenses: 'driverDeclaredExpenses',
+  none: 'driverDeclaredNone',
+};
 import { CompletionReviewModal } from './components/CompletionReviewModal';
 
 /**
@@ -90,9 +97,13 @@ export default function CompletionReviewPage() {
 
       {loading ? (
         <p className="py-8 text-center text-sm text-muted-foreground">{t('driverLoading')}</p>
-      ) : queue.length === 0 ? (
+      ) : null}
+
+      {!loading && queue.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground">{t('reviewQueueEmpty')}</p>
-      ) : (
+      ) : null}
+
+      {!loading && queue.length > 0 ? (
         <div className="overflow-x-auto rounded-xl border border-border">
           <Table>
             <TableHeader>
@@ -118,7 +129,7 @@ export default function CompletionReviewPage() {
             </TableBody>
           </Table>
         </div>
-      )}
+      ) : null}
 
       {openTripId ? (
         <Modal isOpen onClose={() => setOpenTripId(null)} title={t('reviewTitle')}>
@@ -160,11 +171,10 @@ function QueueRow({
         </Badge>
       </TableCell>
       <TableCell className="whitespace-nowrap text-sm">
-        {row.expenseDeclaration === 'expenses'
-          ? t('driverDeclaredExpenses')
-          : row.expenseDeclaration === 'none'
-            ? t('driverDeclaredNone')
-            : '—'}
+        {/* ★ A LOOKUP PLUS ONE FLAT QUESTION. `null` is not a third
+            declaration — it means no completion request exists yet — so it is
+            asked separately rather than chained onto the two real answers. */}
+        {row.expenseDeclaration ? t(DECLARATION_LABEL[row.expenseDeclaration]) : '—'}
       </TableCell>
       <TableCell className="text-right">
         <Button size="sm" variant="outline" onClick={onOpen}>

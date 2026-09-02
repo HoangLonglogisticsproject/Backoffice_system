@@ -208,7 +208,7 @@ describe('the evidence', () => {
     expect(screen.getByText(/đến điểm lấy hàng/i)).toBeInTheDocument();
     expect(screen.getByText(/xác nhận giao hàng/i)).toBeInTheDocument();
     // ★ `recordedAt` is labelled and shown — it is the figure a reviewer trusts.
-    expect(screen.getAllByText(/máy chủ ghi/i).length).toBe(4);
+    expect(screen.getAllByText(/máy chủ ghi/i)).toHaveLength(4);
   });
 
   it('★ labels the handset clock as diagnostic, never as a fact', async () => {
@@ -224,7 +224,7 @@ describe('the evidence', () => {
     fetchExecutionEvents.mockResolvedValue([event('ARRIVED_PICKUP')]);
     await openReview();
 
-    expect(screen.getAllByText(/chưa báo/i).length).toBe(3);
+    expect(screen.getAllByText(/chưa báo/i)).toHaveLength(3);
   });
 
   it('shows a withdrawn event with its reason rather than hiding it', async () => {

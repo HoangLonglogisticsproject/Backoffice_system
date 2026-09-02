@@ -56,6 +56,34 @@ const NOTE_HINT: Record<TripCostCategory, TranslationKey> = {
   overtime: 'driverHintOvertime',
 };
 
+/**
+ * Why the declaration form is not on screen.
+ *
+ * ★ THREE REASONS, ASKED IN THE ORDER THEY OVERRIDE EACH OTHER. No lorry means
+ * no trip to spend against and nothing else matters; an approved trip is closed
+ * for good; anything else still open is merely waiting on the review. As nested
+ * ternaries inside the markup that precedence was real but invisible.
+ */
+const lockedReasonKey = (trip: DriverTripDetail): TranslationKey => {
+  if (trip.vehicle === null) return 'driverNeedVehicleFirst';
+  if (trip.accountability === 'APPROVED_IMMUTABLE') return 'driverExpenseFinal';
+  return 'driverExpenseLocked';
+};
+
+/**
+ * The chip in the panel header — where the figures stand.
+ *
+ * ★ THE SAME PRECEDENCE, AND DELIBERATELY NOT MERGED WITH `lockedReasonKey`.
+ * They agree today but answer different questions: one explains an absent form,
+ * the other labels a state that also exists while the form IS shown. Folding
+ * them would tie a future change in one to the other.
+ */
+const stateChipKey = (trip: DriverTripDetail): TranslationKey => {
+  if (trip.accountability === 'APPROVED_IMMUTABLE') return 'driverExpenseFinal';
+  if (trip.completion?.state === 'pending') return 'driverExpenseLocked';
+  return 'driverExpenseOpen';
+};
+
 interface Props {
   trip: DriverTripDetail;
   onDeclare: (input: {
@@ -185,11 +213,7 @@ export function ExpensePanel({
         {!open ? (
           <p className="flex items-center gap-1.5 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
             <Lock className="size-3.5 shrink-0" aria-hidden />
-            {trip.vehicle === null
-              ? t('driverNeedVehicleFirst')
-              : trip.accountability === 'APPROVED_IMMUTABLE'
-                ? t('driverExpenseFinal')
-                : t('driverExpenseLocked')}
+            {t(lockedReasonKey(trip))}
           </p>
         ) : adding ? (
           <ExpenseForm
@@ -223,12 +247,7 @@ export function ExpensePanel({
 function StateChip({ trip }: Readonly<{ trip: DriverTripDetail }>) {
   const { t } = useLanguage();
 
-  const label: TranslationKey =
-    trip.accountability === 'APPROVED_IMMUTABLE'
-      ? 'driverExpenseFinal'
-      : trip.completion?.state === 'pending'
-        ? 'driverExpenseLocked'
-        : 'driverExpenseOpen';
+  const label = stateChipKey(trip);
 
   return (
     <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">

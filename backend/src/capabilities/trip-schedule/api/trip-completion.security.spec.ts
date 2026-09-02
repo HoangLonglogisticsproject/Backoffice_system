@@ -179,7 +179,18 @@ describe('trip-completion HTTP security', () => {
     it('★ may still READ the attempts, which are dispatch information', async () => {
       // `trip.read` is `'any'`. The list carries a declaration word and a
       // rejection reason, never an amount.
-      await authed('get', LIST).expect(200);
+      //
+      // ★ ASSERTED ON THE RESPONSE, NOT CHAINED ONTO THE REQUEST. Supertest's
+      // `.expect(200)` does fail the test, but it is the only check here and it
+      // lives on the request builder — so the case reads as having no
+      // assertion at all to anything inspecting the test rather than running
+      // it. Same guarantee, stated where a reader and a linter both find it.
+      const response = await authed('get', LIST);
+
+      expect(response.status).toBe(200);
+      // And it genuinely reached the read path, rather than 200-ing from
+      // somewhere short of it.
+      expect(completion.listRequests).toHaveBeenCalledWith(TRIP);
     });
   });
 
@@ -229,7 +240,13 @@ describe('trip-completion HTTP security', () => {
     });
 
     it('refuses a reason that is only whitespace', async () => {
-      await authed('post', REJECT).send({ reason: '   ' }).expect(422);
+      const response = await authed('post', REJECT).send({ reason: '   ' });
+
+      expect(response.status).toBe(422);
+      // ★ THE POINT OF THE RULE. A blank reason must be refused BEFORE the
+      // service, because the service is what would write a rejection nobody
+      // could act on.
+      expect(completion.reject).not.toHaveBeenCalled();
     });
 
     it('takes no decider from the body', async () => {
@@ -238,7 +255,14 @@ describe('trip-completion HTTP security', () => {
     });
 
     it('refuses a malformed trip id', async () => {
-      await authed('post', '/trip-schedules/not-a-uuid/completion-requests/approve').expect(422);
+      const response = await authed(
+        'post',
+        '/trip-schedules/not-a-uuid/completion-requests/approve',
+      );
+
+      expect(response.status).toBe(422);
+      // Refused at the boundary: nothing reached the service to look up.
+      expect(completion.approve).not.toHaveBeenCalled();
     });
   });
 });

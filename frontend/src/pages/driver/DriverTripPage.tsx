@@ -28,7 +28,10 @@ export default function DriverTripPage() {
   const { tripId } = useParams<{ tripId: string }>();
   const { t, language } = useLanguage();
 
-  const { trip, loading, error, reload } = useMyTrip(tripId);
+  // ★ `loadError`, not `error`: this file already calls the WRITE failure
+  // `actionError`, and the read failure had no name of its own — so it took
+  // the generic one and every `catch` below had to avoid it.
+  const { trip, loading, error: loadError, reload } = useMyTrip(tripId);
   const { report, declare, correct, complete } = useDriverActions(tripId ?? '');
 
   const [actionError, setActionError] = useState<unknown>(null);
@@ -75,9 +78,9 @@ export default function DriverTripPage() {
     try {
       await work();
       return true;
-    } catch (failure) {
-      setActionError(failure);
-      if (shouldReloadAfter(failure)) reload();
+    } catch (error) {
+      setActionError(error);
+      if (shouldReloadAfter(error)) reload();
       return false;
     }
   };
@@ -86,12 +89,12 @@ export default function DriverTripPage() {
     return <p className="py-12 text-center text-sm text-muted-foreground">{t('driverLoading')}</p>;
   }
 
-  if (error || !trip) {
+  if (loadError || !trip) {
     return (
       <div className="space-y-4 py-12 text-center">
         {/* ★ A 403 SAYS "not yours" AND NOTHING ELSE. Never whether the trip
             exists, never whose it is. */}
-        <p className="text-sm text-muted-foreground">{t(driverErrorKey(error))}</p>
+        <p className="text-sm text-muted-foreground">{t(driverErrorKey(loadError))}</p>
         <Button variant="outline" size="lg" render={<Link to="/driver" />}>
           {t('driverBackToTrips')}
         </Button>
@@ -135,9 +138,9 @@ export default function DriverTripPage() {
     try {
       await declare.mutateAsync(input);
       return true;
-    } catch (failure) {
-      setActionError(failure);
-      if (shouldReloadAfter(failure)) reload();
+    } catch (error) {
+      setActionError(error);
+      if (shouldReloadAfter(error)) reload();
       return false;
     }
   };

@@ -914,7 +914,9 @@ describe('withdrawing an immutable figure', () => {
     // "void as a hidden edit" is unspellable rather than merely discouraged.
     const { service } = build();
 
-    expect(service.voidCost.length).toBe(3);
+    // `toHaveLength` on a FUNCTION reads its arity — three declared parameters,
+    // none of which is an amount.
+    expect(service.voidCost).toHaveLength(3);
   });
 
   it('refuses a second withdrawal rather than rewriting the first', async () => {

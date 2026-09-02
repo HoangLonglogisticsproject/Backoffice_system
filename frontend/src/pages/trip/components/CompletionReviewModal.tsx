@@ -10,7 +10,12 @@ import { formatDateTime } from '@/utils/format/datetime';
 import { formatMoney } from '@/utils/format/money';
 import { useCompletionDecision, useCompletionEvidence } from '@/hooks/trip/useCompletionReview';
 import { EXECUTION_EVENT_TYPES } from '@/types/driver';
-import type { CompletionRequest, ExecutionEvent, ExecutionEventType } from '@/types/driver';
+import type {
+  CompletionRequest,
+  CompletionState,
+  ExecutionEvent,
+  ExecutionEventType,
+} from '@/types/driver';
 import type { OperationalBoardRow } from '@/types/operationalBoard';
 import type { TranslationKey } from '@/types/translate';
 
@@ -38,6 +43,20 @@ const EVENT_LABEL: Record<ExecutionEventType, TranslationKey> = {
   PICKUP_CONFIRMED: 'driverStepPickupConfirmed',
   ARRIVED_DELIVERY: 'driverStepArrivedDelivery',
   DELIVERY_CONFIRMED: 'driverStepDeliveryConfirmed',
+};
+
+/**
+ * How each attempt reads at a glance.
+ *
+ * ★ A MAP, NOT A CHAIN. `CompletionState` has exactly three members and the
+ * mapping is data; spelling it as nested ternaries put a lookup table inside a
+ * JSX attribute. `pending` is included explicitly so adding a fourth state is a
+ * compile error here rather than a silent fall-through to `secondary`.
+ */
+const ATTEMPT_VARIANT: Record<CompletionState, 'default' | 'destructive' | 'secondary'> = {
+  approved: 'default',
+  rejected: 'destructive',
+  pending: 'secondary',
 };
 
 const CATEGORY_LABEL = {
@@ -300,9 +319,10 @@ function Timeline({
       <h3 className="mb-2 text-sm font-semibold">{t('reviewTimeline')}</h3>
       <ul className="space-y-2">
         {EXECUTION_EVENT_TYPES.map((type) => {
-          const live = events.filter((event) => event.type === type && event.voidedAt === null);
+          // ★ `find`, not `filter(...)[0]`: only the FIRST live reading is shown,
+          // which is DL-86's rule for this panel, and stopping at it says so.
+          const first = events.find((event) => event.type === type && event.voidedAt === null);
           const withdrawn = events.filter((event) => event.type === type && event.voidedAt !== null);
-          const first = live[0];
 
           return (
             <li key={type} className="rounded-lg border border-border px-3 py-2">
@@ -381,13 +401,19 @@ function Expenses({
     <section>
       <h3 className="mb-2 text-sm font-semibold">{t('reviewExpenses')}</h3>
 
+      {/* ★ `cost.read` is a separate key with a separate tier. A reviewer who
+          does not hold it decides on the declaration and the timeline. Asked as
+          three flat questions rather than one chain: "may I see them", "are
+          there any", "here they are". */}
       {hidden ? (
-        // ★ `cost.read` is a separate key with a separate tier. A reviewer who
-        // does not hold it decides on the declaration and the timeline.
         <p className="text-sm text-muted-foreground">{t('reviewExpensesHidden')}</p>
-      ) : expenses.length === 0 ? (
+      ) : null}
+
+      {!hidden && expenses.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('reviewNoExpense')}</p>
-      ) : (
+      ) : null}
+
+      {!hidden && expenses.length > 0 ? (
         <ul className="divide-y divide-border rounded-lg border border-border">
           {expenses.map((line) => (
             <li key={line.id} className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -397,7 +423,7 @@ function Expenses({
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -425,15 +451,7 @@ function Attempts({
               <span className="font-medium">
                 {t('driverAttempt')} {request.attemptNo}
               </span>
-              <Badge
-                variant={
-                  request.state === 'approved'
-                    ? 'default'
-                    : request.state === 'rejected'
-                      ? 'destructive'
-                      : 'secondary'
-                }
-              >
+              <Badge variant={ATTEMPT_VARIANT[request.state]}>
                 {request.state}
               </Badge>
             </div>

@@ -143,6 +143,21 @@ export const nextEvent = (events: readonly ExecutionEvent[]): ExecutionEventType
  * against the delivery time. Comparing either with the other produces a delay
  * wrong by the length of the journey.
  */
+/**
+ * Reported → `done`. Not reported but next in line → `current`. Otherwise it is
+ * still ahead.
+ *
+ * ★ A FUNCTION RATHER THAN A NESTED TERNARY IN AN OBJECT LITERAL. The two
+ * questions are independent — "has it happened" and "is it the one to do now" —
+ * and reading them as one expression buried in a `map` hid that. `done` wins
+ * over `current` because a reported step is finished regardless of what comes
+ * next.
+ */
+const stepStateOf = (reported: boolean, isNext: boolean): StepState => {
+  if (reported) return 'done';
+  return isNext ? 'current' : 'upcoming';
+};
+
 export const executionSteps = (trip: DriverTripDetail): ExecutionStep[] => {
   const next = nextEvent(trip.events);
 
@@ -152,7 +167,7 @@ export const executionSteps = (trip: DriverTripDetail): ExecutionStep[] => {
 
     return {
       type,
-      state: event ? 'done' : type === next ? 'current' : 'upcoming',
+      state: stepStateOf(event !== null, type === next),
       actualAt: event?.actualAt ?? null,
       scheduledAt: isPickupStep ? trip.scheduledPickupAt : trip.scheduledDeliveryAt,
     };

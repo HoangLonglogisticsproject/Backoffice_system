@@ -273,7 +273,7 @@ describe('★ driver write routes — resource scope', () => {
     const params = [...controller.matchAll(/@Param\('tripId', UuidParam\)/g)];
 
     // Four writes plus the detail read.
-    expect(params.length).toBe(5);
+    expect(params).toHaveLength(5);
     expect(controller).not.toMatch(/body\.tripId/);
   });
 
