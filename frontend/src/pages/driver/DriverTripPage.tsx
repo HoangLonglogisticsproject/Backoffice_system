@@ -1,0 +1,282 @@
+import { useCallback, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { ArrowLeft, MapPin, MessageSquare, Package, Phone, Truck, User } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useDriverActions, useMyTrip } from '@/hooks/driver';
+import { driverErrorKey, shouldReloadAfter } from '@/utils/driverErrors';
+import { formatCalendarDay } from '@/utils/format/datetime';
+import type { ExecutionEventType, ExpenseDeclaration } from '@/types/driver';
+import type { TripCostCategory } from '@/types/tripCost';
+import { CompletionPanel } from './components/CompletionPanel';
+import { ExecutionTimeline } from './components/ExecutionTimeline';
+import { ExpensePanel } from './components/ExpensePanel';
+
+/**
+ * One trip, everything the driver needs, in the order they need it.
+ *
+ * ★ THE ORDER OF THE SECTIONS IS THE JOB, not a layout preference: where am I
+ * going, what have I reported, what did I spend, am I finished. A driver
+ * scrolls top to bottom once per trip.
+ *
+ * ★ EVERY BUSINESS RULE ON THIS PAGE COMES FROM `utils/driverExecution`. This
+ * file wires data to components and turns failures into sentences; it decides
+ * no lifecycle. That is what keeps the rules testable without a browser and
+ * stops them drifting from the server quietly.
+ */
+export default function DriverTripPage() {
+  const { tripId } = useParams<{ tripId: string }>();
+  const { t, language } = useLanguage();
+
+  // ★ `loadError`, not `error`: this file already calls the WRITE failure
+  // `actionError`, and the read failure had no name of its own — so it took
+  // the generic one and every `catch` below had to avoid it.
+  const { trip, loading, error: loadError, reload } = useMyTrip(tripId);
+  const { report, declare, correct, complete } = useDriverActions(tripId ?? '');
+
+  const [actionError, setActionError] = useState<unknown>(null);
+  /**
+   * ★ THE COMPLETION CHECKPOINT CAN OPEN THE EXPENSE FORM.
+   *
+   * The two panels are separate components but one workflow: choosing "there
+   * were expenses" with nothing declared has exactly one useful next step, and
+   * making the driver find it themselves is the bug this replaces.
+   */
+  const [openExpenseForm, setOpenExpenseForm] = useState(false);
+
+  /**
+   * Brings the figures into view — used by the checkpoint and by a rejection.
+   *
+   * ★ `?.scrollIntoView?.()`, AND THE SECOND `?.` IS THE ONE THAT MATTERS. The
+   * first guards a missing element; the second guards a missing METHOD, which
+   * is a different failure and the one that actually bit. `scrollIntoView` is
+   * not implemented by jsdom, so the call threw inside a click handler and took
+   * the whole render down with it — 581 tests passed while two unhandled errors
+   * failed the run.
+   *
+   * Scrolling is a courtesy. Somewhere that cannot scroll should show the
+   * driver an unscrolled page, never a broken one — the same reasoning that
+   * wraps every `sessionStorage` access in `driverDraft`.
+   */
+  const goToExpenses = useCallback(() => {
+    document.getElementById('driver-expenses')?.scrollIntoView?.({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }, []);
+
+  /**
+   * Every write goes through here.
+   *
+   * ★ A 409 REFETCHES BEFORE IT COMPLAINS. It means the trip moved underneath —
+   * the office changed the driver, a review landed, the completion was sent from
+   * another device — so the screen is showing a state that no longer exists.
+   * Re-reading turns a dead end into a screen that explains itself.
+   */
+  const run = async (work: () => Promise<unknown>): Promise<boolean> => {
+    setActionError(null);
+    try {
+      await work();
+      return true;
+    } catch (error) {
+      setActionError(error);
+      if (shouldReloadAfter(error)) reload();
+      return false;
+    }
+  };
+
+  if (loading) {
+    return <p className="py-12 text-center text-sm text-muted-foreground">{t('driverLoading')}</p>;
+  }
+
+  if (loadError || !trip) {
+    return (
+      <div className="space-y-4 py-12 text-center">
+        {/* ★ A 403 SAYS "not yours" AND NOTHING ELSE. Never whether the trip
+            exists, never whose it is. */}
+        <p className="text-sm text-muted-foreground">{t(driverErrorKey(loadError))}</p>
+        <Button variant="outline" size="lg" render={<Link to="/driver" />}>
+          {t('driverBackToTrips')}
+        </Button>
+      </div>
+    );
+  }
+
+  const reportEvent = (type: ExecutionEventType) =>
+    void run(() =>
+      report.mutateAsync({
+        type,
+        // ★ NO TIME IS SENT, AND THAT IS THE RULE RATHER THAN AN OMISSION.
+        //
+        // `actual_at` is what every delay in the system is measured from, and a
+        // phone's clock is set by the phone's owner — a handset an hour out
+        // would write an hour of lateness nobody caused. The server stamps it
+        // when the tap arrives.
+        //
+        // The handset's own reading goes in `deviceReportedAt`, which is
+        // DIAGNOSTIC: kept so a disagreement can be investigated, never read by
+        // anything that computes a delay or an order.
+        deviceReportedAt: new Date().toISOString(),
+        // ★ ONE ID PER INTENT, NOT PER ATTEMPT. A retried request must collide
+        // with its own first attempt so an arrival is never recorded twice.
+        clientEventId: `${trip.assignment.id}:${type}`,
+      }),
+    );
+
+  /**
+   * ★ RETURNS WHETHER THE SERVER ACCEPTED, so the form knows whether to keep
+   * the draft. Discarding it on a network error is the one moment a figure
+   * must not be thrown away.
+   */
+  const declareExpense = async (input: {
+    category: TripCostCategory;
+    amount: string;
+    note: string | null;
+    clientRequestId: string;
+  }): Promise<boolean> => {
+    setActionError(null);
+    try {
+      await declare.mutateAsync(input);
+      return true;
+    } catch (error) {
+      setActionError(error);
+      if (shouldReloadAfter(error)) reload();
+      return false;
+    }
+  };
+
+  /**
+   * ★ ANSWERS WHETHER THE SERVER ACCEPTED, for the same reason `declareExpense`
+   * does: the form may only close on a yes.
+   *
+   * A correction is the one write with NO draft behind it — persisting it would
+   * resurrect an abandoned edit on the next reload, which is why `driverDraft`
+   * is not used here. That makes the open form the only place the driver's
+   * retyped figure exists, so closing it before the server has agreed is the
+   * moment the figure is lost.
+   */
+  const correctExpense = (input: {
+    costId: string;
+    category: TripCostCategory;
+    amount: string;
+    note: string | null;
+  }): Promise<boolean> => run(() => correct.mutateAsync(input));
+
+  const submitCompletion = (declaration: ExpenseDeclaration) =>
+    void run(() => complete.mutateAsync(declaration));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" size="icon-lg" aria-label={t('driverBackToTrips')} render={<Link to="/driver" />}>
+          <ArrowLeft />
+        </Button>
+        <div className="min-w-0">
+          <h1 className="truncate font-semibold">{trip.customer?.name ?? t('driverNotSet')}</h1>
+          <p className="text-xs text-muted-foreground">
+            {formatCalendarDay(trip.scheduledOn, language)}
+          </p>
+        </div>
+      </div>
+
+      {actionError ? (
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+        >
+          {t(driverErrorKey(actionError))}
+        </p>
+      ) : null}
+
+      <TripFacts trip={trip} />
+
+      <ExecutionTimeline
+        trip={trip}
+        now={new Date()}
+        onReport={reportEvent}
+        reporting={report.isPending}
+      />
+
+      <ExpensePanel
+        trip={trip}
+        onDeclare={declareExpense}
+        onCorrect={correctExpense}
+        saving={declare.isPending || correct.isPending}
+        openForm={openExpenseForm}
+        onFormClosed={() => setOpenExpenseForm(false)}
+      />
+
+      <CompletionPanel
+        trip={trip}
+        onSubmit={submitCompletion}
+        submitting={complete.isPending}
+        onDeclareExpenses={() => {
+          setOpenExpenseForm(true);
+          goToExpenses();
+        }}
+        onReviewExpenses={goToExpenses}
+      />
+    </div>
+  );
+}
+
+/**
+ * The whitelisted facts, and only those.
+ *
+ * ★ THERE IS NO PRICE, NO COST, NO HIRE AMOUNT AND NO `note` HERE — not because
+ * they are filtered, but because the server never sends them. A field can only
+ * appear on this screen after it appears in the server's whitelist, which is
+ * the point of building it that way round.
+ */
+function TripFacts({ trip }: Readonly<{ trip: ReturnType<typeof useMyTrip>['trip'] }>) {
+  const { t } = useLanguage();
+  if (!trip) return null;
+
+  return (
+    <section className="space-y-3 rounded-xl border border-border bg-background p-4">
+      <Fact icon={<Truck />} label={t('driverVehicle')} value={trip.vehicle?.plate ?? null} />
+      <Fact icon={<User />} label={t('driverCustomer')} value={trip.customer?.name ?? null} />
+
+      <Fact icon={<MapPin />} label={t('driverPickup')} value={trip.pickupAddress} />
+      <Fact icon={<Phone />} label={t('driverContact')} value={trip.pickupContact} />
+
+      <Fact icon={<MapPin />} label={t('driverDelivery')} value={trip.deliveryAddress} />
+      <Fact icon={<Phone />} label={t('driverContact')} value={trip.deliveryContact} />
+
+      <Fact icon={<Package />} label={t('driverCargo')} value={trip.cargoInfo} />
+
+      {/* ★ THE ONE FIELD WRITTEN FOR THE DRIVER, so it is the one given room. */}
+      {trip.driverInstructions ? (
+        <div className="rounded-lg bg-muted/60 p-3">
+          <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <MessageSquare className="size-3.5" aria-hidden />
+            {t('driverInstructions')}
+          </p>
+          <p className="text-sm whitespace-pre-wrap">{trip.driverInstructions}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function Fact({
+  icon,
+  label,
+  value,
+}: Readonly<{ icon: React.ReactNode; label: string; value: string | null }>) {
+  const { t } = useLanguage();
+
+  return (
+    <div className="flex gap-2.5">
+      <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4" aria-hidden>
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className={value ? 'text-sm' : 'text-sm text-muted-foreground'}>
+          {value ?? t('driverNotSet')}
+        </p>
+      </div>
+    </div>
+  );
+}

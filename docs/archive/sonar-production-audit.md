@@ -1,3 +1,15 @@
+> # ⚠ HISTORICAL — POINT-IN-TIME AUDIT
+>
+> **Đây là ảnh chụp tại một thời điểm, KHÔNG phải living architecture và KHÔNG phải
+> source of truth.**
+>
+> Nội dung giữ nguyên, không sửa. Nó ghi lại tình trạng tại thời điểm audit được
+> thực hiện — hệ thống đã thay đổi từ đó.
+>
+> Tài liệu kiến trúc đang có hiệu lực: [`../README.md`](../README.md).
+>
+> ---
+
 # SonarCloud Accepted Findings — Production Database & Backend Audit
 
 **Branch:** `feat/sonar-db-production-audit`

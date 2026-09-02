@@ -6,6 +6,12 @@ import type {
   TripCostCategory,
   TripCostTotals,
 } from '../domain/trip-cost';
+import type {
+  TripCostEdit,
+  TripCostSource,
+  TripCostState,
+  VehicleOwnership,
+} from '../domain/trip-execution';
 
 /**
  * SQL for a trip's money. Opens no transaction; decides nothing.
@@ -54,6 +60,23 @@ const AUDIT = ['note', 'created_by', 'created_at', 'voided_at', 'voided_by', 'vo
  *
  * `alias` is `'c.'` / `'h.'` inside a joined read, `''` in a RETURNING clause.
  */
+/**
+ * The lifecycle columns 0016 added.
+ *
+ * Listed apart from the original four so it stays visible that everything here
+ * arrived with the driver portal, and that a backoffice line carries the
+ * defaults 0016 chose precisely so its behaviour did not change.
+ */
+const LIFECYCLE = [
+  'state',
+  'source',
+  'driver_assignment_id',
+  'vehicle_id',
+  'vehicle_ownership',
+  'locked_at',
+  'locked_by',
+] as const;
+
 const costColumns = (alias = ''): string =>
   [
     `${alias}id`,
@@ -61,6 +84,7 @@ const costColumns = (alias = ''): string =>
     `${alias}category`,
     `${alias}amount::text AS amount`,
     ...AUDIT.map((column) => `${alias}${column}`),
+    ...LIFECYCLE.map((column) => `${alias}${column}`),
   ].join(', ');
 
 const hireColumns = (alias = ''): string =>
@@ -122,6 +146,13 @@ interface CostRow extends AuditRow {
   trip_id: string;
   category: TripCostCategory;
   amount: string;
+  state: TripCostState;
+  source: TripCostSource;
+  driver_assignment_id: string | null;
+  vehicle_id: string | null;
+  vehicle_ownership: VehicleOwnership | null;
+  locked_at: Date | null;
+  locked_by: string | null;
 }
 
 interface HireRow extends AuditRow {
@@ -148,6 +179,13 @@ const toCost = (row: CostRow): TripCost => ({
   tripId: row.trip_id,
   category: row.category,
   amount: row.amount,
+  state: row.state,
+  source: row.source,
+  driverAssignmentId: row.driver_assignment_id,
+  vehicleId: row.vehicle_id,
+  vehicleOwnership: row.vehicle_ownership,
+  lockedAt: row.locked_at,
+  lockedBy: row.locked_by,
   ...toAudit(row),
 });
 
@@ -245,6 +283,262 @@ export class TripCostRepository {
       [id, by, reason, now],
     );
     return rows[0] ? toCost(rows[0]) : null;
+  }
+
+  // ------------------------------------------------- the driver's lifecycle ----
+
+  /**
+   * Records a figure a DRIVER typed.
+   *
+   * ★ SEPARATE FROM `create`, AND NOT AN OPTIONAL ARGUMENT ON IT. The two write
+   * genuinely different rows: `create` writes a backoffice line that is final on
+   * arrival, this one writes an editable line carrying the assignment and the
+   * snapshots that make it auditable later. Folding them together would mean
+   * seven parameters that are meaningless for one of the two callers, and a
+   * `state` a caller could pass by mistake.
+   *
+   * ★ EVERY SNAPSHOT IS A PARAMETER. Reading the trip's vehicle inside this
+   * INSERT would store whatever the trip says at the instant of the write, which
+   * is not the value the service checked under its lock a moment earlier.
+   */
+  async declare(
+    input: {
+      tripId: string;
+      driverAssignmentId: string;
+      category: TripCostCategory;
+      amount: string;
+      note: string | null;
+      vehicleId: string | null;
+      vehicleOwnership: VehicleOwnership | null;
+      clientRequestId: string | null;
+      createdBy: string;
+    },
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripCost> {
+    const rows = await executor.query<CostRow>(
+      writeReturningAuthor(
+        `INSERT INTO trip_costs
+           (trip_id, category, amount, note, created_by, state, source,
+            driver_assignment_id, vehicle_id, vehicle_ownership, client_request_id)
+         VALUES ($1, $2, $3::numeric, $4, $5, 'editable', 'driver_portal', $6, $7, $8, $9)`,
+        costColumns(),
+      ),
+      [
+        input.tripId,
+        input.category,
+        input.amount,
+        input.note,
+        input.createdBy,
+        input.driverAssignmentId,
+        input.vehicleId,
+        input.vehicleOwnership,
+        input.clientRequestId,
+      ],
+    );
+
+    const row = rows[0];
+    if (!row) throw new Error('INSERT INTO trip_costs returned no row');
+
+    return toCost(row);
+  }
+
+  /**
+   * The line a retried request already wrote, if there is one.
+   *
+   * Lets the service answer a duplicate with the ORIGINAL record: a driver on a
+   * bad connection did nothing wrong, and refusing the retry would leave them
+   * unsure whether the figure was stored at all.
+   */
+  async findByClientRequestId(
+    tripId: string,
+    clientRequestId: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripCost | null> {
+    const rows = await executor.query<CostRow>(
+      `${costsWithAuthor} WHERE c.trip_id = $1 AND c.client_request_id = $2`,
+      [tripId, clientRequestId],
+    );
+    return rows[0] ? toCost(rows[0]) : null;
+  }
+
+  /**
+   * The lines THIS DRIVER declared on this trip.
+   *
+   * ★ TWO FILTERS, AND BOTH ARE THE POINT. `source = 'driver_portal'` keeps
+   * backoffice cost lines out — those are internal accounting the contract
+   * keeps from the driver — and `created_by` keeps a previous driver's
+   * declarations out after a handover. Either one alone would leak.
+   *
+   * ⚠ THERE IS NO TOTAL METHOD BESIDE THIS ONE, ON PURPOSE. A trip's total
+   * includes the price agreed with a hired carrier, which is precisely the
+   * commercial figure a driver must never see. The driver's screen adds up
+   * nothing; it lists what they typed.
+   */
+  async listDeclaredByDriver(
+    tripId: string,
+    driverUserId: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripCost[]> {
+    const rows = await executor.query<CostRow>(
+      `${costsWithAuthor}
+        WHERE c.trip_id = $1
+          AND c.created_by = $2
+          AND c.source = 'driver_portal'
+          AND c.voided_at IS NULL
+        ${ORDER}`,
+      [tripId, driverUserId],
+    );
+    return rows.map(toCost);
+  }
+
+  /** One line, locked for the rest of the transaction. */
+  async lockById(id: string, executor: DatabaseQuery): Promise<TripCost | null> {
+    const rows = await executor.query<CostRow>(
+      `${costsWithAuthor} WHERE c.id = $1 FOR UPDATE OF c`,
+      [id],
+    );
+    return rows[0] ? toCost(rows[0]) : null;
+  }
+
+  /**
+   * Corrects a figure that is still editable.
+   *
+   * ★ `WHERE state = 'editable'` IS NOT BELT AND BRACES. 0016's trigger refuses
+   * the same thing, but a trigger raises an exception that reaches a client as a
+   * 500; losing the race here simply returns no row, and the service turns that
+   * into a conflict that says what happened. The trigger stays because it also
+   * covers callers that never come through this method.
+   */
+  async editEditable(
+    id: string,
+    values: { category: TripCostCategory; amount: string; note: string | null },
+    executor: DatabaseQuery,
+  ): Promise<TripCost | null> {
+    const rows = await executor.query<CostRow>(
+      writeReturningAuthor(
+        `UPDATE trip_costs
+            SET category = $2, amount = $3::numeric, note = $4
+          WHERE id = $1 AND state = 'editable' AND voided_at IS NULL`,
+        costColumns(),
+      ),
+      [id, values.category, values.amount, values.note],
+    );
+    return rows[0] ? toCost(rows[0]) : null;
+  }
+
+  /**
+   * Writes the edit log.
+   *
+   * One row per FIELD, because "something changed at 14:02" is not an answer.
+   * Called in the same transaction as the edit itself — a log written separately
+   * is a log that can be missing for the change somebody is asking about.
+   */
+  async recordEdits(
+    costId: string,
+    edits: readonly {
+      field: 'category' | 'amount' | 'note';
+      from: string | null;
+      to: string | null;
+    }[],
+    editedBy: string,
+    executor: DatabaseQuery,
+  ): Promise<void> {
+    for (const edit of edits) {
+      await executor.query(
+        `INSERT INTO trip_cost_edits (cost_id, field, old_value, new_value, edited_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [costId, edit.field, edit.from, edit.to, editedBy],
+      );
+    }
+  }
+
+  /** What was changed on one line, newest first. */
+  async listEdits(costId: string, executor: DatabaseQuery = this.db): Promise<TripCostEdit[]> {
+    const rows = await executor.query<{
+      id: string;
+      cost_id: string;
+      field: 'category' | 'amount' | 'note';
+      old_value: string | null;
+      new_value: string | null;
+      edited_by: string;
+      edited_by_display_name: string;
+      edited_at: Date;
+    }>(
+      `SELECT e.id, e.cost_id, e.field, e.old_value, e.new_value, e.edited_by, e.edited_at,
+              u.display_name AS edited_by_display_name
+         FROM trip_cost_edits e
+         JOIN users u ON u.id = e.edited_by
+        WHERE e.cost_id = $1
+        ORDER BY e.edited_at DESC, e.id DESC`,
+      [costId],
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      costId: row.cost_id,
+      field: row.field,
+      oldValue: row.old_value,
+      newValue: row.new_value,
+      editedBy: row.edited_by,
+      editedByUser: { id: row.edited_by, displayName: row.edited_by_display_name },
+      editedAt: row.edited_at,
+    }));
+  }
+
+  /**
+   * Freezes a trip's declared lines while a completion request is outstanding.
+   *
+   * ★ THREE SEPARATE METHODS RATHER THAN ONE PARAMETERISED `setState`. They
+   * differ in what happens to the lock columns — set, cleared, left alone — and
+   * one method taking a flag for that is a method whose correctness depends on
+   * every caller having read its documentation.
+   *
+   * Voided lines are skipped throughout: a withdrawn figure has no state worth
+   * moving, and it is excluded from every total anyway.
+   */
+  async lockForTrip(tripId: string, by: string, at: Date, executor: DatabaseQuery): Promise<number> {
+    const rows = await executor.query<{ id: string }>(
+      `UPDATE trip_costs
+          SET state = 'locked', locked_at = $3, locked_by = $2
+        WHERE trip_id = $1 AND state = 'editable' AND voided_at IS NULL
+        RETURNING id`,
+      [tripId, by, at],
+    );
+    return rows.length;
+  }
+
+  /** Reopens a trip's lines after a rejection. Locking was always temporary. */
+  async unlockForTrip(tripId: string, executor: DatabaseQuery): Promise<number> {
+    const rows = await executor.query<{ id: string }>(
+      `UPDATE trip_costs
+          SET state = 'editable', locked_at = NULL, locked_by = NULL
+        WHERE trip_id = $1 AND state = 'locked' AND voided_at IS NULL
+        RETURNING id`,
+      [tripId],
+    );
+    return rows.length;
+  }
+
+  /**
+   * Makes a trip's figures permanent. This is what approval MEANS.
+   *
+   * `editable` is included alongside `locked` deliberately: a line declared
+   * while the request was already pending was never locked, and leaving it
+   * editable after the trip closed would be a figure that can still move after
+   * the money stopped moving.
+   *
+   * The lock columns are left as they are — they record when the freeze
+   * happened, and a line that went straight to immutable never had one.
+   */
+  async finalizeForTrip(tripId: string, executor: DatabaseQuery): Promise<number> {
+    const rows = await executor.query<{ id: string }>(
+      `UPDATE trip_costs
+          SET state = 'immutable'
+        WHERE trip_id = $1 AND state IN ('editable', 'locked') AND voided_at IS NULL
+        RETURNING id`,
+      [tripId],
+    );
+    return rows.length;
   }
 }
 

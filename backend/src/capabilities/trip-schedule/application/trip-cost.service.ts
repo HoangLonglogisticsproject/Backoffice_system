@@ -1,5 +1,11 @@
-import { Injectable } from '@nestjs/common';
-import { ConflictError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+} from '../../../common/errors/domain.error';
+import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
   isRecordableAmount,
   TRIP_COST_CATEGORIES,
@@ -13,6 +19,9 @@ import {
   TripCostRepository,
   TripCostTotalsRepository,
 } from '../persistence/trip-cost.repository';
+import type { TripCostEdit, VehicleOwnership } from '../domain/trip-execution';
+import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
+import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
 
 /**
@@ -39,10 +48,13 @@ import { TripScheduleRepository } from '../persistence/trip-schedule.repository'
 @Injectable()
 export class TripCostService {
   constructor(
+    @Inject(DATABASE) private readonly db: Database,
     private readonly trips: TripScheduleRepository,
     private readonly costs: TripCostRepository,
     private readonly hires: OutsourceHireRepository,
     private readonly totals: TripCostTotalsRepository,
+    private readonly assignments: DriverAssignmentRepository,
+    private readonly vehicles: TripVehicleRepository,
   ) {}
 
   // ---------------------------------------------------------------- costs ----
@@ -119,6 +131,172 @@ export class TripCostService {
     if (!voided) throw new ConflictError('That cost line has already been voided.');
 
     return voided;
+  }
+
+  // -------------------------------------------------- declared by a driver ----
+
+  /**
+   * A driver declares what they just spent.
+   *
+   * ★ NOT `createCost` WITH EXTRA ARGUMENTS. The two write different rows on
+   * purpose: the backoffice one is final on arrival, this one is EDITABLE until
+   * the trip is submitted, and it carries the assignment and the two snapshots
+   * that make it auditable a year later. See `declare` in the repository.
+   *
+   * ★ THE RETRY IS ANSWERED, NOT REFUSED. A phone on a bad connection sends the
+   * same declaration three times; the second and third find it already written
+   * and get the original back. Only the pair that arrive simultaneously reach
+   * `uq_trip_cost_client_request`, and one of them loses there.
+   */
+  async declareCost(input: {
+    tripId: string;
+    category: TripCostCategory;
+    amount: string;
+    note?: string | null;
+    clientRequestId?: string | null;
+    declaredBy: string;
+  }): Promise<TripCost> {
+    requireCategory(input.category);
+    requireAmount(input.amount);
+
+    const clientRequestId = blankToNull(input.clientRequestId);
+    if (clientRequestId) {
+      const already = await this.costs.findByClientRequestId(input.tripId, clientRequestId);
+      if (already) return already;
+    }
+
+    return this.db.transaction(async (tx) => {
+      const trip = await this.trips.lockActive(input.tripId, tx);
+      if (!trip) throw new NotFoundError('Trip not found.');
+      if (trip.status === 'done') throw new ConflictError('That trip is closed.');
+
+      // ★ NO VEHICLE, NO EXPENSE — contract §4.1a, the operational ordering.
+      // A figure declared before a lorry is assigned has nothing to attribute
+      // itself to: the snapshot would be empty and the outsourced-category rule
+      // below would have nothing to read.
+      if (!trip.vehicleId) {
+        throw new ConflictError('That trip has no vehicle yet, so there is nothing to spend on.');
+      }
+
+      const assignment = await this.assignments.lockActive(input.tripId, tx);
+      if (!assignment) throw new ConflictError('That trip has no driver.');
+
+      // A rule about DATA rather than about a role, so no permission tier can
+      // express it: the guard knows who somebody IS, not which trip they are on.
+      if (assignment.driverUserId !== input.declaredBy) {
+        throw new ForbiddenError('Only the driver assigned to a trip may declare its expenses.');
+      }
+
+      const vehicleOwnership = await this.ownershipOf(trip.vehicleId, tx);
+
+      // ★ SAID HERE AS WELL AS IN THE DATABASE, AND FOR A DIFFERENT AUDIENCE.
+      // `trip_costs_outsourced_category` refuses the same row, but a CHECK
+      // violation reaches a client as a 500. A hired lorry's fuel and tolls are
+      // inside the one price agreed with its carrier, so claiming them again
+      // here is the same money counted twice.
+      if (vehicleOwnership === 'outsourced' && (input.category === 'fuel' || input.category === 'toll')) {
+        throw new ValidationError(
+          'Fuel and tolls are already inside the price agreed with the carrier for a hired lorry.',
+        );
+      }
+
+      return this.costs.declare(
+        {
+          tripId: input.tripId,
+          driverAssignmentId: assignment.id,
+          category: input.category,
+          amount: input.amount,
+          note: blankToNull(input.note),
+          vehicleId: trip.vehicleId,
+          vehicleOwnership,
+          clientRequestId,
+          createdBy: input.declaredBy,
+        },
+        tx,
+      );
+    });
+  }
+
+  /**
+   * Corrects a figure that has not been locked yet.
+   *
+   * ★ THIS IS THE METHOD 0012 SAID WOULD NEVER EXIST, AND THE REASON IT DOES.
+   * That rule was written for a clerk entering an invoice, where a correction is
+   * a void and a replacement. A driver mistyping a digit at a fuel station would
+   * produce two rows and a void reason reading "typo" — noise that buries the
+   * corrections that matter. So a DECLARED line is editable until it is
+   * submitted, and every change is logged field by field.
+   *
+   * ★ AND THE EDIT LOG IS WRITTEN IN THE SAME TRANSACTION. A change recorded
+   * without its log is a figure that moved and cannot be explained, which is
+   * worse than not allowing the edit at all.
+   */
+  async editCost(
+    tripId: string,
+    costId: string,
+    patch: { category?: TripCostCategory; amount?: string; note?: string | null },
+    editedBy: string,
+  ): Promise<TripCost> {
+    if (patch.category !== undefined) requireCategory(patch.category);
+    if (patch.amount !== undefined) requireAmount(patch.amount);
+
+    return this.db.transaction(async (tx) => {
+      const current = await this.costs.lockById(costId, tx);
+      // Belonging to the trip in the route is checked, not assumed: a caller
+      // holding one trip's id must not reach another trip's line by pairing it
+      // with a foreign cost id.
+      if (current?.tripId !== tripId) throw new NotFoundError('Cost line not found.');
+      if (current.voidedAt) throw new ConflictError('That cost line has been voided.');
+
+      if (current.source !== 'driver_portal') {
+        throw new ConflictError('A backoffice cost line is corrected by voiding it, not by editing.');
+      }
+      if (current.state !== 'editable') {
+        throw new ConflictError(
+          current.state === 'locked'
+            ? 'That trip has been submitted for completion, so its figures are frozen.'
+            : 'That trip is closed and its figures are final.',
+        );
+      }
+      if (current.createdBy !== editedBy) {
+        throw new ForbiddenError('A driver may only correct the figures they declared.');
+      }
+
+      const values = {
+        category: patch.category ?? current.category,
+        amount: patch.amount ?? current.amount,
+        note: 'note' in patch ? blankToNull(patch.note) : current.note,
+      };
+
+      const edits = ([
+        { field: 'category' as const, from: current.category, to: values.category },
+        { field: 'amount' as const, from: current.amount, to: values.amount },
+        { field: 'note' as const, from: current.note, to: values.note },
+      ]).filter((edit) => edit.from !== edit.to);
+
+      // Nothing to do, and nothing to log. Answering with the row keeps a
+      // repeated save harmless rather than filling the log with entries in
+      // which nothing changed.
+      if (edits.length === 0) return current;
+
+      const updated = await this.costs.editEditable(costId, values, tx);
+      // The row was locked two statements ago, so an empty result means a
+      // concurrent submit froze it — which is a conflict, not a missing row.
+      if (!updated) {
+        throw new ConflictError('That trip was submitted for completion while you were editing.');
+      }
+
+      await this.costs.recordEdits(costId, edits, editedBy, tx);
+
+      return updated;
+    });
+  }
+
+  /** What was changed on one line, newest first. */
+  async listCostEdits(tripId: string, costId: string): Promise<TripCostEdit[]> {
+    const current = await this.costs.findById(costId);
+    if (current?.tripId !== tripId) throw new NotFoundError('Cost line not found.');
+    return this.costs.listEdits(costId);
   }
 
   // ------------------------------------------------------- outsource hires ----
@@ -206,6 +384,23 @@ export class TripCostService {
    */
   private async requireTrip(tripId: string): Promise<void> {
     if (!(await this.trips.exists(tripId))) throw new NotFoundError('Trip not found.');
+  }
+
+  /**
+   * The lorry's ownership at the moment of writing.
+   *
+   * ★ `null` IS RETURNED AS `null`. 0013 leaves every existing lorry
+   * unclassified on purpose, and reading that absence as `company` would let a
+   * hired lorry's fuel through the rule above by assuming a fact nobody stated.
+   * An unclassified lorry simply carries no snapshot, and the check does not
+   * fire — which is the honest behaviour, and visible in the data as a null.
+   */
+  private async ownershipOf(
+    vehicleId: string,
+    tx: DatabaseQuery,
+  ): Promise<VehicleOwnership | null> {
+    const vehicle = await this.vehicles.findById(vehicleId, tx);
+    return vehicle?.ownership ?? null;
   }
 }
 

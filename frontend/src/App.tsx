@@ -1,5 +1,6 @@
 import { Routes, Route } from 'react-router-dom'
 import MainLayout from './layouts/MainLayout'
+import DriverLayout from './layouts/DriverLayout'
 
 import PotentialCustomerPoolPage from './pages/leads/PotentialCustomerPoolPage'
 import MyCustomersPage from './pages/leads/MyCustomersPage'
@@ -16,6 +17,7 @@ import WorkListPage from './pages/worklist/WorkListPage'
 
 import TripSchedulePage from './pages/trip/TripSchedulePage'
 import TripMasterDataPage from './pages/trip/TripMasterDataPage'
+import CompletionReviewPage from './pages/trip/CompletionReviewPage'
 
 import NoAccessPage from './pages/system/NoAccessPage'
 import PlaceholderPage from './pages/system/PlaceholderPage'
@@ -25,6 +27,8 @@ import ApprovalsPage from './pages/system/ApprovalsPage'
 import EmployeeDetailPage from '@/pages/organization/EmployeeDetailPage'
 import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
 import AccountSecurityPage from './pages/account/AccountSecurityPage'
+import DriverTripsPage from './pages/driver/DriverTripsPage'
+import DriverTripPage from './pages/driver/DriverTripPage'
 import { RequireSession } from './components/common/SessionGuard'
 
 function App() {
@@ -32,6 +36,26 @@ function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/change-password" element={<ChangePasswordPage />} />
+
+      {/* ★ THE DRIVER PORTAL HAS ITS OWN SHELL, NOT `MainLayout`.
+          `MainLayout` is a backoffice sidebar of departments, approvals and
+          dispatch — every link on it leads somewhere a driver has no business
+          and the server would refuse. A menu that offers what the server will
+          403 is worse than no menu.
+
+          It still sits behind `RequireSession`: this is navigation, not
+          authorization. The server re-decides every request, and the portal's
+          own routes are guarded there by the active assignment. */}
+      <Route
+        element={
+          <RequireSession>
+            <DriverLayout />
+          </RequireSession>
+        }
+      >
+        <Route path="/driver" element={<DriverTripsPage />} />
+        <Route path="/driver/trips/:tripId" element={<DriverTripPage />} />
+      </Route>
 
       {/* Everything below needs a session. RequireSession routes the three
           session states (§3b); it does not decide permissions — the server
@@ -67,6 +91,9 @@ function App() {
             company-wide data, so there is no unit to scope it to (§21). */}
         <Route path="/dispatch/trip-schedule" element={<TripSchedulePage />} />
         <Route path="/dispatch/master-data" element={<TripMasterDataPage />} />
+        {/* The office side of the SAME completion lifecycle the Driver Portal
+            submits into. One model, two counters. */}
+        <Route path="/dispatch/completion-review" element={<CompletionReviewPage />} />
 
         <Route path="/account/security" element={<AccountSecurityPage />} />
         <Route path="/system/approvals" element={<ApprovalsPage />} />

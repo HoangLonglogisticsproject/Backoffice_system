@@ -1,4 +1,5 @@
 import type { UserSummary } from '../../../common/types/user-summary';
+import type { TripCostSource, TripCostState, VehicleOwnership } from './trip-execution';
 
 /**
  * The money a trip cost, as data.
@@ -112,10 +113,39 @@ interface FinancialRecord {
   voidReason: string | null;
 }
 
-/** One line of what running our own lorry cost. */
+/**
+ * One line of what running our own lorry cost.
+ *
+ * ★ THE LIFECYCLE FIELDS BELOW ARE WHY THIS TYPE OUTGREW ITS ORIGINAL SHAPE.
+ * A clerk's invoice line is final the moment it is typed; a driver's figure,
+ * entered on a phone at a fuel station, is not. Both live here, and `state` and
+ * `source` are what tell them apart — see `trip-execution.ts` for the argument.
+ */
 export interface TripCost extends FinancialRecord {
   category: TripCostCategory;
   amount: string;
+
+  /** `editable` → `locked` → `immutable`. A backoffice line starts `immutable`. */
+  state: TripCostState;
+  /** Which channel typed it. NOT derivable from `createdBy`. */
+  source: TripCostSource;
+
+  /** The turn at the wheel that declared this. `null` for a backoffice line. */
+  driverAssignmentId: string | null;
+
+  /**
+   * What was true when the figure was written.
+   *
+   * ★ NEVER RE-READ FROM THE TRIP. The trip's vehicle today may not be the one
+   * this money was spent on, and `vehicleOwnership` is `null` wherever the
+   * classification has not been made — which must never be read as `company`.
+   */
+  vehicleId: string | null;
+  vehicleOwnership: VehicleOwnership | null;
+
+  /** When the line was frozen by a completion request. Temporary; a rejection clears it. */
+  lockedAt: Date | null;
+  lockedBy: string | null;
 }
 
 /**

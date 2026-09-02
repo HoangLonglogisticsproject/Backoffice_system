@@ -38,6 +38,18 @@ export const PERMISSIONS = [
   'cost.create',
   /** Withdraw one, with a reason. There is no edit — a correction is a void. */
   'cost.void',
+
+  /**
+   * ★ ONE KEY FOR BOTH DECISIONS, NOT TWO.
+   *
+   * Approving and rejecting a completion are the same authority used two ways —
+   * the reviewer looked at the trip and said yes or no. Splitting them would
+   * create a holder who may send work back but never accept it, which is not a
+   * role anybody has asked for and not one the contract describes.
+   *
+   * The action is REVIEW, and the two outcomes are what the route says.
+   */
+  'trip.complete.review',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];
@@ -148,6 +160,25 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'cost.read': 'global',
   'cost.create': 'global',
   'cost.void': 'global',
+
+  /**
+   * ★ 'global' BECAUSE THE CONTRACT NAMES ONE ACTOR, NOT BECAUSE IT IS SAFEST.
+   *
+   * Confirming that a trip is finished is reserved to the SuperAdmin: it is the
+   * moment the trip's figures become permanent and the row closes for good — a
+   * trigger makes `done` irreversible, so there is no undo to fall back on.
+   * `head-anywhere` would hand that to every department head, and `any` to
+   * everybody with an account.
+   *
+   * ⚠ AND IT IS DELIBERATELY NOT `trip.write`. A dispatcher correcting a
+   * delivery address and a reviewer closing a trip's books are different acts
+   * with different consequences; sharing a key would mean the narrower one
+   * could never be granted without the wider one.
+   *
+   * As everywhere else, 'global' is a RELATION — a caller whose authority is
+   * not scoped to a department — and WHICH accounts hold it stays data.
+   */
+  'trip.complete.review': 'global',
 };
 
 export function isPermissionKey(value: string): value is PermissionKey {

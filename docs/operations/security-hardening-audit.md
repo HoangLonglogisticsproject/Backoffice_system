@@ -802,8 +802,8 @@ digests keep verifying, and re-hash on successful login is available if wanted.
 | `backend/scripts/check-boundaries.sh` | **B13 runtime ↛ DELETE**, proven to fail on a real violation |
 | `backend/README.md` | new §7 (three PostgreSQL principals); §8 throttle deferral upgraded to a precondition |
 | `backend/.env.example` | `DATABASE_URL` documented as the runtime role; migration command shown separately |
-| `docs/security/security-hardening-audit.md` | this section, the decision matrix, and updated cross-references |
-| `docs/security/security-test-plan.md` | database-privilege attack cases added |
+| `docs/operations/security-hardening-audit.md` | this section, the decision matrix, and updated cross-references |
+| `docs/operations/security-test-plan.md` | database-privilege attack cases added |
 
 **No application source changed in round 2.** The privilege split needed configuration and
 documentation, not code — because `migrate.cli.ts` had already made the separation possible.
@@ -1181,8 +1181,8 @@ Cloudflare, request the VPS directly and confirm the connection is refused.
 | `src/config/env.schema.spec.ts` | updated for the new variable, including boot refusal |
 | `src/core/identity/api/trusted-proxy.security.spec.ts` | **new** — 7 regression cases |
 | `.env.example` | documents the variable, the Cloudflare source, and the origin caveat |
-| `docs/security/production-launch-checklist.md` | **new** — the deployment half |
-| `docs/security/security-hardening-audit.md` | this section |
+| `docs/operations/production-launch-checklist.md` | **new** — the deployment half |
+| `docs/operations/security-hardening-audit.md` | this section |
 
 **Config migration:** a deployment still setting `TRUST_PROXY_HOPS` is not broken — the
 variable is simply ignored, and the app falls back to trusting nobody, which is the safe

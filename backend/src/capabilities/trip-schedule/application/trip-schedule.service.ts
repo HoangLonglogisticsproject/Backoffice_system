@@ -5,6 +5,11 @@ import type { DateRangePageQuery } from '../../../common/pagination/date-range-p
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { TripSchedule, TripScheduleWithRefs, TripStatus } from '../domain/trip-schedule';
 import {
+  canTransition,
+  isCompletionOnlyStatus,
+  type TripStatusChange,
+} from '../domain/trip-status-history';
+import {
   TripCustomerRepository,
   TripVehicleRepository,
 } from '../persistence/trip-catalogue.repository';
@@ -12,6 +17,7 @@ import {
   TripScheduleRepository,
   type TripScheduleValues,
 } from '../persistence/trip-schedule.repository';
+import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
 
 /**
  * What a caller may say when creating a trip. Everything but the day is
@@ -78,6 +84,7 @@ export class TripScheduleService {
     private readonly trips: TripScheduleRepository,
     private readonly vehicles: TripVehicleRepository,
     private readonly customers: TripCustomerRepository,
+    private readonly history: TripStatusHistoryRepository,
   ) {}
 
   /**
@@ -123,7 +130,25 @@ export class TripScheduleService {
       // No previous row, so every reference here is newly assigned and every
       // one of them is checked against the catalogue.
       const values = await this.resolve(input, 'awaiting_production', tx, null);
-      return this.trips.create({ ...values, createdBy: input.createdBy }, tx);
+
+      // ★ A TRIP CANNOT BE BORN CLOSED. `status` is an optional field of the
+      // create body, so without this a single POST produces a trip that is
+      // permanently done, with no completion request, no approver, no frozen
+      // figures and — because 0017 makes `done` terminal — no way back.
+      this.requireNotCompletionOnly(values.status);
+
+      const created = await this.trips.create({ ...values, createdBy: input.createdBy }, tx);
+
+      // ★ THE HISTORY STARTS AT THE FIRST ROW, NOT THE FIRST CHANGE. Without
+      // this the earliest recorded transition would be `X -> Y` with nothing
+      // saying where X came from, and "which status did this trip open on"
+      // would be answerable only by assuming the default never moved.
+      await this.history.record(
+        { tripId: created.id, from: null, to: created.status, reason: null, changedBy: input.createdBy },
+        tx,
+      );
+
+      return created;
     });
   }
 
@@ -135,7 +160,7 @@ export class TripScheduleService {
    * in one readable place, inside the lock — beats assembling an UPDATE
    * statement out of whichever keys a caller happened to send.
    */
-  async update(id: string, patch: UpdateTripInput): Promise<TripSchedule> {
+  async update(id: string, patch: UpdateTripInput, changedBy: string): Promise<TripSchedule> {
     return this.db.transaction(async (tx) => {
       const current = await this.trips.lockActive(id, tx);
       if (!current) throw new NotFoundError('Trip not found.');
@@ -172,21 +197,130 @@ export class TripScheduleService {
         customerId: current.customerId,
       });
 
+      // ★ THE PATCH ROUTE CAN MOVE THE STATUS TOO, AND IT IS THE EASIER PATH
+      // TO FORGET. `status` is a field of the create schema, so a general edit
+      // carrying one is a board move wearing different clothes — and if only
+      // the dedicated route recorded history, this one would be a silent way
+      // around it.
+      // `merged.status` is built as `patch.status ?? current.status` above, so
+      // it is always set — the fallback restates that for the type rather than
+      // asserting it away.
+      const nextStatus = merged.status ?? current.status;
+      if (nextStatus !== current.status) {
+        this.requireDispatchTransition(current.status, nextStatus);
+      }
+
       const updated = await this.trips.replace(id, values, tx);
       // The row was locked two statements ago, so this cannot be a concurrent
       // archive — it is a programming error, and pretending otherwise would
       // hide it behind a plausible 404.
       if (!updated) throw new Error('Locked trip disappeared during update.');
 
+      if (updated.status !== current.status) {
+        await this.recordMove(current, updated.status, null, changedBy, tx);
+      }
+
       return updated;
     });
   }
 
-  /** Moves a row along the board and touches nothing else. */
-  async updateStatus(id: string, status: TripStatus): Promise<TripSchedule> {
-    const updated = await this.trips.updateStatus(id, status);
-    if (!updated) throw new NotFoundError('Trip not found.');
-    return updated;
+  /**
+   * Moves a row along the board.
+   *
+   * ★ A TRANSACTION NOW, WHERE IT USED TO BE ONE STATEMENT. The status and the
+   * history entry have to be written together or not at all: a move that was
+   * applied but not recorded is exactly the hole this method used to have, and
+   * it is unrecoverable — nothing left behind says the move happened.
+   *
+   * ★ AND THE ROW IS LOCKED FIRST, so `from` in the history is the status the
+   * move actually started from. Reading it outside the lock lets a concurrent
+   * move slip in between, and the history then records a transition that never
+   * occurred.
+   */
+  async updateStatus(
+    id: string,
+    status: TripStatus,
+    changedBy: string,
+    reason: string | null = null,
+  ): Promise<TripSchedule> {
+    return this.db.transaction(async (tx) => {
+      const current = await this.trips.lockActive(id, tx);
+      if (!current) throw new NotFoundError('Trip not found.');
+
+      // Setting the status it already holds is not a move. Answering with the
+      // row rather than an error keeps a retried request harmless, and writing
+      // no history keeps the log free of entries where nothing changed — which
+      // the `trip_status_history_actually_changed` CHECK would refuse anyway.
+      if (current.status === status) return current;
+
+      this.requireDispatchTransition(current.status, status);
+
+      const updated = await this.trips.updateStatus(id, status, tx);
+      if (!updated) throw new Error('Locked trip disappeared during status change.');
+
+      await this.recordMove(current, status, reason, changedBy, tx);
+
+      return updated;
+    });
+  }
+
+  /** A trip's board history, newest first. */
+  async statusHistory(id: string): Promise<TripStatusChange[]> {
+    if (!(await this.trips.exists(id))) throw new NotFoundError('Trip not found.');
+    return this.history.listByTrip(id);
+  }
+
+  /**
+   * Refuses a move the DISPATCH BOARD is not allowed to make.
+   *
+   * Two rules, and they close the board off from `done` in both directions:
+   *
+   *   · nothing leaves `done` — 0017's trigger says the same thing, but that
+   *     one surfaces as a 500, so it is said here where it can be a 409
+   *   · ★ and nothing on the board ENTERS `done` either
+   *
+   * The second is the important one. Completing a trip freezes its money,
+   * stamps who closed it and writes the history, all in one transaction —
+   * `TripCompletionService.approve` is where that happens, and it reaches the
+   * status column through the repository rather than through here. A status
+   * route that could also write `done` would be a second way to close a trip
+   * that skipped every one of those steps, and 0017 would then make the result
+   * permanent.
+   */
+  private requireDispatchTransition(from: TripStatus, to: TripStatus): void {
+    this.requireNotCompletionOnly(to);
+    if (canTransition(from, to)) return;
+    throw new ConflictError('A completed trip cannot be reopened.');
+  }
+
+  private requireNotCompletionOnly(status: TripStatus): void {
+    if (!isCompletionOnlyStatus(status)) return;
+    throw new ConflictError(
+      'A trip is completed by approving its completion request, not by setting its status.',
+    );
+  }
+
+  /**
+   * Writes the history row for a board move.
+   *
+   * ★ NO `closed_at` BRANCH HERE, AND THAT IS THE POINT. This method can never
+   * see a move to `done`, because `requireDispatchTransition` refuses one
+   * before any write happens. Closing a trip — status, stamp and history
+   * together — belongs to `TripCompletionService.approve` and nowhere else, so
+   * a second implementation of it here would be a second answer waiting to
+   * drift from the first.
+   */
+  private async recordMove(
+    current: TripSchedule,
+    to: TripStatus,
+    reason: string | null,
+    changedBy: string,
+    tx: DatabaseQuery,
+  ): Promise<void> {
+    await this.history.record(
+      { tripId: current.id, from: current.status, to, reason, changedBy },
+      tx,
+    );
   }
 
   /**
