@@ -209,13 +209,19 @@ export function ExpensePanel({
         </>
       )}
 
+      {/* ★ THREE STATES, ASKED FLAT. Shut, open-and-typing, open-and-idle —
+          exactly one is true. As a chain the middle case sat inside the
+          negation of the first, which is not how anyone reads a panel that is
+          either locked, in use, or waiting. */}
       <div className="mt-3">
         {!open ? (
           <p className="flex items-center gap-1.5 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
             <Lock className="size-3.5 shrink-0" aria-hidden />
             {t(lockedReasonKey(trip))}
           </p>
-        ) : adding ? (
+        ) : null}
+
+        {open && adding ? (
           <ExpenseForm
             categories={categories}
             tripId={trip.tripId}
@@ -232,12 +238,14 @@ export function ExpensePanel({
               }
             }}
           />
-        ) : (
+        ) : null}
+
+        {open && !adding ? (
           <Button variant="outline" size="lg" className="h-11 w-full" onClick={() => setAdding(true)}>
             <Plus aria-hidden />
             {t('driverAddExpense')}
           </Button>
-        )}
+        ) : null}
       </div>
     </section>
   );
