@@ -15,6 +15,7 @@ import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
 import { PermissionGuard, RequirePermission } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
+import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
@@ -89,7 +90,7 @@ export class TripCatalogueController {
   // ------------------------------------------------------------- vehicles ----
 
   @Get('trip-vehicles')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async listVehicles(
     @Query(new ZodValidationPipe(catalogueQuerySchema)) query: CatalogueQuery,
@@ -98,7 +99,7 @@ export class TripCatalogueController {
   }
 
   @Post('trip-vehicles')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.create')
   async createVehicle(
     @Body(new ZodValidationPipe(createVehicleSchema)) body: CreateVehicleBody,
@@ -108,7 +109,7 @@ export class TripCatalogueController {
   }
 
   @Patch('trip-vehicles/:vehicleId')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   async updateVehicle(
     @Param('vehicleId', UuidParam) vehicleId: string,
@@ -118,7 +119,7 @@ export class TripCatalogueController {
   }
 
   @Post('trip-vehicles/:vehicleId/archive')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   @HttpCode(HttpStatus.OK)
   async archiveVehicle(
@@ -130,7 +131,7 @@ export class TripCatalogueController {
   // ------------------------------------------------------------ customers ----
 
   @Get('trip-customers')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async listCustomers(
     @Query(new ZodValidationPipe(catalogueQuerySchema)) query: CatalogueQuery,
@@ -139,7 +140,7 @@ export class TripCatalogueController {
   }
 
   @Post('trip-customers')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.create')
   async createCustomer(
     @Body(new ZodValidationPipe(createCustomerSchema)) body: CreateCustomerBody,
@@ -149,7 +150,7 @@ export class TripCatalogueController {
   }
 
   @Patch('trip-customers/:customerId')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   async updateCustomer(
     @Param('customerId', UuidParam) customerId: string,
@@ -159,7 +160,7 @@ export class TripCatalogueController {
   }
 
   @Post('trip-customers/:customerId/archive')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   @HttpCode(HttpStatus.OK)
   async archiveCustomer(

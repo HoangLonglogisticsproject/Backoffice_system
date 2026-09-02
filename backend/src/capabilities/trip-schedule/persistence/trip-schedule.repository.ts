@@ -237,6 +237,24 @@ export class TripScheduleRepository {
     return Number(rows[0]?.total ?? 0);
   }
 
+  /**
+   * Does this trip exist at all — archived or not?
+   *
+   * ★ DELIBERATELY DOES NOT FILTER `archived_at`, unlike every other read here.
+   * Its one caller is the cost service, and money is independent of where the
+   * trip sits on the board: a figure can arrive weeks after dispatch archived
+   * the row, and refusing it would lose a real expense to a lifecycle it has
+   * nothing to do with. `findById` stays archive-aware because a board reader
+   * genuinely must not see archived rows.
+   */
+  async exists(id: string, executor: DatabaseQuery = this.db): Promise<boolean> {
+    const rows = await executor.query<{ one: number }>(
+      `SELECT 1 AS one FROM trip_schedules WHERE id = $1`,
+      [id],
+    );
+    return rows.length > 0;
+  }
+
   async findById(
     id: string,
     executor: DatabaseQuery = this.db,
@@ -334,6 +352,32 @@ export class TripScheduleRepository {
       [id, status],
     );
     return rows[0] ? toTrip(rows[0]) : null;
+  }
+
+  /**
+   * Stamps who ended a trip, and when.
+   *
+   * ★ SEPARATE FROM `updateStatus`, AND ALWAYS IN THE SAME TRANSACTION AS IT.
+   * `status = 'done'` is the board's word; these two columns are the audit of
+   * the decision behind it. Folding them into one statement would mean a CASE
+   * expression on every ordinary board move for the sake of the one move that
+   * closes a trip.
+   *
+   * `WHERE closed_at IS NULL` makes a second call a no-op rather than a quiet
+   * rewrite of who closed it — the same shape `archive` uses below.
+   */
+  async markClosed(
+    id: string,
+    closedBy: string,
+    now: Date,
+    executor: DatabaseQuery,
+  ): Promise<void> {
+    await executor.query(
+      `UPDATE trip_schedules
+          SET closed_at = $3, closed_by = $2
+        WHERE id = $1 AND closed_at IS NULL`,
+      [id, closedBy, now],
+    );
   }
 
   /**

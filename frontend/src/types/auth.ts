@@ -23,7 +23,26 @@ export type PermissionKey =
   // `trip.write` — correcting somebody else's row — stays global.
   | 'trip.read'
   | 'trip.create'
-  | 'trip.write';
+  | 'trip.write'
+  // The money on a trip (§21). Separate keys from `trip.*` on purpose: the
+  // board is read by everybody and the amounts on it are not, so a caller
+  // without `cost.read` is never sent a figure at all. All three are GLOBAL
+  // today — a fail-closed placeholder until role mapping is designed.
+  | 'cost.read'
+  | 'cost.create'
+  | 'cost.void'
+  // ★ CLOSING A TRIP, AND DELIBERATELY NOT `trip.write`. A dispatcher
+  // correcting a delivery address and a reviewer closing a trip's books are
+  // different acts with different consequences — approval is irreversible —
+  // so sharing a key would mean the narrower one could never be granted
+  // without the wider. GLOBAL, because the contract reserves it to one actor.
+  | 'trip.complete.review'
+  /**
+   * ★ PROPOSE A DRIVER ACCOUNT, AND NOTHING MORE. Tier `head-anywhere` on the
+   * server: any department head holds it. It does not create an account —
+   * approving is `user.write`, which is global.
+   */
+  | 'driver.account.request';
 
 export type UserStatus = 'active' | 'disabled';
 

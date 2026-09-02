@@ -16,7 +16,7 @@ import {
   todayAsCalendarDay,
   toDateTimeLocalValue,
 } from '@/utils/format/datetime';
-import { TRIP_STATUSES, type TripCustomer, type TripScheduleWithRefs, type TripStatus, type TripVehicle } from '@/types/trip';
+import { DISPATCH_SELECTABLE_STATUSES, type TripCustomer, type TripScheduleWithRefs, type TripStatus, type TripVehicle } from '@/types/trip';
 import { CatalogueSelect } from './CatalogueSelect';
 import { TRIP_STATUS_STYLES } from './tripStatus';
 
@@ -216,10 +216,20 @@ export function TripFormModal({
 
   const formId = 'trip-form';
 
-  // ★ `done` IS TERMINAL (BD-01), so a finished trip's status field is frozen.
-  // Every other field stays editable — only the status cannot move, and only
-  // when the row was ALREADY finished. Creating a trip as `done` is still fine,
-  // because that is entering the state rather than leaving it.
+  /**
+   * ★ `done` IS TERMINAL, AND IT IS ALSO UNREACHABLE FROM HERE (BD-01).
+   *
+   * Two rules, not one. A finished trip's status is frozen because the server
+   * refuses every move away from it. And `done` is absent from the options on
+   * EVERY trip — new or existing — because a trip is finished by approving its
+   * completion request, never by editing a field: `requireNotCompletionOnly`
+   * refuses it on create and on update alike, and a trigger in 0017 makes the
+   * state permanent once it is reached.
+   *
+   * Every other field of a finished trip stays editable. Whether a closed trip
+   * should be read-only in full is a separate decision nobody has taken, and
+   * this is not the place to take it.
+   */
   const statusLocked = trip?.status === 'done';
 
   return (
@@ -279,7 +289,12 @@ export function TripFormModal({
               disabled={statusLocked}
               className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {TRIP_STATUSES.map((status) => (
+              {/* The current value must still render, or a frozen `done` field
+                  would show the first option instead of the truth. */}
+              {statusLocked && (
+                <option value="done">{t(TRIP_STATUS_STYLES.done.label)}</option>
+              )}
+              {DISPATCH_SELECTABLE_STATUSES.map((status) => (
                 <option key={status} value={status}>
                   {t(TRIP_STATUS_STYLES[status].label)}
                 </option>

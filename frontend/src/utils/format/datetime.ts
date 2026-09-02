@@ -111,21 +111,67 @@ export function formatCalendarDay(day: string, language: Language): string {
  * 1 September it answers `2026-08-31`, and the schedule opens on the wrong
  * month at exactly the hour that month's first trips are entered.
  */
+/**
+ * ★ THE BUSINESS CALENDAR, AND IT IS NOT THE VIEWER'S.
+ *
+ * The company operates on `Asia/Ho_Chi_Minh` (contract §10.6), and the server
+ * resolves every unbounded date range on that calendar. A browser reading its
+ * own clock disagrees for a slice of every day: at 23:30 UTC on 31 August it is
+ * already 1 September in Hồ Chí Minh, so a laptop in London would open the
+ * board on August while the server — and everybody in the office — is on
+ * September.
+ *
+ * That is not a display preference. It decides which MONTH is queried and which
+ * DAY a new trip defaults to, so it has to be the same calendar the server uses.
+ * `Intl` with an explicit `timeZone` is exactly what the backend's
+ * `businessToday` does, deliberately mirrored here.
+ *
+ * ⚠ THIS IS THE ONLY PLACE THE FRONTEND MAY DERIVE A BUSINESS DATE. Formatting
+ * an instant for display still uses the viewer's zone — a driver in the cab
+ * should see their own wall clock — but what is ASKED FOR is decided here.
+ */
+const BUSINESS_TIME_ZONE = 'Asia/Ho_Chi_Minh';
+
+/** Built once: resolving a locale is the expensive half of formatting. */
+const businessParts = new Intl.DateTimeFormat('en-US', {
+  timeZone: BUSINESS_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/** `[year, monthIndex, day]` on the business calendar. */
+function businessYmd(now: Date): [number, number, number] {
+  const parts = businessParts.formatToParts(now);
+  const value = (type: 'year' | 'month' | 'day'): number =>
+    Number(parts.find((part) => part.type === type)?.value ?? '1');
+
+  return [value('year'), value('month') - 1, value('day')];
+}
+
 export function todayAsCalendarDay(now: Date = new Date()): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const [year, monthIndex, dayOfMonth] = businessYmd(now);
+  const month = String(monthIndex + 1).padStart(2, '0');
+  const day = String(dayOfMonth).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
 /** The first and last day of the month containing `now`, on the viewer's calendar. */
+/**
+ * The month a date filter opens on.
+ *
+ * ★ ON THE BUSINESS CALENDAR, so it matches what the server resolves when a
+ * caller sends no range at all. Computed from the viewer's clock this returned
+ * a different month for part of every day depending on where the browser was,
+ * and the board would then query a month nobody in the office was looking at.
+ */
 export function currentMonthRange(now: Date = new Date()): { from: string; to: string } {
-  const year = now.getFullYear();
-  const month = now.getMonth();
+  const [year, month] = businessYmd(now);
 
   // Day 0 of the next month is the last day of this one, for every month length
-  // and every leap year, with no table to maintain.
-  const lastDay = new Date(year, month + 1, 0).getDate();
+  // and every leap year, with no table to maintain. `Date.UTC` because the
+  // arithmetic must not re-enter the viewer's zone.
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   const asDay = (date: number) =>
     `${year}-${String(month + 1).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
 

@@ -2,6 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import type { Database, DatabaseQuery } from '@common/types/database.port';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import { SessionRepository } from '@core/identity/persistence/session.repository';
 import { SessionService } from '@core/identity/application/session.service';
 import { DepartmentRepository } from '@core/organization/persistence/department.repository';
@@ -26,20 +34,10 @@ import { can } from '@core/authorization/domain/authorization.context';
  *   #7  the API cannot leave the deployment with zero SuperAdmins
  *       provenance CHECKs, and the hand-over transaction
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 
 /** Its own schema — the migration-runner suite drops `public` between cases. */
 const SCHEMA = 'authorization_itest';
 
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-  if (!/test/i.test(name)) {
-    throw new Error(
-      `DATABASE_URL_TEST points at "${name}", which is not named as a test database.`,
-    );
-  }
-}
 
 describeIntegration('Authorization against real PostgreSQL', () => {
   jest.setTimeout(30_000);
@@ -54,14 +52,7 @@ describeIntegration('Authorization against real PostgreSQL', () => {
   beforeAll(async () => {
     assertLooksLikeATestDatabase(TEST_URL as string);
 
-    const setup = new Pool({ connectionString: TEST_URL, max: 1 });
-    try {
-      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA};`);
-    } finally {
-      await setup.end();
-    }
-
-    pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
+    pool = await openTestSchema(TEST_URL as string, SCHEMA);
 
     const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of [

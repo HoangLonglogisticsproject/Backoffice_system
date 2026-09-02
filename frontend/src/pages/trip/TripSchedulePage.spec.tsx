@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
@@ -209,9 +209,12 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'done' } });
+      // ★ NOT `done`. The board cannot set it — a trip is finished by approving
+      // its completion request — so a case that moved a row to `done` was
+      // asserting an interaction the server answers with 409.
+      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
 
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'done'));
+      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'needs_confirmation'));
     });
 
     it('shows the new status immediately, before the server answers', async () => {
@@ -224,20 +227,52 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'done' } });
+      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
 
-      // ★ ASSERTED ON WHAT THE USER SEES, not on the node that was replaced.
-      // The optimistic row is already `done`, and BD-01 makes `done` terminal,
-      // so the dropdown correctly gives way to a label in the same render —
-      // the old `select` node is detached and keeps its stale value forever.
-      // The dropdown going away IS the signal: waiting on the text alone would
-      // match the <option> inside the select that is still mounted.
-      await waitFor(() => expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull());
-      expect(screen.getByText('Đã xong')).toBeTruthy();
-      // …and all of that happened while the request is still in flight.
-      expect(updateTripStatus).toHaveBeenCalledWith('t1', 'done');
+      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('needs_confirmation'));
+      settle(trip({ status: 'needs_confirmation' }));
+    });
 
-      settle(trip({ status: 'done' }));
+    /**
+     * ★ THE TWO THINGS BD-01 EXISTS TO STOP OFFERING.
+     *
+     * The server refuses both with 409 — `requireNotCompletionOnly` on the way
+     * in, `canTransition` on the way out, and a trigger in 0017 behind them. A
+     * control whose only possible outcome is a refusal is not a control.
+     */
+    it('★ never offers `done` on the board — a trip is finished by approval', async () => {
+      useSession.mockReturnValue(session(write));
+      renderPage();
+
+      const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
+      const options = [...select.options].map((option) => option.value);
+
+      expect(options).not.toContain('done');
+      // The four that ARE a dispatcher's to choose are all still there.
+      expect(options).toEqual(
+        expect.arrayContaining([
+          'awaiting_production',
+          'awaiting_vehicle',
+          'needs_confirmation',
+          'external_booking',
+        ]),
+      );
+    });
+
+    it('★ shows a finished trip as a badge, not a dropdown', async () => {
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ status: 'done' })],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      useSession.mockReturnValue(session(write));
+      renderPage();
+
+      // The label the badge carries, and no control to change it.
+      expect(await screen.findByText('Đã xong')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Đổi trạng thái')).not.toBeInTheDocument();
     });
 
     it('★ puts the old status back when the server refuses, and says why', async () => {
@@ -250,10 +285,11 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'done' } });
+      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
 
       expect(await screen.findByText('This trip has been archived.')).toBeTruthy();
-      // The optimistic guess is gone, not left on screen as if it had worked.
+      // The optimistic guess is gone, not left on screen as if it had worked —
+      // back to the status the row actually holds.
       await waitFor(() => expect((select as HTMLSelectElement).value).toBe('awaiting_vehicle'));
     });
 
@@ -394,81 +430,64 @@ describe('TripSchedulePage', () => {
   });
 
   /**
-   * ★ BD-01 — a finished trip is a label, not a control.
+   * ★ THE MONEY IS NOT ON THE BOARD, AND ITS CONTROL HAS ITS OWN PERMISSION.
    *
-   * `done` is terminal on the server, so every move away from it answers 409.
-   * The board must not offer a dropdown whose only possible outcome is that
-   * error. This is NOT the frontend deciding business validity: the server
-   * still refuses the request if one is made — the UI just stops asking a
-   * question that has already been settled.
+   * `trip.read` is unrestricted — every signed-in account reads this list. So
+   * no amount may appear in it, and the way in is a dialog gated on `cost.read`
+   * rather than a column. These cases pin both halves.
    */
-  describe('★ BD-01 a finished trip', () => {
-    const write = ['trip.read', 'trip.create', 'trip.write'];
-
-    const boardWith = (status: string) => {
-      useSession.mockReturnValue(session(write));
-      fetchTripSchedules.mockResolvedValue({
-        items: [trip({ status })],
-        page: 1,
-        limit: 20,
-        total: 1,
-        totalPages: 1,
-      });
-    };
-
-    it('shows the status as a label, with no control to change it', async () => {
-      boardWith('done');
-      renderPage();
-
-      expect(await screen.findByText('Đã xong')).toBeTruthy();
-      expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull();
-    });
-
-    it('still offers the control on a trip that is NOT finished', async () => {
-      // The guard is about `done` specifically, not about locking the board.
-      boardWith('awaiting_vehicle');
-      renderPage();
-
-      expect(await screen.findByLabelText('Đổi trạng thái')).toBeTruthy();
-    });
-
-    it('★ freezes the status field in the edit form, and nothing else', async () => {
-      boardWith('done');
-      renderPage();
-      await screen.findByText('Đã xong');
-
-      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
-      await screen.findByLabelText('Trạng thái');
-
-      expect((screen.getByLabelText('Trạng thái') as HTMLSelectElement).disabled).toBe(true);
-      // Every other field stays editable — only the status is terminal.
-      expect((screen.getByLabelText('Ghi chú') as HTMLTextAreaElement).disabled).toBe(false);
-    });
-
-    it('leaves the status field editable when the trip is not finished', async () => {
-      boardWith('awaiting_vehicle');
+  describe('★ cost is a separate permission and a separate fetch', () => {
+    it('offers the cost control to a caller holding cost.read', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
       renderPage();
       await screen.findByText('50H-49266');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
-      await screen.findByLabelText('Trạng thái');
-
-      expect((screen.getByLabelText('Trạng thái') as HTMLSelectElement).disabled).toBe(false);
+      expect(screen.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
     });
 
-    it('offers every status when ADDING, because entering done is not leaving it', async () => {
-      boardWith('awaiting_vehicle');
+    it('★ offers it to NOBODY without cost.read, however senior they are', async () => {
+      // `trip.write` corrects the board; it does not reveal the cost base.
+      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
       renderPage();
       await screen.findByText('50H-49266');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
-      await screen.findByLabelText('Trạng thái');
+      expect(screen.queryByRole('button', { name: 'Chi phí chuyến' })).toBeNull();
+      // The column is still there — `trip.write` earns it on its own.
+      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
+    });
 
-      const field = screen.getByLabelText('Trạng thái') as HTMLSelectElement;
-      expect(field.disabled).toBe(false);
-      // Scoped to the form: the board row behind the modal has its own status
-      // dropdown carrying the same five options.
-      expect(within(field).getByRole('option', { name: 'Đã xong' })).toBeTruthy();
+    it('★ hides the actions column entirely from a caller with neither permission', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.create']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      expect(screen.queryByRole('columnheader', { name: 'Thao tác' })).toBeNull();
+    });
+
+    it('★ shows the actions column for cost.read ALONE, without trip.write', async () => {
+      // An accountant may hold cost.read and no right to correct the board.
+      // Gating the column on trip.write alone would hide their only control.
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      // The column itself must appear, not just the button inside it.
+      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
+      // …and still no edit or archive, which are a different permission.
+      expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+    });
+
+    it('★ renders no amount anywhere on the board', async () => {
+      // The list endpoint returns no money at all. This asserts the page never
+      // starts showing one, which is what a "just add a total column" change
+      // would break.
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      expect(document.body.textContent).not.toMatch(/1\.500\.000|4\.500\.000/);
     });
   });
 

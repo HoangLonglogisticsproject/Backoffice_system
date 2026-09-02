@@ -1,7 +1,15 @@
 import { Pool } from 'pg';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
 import { DepartmentRepository } from '@core/organization/persistence/department.repository';
 import { MembershipRepository } from '@core/organization/persistence/membership.repository';
 import { MembershipService } from '@core/organization/application/membership.service';
@@ -29,20 +37,10 @@ import { pageQuerySchema } from '@common/pagination/page-query.dto';
  *
  * Skipped unless DATABASE_URL_TEST names a database this test may WIPE.
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 
 /** Its own schema, for the reason the organization suite documents. */
 const SCHEMA = 'pagination_itest';
 
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-  if (!/test/i.test(name)) {
-    throw new Error(
-      `DATABASE_URL_TEST points at "${name}", which is not named as a test database.`,
-    );
-  }
-}
 
 describeIntegration('keyset pagination against real PostgreSQL', () => {
   jest.setTimeout(60_000);

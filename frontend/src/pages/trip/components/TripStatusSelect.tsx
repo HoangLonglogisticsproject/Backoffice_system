@@ -3,7 +3,8 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useUpdateTripStatus } from '@/hooks/trip';
 import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
-import { TRIP_STATUSES, type TripStatus } from '@/types/trip';
+import { DISPATCH_SELECTABLE_STATUSES, type TripStatus } from '@/types/trip';
+import { TripStatusBadge } from './TripStatusBadge';
 import { TRIP_STATUS_STYLES } from './tripStatus';
 
 /**
@@ -25,6 +26,16 @@ import { TRIP_STATUS_STYLES } from './tripStatus';
  *
  * The change shows immediately and the request follows; see
  * `useUpdateTripStatus`. What arrives here is only the failure case.
+ *
+ * ★ A FINISHED TRIP IS A BADGE, FOR EVERYBODY. `done` is terminal: the server
+ * refuses every move away from it and a trigger in 0017 makes that permanent.
+ * Rendering the dropdown on such a row would offer a control whose only
+ * possible outcome is a 409 — the server still decides, this just stops asking
+ * a settled question.
+ *
+ * ★ AND `done` IS NOT AN OPTION ON ANY ROW. A trip is finished by approving its
+ * completion request, never from the board, so the option list is
+ * `DISPATCH_SELECTABLE_STATUSES` rather than every status a trip may hold.
  */
 export function TripStatusSelect({
   tripId,
@@ -35,6 +46,10 @@ export function TripStatusSelect({
   const mutation = useUpdateTripStatus();
 
   const style = TRIP_STATUS_STYLES[status];
+
+  // Read-only, and not merely disabled: a greyed-out dropdown still says "this
+  // is yours to change, later". It is not, and it never will be.
+  if (status === 'done') return <TripStatusBadge status={status} />;
 
   const change = (next: TripStatus) => {
     if (next === status) return;
@@ -76,7 +91,7 @@ export function TripStatusSelect({
         }}
       >
         {!style && <option value={status}>{status}</option>}
-        {TRIP_STATUSES.map((option) => (
+        {DISPATCH_SELECTABLE_STATUSES.map((option) => (
           <option key={option} value={option} className="bg-white text-gray-900">
             {t(TRIP_STATUS_STYLES[option].label)}
           </option>

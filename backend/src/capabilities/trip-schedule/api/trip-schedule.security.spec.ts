@@ -12,7 +12,11 @@ import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { SESSION_COOKIE } from '../../../core/identity/api/session.cookie';
 import { SessionService } from '../../../core/identity/application/session.service';
+import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
+import type { AccountType } from '../../../core/users/domain/user.entity';
 import { TripCatalogueService } from '../application/trip-catalogue.service';
+import { OperationalBoardService } from '../application/operational-board.service';
+import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService } from '../application/trip-schedule.service';
 import { TripCatalogueController } from './trip-catalogue.controller';
 import { TripScheduleController } from './trip-schedule.controller';
@@ -52,6 +56,7 @@ describe('trip-schedule HTTP security', () => {
     update: jest.Mock;
     updateStatus: jest.Mock;
     archive: jest.Mock;
+    statusHistory: jest.Mock;
   }
 
   interface CatalogueServiceMock {
@@ -68,7 +73,11 @@ describe('trip-schedule HTTP security', () => {
   let app: INestApplication;
   let trips: TripServiceMock;
   let catalogue: CatalogueServiceMock;
+  let operations: { list: jest.Mock; listUnresolvedCompletions: jest.Mock };
+  let execution: { listEvents: jest.Mock };
   let context: AuthorizationContext;
+  /** What KIND of account is calling. Drivers are refused the Backoffice. */
+  let accountType: AccountType;
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: ACTOR,
@@ -99,6 +108,7 @@ describe('trip-schedule HTTP security', () => {
   };
 
   beforeEach(async () => {
+    accountType = 'employee';
     context = asContext();
 
     trips = {
@@ -114,7 +124,14 @@ describe('trip-schedule HTTP security', () => {
       update: jest.fn().mockResolvedValue(storedTrip),
       updateStatus: jest.fn().mockResolvedValue({ ...storedTrip, status: 'done' }),
       archive: jest.fn().mockResolvedValue(storedTrip),
+      statusHistory: jest.fn().mockResolvedValue([]),
     };
+
+    operations = {
+      list: jest.fn().mockResolvedValue([]),
+      listUnresolvedCompletions: jest.fn().mockResolvedValue([]),
+    };
+    execution = { listEvents: jest.fn().mockResolvedValue([]) };
 
     catalogue = {
       listVehicles: jest.fn().mockResolvedValue([]),
@@ -133,16 +150,22 @@ describe('trip-schedule HTTP security', () => {
         Reflector,
         PermissionGuard,
         AuthGuard,
+        BackofficeOnlyGuard,
         CsrfGuard,
         { provide: TripScheduleService, useValue: trips },
+        { provide: OperationalBoardService, useValue: operations },
+        { provide: TripExecutionService, useValue: execution },
         { provide: TripCatalogueService, useValue: catalogue },
         { provide: AppConfig, useValue: { isProduction: true } },
         {
           provide: SessionService,
           useValue: {
-            resolve: jest
-              .fn()
-              .mockResolvedValue({ id: ACTOR, displayName: 'Actor', status: 'active' }),
+            resolve: jest.fn().mockImplementation(async () => ({
+              id: ACTOR,
+              displayName: 'Actor',
+              accountType,
+              status: 'active',
+            })),
           },
         },
         {
@@ -185,6 +208,13 @@ describe('trip-schedule HTTP security', () => {
   const READS = [
     ['get', '/trip-schedules'],
     ['get', `/trip-schedules/${TRIP}`],
+    ['get', `/trip-schedules/${TRIP}/status-history`],
+    // The operational board is dispatch information behind the same two guards.
+    ['get', '/operational-board'],
+    // The review queue: outstanding work, deliberately not date-filtered.
+    ['get', '/completion-review-queue'],
+    // The reviewer's timeline read. Same permission as the board; no money in it.
+    ['get', `/trip-schedules/${TRIP}/execution-events`],
     ['get', '/trip-vehicles'],
     ['get', '/trip-customers'],
   ] as const;
@@ -192,21 +222,34 @@ describe('trip-schedule HTTP security', () => {
   // ------------------------------------------------------------ anonymous --
 
   describe('without authentication', () => {
-    it.each([...READS, ...WRITES])('refuses %s %s with 401', async (method, path) => {
-      const response = await request(app.getHttpServer())
-        [method](path)
-        .set('X-Requested-With', 'XMLHttpRequest')
-        .send({});
+    it.each([...READS, ...WRITES])(
+      'refuses %s %s with 401, and calls nothing on the services',
+      async (method, path) => {
+        const response = await request(app.getHttpServer())
+          [method](path)
+          .set('X-Requested-With', 'XMLHttpRequest')
+          .send({});
 
-      expect(response.status).toBe(401);
-      expect(response.body.error.code).toBe('UNAUTHORIZED');
-    });
+        expect(response.status).toBe(401);
+        expect(response.body.error.code).toBe('UNAUTHORIZED');
 
-    it('calls nothing on the services', () => {
-      for (const mock of [...Object.values(trips), ...Object.values(catalogue)]) {
-        expect(mock).not.toHaveBeenCalled();
-      }
-    });
+        // ★ ASSERTED HERE BECAUSE `beforeEach` REBUILDS THE MOCKS PER TEST.
+        //
+        // As its own case this checked a set of `jest.fn()`s created moments
+        // earlier and never handed to a request — vacuously true, and it would
+        // have stayed green with the guard deleted. Against the instances that
+        // served THIS request it is the real claim: the refusal came before
+        // any service was reached, on every route in the table.
+        for (const mock of [
+          ...Object.values(trips),
+          ...Object.values(catalogue),
+          ...Object.values(operations),
+          ...Object.values(execution),
+        ]) {
+          expect(mock).not.toHaveBeenCalled();
+        }
+      },
+    );
   });
 
   // ------------------------------------------------- temporary credential --
@@ -306,26 +349,53 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('does everything a member does', async () => {
-      await authed('get', '/trip-schedules').expect(200);
-      await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(201);
+      // ★ ASSERTED ON THE RESPONSE AND ON THE SERVICE. A status alone would not
+      // say the head got THROUGH — the claim is that seniority adds and never
+      // subtracts, so what matters is that the same two calls a member makes
+      // still reach the same two service methods.
+      const read = await authed('get', '/trip-schedules');
+      const write = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' });
+
+      expect(read.status).toBe(200);
+      expect(write.status).toBe(201);
+      expect(trips.list).toHaveBeenCalled();
+      expect(trips.create).toHaveBeenCalled();
     });
 
     it('★ corrects, restatuses and archives a row — the shift senior', async () => {
       // 'head-anywhere'. The route names no department because a trip belongs
       // to none, so what is being asked here is seniority, not a relation to a
       // target. See PERMISSION_REQUIREMENT for why that needed its own tier.
-      await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' }).expect(200);
-      await authed('patch', `/trip-schedules/${TRIP}/status`)
-        .send({ status: 'done' })
-        .expect(200);
-      await authed('post', `/trip-schedules/${TRIP}/archive`).expect(200);
+      const corrected = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
+      const restatused = await authed('patch', `/trip-schedules/${TRIP}/status`).send({
+        status: 'done',
+      });
+      const archived = await authed('post', `/trip-schedules/${TRIP}/archive`);
+
+      expect(corrected.status).toBe(200);
+      expect(restatused.status).toBe(200);
+      expect(archived.status).toBe(200);
+
+      // ★ ALL THREE REACHED THE SERVICE. "Does the work" is the claim; three
+      // 200s from a controller that never called anything would satisfy the
+      // status check and say nothing about the tier.
+      expect(trips.update).toHaveBeenCalled();
+      expect(trips.updateStatus).toHaveBeenCalled();
+      expect(trips.archive).toHaveBeenCalled();
     });
 
     it('★ may correct the board while heading a department it has nothing to do with', async () => {
       // Deliberate, and the cost of putting company-wide data behind a
       // departmental role: there is no "the department that owns this trip".
       context = asContext({ headOf: [DEPT], memberOf: [] });
-      await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' }).expect(200);
+
+      const response = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
+
+      expect(response.status).toBe(200);
+      // ★ THE POINT OF THE CASE: the write happened even though this head leads
+      // a department with no relation to the trip. `head-anywhere` asks for
+      // seniority, not for a target — and reaching `update` is what proves it.
+      expect(trips.update).toHaveBeenCalled();
     });
 
     it('★ is refused when the head assignment is only a membership', async () => {
@@ -350,14 +420,21 @@ describe('trip-schedule HTTP security', () => {
         .send({ note: 'TÀI XẾ KIỂM TRA LẠI SỐ LƯỢNG' })
         .expect(200);
 
-      expect(trips.update).toHaveBeenCalledWith(TRIP, {
-        note: 'TÀI XẾ KIỂM TRA LẠI SỐ LƯỢNG',
-      });
+      // The actor rides along because this route can move the status too, and
+      // every board move is recorded against whoever made it.
+      expect(trips.update).toHaveBeenCalledWith(
+        TRIP,
+        { note: 'TÀI XẾ KIỂM TRA LẠI SỐ LƯỢNG' },
+        ACTOR,
+      );
     });
 
     it('moves a row along the board', async () => {
       await authed('patch', `/trip-schedules/${TRIP}/status`).send({ status: 'done' }).expect(200);
-      expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'done');
+      // ★ THE ACTOR IS NOT OPTIONAL HERE. A board move with no author is the
+      // gap `trip_status_history` exists to close, so the route passes the
+      // session user and never a value from the body.
+      expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'done', ACTOR, null);
     });
 
     it('archives rather than deletes, and gets the archived row back', async () => {
@@ -382,8 +459,19 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('refuses a day written any other way', async () => {
-      await authed('post', '/trip-schedules').send({ scheduledOn: '04/08/2026' }).expect(422);
-      await authed('post', '/trip-schedules').send({ scheduledOn: '2026-8-4' }).expect(422);
+      const slashes = await authed('post', '/trip-schedules').send({ scheduledOn: '04/08/2026' });
+      const unpadded = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-8-4' });
+
+      expect(slashes.status).toBe(422);
+      expect(unpadded.status).toBe(422);
+      // Named the same way the sibling case above names it, so a reader sees
+      // one contract rather than two spellings of a refusal.
+      expect(slashes.body.error.details).toHaveProperty('scheduledOn');
+      expect(unpadded.body.error.details).toHaveProperty('scheduledOn');
+
+      // ★ REFUSED AT THE BOUNDARY. A date the server could not parse must never
+      // reach the service, where it would become a row nobody can read back.
+      expect(trips.create).not.toHaveBeenCalled();
     });
 
     it('refuses a status outside the five the board has', async () => {
@@ -396,9 +484,19 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('refuses a backwards range and an oversized one, rather than trimming them', async () => {
-      await authed('get', '/trip-schedules?from=2026-08-31&to=2026-08-01').expect(422);
-      await authed('get', '/trip-schedules?from=2020-01-01&to=2026-12-31').expect(422);
-      await authed('get', '/trip-schedules?limit=5000').expect(422);
+      const backwards = await authed('get', '/trip-schedules?from=2026-08-31&to=2026-08-01');
+      const tooWide = await authed('get', '/trip-schedules?from=2020-01-01&to=2026-12-31');
+      const tooMany = await authed('get', '/trip-schedules?limit=5000');
+
+      expect(backwards.status).toBe(422);
+      expect(tooWide.status).toBe(422);
+      expect(tooMany.status).toBe(422);
+
+      // ★ "RATHER THAN TRIMMING THEM" IS THE WHOLE CLAIM, and only this line
+      // measures it. A server that silently clamped `limit=5000` to 100 would
+      // answer 200 — but one that clamped and still answered 422 would pass a
+      // status-only check while having queried the database anyway.
+      expect(trips.list).not.toHaveBeenCalled();
     });
 
     it('answers 422 for a malformed id, in the same envelope as everything else', async () => {
@@ -415,7 +513,7 @@ describe('trip-schedule HTTP security', () => {
 
       // `null` survives the schema. If it were stripped, "remove the delivery
       // address" and "leave it alone" would be the same request.
-      expect(trips.update).toHaveBeenCalledWith(TRIP, { deliveryAddress: null });
+      expect(trips.update).toHaveBeenCalledWith(TRIP, { deliveryAddress: null }, ACTOR);
     });
 
     it('strips a field the body must not decide', async () => {
@@ -432,6 +530,79 @@ describe('trip-schedule HTTP security', () => {
       // `z.coerce.boolean()` would make this pass archived rows through.
       await authed('get', '/trip-vehicles?includeArchived=false').expect(200);
       expect(catalogue.listVehicles).toHaveBeenCalledWith(false);
+    });
+  });
+
+  // ============================================ ★ THE BACKOFFICE BOUNDARY ==
+
+  /**
+   * ★ WHY THIS BLOCK EXISTS, AND WHY A TIER COULD NOT DO ITS JOB.
+   *
+   * `trip.read` and `trip.create` are `'any'` — company-wide dispatch data with
+   * no departmental owner, readable by any authenticated caller. That was a
+   * safe reading while every account belonged to a department. Driver accounts
+   * break it: they authenticate, they hold no membership, and `'any'` would
+   * hand them the whole board — every customer, address, contact and cargo note
+   * on every trip, plus the ability to CREATE trips.
+   *
+   * Narrowing the tier would have refused the same routes to any employee
+   * outside a department, which is a different rule about different people. So
+   * the boundary names the one account type that does not belong here.
+   */
+  describe('★ a driver account holding Backoffice URLs', () => {
+    beforeEach(() => {
+      // A driver is not a member or a head of anything. The context is empty,
+      // which is exactly why `'any'` would otherwise have let them through.
+      accountType = 'driver';
+      context = asContext();
+    });
+
+    it.each([...READS])('refuses %s %s with 403, and reaches no service', async (method, path) => {
+      const response = await authed(method, path);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+
+      for (const mock of [
+        ...Object.values(trips),
+        ...Object.values(catalogue),
+        ...Object.values(operations),
+        ...Object.values(execution),
+      ]) {
+        expect(mock).not.toHaveBeenCalled();
+      }
+    });
+
+    it('★ cannot CREATE a trip either — `trip.create` is `any` too', async () => {
+      const response = await authed('post', '/trip-schedules').send({});
+
+      expect(response.status).toBe(403);
+      expect(trips.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('★ an employee reading the same routes is unaffected', () => {
+    beforeEach(() => {
+      accountType = 'employee';
+      // An ordinary member: no headship, no global. `trip.read` is `'any'`, so
+      // this is the weakest caller the boundary must still let through.
+      context = asContext({ memberOf: [DEPT] });
+    });
+
+    it.each([...READS])('still allows %s %s', async (method, path) => {
+      const response = await authed(method, path);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('★ still CREATES a trip — `trip.create` is untouched for employees', async () => {
+      // The boundary refuses an account TYPE, not a permission tier. An
+      // ordinary member held `trip.create` before this guard existed and holds
+      // it now; if that ever stops being true, this fails rather than the
+      // change being noticed in production.
+      await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(201);
+
+      expect(trips.create).toHaveBeenCalled();
     });
   });
 });

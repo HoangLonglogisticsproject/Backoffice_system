@@ -1,10 +1,15 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import type { AppConfig } from '@config/app.config';
-import type { PasswordHasher } from '@core/identity/domain/password-hasher.port';
 import { IdentityRepository } from '@core/identity/persistence/identity.repository';
 import { SessionRepository } from '@core/identity/persistence/session.repository';
 import { SessionService } from '@core/identity/application/session.service';
@@ -32,23 +37,7 @@ import { decodeCursor } from '@common/pagination/cursor';
  *   FRESHNESS   what was true when the request was raised is re-read when it is
  *               decided, so a stale request cannot act on a world that moved
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 const SCHEMA = 'approval_itest';
-
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-  if (!/test/i.test(name)) {
-    throw new Error(`DATABASE_URL_TEST points at "${name}", which is not named as a test database.`);
-  }
-}
-
-const digest = (plain: string): string => createHash('sha256').update(plain, 'utf8').digest('hex');
-const fakeHasher: PasswordHasher = {
-  hash: async (plain: string) => digest(plain),
-  verify: async (plain: string, hash: string) => hash === digest(plain),
-  fakeVerify: async () => undefined,
-};
 
 describeIntegration('Membership approval against real PostgreSQL', () => {
   jest.setTimeout(30_000);
@@ -64,14 +53,7 @@ describeIntegration('Membership approval against real PostgreSQL', () => {
   beforeAll(async () => {
     assertLooksLikeATestDatabase(TEST_URL as string);
 
-    const setup = new Pool({ connectionString: TEST_URL, max: 1 });
-    try {
-      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA};`);
-    } finally {
-      await setup.end();
-    }
-
-    pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
+    pool = await openTestSchema(TEST_URL as string, SCHEMA);
 
     const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of [
@@ -82,31 +64,14 @@ describeIntegration('Membership approval against real PostgreSQL', () => {
       '0005_identity_credential_state.sql',
       '0006_membership_change_requests.sql',
       '0008_role_assignment_membership_fk_index.sql',
+      // 0018 adds `users.account_type`, which provisioning now writes on every
+      // insert — so every spec that creates a user needs it.
+      '0018_driver_account.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
 
-    const database: Database = {
-      query: async <T>(sql: string, params?: readonly unknown[]): Promise<T[]> =>
-        (await pool.query(sql, params as unknown[])).rows as T[],
-      transaction: async <T>(work: (tx: DatabaseQuery) => Promise<T>): Promise<T> => {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-          const result = await work({
-            query: async <R>(sql: string, params?: readonly unknown[]): Promise<R[]> =>
-              (await client.query(sql, params as unknown[])).rows as R[],
-          });
-          await client.query('COMMIT');
-          return result;
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
-      },
-    };
+    const database = poolAsDatabase(pool);
 
     const config = { allowedEmailDomains: [] } as unknown as AppConfig;
     const users = new UserRepository(database);

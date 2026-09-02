@@ -9,10 +9,16 @@ import {
 import type { OffsetPage } from '../../../common/pagination/offset-page';
 import { PermissionGuard, RequirePermission } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
+import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
+import { OperationalBoardService } from '../application/operational-board.service';
+import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService } from '../application/trip-schedule.service';
+import type { OperationalBoardRow } from '../domain/operational-board';
+import type { ExecutionEvent } from '../domain/trip-execution';
+import type { TripStatusChange } from '../domain/trip-status-history';
 import { TRIP_STATUSES, type TripSchedule, type TripScheduleWithRefs } from '../domain/trip-schedule';
 
 /**
@@ -106,7 +112,29 @@ const createTripSchema = z.object({
  */
 const updateTripSchema = createTripSchema.partial();
 
-const updateStatusSchema = z.object({ status: tripStatus });
+/**
+ * A board move, optionally explained.
+ *
+ * `reason` is optional because most moves are routine and forcing a sentence
+ * onto each of them produces a column full of "ok" — the opposite of an audit
+ * trail. It is accepted because the moves that ARE worth explaining, such as
+ * sending a trip backwards, are the ones somebody asks about later.
+ */
+/**
+ * `?includeVoided=true`.
+ *
+ * An enum rather than a boolean, and NOT coerced — `z.coerce.boolean()` is a
+ * trap here, because `Boolean("false")` is `true`. The same spelling the cost
+ * and catalogue routes use.
+ */
+const includeVoidedSchema = z.object({ includeVoided: z.enum(['true', 'false']).optional() });
+
+type IncludeVoidedQuery = z.infer<typeof includeVoidedSchema>;
+
+const updateStatusSchema = z.object({
+  status: tripStatus,
+  reason: z.string().trim().min(1).max(500).nullable().optional(),
+});
 
 type CreateTripBody = z.infer<typeof createTripSchema>;
 type UpdateTripBody = z.infer<typeof updateTripSchema>;
@@ -114,7 +142,36 @@ type UpdateStatusBody = z.infer<typeof updateStatusSchema>;
 
 @Controller()
 export class TripScheduleController {
-  constructor(private readonly trips: TripScheduleService) {}
+  constructor(
+    private readonly trips: TripScheduleService,
+    private readonly operations: OperationalBoardService,
+    private readonly execution: TripExecutionService,
+  ) {}
+
+  /**
+   * What is actually happening, for the people who have to chase it.
+   *
+   * ★ DECLARED BEFORE `:tripId`, and the ordering is load-bearing — Nest matches
+   * in declaration order, so below it this literal would be parsed as a trip id
+   * and `UuidParam` would reject it.
+   *
+   * `trip.read`, the same permission as the board itself: this is dispatch
+   * information throughout. It names the driver and how late they are — which is
+   * exactly what the DRIVER's own read model must not carry about anybody — and
+   * it carries no money at all: the expense declaration is a `none`/`expenses`
+   * word, never an amount.
+   *
+   * ⚠ THE DATE RANGE IS MANDATORY AND CAPPED, by the same DTO the dispatch list
+   * uses and for the same reason ADR-0003 gives.
+   */
+  @Get('operational-board')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async operationalBoard(
+    @Query(new ZodValidationPipe(dateRangePageQuerySchema)) query: DateRangePageQuery,
+  ): Promise<OperationalBoardRow[]> {
+    return this.operations.list(query);
+  }
 
   /**
    * One page of the board.
@@ -125,8 +182,31 @@ export class TripScheduleController {
    * count for the month, and it is only defensible while the date range stays
    * mandatory and capped. ADR-0003 has the argument in full.
    */
+  /**
+   * Every completion still waiting on a decision, whatever month the trip ran.
+   *
+   * ★ NO DATE RANGE, UNLIKE EVERY OTHER TRIP LIST, and that is the fix rather
+   * than an inconsistency. The board is a view of a PERIOD; this is a view of
+   * OUTSTANDING WORK. Filtering it by `scheduled_on` made a completion
+   * submitted on the 30th disappear from the queue on the 1st — while nobody
+   * had decided it.
+   *
+   * Bounded without a range for the reason ADR-0002 §4 gives for the short
+   * lists: one pending request per trip, and a decided trip leaves the set.
+   * A queue that grows long is the alarm, and hiding it behind a filter would
+   * silence exactly that.
+   *
+   * `trip.read`, like the board: no money rides on this response.
+   */
+  @Get('completion-review-queue')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async completionReviewQueue(): Promise<OperationalBoardRow[]> {
+    return this.operations.listUnresolvedCompletions();
+  }
+
   @Get('trip-schedules')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async list(
     @Query(new ZodValidationPipe(dateRangePageQuerySchema)) query: DateRangePageQuery,
@@ -135,7 +215,7 @@ export class TripScheduleController {
   }
 
   @Get('trip-schedules/:tripId')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async findOne(
     @Param('tripId', UuidParam) tripId: string,
@@ -144,7 +224,7 @@ export class TripScheduleController {
   }
 
   @Post('trip-schedules')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.create')
   async create(
     @Body(new ZodValidationPipe(createTripSchema)) body: CreateTripBody,
@@ -156,13 +236,17 @@ export class TripScheduleController {
   }
 
   @Patch('trip-schedules/:tripId')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   async update(
     @Param('tripId', UuidParam) tripId: string,
     @Body(new ZodValidationPipe(updateTripSchema)) body: UpdateTripBody,
+    @CurrentUser() actor: SessionUser,
   ): Promise<TripSchedule> {
-    return this.trips.update(tripId, body);
+    // The actor is passed because this route can move the status too — `status`
+    // is a field of the patch — and every board move is recorded with whoever
+    // made it.
+    return this.trips.update(tripId, body, actor.id);
   }
 
   /**
@@ -175,13 +259,52 @@ export class TripScheduleController {
    * a change to one decorator rather than a redesign of the edit path.
    */
   @Patch('trip-schedules/:tripId/status')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   async updateStatus(
     @Param('tripId', UuidParam) tripId: string,
     @Body(new ZodValidationPipe(updateStatusSchema)) body: UpdateStatusBody,
+    @CurrentUser() actor: SessionUser,
   ): Promise<TripSchedule> {
-    return this.trips.updateStatus(tripId, body.status);
+    return this.trips.updateStatus(tripId, body.status, actor.id, body.reason ?? null);
+  }
+
+  /**
+   * Every move this trip has made, and who made it.
+   *
+   * `trip.read`, the same permission as the board itself: this is dispatch
+   * information and carries no money. The author's NAME rides along because a
+   * UUID cannot be shown to anybody.
+   */
+  @Get('trip-schedules/:tripId/status-history')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async statusHistory(
+    @Param('tripId', UuidParam) tripId: string,
+  ): Promise<TripStatusChange[]> {
+    return this.trips.statusHistory(tripId);
+  }
+
+  /**
+   * What the driver reported on this trip, in the order it happened.
+   *
+   * ★ ADDED FOR THE COMPLETION REVIEW, AND IT READS WHAT ALREADY EXISTS. The
+   * operational board carries the four DERIVED times; a reviewer deciding
+   * whether to close a trip needs the events themselves — when the server heard
+   * each one, whether any was withdrawn and why. Nothing else exposed that.
+   *
+   * `trip.read`, the same permission as the board: an execution event carries no
+   * money. `includeVoided=true` shows the withdrawn ones, which is exactly what
+   * somebody auditing a correction is looking for.
+   */
+  @Get('trip-schedules/:tripId/execution-events')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async executionEvents(
+    @Param('tripId', UuidParam) tripId: string,
+    @Query(new ZodValidationPipe(includeVoidedSchema)) query: IncludeVoidedQuery,
+  ): Promise<ExecutionEvent[]> {
+    return this.execution.listEvents(tripId, query.includeVoided === 'true');
   }
 
   /**
@@ -194,7 +317,7 @@ export class TripScheduleController {
    * it just removed.
    */
   @Post('trip-schedules/:tripId/archive')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   @HttpCode(HttpStatus.OK)
   async archive(

@@ -32,6 +32,25 @@ export const TRIP_STATUSES: readonly TripStatus[] = [
   'done',
 ];
 
+/**
+ * The statuses a dispatcher may CHOOSE. Everything above is what a trip may BE.
+ *
+ * ★ `done` IS MISSING ON PURPOSE, AND IT IS NOT A UI PREFERENCE. A trip is
+ * finished by APPROVING ITS COMPLETION REQUEST — the server refuses `done` from
+ * the board and from trip creation alike, and a database trigger makes it
+ * permanent once set. Offering it in a dropdown would offer a control whose
+ * only possible outcome is a 409.
+ *
+ * ⚠ The other four stay UNORDERED. `external_booking` is a ROUTE rather than a
+ * stage and `needs_confirmation` is an exception reachable from anywhere, so
+ * constraining moves between them would invent a workflow the business has not
+ * described — and the first thing it would break is a dispatcher correcting a
+ * mis-click.
+ */
+export const DISPATCH_SELECTABLE_STATUSES: readonly TripStatus[] = TRIP_STATUSES.filter(
+  (status) => status !== 'done',
+);
+
 export type CatalogueStatus = 'active' | 'archived';
 
 /** A trip as the WRITE paths return it: ids, no joined names. */

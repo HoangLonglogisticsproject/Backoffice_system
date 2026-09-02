@@ -24,6 +24,225 @@ export type Language = 'vi' | 'en';
 type Phrase = Record<Language, string>;
 
 const PHRASES = {
+  // ------------------------------------- Driver expense declaration (P0 fix) --
+  driverLineCount: { vi: 'khoản', en: 'items' },
+  driverExpenseOpen: { vi: 'Còn sửa được', en: 'Still editable' },
+  driverResubmit: { vi: 'Gửi lại', en: 'Send again' },
+  driverReviewExpenses: { vi: 'Xem lại chi phí đã khai', en: 'Review the figures' },
+  driverConfirmAnyway: { vi: 'Vẫn chọn không phát sinh', en: 'Keep "no expenses"' },
+  // ★ Hỏi lại trước khi gửi một trạng thái server chắc chắn từ chối.
+  driverDeclareConflict: {
+    vi: 'Chuyến này đang có chi phí đã khai. Bạn chắc chắn là không phát sinh?',
+    en: 'This trip already has declared expenses. Are you sure there were none?',
+  },
+  // ★ Gợi ý theo nhóm — khác biệt duy nhất giữa 5 nhóm, vì schema cho cả năm
+  // cùng một hình dạng (nhóm · số tiền · ghi chú).
+  driverHintFuel: { vi: 'Đổ ở đâu, bao nhiêu lít', en: 'Where, how many litres' },
+  driverHintToll: { vi: 'Trạm nào', en: 'Which toll station' },
+  driverHintWarehouse: { vi: 'Kho nào', en: 'Which warehouse' },
+  driverHintLoading: { vi: 'Bốc hay xếp, mấy người', en: 'Loading or unloading, how many' },
+  driverHintOvertime: { vi: 'Tăng ca vì lý do gì', en: 'Why the overtime' },
+  // ------------------------------------------- Completion review (backoffice) --
+  reviewNav: { vi: 'Duyệt hoàn tất', en: 'Completion review' },
+  reviewTitle: { vi: 'Duyệt hoàn tất chuyến', en: 'Completion review' },
+  reviewQueueEmpty: { vi: 'Không có chuyến nào chờ duyệt', en: 'Nothing waiting for review' },
+  reviewOpen: { vi: 'Xem hồ sơ', en: 'Inspect' },
+  reviewClose: { vi: 'Đóng', en: 'Close' },
+  reviewApprove: { vi: 'Duyệt — đóng chuyến', en: 'Approve — close the trip' },
+  reviewReject: { vi: 'Từ chối', en: 'Send back' },
+  reviewRejectReasonLabel: {
+    vi: 'Lý do từ chối (bắt buộc — tài xế sẽ đọc)',
+    en: 'Reason (required — the driver reads this)',
+  },
+  reviewRejectPlaceholder: { vi: 'Ví dụ: Số tiền dầu sai', en: 'For example: the fuel figure is wrong' },
+  reviewReasonRequired: { vi: 'Phải nhập lý do', en: 'A reason is required' },
+  // ★ APPROVAL IS IRREVERSIBLE. The wording says so before the click, because
+  // there is no screen after it that can undo anything.
+  reviewApproveWarning: {
+    vi: 'Duyệt sẽ đóng chuyến vĩnh viễn và khoá toàn bộ chi phí. Không thể mở lại.',
+    en: 'Approving closes the trip permanently and freezes every figure. It cannot be undone.',
+  },
+  reviewTimeline: { vi: 'Tiến trình tài xế báo', en: 'What the driver reported' },
+  reviewRecordedAt: { vi: 'Máy chủ ghi', en: 'Server recorded' },
+  reviewDeviceTime: { vi: 'Đồng hồ thiết bị (tham khảo)', en: 'Device clock (diagnostic)' },
+  reviewNotReported: { vi: 'Chưa báo', en: 'Not reported' },
+  reviewVoided: { vi: 'Đã thu hồi', en: 'Withdrawn' },
+  reviewExpenses: { vi: 'Chi phí tài xế khai', en: 'Expenses the driver declared' },
+  reviewNoExpense: { vi: 'Không có khoản nào', en: 'None' },
+  reviewExpensesHidden: {
+    vi: 'Bạn không có quyền xem số tiền',
+    en: 'You may not see the figures',
+  },
+  reviewDeclaration: { vi: 'Tài xế khai báo', en: 'Driver declared' },
+  reviewAttempts: { vi: 'Số lần gửi', en: 'Attempts' },
+  reviewSubmittedAt: { vi: 'Gửi lúc', en: 'Submitted' },
+  reviewDecidedAt: { vi: 'Quyết định lúc', en: 'Decided' },
+  reviewNothingPending: {
+    vi: 'Chuyến này không có yêu cầu nào đang chờ duyệt',
+    en: 'This trip has no request waiting for a decision',
+  },
+  reviewStage: { vi: 'Trạng thái', en: 'Stage' },
+  reviewDriver: { vi: 'Tài xế', en: 'Driver' },
+  reviewDelayPickup: { vi: 'Trễ lấy hàng', en: 'Pickup late by' },
+  reviewDelayDelivery: { vi: 'Trễ giao hàng', en: 'Delivery late by' },
+  reviewNoPermission: {
+    vi: 'Bạn không có quyền duyệt hoàn tất chuyến',
+    en: 'You may not decide completions',
+  },
+
+  stageNO_DRIVER: { vi: 'Chưa có tài xế', en: 'No driver' },
+  stageDRIVER_ASSIGNED: { vi: 'Đã gán tài xế', en: 'Driver assigned' },
+  stageWAITING_PICKUP: { vi: 'Chờ đến điểm lấy', en: 'Waiting for pickup' },
+  stagePICKUP_DELAYED: { vi: 'Trễ điểm lấy', en: 'Pickup delayed' },
+  stageAT_PICKUP: { vi: 'Đang ở điểm lấy', en: 'At pickup' },
+  stageIN_TRANSIT: { vi: 'Đang vận chuyển', en: 'In transit' },
+  stageDELIVERY_DELAYED: { vi: 'Trễ điểm giao', en: 'Delivery delayed' },
+  stageAT_DELIVERY: { vi: 'Đang ở điểm giao', en: 'At delivery' },
+  stageAWAITING_COMPLETION: { vi: 'Chờ tài xế gửi hoàn tất', en: 'Awaiting completion' },
+  stageCOMPLETION_PENDING: { vi: 'Chờ duyệt', en: 'Waiting for review' },
+  stageCOMPLETION_REJECTED: { vi: 'Đã từ chối', en: 'Sent back' },
+  stageDONE: { vi: 'Đã hoàn tất', en: 'Completed' },
+
+  reviewErrConflict: {
+    vi: 'Yêu cầu này vừa được xử lý ở nơi khác. Màn hình đã cập nhật.',
+    en: 'This request was just decided elsewhere. The screen has been refreshed.',
+  },
+  reviewErrForbidden: {
+    vi: 'Bạn không có quyền thực hiện thao tác này.',
+    en: 'You are not allowed to do that.',
+  },
+  reviewErrNetwork: {
+    vi: 'Không kết nối được máy chủ. Thử lại.',
+    en: 'Could not reach the server. Try again.',
+  },
+  reviewErrValidation: { vi: 'Dữ liệu chưa hợp lệ.', en: 'That is not valid.' },
+  reviewErrUnknown: { vi: 'Có lỗi xảy ra. Thử lại.', en: 'Something went wrong. Try again.' },
+  // ------------------------------------------------------------ Driver Portal --
+  //
+  // ★ WRITTEN FOR SOMEBODY STANDING BESIDE A LORRY. Short, concrete, and about
+  // what to do next rather than about what the system is. Nothing here names a
+  // status code, a table or a state machine.
+  driverPortal: { vi: 'Cổng tài xế', en: 'Driver Portal' },
+  driverMyTrips: { vi: 'Chuyến của tôi', en: 'My trips' },
+  driverNoTrips: { vi: 'Bạn chưa được phân công chuyến nào', en: 'You have no assigned trips' },
+  driverBackToTrips: { vi: 'Về danh sách chuyến', en: 'Back to trips' },
+  driverRetry: { vi: 'Thử lại', en: 'Try again' },
+  driverLoading: { vi: 'Đang tải…', en: 'Loading…' },
+
+  driverVehicle: { vi: 'Xe', en: 'Vehicle' },
+  driverCustomer: { vi: 'Khách hàng', en: 'Customer' },
+  driverPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
+  driverDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },
+  driverCargo: { vi: 'Hàng hoá', en: 'Cargo' },
+  driverContact: { vi: 'Liên hệ', en: 'Contact' },
+  driverInstructions: { vi: 'Chỉ dẫn cho tài xế', en: 'Instructions' },
+  driverScheduled: { vi: 'Dự kiến', en: 'Scheduled' },
+  driverActual: { vi: 'Thực tế', en: 'Actual' },
+  driverNotSet: { vi: 'Chưa có', en: 'Not set' },
+
+  driverProgress: { vi: 'Tiến trình chuyến', en: 'Trip progress' },
+  driverStepArrivedPickup: { vi: 'Đến điểm lấy hàng', en: 'Arrived at pickup' },
+  driverStepPickupConfirmed: { vi: 'Xác nhận lấy hàng', en: 'Pickup confirmed' },
+  driverStepArrivedDelivery: { vi: 'Đến điểm giao hàng', en: 'Arrived at delivery' },
+  driverStepDeliveryConfirmed: { vi: 'Xác nhận giao hàng', en: 'Delivery confirmed' },
+  driverActionArrivedPickup: { vi: 'Tôi đã đến điểm lấy hàng', en: 'I have arrived at pickup' },
+  driverActionPickupConfirmed: { vi: 'Đã lấy hàng xong', en: 'Pickup is done' },
+  driverActionArrivedDelivery: { vi: 'Tôi đã đến điểm giao hàng', en: 'I have arrived at delivery' },
+  driverActionDeliveryConfirmed: { vi: 'Đã giao hàng xong', en: 'Delivery is done' },
+  driverStepWaiting: { vi: 'Chưa đến', en: 'Not yet' },
+  driverStepDone: { vi: 'Đã xong', en: 'Done' },
+  // ★ A FACT, NOT A VERDICT. No threshold decides this — the planned time has
+  // simply passed and the step has not been reported.
+  driverOverdue: { vi: 'Đã quá giờ dự kiến', en: 'Past the planned time' },
+  driverLateBy: { vi: 'Trễ', en: 'Late by' },
+  driverMinutes: { vi: 'phút', en: 'min' },
+  driverAllStepsDone: { vi: 'Đã hoàn tất các bước vận chuyển', en: 'All journey steps reported' },
+
+  driverExpenses: { vi: 'Chi phí tôi đã khai', en: 'Expenses I declared' },
+  driverAddExpense: { vi: 'Thêm khoản chi', en: 'Add an expense' },
+  driverNoExpenseYet: { vi: 'Chưa khai khoản chi nào', en: 'No expenses declared yet' },
+  driverAmount: { vi: 'Số tiền', en: 'Amount' },
+  driverCategory: { vi: 'Loại chi phí', en: 'Category' },
+  driverNote: { vi: 'Ghi chú', en: 'Note' },
+  driverSave: { vi: 'Lưu', en: 'Save' },
+  driverCancel: { vi: 'Huỷ', en: 'Cancel' },
+  driverEdit: { vi: 'Sửa', en: 'Edit' },
+  driverExpenseLocked: { vi: 'Đang chờ duyệt — chưa sửa được', en: 'Under review — locked' },
+  driverExpenseFinal: { vi: 'Đã duyệt — không sửa được', en: 'Approved — final' },
+  driverNeedVehicleFirst: {
+    vi: 'Chuyến chưa có xe nên chưa khai chi phí được',
+    en: 'This trip has no vehicle yet, so expenses cannot be declared',
+  },
+  driverAmountHint: { vi: 'Ví dụ: 1500000', en: 'For example: 1500000' },
+
+  driverCompletion: { vi: 'Hoàn tất chuyến', en: 'Completing the trip' },
+  driverSubmitCompletion: { vi: 'Gửi hoàn tất chuyến', en: 'Submit for completion' },
+  // ★ THE QUESTION THE SERVER REFUSES TO ANSWER FOR THEM. No expense rows is
+  // not a declaration — it is either a trip that cost nothing or a driver who
+  // forgot, and only the driver knows which.
+  driverDeclareQuestion: {
+    vi: 'Chuyến này có phát sinh chi phí không?',
+    en: 'Did this trip have any expenses?',
+  },
+  driverDeclareNone: { vi: 'Không phát sinh chi phí', en: 'No expenses' },
+  driverDeclareExpenses: { vi: 'Có phát sinh chi phí', en: 'There were expenses' },
+  driverFinishStepsFirst: {
+    vi: 'Hoàn tất các bước vận chuyển ở trên trước',
+    en: 'Report the journey steps above first',
+  },
+  driverCompletionPending: { vi: 'Đã gửi — đang chờ duyệt', en: 'Sent — waiting for review' },
+  driverCompletionPendingHint: {
+    vi: 'Chi phí đang tạm khoá cho tới khi có kết quả duyệt.',
+    en: 'Expenses are locked until the review is decided.',
+  },
+  driverCompletionRejected: { vi: 'Yêu cầu bị từ chối', en: 'Sent back' },
+  driverRejectReason: { vi: 'Lý do từ chối', en: 'Reason' },
+  driverFixAndResubmit: { vi: 'Chỉnh sửa và gửi lại', en: 'Correct and send again' },
+  driverCompletionApproved: { vi: 'Chuyến đã hoàn tất', en: 'Trip completed' },
+  driverCompletionApprovedHint: {
+    vi: 'Chuyến đã đóng. Chi phí không thay đổi được nữa.',
+    en: 'This trip is closed. Its figures are final.',
+  },
+  driverAttempt: { vi: 'Lần gửi', en: 'Attempt' },
+  driverDeclaredNone: { vi: 'Đã khai: không phát sinh', en: 'Declared: no expenses' },
+  driverDeclaredExpenses: { vi: 'Đã khai: có phát sinh', en: 'Declared: there were expenses' },
+
+  driverErrNetwork: {
+    vi: 'Không có kết nối. Kiểm tra mạng rồi thử lại.',
+    en: 'No connection. Check your network and try again.',
+  },
+  driverErrSession: {
+    vi: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+    en: 'Your session has expired. Please sign in again.',
+  },
+  driverErrForbidden: {
+    vi: 'Chuyến này không thuộc về bạn.',
+    en: 'This trip is not yours.',
+  },
+  driverErrPasswordChange: {
+    vi: 'Bạn cần đổi mật khẩu trước khi sử dụng.',
+    en: 'You must change your password first.',
+  },
+  driverErrNotFound: { vi: 'Không tìm thấy chuyến này.', en: 'This trip was not found.' },
+  driverErrValidation: {
+    vi: 'Thông tin chưa hợp lệ. Kiểm tra lại số tiền và các ô đã nhập.',
+    en: 'Something is not valid. Check the amount and the fields you filled in.',
+  },
+  driverErrTooMany: {
+    vi: 'Bạn thao tác quá nhanh. Chờ một lát rồi thử lại.',
+    en: 'Too many attempts. Wait a moment and try again.',
+  },
+  // ★ ONE SENTENCE FOR EVERY 409, AND IT SAYS WHAT TO DO. The trip changed
+  // underneath — from the office, from another device, or because a review
+  // landed. Re-reading the screen is always the right next step.
+  driverErrConflict: {
+    vi: 'Chuyến vừa thay đổi. Màn hình đã được cập nhật — xem lại rồi thao tác tiếp.',
+    en: 'This trip just changed. The screen has been refreshed — check it and try again.',
+  },
+  driverErrUnknown: {
+    vi: 'Có lỗi xảy ra. Thử lại, nếu vẫn lỗi hãy báo văn phòng.',
+    en: 'Something went wrong. Try again, and tell the office if it keeps failing.',
+  },
   backofficeSystem: { vi: 'Backoffice System', en: 'Backoffice System' },
   logout: { vi: 'Đăng xuất', en: 'Logout' },
   common: { vi: 'CHUNG', en: 'GENERAL' },
@@ -50,6 +269,58 @@ const PHRASES = {
   reports: { vi: 'Báo cáo', en: 'Reports' },
   aiCoordinator: { vi: 'AI Điều phối', en: 'AI Coordinator' },
   settings: { vi: 'Cài đặt', en: 'Settings' },
+
+  // Driver accounts — account type, proposal and review
+  accountTypeLabel: { vi: 'Loại tài khoản', en: 'Account type' },
+  accountTypeEmployee: { vi: 'Nhân viên', en: 'Employee' },
+  accountTypeDriver: { vi: 'Tài xế', en: 'Driver' },
+  driverNoDepartmentNote: {
+    vi: 'Tài xế không thuộc phòng ban.',
+    en: 'Drivers do not belong to a department.',
+  },
+  driverNoDepartmentWhy: {
+    vi: 'Tài xế đăng nhập vào Driver Portal và chỉ thấy chuyến được phân công cho mình. Việc phân công chuyến là một nghiệp vụ riêng, không thực hiện ở đây.',
+    en: 'A driver signs in to the Driver Portal and sees only the trips assigned to them. Assigning trips is a separate task and is not done here.',
+  },
+  driverProposeTitle: { vi: 'Đề xuất tài khoản tài xế', en: 'Propose a driver account' },
+  driverProposeNote: {
+    vi: 'Bạn có thể đề xuất; tài khoản chỉ được kích hoạt sau khi SuperAdmin duyệt. Mật khẩu tạm sẽ do hệ thống sinh lúc duyệt.',
+    en: 'You may propose one; the account is activated only after a SuperAdmin approves it. The temporary password is generated at approval.',
+  },
+  driverProposeSubmit: { vi: 'Gửi đề xuất', en: 'Send proposal' },
+  driverProposeSent: {
+    vi: 'Đã gửi đề xuất. Đang chờ SuperAdmin duyệt.',
+    en: 'Proposal sent. Awaiting a SuperAdmin decision.',
+  },
+  driverRequestQueue: { vi: 'Đề xuất tài khoản tài xế', en: 'Driver account requests' },
+  driverRequestQueueEmpty: {
+    vi: 'Không có đề xuất nào đang chờ.',
+    en: 'No requests are waiting.',
+  },
+  driverRequestMine: { vi: 'Đề xuất của tôi', en: 'My proposals' },
+  driverRequestRequester: { vi: 'Người đề xuất', en: 'Proposed by' },
+  driverRequestedAt: { vi: 'Thời điểm đề xuất', en: 'Proposed at' },
+  driverRequestDecidedBy: { vi: 'Người duyệt', en: 'Decided by' },
+  driverRequestDecidedAt: { vi: 'Thời điểm duyệt', en: 'Decided at' },
+  driverRequestStatusPending: { vi: 'Chờ duyệt', en: 'Awaiting decision' },
+  driverRequestStatusApproved: { vi: 'Đã duyệt', en: 'Approved' },
+  driverRequestStatusRejected: { vi: 'Đã từ chối', en: 'Rejected' },
+  driverRequestApprove: { vi: 'Duyệt', en: 'Approve' },
+  driverRequestReject: { vi: 'Từ chối', en: 'Reject' },
+  driverRequestRejectReason: { vi: 'Lý do từ chối', en: 'Reason for rejection' },
+  driverRequestRejectReasonHint: {
+    vi: 'Bắt buộc — người đề xuất cần biết phải sửa gì.',
+    en: 'Required — the requester needs to know what to fix.',
+  },
+  driverRequestReasonRequired: {
+    vi: 'Phải nhập lý do từ chối.',
+    en: 'A reason is required.',
+  },
+  driverRequestApproveWarning: {
+    vi: 'Duyệt sẽ tạo tài khoản tài xế và kích hoạt ngay. Mật khẩu tạm chỉ hiện một lần.',
+    en: 'Approving creates the driver account and activates it. The temporary password is shown once.',
+  },
+  driverCreatedTitle: { vi: 'Đã tạo tài khoản tài xế', en: 'Driver account created' },
 
   // Employee Management Page
   employeeList: { vi: 'Danh sách nhân viên', en: 'Employee List' },
@@ -502,6 +773,48 @@ const PHRASES = {
   confirmArchiveCustomerBody: {
     vi: 'Lưu trữ khách hàng này? Các chuyến cũ vẫn giữ nguyên tên khách — khách chỉ không còn được chọn cho chuyến mới.',
     en: 'Archive this customer? Past trips keep the name — they are only no longer offered for new trips.',
+  },
+  // Trip cost — the CHI PHÍ block of the workbook, behind `cost.read`
+  tripCost: { vi: 'Chi phí chuyến', en: 'Trip cost' },
+  costOwnVehicle: { vi: 'Chi phí xe nhà', en: 'Own-vehicle cost' },
+  costOutsource: { vi: 'Xe thuê ngoài', en: 'Outsourced hire' },
+  // The five headings, exactly as the sheet writes them.
+  costFuel: { vi: 'Dầu', en: 'Fuel' },
+  costToll: { vi: 'Cầu trạm', en: 'Tolls' },
+  costWarehouse: { vi: 'Phí kho', en: 'Warehouse' },
+  costLoading: { vi: 'Bốc xếp', en: 'Loading' },
+  costOvertime: { vi: 'Tăng ca', en: 'Overtime' },
+  totalOwnVehicle: { vi: 'Tổng chi phí xe nhà', en: 'Own-vehicle total' },
+  totalOutsource: { vi: 'Tổng xe thuê ngoài', en: 'Outsourced total' },
+  totalTripCost: { vi: 'Tổng chi phí chuyến', en: 'Trip total' },
+  addCost: { vi: 'Thêm chi phí', en: 'Add cost' },
+  addHire: { vi: 'Thêm xe ngoài', en: 'Add hire' },
+  colCategory: { vi: 'Khoản mục', en: 'Category' },
+  colAmount: { vi: 'Số tiền (VND)', en: 'Amount (VND)' },
+  colCarrier: { vi: 'Nhà xe', en: 'Carrier' },
+  colDocumentRef: { vi: 'Chứng từ', en: 'Document' },
+  fieldCategory: { vi: 'Khoản mục *', en: 'Category *' },
+  fieldAmount: { vi: 'Số tiền (VND) *', en: 'Amount (VND) *' },
+  fieldCarrier: { vi: 'Nhà xe *', en: 'Carrier *' },
+  fieldAgreedAmount: { vi: 'Giá thỏa thuận (VND) *', en: 'Agreed price (VND) *' },
+  fieldDocumentRef: { vi: 'Số chứng từ', en: 'Document reference' },
+  vatIncluded: { vi: 'Đã bao gồm VAT', en: 'VAT included' },
+  vatIncludedShort: { vi: 'Có VAT', en: 'incl. VAT' },
+  // ★ SAYS WHAT VOID IS NOT. A withdrawn line is not deleted — it stays on
+  // the record with a reason, and only stops counting.
+  voidRecord: { vi: 'Hủy khoản', en: 'Void' },
+  voidReason: { vi: 'Lý do hủy *', en: 'Reason for voiding *' },
+  confirmVoidBody: {
+    vi: 'Hủy khoản này? Bản ghi vẫn được giữ lại kèm lý do — chỉ là không còn tính vào tổng.',
+    en: 'Void this record? It is kept, with the reason — it simply stops counting.',
+  },
+  statusVoided: { vi: 'Đã hủy', en: 'Voided' },
+  showVoided: { vi: 'Hiện cả khoản đã hủy', en: 'Show voided' },
+  emptyCosts: { vi: 'Chưa có chi phí xe nhà.', en: 'No own-vehicle cost yet.' },
+  emptyHires: { vi: 'Chưa có xe thuê ngoài.', en: 'No outsourced hire yet.' },
+  amountHint: {
+    vi: 'Nhập số tiền, tối đa 2 số lẻ. Ví dụ: 1500000',
+    en: 'A positive amount, at most 2 decimals. e.g. 1500000',
   },
 } as const satisfies Record<string, Phrase>;
 

@@ -31,6 +31,41 @@ export const PERMISSIONS = [
    * table below for why "any department" is the honest reading here.
    */
   'trip.write',
+
+  /** See the money on a trip: its cost lines, its hires, and their totals. */
+  'cost.read',
+  /** Record a cost line or an outsourced hire against a trip. */
+  'cost.create',
+  /** Withdraw one, with a reason. There is no edit — a correction is a void. */
+  'cost.void',
+
+  /**
+   * ★ ONE KEY FOR BOTH DECISIONS, NOT TWO.
+   *
+   * Approving and rejecting a completion are the same authority used two ways —
+   * the reviewer looked at the trip and said yes or no. Splitting them would
+   * create a holder who may send work back but never accept it, which is not a
+   * role anybody has asked for and not one the contract describes.
+   *
+   * The action is REVIEW, and the two outcomes are what the route says.
+   */
+  'trip.complete.review',
+
+  /**
+   * ★ PROPOSE A DRIVER ACCOUNT — AND NOTHING MORE.
+   *
+   * Holding this lets somebody put a name and an address in front of a global
+   * administrator. It does not create an account, does not activate one, and
+   * carries no route that could. Approving is `user.write`, which is `'global'`
+   * and which no department head holds — that separation is the whole design.
+   *
+   * ★ ONE KEY, NOT ONE PER DEPARTMENT. Operations and Accounting were named
+   * separately in the requirement, but they are the same act by the same kind
+   * of person: a head, proposing. `'head-anywhere'` says exactly that and stays
+   * true when a third department starts hiring drivers. Keys named after
+   * departments would turn the org chart into the permission set.
+   */
+  'driver.account.request',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];
@@ -118,6 +153,58 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'trip.read': 'any',
   'trip.create': 'any',
   'trip.write': 'head-anywhere',
+
+  /**
+   * ★ MONEY IS 'global' — THE MOST RESTRICTIVE TIER — AND THIS IS A DELIBERATE
+   * PLACEHOLDER, NOT A FINISHED ANSWER.
+   *
+   * The requirement on record is that price visibility is RESTRICTED, and that
+   * the people who need it are a small group. Which group, expressed as which
+   * holders, is a role-mapping decision nobody has taken yet.
+   *
+   * Until it is taken this fails CLOSED. 'any' would hand every finished
+   * account the company's cost base, and the difference between the two
+   * mistakes is not symmetric: a tier that is too tight blocks work until
+   * somebody widens it, while a tier that is too loose has already disclosed
+   * the figures by the time anyone notices. Relaxing this later is one edit to
+   * this table; un-disclosing is not possible.
+   *
+   * ⚠ NO ROLE IS NAMED HERE OR ANYWHERE ELSE. 'global' is a RELATION — a
+   * caller whose authorization is not scoped to a department — and which
+   * accounts hold it stays data, exactly as it is for every other permission.
+   */
+  'cost.read': 'global',
+  'cost.create': 'global',
+  'cost.void': 'global',
+
+  /**
+   * ★ 'global' BECAUSE THE CONTRACT NAMES ONE ACTOR, NOT BECAUSE IT IS SAFEST.
+   *
+   * Confirming that a trip is finished is reserved to the SuperAdmin: it is the
+   * moment the trip's figures become permanent and the row closes for good — a
+   * trigger makes `done` irreversible, so there is no undo to fall back on.
+   * `head-anywhere` would hand that to every department head, and `any` to
+   * everybody with an account.
+   *
+   * ⚠ AND IT IS DELIBERATELY NOT `trip.write`. A dispatcher correcting a
+   * delivery address and a reviewer closing a trip's books are different acts
+   * with different consequences; sharing a key would mean the narrower one
+   * could never be granted without the wider one.
+   *
+   * As everywhere else, 'global' is a RELATION — a caller whose authority is
+   * not scoped to a department — and WHICH accounts hold it stays data.
+   */
+  'trip.complete.review': 'global',
+
+  /**
+   * ★ `head-anywhere`, WHICH IS THE TIER THIS CASE WAS BUILT FOR.
+   *
+   * A driver belongs to no department, so there is no unit to name and no
+   * target to scope against — asking for one would refuse every head at the
+   * guard. Heading ANY department is the whole test, and an ordinary member
+   * fails it, which is what the specification asks for.
+   */
+  'driver.account.request': 'head-anywhere',
 };
 
 export function isPermissionKey(value: string): value is PermissionKey {

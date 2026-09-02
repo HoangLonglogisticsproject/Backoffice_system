@@ -1,8 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import { ConflictError, NotFoundError } from '@common/errors/domain.error';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
 import { buildDateRangePageQuerySchema } from '@common/pagination/date-range-page-query.dto';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import {
@@ -10,6 +17,7 @@ import {
   TripVehicleRepository,
 } from '../../src/capabilities/trip-schedule/persistence/trip-catalogue.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
+import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
 import { TripCatalogueService } from '../../src/capabilities/trip-schedule/application/trip-catalogue.service';
 import { TripScheduleService } from '../../src/capabilities/trip-schedule/application/trip-schedule.service';
 import type { TripStatus } from '../../src/capabilities/trip-schedule/domain/trip-schedule';
@@ -31,16 +39,8 @@ import type { TripStatus } from '../../src/capabilities/trip-schedule/domain/tri
  *                                  refused by the index, not merely by a check
  *                                  the service could forget to run
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 const SCHEMA = 'trip_itest';
 
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-  if (!/test/i.test(name)) {
-    throw new Error(`DATABASE_URL_TEST points at "${name}", which is not named as a test database.`);
-  }
-}
 
 describeIntegration('Trip schedule against real PostgreSQL', () => {
   jest.setTimeout(30_000);
@@ -78,36 +78,33 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       '0001_identity.sql',
       '0002_users_updated_at.sql',
       '0011_trip_schedule.sql',
+      '0012_trip_cost.sql',
+      // The operational lifecycle. Listed in full because 0016 and 0017 carry
+      // foreign keys back into 0013 and 0014 — a subset simply fails to apply.
+      '0013_trip_carrier_and_vehicle_ownership.sql',
+      '0014_trip_driver_assignment.sql',
+      '0015_trip_execution_event.sql',
+      '0016_trip_cost_lifecycle.sql',
+      '0017_trip_completion_and_history.sql',
+      // 0018 adds `users.account_type`, which provisioning now writes on every
+      // insert — so every spec that creates a user needs it.
+      '0018_driver_account.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
 
-    const database: Database = {
-      query: async <T>(sql: string, params?: readonly unknown[]): Promise<T[]> =>
-        (await pool.query(sql, params as unknown[])).rows as T[],
-      transaction: async <T>(work: (tx: DatabaseQuery) => Promise<T>): Promise<T> => {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-          const result = await work({
-            query: async <R>(sql: string, params?: readonly unknown[]): Promise<R[]> =>
-              (await client.query(sql, params as unknown[])).rows as R[],
-          });
-          await client.query('COMMIT');
-          return result;
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
-      },
-    };
+    const database = poolAsDatabase(pool);
 
     const vehicles = new TripVehicleRepository(database);
     const customers = new TripCustomerRepository(database);
 
-    trips = new TripScheduleService(database, new TripScheduleRepository(database), vehicles, customers);
+    trips = new TripScheduleService(
+      database,
+      new TripScheduleRepository(database),
+      vehicles,
+      customers,
+      new TripStatusHistoryRepository(database),
+    );
     catalogue = new TripCatalogueService(vehicles, customers);
 
     author = (await new UserRepository(database).insertUser({ displayName: 'Điều Độ' })).id;
@@ -118,9 +115,20 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('DELETE FROM trip_schedules');
-    await pool.query('DELETE FROM trip_vehicles');
-    await pool.query('DELETE FROM trip_customers');
+    // ★ TRUNCATE, NOT DELETE, AND 0017 IS THE REASON. Its `deny_delete` trigger
+    // refuses a row-level DELETE on every historical table — which is the point
+    // of it. TRUNCATE is a different statement that fires no row triggers, so a
+    // disposable test database can still be emptied between cases while the
+    // guarantee holds for every path the application could ever take.
+    //
+    // CASCADE because `trip_status_history` and the execution tables now carry
+    // foreign keys back to `trip_schedules`.
+    await pool.query(
+      `TRUNCATE trip_status_history, trip_completion_requests, trip_execution_events,
+                trip_cost_edits, trip_costs, trip_outsource_hires,
+                trip_driver_assignments, trip_schedules, trip_vehicles, trip_customers
+       RESTART IDENTITY CASCADE`,
+    );
   });
 
   // ------------------------------------------------------------ the day ----
@@ -303,7 +311,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         createdBy: author,
       });
 
-      const updated = await trips.update(created.id, { deliveryAddress: null });
+      const updated = await trips.update(created.id, { deliveryAddress: null }, author);
 
       expect(updated.deliveryAddress).toBeNull();
       expect(updated.note).toBe('giữ nguyên');
@@ -384,7 +392,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       await catalogue.archiveVehicle(vehicle.id);
 
-      const updated = await trips.update(trip.id, { note: 'sau' });
+      const updated = await trips.update(trip.id, { note: 'sau' }, author);
 
       expect(updated.note).toBe('sau');
       // The historical assignment is intact — not cleared, not swapped.
@@ -401,7 +409,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       await catalogue.archiveCustomer(customer.id);
 
-      const updated = await trips.update(trip.id, { cargoInfo: '17CTN / 1.22CBM' });
+      const updated = await trips.update(trip.id, { cargoInfo: '17CTN / 1.22CBM' }, author);
 
       expect(updated.cargoInfo).toBe('17CTN / 1.22CBM');
       expect(updated.customerId).toBe(customer.id);
@@ -420,9 +428,14 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       await catalogue.archiveVehicle(vehicle.id);
       await catalogue.archiveCustomer(customer.id);
 
-      const updated = await trips.update(trip.id, { status: 'done' });
+      // `external_booking` rather than `done`: this case is about RETIRED
+      // REFERENCES surviving an edit, and any status change demonstrates that
+      // equally well. `done` is no longer reachable from the edit path at all —
+      // 0017 makes it permanent, so completing a trip belongs to the completion
+      // approval and to nothing else.
+      const updated = await trips.update(trip.id, { status: 'external_booking' }, author);
 
-      expect(updated.status).toBe('done');
+      expect(updated.status).toBe('external_booking');
       expect(updated.vehicleId).toBe(vehicle.id);
       expect(updated.customerId).toBe(customer.id);
     });
@@ -439,7 +452,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
       await catalogue.archiveVehicle(vehicle.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: vehicle.id, note: 'sau' });
+      const updated = await trips.update(trip.id, { vehicleId: vehicle.id, note: 'sau' }, author);
 
       expect(updated.vehicleId).toBe(vehicle.id);
       expect(updated.note).toBe('sau');
@@ -458,7 +471,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
 
       await expect(
-        trips.update(trip.id, { vehicleId: retired.id }),
+        trips.update(trip.id, { vehicleId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
 
       // The refusal is a refusal: the transaction rolled back and nothing moved.
@@ -479,7 +492,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
 
       await expect(
-        trips.update(trip.id, { customerId: retired.id }),
+        trips.update(trip.id, { customerId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
 
       const after = await trips.findById(trip.id);
@@ -495,7 +508,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const trip = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
 
       await expect(
-        trips.update(trip.id, { vehicleId: retired.id }),
+        trips.update(trip.id, { vehicleId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
     });
 
@@ -510,7 +523,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
       await catalogue.archiveVehicle(vehicle.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: null });
+      const updated = await trips.update(trip.id, { vehicleId: null }, author);
 
       expect(updated.vehicleId).toBeNull();
     });
@@ -525,7 +538,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
       await catalogue.archiveVehicle(retired.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: replacement.id });
+      const updated = await trips.update(trip.id, { vehicleId: replacement.id }, author);
 
       expect(updated.vehicleId).toBe(replacement.id);
     });
@@ -541,7 +554,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
    * These cases pin both halves — the rule that exists, and the freedom that
    * deliberately still exists around it.
    */
-  describe('★ BD-01 the status machine', () => {
+  describe('★ BD-01 — `done` is terminal, and the board cannot reach it', () => {
     const OTHERS = [
       'awaiting_production',
       'awaiting_vehicle',
@@ -552,32 +565,69 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     const tripWith = async (status: TripStatus) =>
       trips.create({ scheduledOn: '2026-08-04', status, createdBy: author });
 
-    describe('reaching done', () => {
-      it.each(OTHERS)('accepts %s → done', async (from) => {
-        const trip = await tripWith(from);
-        const moved = await trips.updateStatus(trip.id, 'done');
-        expect(moved.status).toBe('done');
+    /**
+     * A finished trip, seeded directly.
+     *
+     * ★ WHY SQL AND NOT THE SERVICE. `done` is reached by APPROVING A
+     * COMPLETION REQUEST and by nothing else — the service refuses to write it
+     * from here, which is the rule three of the cases below exist to prove. The
+     * state is real and reachable in production; this spec simply has no
+     * completion service wired, so the row is put into it directly. The trigger
+     * guards LEAVING `done`, not entering it, so this is exactly what an
+     * approval leaves behind.
+     */
+    const doneTrip = async () => {
+      const trip = await tripWith('awaiting_vehicle');
+      await pool.query("UPDATE trip_schedules SET status = 'done' WHERE id = $1", [trip.id]);
+      return trip;
+    };
+
+    describe('★ reaching done — refused, whichever door is used', () => {
+      it('refuses it through the status endpoint', async () => {
+        const trip = await tripWith('awaiting_vehicle');
+
+        await expect(trips.updateStatus(trip.id, 'done', author)).rejects.toBeInstanceOf(
+          ConflictError,
+        );
+
+        expect((await trips.findById(trip.id))?.status).toBe('awaiting_vehicle');
+      });
+
+      it('refuses it through the FULL PATCH too — the rule is not bypassable', async () => {
+        const trip = await tripWith('awaiting_vehicle');
+
+        await expect(trips.update(trip.id, { status: 'done' }, author)).rejects.toBeInstanceOf(
+          ConflictError,
+        );
+
+        expect((await trips.findById(trip.id))?.status).toBe('awaiting_vehicle');
+      });
+
+      it('★ refuses a trip BORN done — a trip cannot be created closed', async () => {
+        // No completion request, no approver, no frozen figures, and — because
+        // the trigger makes `done` permanent — no way back.
+        await expect(tripWith('done')).rejects.toBeInstanceOf(ConflictError);
       });
     });
 
     describe('★ leaving done — refused, whichever door is used', () => {
       it.each(OTHERS)('refuses done → %s through the status endpoint', async (to) => {
-        const trip = await tripWith('done');
+        const trip = await doneTrip();
 
-        await expect(trips.updateStatus(trip.id, to)).rejects.toBeInstanceOf(ConflictError);
+        await expect(trips.updateStatus(trip.id, to, author)).rejects.toBeInstanceOf(ConflictError);
 
         // Refused means unchanged, not partially applied.
         expect((await trips.findById(trip.id))?.status).toBe('done');
       });
 
-      it('★ refuses it through the FULL PATCH too — the rule is not bypassable', async () => {
+      it('refuses it through the FULL PATCH too', async () => {
         // Guarding only `updateStatus` would leave the edit form as an open
         // second door onto the same column.
-        const trip = await tripWith('done');
+        const trip = await doneTrip();
 
-        await expect(
-          trips.update(trip.id, { status: 'awaiting_vehicle' }),
-        ).rejects.toBeInstanceOf(ConflictError);
+        await expect(trips.update(trip.id, { status: 'awaiting_vehicle' }, author)).rejects.toBeInstanceOf(
+          ConflictError,
+        );
 
         expect((await trips.findById(trip.id))?.status).toBe('done');
       });
@@ -585,15 +635,11 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       it('★ rolls the WHOLE edit back, not just the status', async () => {
         // The refusal happens inside the transaction, so a patch that also
         // carried legitimate field edits must leave none of them behind.
-        const trip = await trips.create({
-          scheduledOn: '2026-08-04',
-          status: 'done',
-          note: 'trước',
-          createdBy: author,
-        });
+        const trip = await doneTrip();
+        await trips.update(trip.id, { note: 'trước' }, author);
 
         await expect(
-          trips.update(trip.id, { status: 'awaiting_vehicle', note: 'sau', cargoInfo: '17CTN' }),
+          trips.update(trip.id, { status: 'awaiting_vehicle', note: 'sau', cargoInfo: '17CTN' }, author),
         ).rejects.toBeInstanceOf(ConflictError);
 
         const after = await trips.findById(trip.id);
@@ -604,19 +650,17 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     });
 
     describe('what the rule does NOT forbid', () => {
-      it('accepts done → done, because it moves nothing', async () => {
-        const trip = await tripWith('done');
-        const again = await trips.updateStatus(trip.id, 'done');
-        expect(again.status).toBe('done');
-      });
-
       it('★ still edits every OTHER field of a finished trip', async () => {
         // Only the STATUS is frozen. Whether a finished trip should be
         // otherwise read-only is a separate decision nobody has taken, so
         // correcting a delivery address on it stays legal.
-        const trip = await tripWith('done');
+        const trip = await doneTrip();
 
-        const updated = await trips.update(trip.id, { note: 'giao lúc 18h', deliveryAddress: 'TCS' });
+        const updated = await trips.update(
+          trip.id,
+          { note: 'giao lúc 18h', deliveryAddress: 'TCS' },
+          author,
+        );
 
         expect(updated.note).toBe('giao lúc 18h');
         expect(updated.deliveryAddress).toBe('TCS');
@@ -628,8 +672,13 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         // not describe must succeed, or somebody has invented a workflow.
         const trip = await tripWith('awaiting_production');
 
-        for (const next of ['external_booking', 'needs_confirmation', 'awaiting_production', 'awaiting_vehicle'] as const) {
-          const moved = await trips.updateStatus(trip.id, next);
+        for (const next of [
+          'external_booking',
+          'needs_confirmation',
+          'awaiting_production',
+          'awaiting_vehicle',
+        ] as const) {
+          const moved = await trips.updateStatus(trip.id, next, author);
           expect(moved.status).toBe(next);
         }
       });
@@ -640,12 +689,14 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         const trip = await tripWith('awaiting_vehicle');
         await trips.archive(trip.id, author);
 
-        await expect(trips.updateStatus(trip.id, 'done')).rejects.toBeInstanceOf(NotFoundError);
+        await expect(
+          trips.updateStatus(trip.id, 'needs_confirmation', author),
+        ).rejects.toBeInstanceOf(NotFoundError);
       });
 
       it('answers 404 for a trip that never existed', async () => {
         await expect(
-          trips.updateStatus('00000000-0000-4000-8000-000000000000', 'done'),
+          trips.updateStatus('00000000-0000-4000-8000-000000000000', 'needs_confirmation', author),
         ).rejects.toBeInstanceOf(NotFoundError);
       });
     });
@@ -654,32 +705,37 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
      * ★ THE RACE THE LOCK EXISTS FOR.
      *
      * `updateStatus` used to be one unconditional UPDATE. A rule that depends
-     * on where the row already is turns it into read-then-write, and without
-     * `FOR UPDATE` two callers could both read a non-terminal status and both
-     * write — the later one moving a row that was `done` by the time it landed.
+     * on where the row already IS turns it into read-then-write, and without
+     * `FOR UPDATE` two callers could both read a stale status and both write.
      */
-    it('★ serialises two concurrent moves, so one cannot step over a finished trip', async () => {
-      const trip = await tripWith('awaiting_vehicle');
+    it('★ serialises two concurrent moves away from a finished trip — both refused', async () => {
+      const trip = await doneTrip();
 
       const results = await Promise.allSettled([
-        trips.updateStatus(trip.id, 'done'),
-        trips.updateStatus(trip.id, 'external_booking'),
+        trips.updateStatus(trip.id, 'awaiting_vehicle', author),
+        trips.updateStatus(trip.id, 'external_booking', author),
       ]);
 
-      const settled = await trips.findById(trip.id);
+      // ★ NEITHER MAY WIN. Whichever order the lock granted, both read a row
+      // that was already `done` and both are refused — there is no interleaving
+      // in which one of them sees a non-terminal status.
+      expect(results.every((r) => r.status === 'rejected')).toBe(true);
+      expect((await trips.findById(trip.id))?.status).toBe('done');
+    });
 
-      // Whichever won, the row is never left in a state neither caller asked
-      // for, and if `done` landed first the other MUST have been refused.
-      if (settled?.status === 'done') {
-        const refused = results.filter(
-          (r) => r.status === 'rejected' && r.reason instanceof ConflictError,
-        );
-        expect(refused).toHaveLength(1);
-      } else {
-        // `external_booking` won the lock; both writes were legal in that order.
-        expect(settled?.status).toBe('external_booking');
-        expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
-      }
+    it('★ serialises two concurrent LEGAL moves, losing neither', async () => {
+      const trip = await tripWith('awaiting_production');
+
+      const results = await Promise.allSettled([
+        trips.updateStatus(trip.id, 'awaiting_vehicle', author),
+        trips.updateStatus(trip.id, 'external_booking', author),
+      ]);
+
+      expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+      // The row holds whichever landed second; both were legal in either order.
+      expect(['awaiting_vehicle', 'external_booking']).toContain(
+        (await trips.findById(trip.id))?.status,
+      );
     });
   });
 
@@ -712,7 +768,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const created = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
       await trips.archive(created.id, author);
 
-      await expect(trips.update(created.id, { note: 'x' })).rejects.toBeInstanceOf(NotFoundError);
+      await expect(trips.update(created.id, { note: 'x' }, author)).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 

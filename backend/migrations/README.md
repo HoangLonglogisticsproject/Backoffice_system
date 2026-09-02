@@ -58,14 +58,41 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0009_list_pagination_indexes.sql` | core | 3 index keyset cho các list phòng ban (ADR-0002) |
 | `0010_canonical_email_identity.sql` | core | email canonical: CHECK + unique index trên dạng đã chuẩn hoá |
 | `0011_trip_schedule.sql` | project | trip_vehicles · trip_customers · trip_schedules · 2 unique index chuẩn hoá |
+| `0012_trip_cost.sql` | project | trip_costs · trip_outsource_hires · 2 partial index · void-state CHECK |
+| `0013_trip_carrier_and_vehicle_ownership.sql` | project | trip_carriers · `trip_vehicles.ownership` (**nullable, không default**) + `carrier_id` + provenance |
+| `0014_trip_driver_assignment.sql` | project | trip_driver_assignments · partial unique 1 active/trip · UNIQUE `(id, trip_id)` cho composite FK |
+| `0015_trip_execution_event.sql` | project | trip_execution_events · composite FK · idempotency `(trip_id, client_event_id)` |
+| `0016_trip_cost_lifecycle.sql` | project | MỞ RỘNG `trip_costs`: `state`/`source`/snapshot/lock · trip_cost_edits · **trigger T2** |
+| `0017_trip_completion_and_history.sql` | project | trip_completion_requests · trip_status_history · `closed_at`/`driver_instructions` · **trigger T1 + T3** |
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
 gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0011`
 dùng lại đúng hàm đó cho cả ba bảng của nó.
 
+## 0013–0017 · vòng đời vận hành
+
+Năm file này dựng phần **vận hành** của chuyến: ai lái, chuyện gì đã xảy ra,
+chuyến kết thúc thế nào. Ba điều đáng nhớ:
+
+1. **`0013` cố ý KHÔNG backfill.** `trip_vehicles.ownership` là `NULL` cho mọi
+   dòng sau khi chạy xong, và đó là trạng thái đích chứ không phải việc còn dở.
+   `DEFAULT 'company'` sẽ là hệ thống tự bịa ra một đội xe; `'unknown'` sẽ là
+   bịa ra một loại xe thứ ba mà nghiệp vụ không có. Việc phân loại thuộc một
+   migration sau, dựa trên bằng chứng, và mỗi giá trị đều phải ghi **ai** khẳng
+   định.
+2. **`0016` mở rộng `trip_costs`, không tạo bảng expense thứ hai.** `state`
+   mặc định `'immutable'` nên mọi dòng cũ và mọi dòng route `cost.create` hiện
+   tại ghi vẫn giữ nguyên luật của `0012`. Vòng đời mới chỉ áp cho dòng do
+   driver portal ghi.
+3. **Ba trigger.** `T1` chặn `done → non-done`; `T2` chặn sửa dòng chi phí đã
+   `immutable` (**trừ** bộ ba void — void không phải là sửa); `T3` chặn `DELETE`
+   trên bảy bảng lịch sử. `T3` bổ sung răng cho ranh giới B13, thứ chỉ grep được
+   source code.
+
 Mỗi migration có một spec kiểm **hình dạng** file, chạy không cần database:
 `migration-schema.spec.ts` cho `0001`, `organization-schema.spec.ts` cho `0003`,
 `authorization-schema.spec.ts` cho `0004` và `0005`,
-`trip-schedule-schema.spec.ts` cho `0011`.
+`trip-schedule-schema.spec.ts` cho `0011`,
+`trip-operational-schema.spec.ts` cho `0013`–`0017`.
 Chúng bắt đúng loại lỗi sống sót qua review rồi thành lỗ hổng: thiếu unique index,
 cascade ăn mất lịch sử, seed dữ liệu nghiệp vụ.

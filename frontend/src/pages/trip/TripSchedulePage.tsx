@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, Pencil, Plus, Truck } from 'lucide-react';
+import { Archive, Pencil, Plus, Truck, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
@@ -23,6 +23,7 @@ import type { TripScheduleWithRefs } from '@/types/trip';
 import { TripFormModal } from './components/TripFormModal';
 import { TripStatusBadge } from './components/TripStatusBadge';
 import { TripStatusSelect } from './components/TripStatusSelect';
+import { TripCostModal } from './components/TripCostModal';
 
 /**
  * The dispatch board — the screen that replaces `LỊCH XE - CHI PHÍ XE.xlsx`.
@@ -48,6 +49,12 @@ export default function TripSchedulePage() {
 
   const canAdd = can('trip.create');
   const canManage = can('trip.write');
+  // ★ A SEPARATE PERMISSION, AND A SEPARATE COLUMN CONDITION. Money is not
+  // `trip.write`: an accountant may hold `cost.read` and no right to correct
+  // the board at all, so gating the actions column on `canManage` alone would
+  // hide the only control they need.
+  const canViewCost = can('cost.read');
+  const [costFor, setCostFor] = useState<string | null>(null);
 
   // The list, its date range and its page walk — see `useTripSchedules` for why
   // those three are one hook and not three pieces of page state.
@@ -147,7 +154,7 @@ export default function TripSchedulePage() {
                 <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colNote')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCreatedBy')}</TableHead>
-                {canManage && (
+                {(canManage || canViewCost) && (
                   <TableHead className="font-semibold text-gray-600">{t('colActions')}</TableHead>
                 )}
               </TableRow>
@@ -214,9 +221,10 @@ export default function TripSchedulePage() {
                   <TableCell className="whitespace-nowrap text-gray-600">
                     {trip.createdByUser.displayName}
                   </TableCell>
-                  {canManage && (
+                  {(canManage || canViewCost) && (
                     <TableCell>
                       <div className="flex items-center gap-1">
+                        {canManage && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -226,6 +234,8 @@ export default function TripSchedulePage() {
                           <Pencil className="h-3.5 w-3.5" />
                           <span className="sr-only">{t('edit')}</span>
                         </Button>
+                        )}
+                        {canManage && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -241,6 +251,25 @@ export default function TripSchedulePage() {
                           */}
                           <span className="sr-only">{t('archive')}</span>
                         </Button>
+                        )}
+                        {/*
+                          ★ ITS OWN PERMISSION, AND ITS OWN DIALOG. The amounts
+                          are never in the board's data — they are fetched only
+                          when this opens, and only for a caller holding
+                          `cost.read`. A column here would put the company's
+                          cost base in front of every signed-in account.
+                        */}
+                        {canViewCost && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-1 px-2 text-gray-600"
+                            onClick={() => setCostFor(trip.id)}
+                          >
+                            <Wallet className="h-3.5 w-3.5" />
+                            <span className="sr-only">{t('tripCost')}</span>
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   )}
@@ -298,6 +327,8 @@ export default function TripSchedulePage() {
         onSaved={trips.reload}
         onCatalogueChanged={catalogue.reload}
       />
+
+      <TripCostModal tripId={costFor} onClose={() => setCostFor(null)} />
 
       <ArchiveTripDialog
         trip={archiving}
