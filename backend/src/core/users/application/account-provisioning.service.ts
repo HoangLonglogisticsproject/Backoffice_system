@@ -96,6 +96,21 @@ export class AccountProvisioningService {
       throw new ConflictError('Display name is required.');
     }
 
+    // ★ THE PAIRING IS AN INVARIANT, NOT A CONVENTION.
+    //
+    // Making `departmentId` optional opened two combinations the business does
+    // not have: an employee belonging to no unit, and a driver belonging to
+    // one. Neither is refused by any constraint — `users` has never required a
+    // membership — so nothing downstream would notice. An employee provisioned
+    // without a department would simply hold no permissions and look like a
+    // bug in authorization; a driver WITH one would appear in an org chart as
+    // staff of a department that never hired them.
+    //
+    // Checked BEFORE the transaction opens: this is a caller mistake, not a
+    // race, and it costs nothing to refuse it before any row is written.
+    const accountType: AccountType = input.accountType ?? 'employee';
+    assertDepartmentMatchesAccountType(accountType, input.departmentId);
+
     // Provisioning-time rules: shape and domain. Neither is ever applied at
     // login — see `domain/email.ts` for why that asymmetry is deliberate.
     const email = assertProvisionableEmail(input.email, this.config.allowedEmailDomains);
@@ -122,10 +137,7 @@ export class AccountProvisioningService {
     const departmentId = input.departmentId;
 
     const run = async (executor: DatabaseQuery): Promise<User> => {
-      const user = await this.users.insertUser(
-        { displayName, ...(input.accountType ? { accountType: input.accountType } : {}) },
-        executor,
-      );
+      const user = await this.users.insertUser({ displayName, accountType }, executor);
       await this.identities.insertLocal(
         { userId: user.id, subject: email, secretHash, mustChangeSecret: true },
         executor,
@@ -146,5 +158,29 @@ export class AccountProvisioningService {
       // when nobody else could already know it.
       ...(generated ? { temporaryPassword: password } : {}),
     };
+  }
+}
+
+/**
+ * An employee has a unit; a driver has none. There is no third shape.
+ *
+ * ★ A FUNCTION RATHER THAN TWO `if`s INSIDE `provision`, so the rule can be
+ * read — and tested — as one statement about the domain instead of two guards
+ * a reader has to assemble.
+ *
+ * ⚠ THE DEFAULT IS `employee`, AND IT MUST STAY THAT WAY. Every existing caller
+ * omits `accountType` and passes a department; they keep behaving exactly as
+ * they did, which is the whole reason employee provisioning needed no change.
+ */
+export function assertDepartmentMatchesAccountType(
+  accountType: AccountType,
+  departmentId: string | undefined,
+): void {
+  if (accountType === 'driver' && departmentId !== undefined) {
+    throw new ConflictError('A driver belongs to no department.');
+  }
+
+  if (accountType === 'employee' && departmentId === undefined) {
+    throw new ConflictError('An employee account needs a department.');
   }
 }

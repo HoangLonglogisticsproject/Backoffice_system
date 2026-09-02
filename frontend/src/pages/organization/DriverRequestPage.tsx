@@ -11,7 +11,7 @@ import {
   fetchMyDriverRequests,
   fetchPendingDriverRequests,
   rejectDriverRequest,
-  type DriverAccountRequest,
+  type DriverAccountRequestWithUsers,
   type DriverRequestStatus,
   type ProvisionedDriver,
 } from '@/api/driverAccounts';
@@ -51,8 +51,10 @@ export default function DriverRequestPage() {
 
   const mayDecide = can('user.write');
 
-  const [requests, setRequests] = useState<DriverAccountRequest[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [requests, setRequests] = useState<DriverAccountRequestWithUsers[] | null>(null);
+  // ★ `pageError`, not `error`: the generic name belongs to the caught
+  // failure, and taking it for state forced every `catch` to invent one.
+  const [pageError, setPageError] = useState<string | null>(null);
   /**
    * ★ SHOWN ONCE AND NEVER FETCHED AGAIN. The generated password exists in this
    * response and nowhere else a screen can reach — reloading the page loses it,
@@ -61,11 +63,11 @@ export default function DriverRequestPage() {
   const [created, setCreated] = useState<ProvisionedDriver | null>(null);
 
   const load = useCallback(async () => {
-    setError(null);
+    setPageError(null);
     try {
       setRequests(mayDecide ? await fetchPendingDriverRequests() : await fetchMyDriverRequests());
-    } catch (failure) {
-      setError(messageOf(failure));
+    } catch (error) {
+      setPageError(messageOf(error));
     }
   }, [mayDecide]);
 
@@ -79,9 +81,9 @@ export default function DriverRequestPage() {
     <div className="space-y-4 p-4">
       <h1 className="text-lg font-semibold">{title}</h1>
 
-      {error ? (
+      {pageError ? (
         <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
+          {pageError}
         </p>
       ) : null}
 
@@ -105,7 +107,7 @@ export default function DriverRequestPage() {
                 if (driver) setCreated(driver);
                 void load();
               }}
-              onError={setError}
+              onError={setPageError}
             />
           ))}
         </ul>
@@ -155,7 +157,7 @@ function RequestCard({
   onDecided,
   onError,
 }: Readonly<{
-  request: DriverAccountRequest;
+  request: DriverAccountRequestWithUsers;
   language: 'vi' | 'en';
   mayDecide: boolean;
   onDecided: (driver: ProvisionedDriver | null) => void;
@@ -173,8 +175,8 @@ function RequestCard({
     setBusy(true);
     try {
       onDecided(await work());
-    } catch (failure) {
-      onError(isApiError(failure) ? failure.message : t('createFailed'));
+    } catch (error) {
+      onError(isApiError(error) ? error.message : t('createFailed'));
     } finally {
       setBusy(false);
     }

@@ -7,6 +7,8 @@ const createUser = vi.fn();
 const requestAccountInvitation = vi.fn();
 const fetchDepartments = vi.fn();
 const assignDepartmentHead = vi.fn();
+const createDriver = vi.fn();
+const requestDriver = vi.fn();
 const useMyDepartments = vi.fn();
 const can = vi.fn();
 
@@ -21,6 +23,10 @@ vi.mock('@/api/department', () => ({
 }));
 vi.mock('@/api/department-head', () => ({
   assignDepartmentHead: (...args: unknown[]) => assignDepartmentHead(...args),
+}));
+vi.mock('@/api/driverAccounts', () => ({
+  createDriver: (...args: unknown[]) => createDriver(...args),
+  requestDriver: (...args: unknown[]) => requestDriver(...args),
 }));
 vi.mock('@/hooks/useMyDepartments', () => ({
   useMyDepartments: () => useMyDepartments(),
@@ -76,6 +82,8 @@ describe('AddEmployeeModal', () => {
   beforeEach(() => {
     createUser.mockReset().mockResolvedValue({ id: 'created-user-id' });
     requestAccountInvitation.mockReset().mockResolvedValue({});
+    createDriver.mockReset().mockResolvedValue({ userId: 'new-driver', username: 'taixe' });
+    requestDriver.mockReset().mockResolvedValue({ id: 'request-1', status: 'pending' });
     fetchDepartments
       .mockReset()
       .mockResolvedValue([active(DEPARTMENT, 'Sales'), active(OTHER_DEPARTMENT, 'Operations')]);
@@ -969,6 +977,81 @@ describe('AddEmployeeModal', () => {
 
       expect(picker).toHaveValue(OTHER_DEPARTMENT);
       expect(document.activeElement).toBe(picker);
+    });
+  });
+
+  // ============================================ ★ THE DRIVER ACCOUNT TYPE ==
+
+  /**
+   * ★ A DRIVER IS NOT AN EMPLOYEE WITH FIELDS HIDDEN.
+   *
+   * They belong to no unit, so there is no department to pick and no
+   * department role to hold. A form that merely hid the picker but kept the
+   * role select would still ask which unit to lead — and `DEPARTMENT_HEAD`
+   * would then try to appoint somebody to a department they are not in.
+   */
+  describe('★ choosing the driver account type', () => {
+    const chooseDriver = () =>
+      fireEvent.click(screen.getByRole('button', { name: /^tài xế$/i }));
+
+    it('offers no department role select', () => {
+      can.mockReturnValue(true);
+      renderModal();
+
+      // Present for an employee — the case this must not regress.
+      expect(screen.getByLabelText(/chức vụ/i)).toBeInTheDocument();
+
+      chooseDriver();
+
+      expect(screen.queryByLabelText(/chức vụ/i)).not.toBeInTheDocument();
+    });
+
+    it('offers no department picker, and says why', () => {
+      can.mockReturnValue(true);
+      renderModalWithoutDepartment();
+
+      chooseDriver();
+
+      expect(screen.queryByLabelText(/phòng ban/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/tài xế không thuộc phòng ban/i)).toBeInTheDocument();
+    });
+
+    it('★ a global administrator creates the driver outright', async () => {
+      can.mockReturnValue(true);
+      renderModal();
+
+      chooseDriver();
+      fireEvent.change(screen.getByLabelText(/họ và tên/i), { target: { value: 'Tài Xế A' } });
+      fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'taixea' } });
+      fireEvent.change(screen.getByLabelText(/mật khẩu tạm/i), { target: { value: 'Tam-2026!' } });
+      fireEvent.click(screen.getByRole('button', { name: /lưu nhân viên/i }));
+
+      await waitFor(() => expect(createDriver).toHaveBeenCalled());
+
+      const [payload] = createDriver.mock.calls[0] as [Record<string, unknown>];
+      // ★ NO DEPARTMENT IN THE BODY AT ALL — not an empty string, not null.
+      expect(payload).not.toHaveProperty('departmentId');
+      expect(requestDriver).not.toHaveBeenCalled();
+      expect(createUser).not.toHaveBeenCalled();
+    });
+
+    it('★ a department head only PROPOSES, and is never asked for a password', async () => {
+      // Holds `driver.account.request` but not `user.write`.
+      can.mockImplementation((key: string) => key === 'driver.account.request');
+      renderModal();
+
+      chooseDriver();
+
+      // The password belongs to the direct-create path only: a pending request
+      // must not carry one, so the field is not on this form.
+      expect(screen.queryByLabelText(/mật khẩu tạm/i)).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/họ và tên/i), { target: { value: 'Tài Xế B' } });
+      fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'taixeb' } });
+      fireEvent.click(screen.getByRole('button', { name: /gửi đề nghị/i }));
+
+      await waitFor(() => expect(requestDriver).toHaveBeenCalled());
+      expect(createDriver).not.toHaveBeenCalled();
     });
   });
 });

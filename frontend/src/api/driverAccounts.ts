@@ -37,15 +37,38 @@ export interface ProvisionedDriver {
 
 export type DriverRequestStatus = 'pending' | 'approved' | 'rejected';
 
+/**
+ * ★ TWO SHAPES, BECAUSE THE SERVER SENDS TWO — verified against the controller
+ * rather than assumed from what a screen happens to need.
+ *
+ * A MUTATION answers with the row it just wrote: ids and nothing else, because
+ * resolving a name costs a join the write path has no reason to pay. A LIST
+ * answers with the people resolved, because a screen cannot print a UUID.
+ *
+ * Declaring one type for both was a lie the compiler could not catch: reading
+ * `requester.displayName` off a create response would have been `undefined` at
+ * runtime while typechecking cleanly. The fix is to name what each endpoint
+ * actually returns — not to cast, and not to widen the server's response so the
+ * client can stop thinking about it.
+ */
 export interface DriverAccountRequest {
   id: string;
   email: string;
   displayName: string;
   status: DriverRequestStatus;
+  /** A user id. The mutation responses carry ids, never resolved people. */
+  requestedBy: string;
   requestedAt: string;
+  decidedBy: string | null;
   decidedAt: string | null;
   /** Present on a rejection. The one thing that says what to fix. */
   decisionReason: string | null;
+  /** Set exactly when approved. */
+  createdUserId: string | null;
+}
+
+/** What the LIST endpoints add: the two people, resolved to names. */
+export interface DriverAccountRequestWithUsers extends DriverAccountRequest {
   requester: { id: string; displayName: string };
   decider: { id: string; displayName: string } | null;
 }
@@ -58,19 +81,22 @@ export async function createDriver(input: CreateDriverInput): Promise<Provisione
 
 /** `POST /driver-account-requests` → 201. Department heads. Creates nothing. */
 export async function requestDriver(input: RequestDriverInput): Promise<DriverAccountRequest> {
+  // Raw: the write path returns the row it inserted, with ids and no join.
   const { data } = await httpClient.post<DriverAccountRequest>('/driver-account-requests', input);
   return data;
 }
 
 /** `GET /driver-account-requests` — the reviewer's queue. */
-export async function fetchPendingDriverRequests(): Promise<DriverAccountRequest[]> {
-  const { data } = await httpClient.get<DriverAccountRequest[]>('/driver-account-requests');
+export async function fetchPendingDriverRequests(): Promise<DriverAccountRequestWithUsers[]> {
+  const { data } = await httpClient.get<DriverAccountRequestWithUsers[]>('/driver-account-requests');
   return data;
 }
 
 /** `GET /driver-account-requests/mine` — scoped to the session, not a parameter. */
-export async function fetchMyDriverRequests(): Promise<DriverAccountRequest[]> {
-  const { data } = await httpClient.get<DriverAccountRequest[]>('/driver-account-requests/mine');
+export async function fetchMyDriverRequests(): Promise<DriverAccountRequestWithUsers[]> {
+  const { data } = await httpClient.get<DriverAccountRequestWithUsers[]>(
+    '/driver-account-requests/mine',
+  );
   return data;
 }
 

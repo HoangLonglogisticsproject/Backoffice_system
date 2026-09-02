@@ -1,11 +1,15 @@
-import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Pool } from 'pg';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
 import type { AppConfig } from '@config/app.config';
 import { ConflictError, ValidationError } from '@common/errors/domain.error';
-import type { PasswordHasher } from '@core/identity/domain/password-hasher.port';
+import {
+  TEST_URL,
+  applyAllMigrations,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import { IdentityRepository } from '@core/identity/persistence/identity.repository';
 import { DepartmentRepository } from '@core/organization/persistence/department.repository';
 import { MembershipRepository } from '@core/organization/persistence/membership.repository';
@@ -30,23 +34,7 @@ import { DriverAccountService } from '../../src/capabilities/driver-account/appl
  * row that should not exist, and the only honest way to assert it is to look.
  */
 
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 const SCHEMA = 'driver_account_itest';
-
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-  if (!/test/i.test(name)) {
-    throw new Error(`DATABASE_URL_TEST points at "${name}", which is not named as a test database.`);
-  }
-}
-
-const digest = (plain: string): string => createHash('sha256').update(plain, 'utf8').digest('hex');
-const fakeHasher: PasswordHasher = {
-  hash: async (plain: string) => digest(plain),
-  verify: async (plain: string, hash: string) => hash === digest(plain),
-  fakeVerify: async () => undefined,
-};
 
 describeIntegration('Driver accounts against real PostgreSQL', () => {
   jest.setTimeout(30_000);
@@ -69,44 +57,10 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
   beforeAll(async () => {
     assertLooksLikeATestDatabase(TEST_URL as string);
 
-    const setup = new Pool({ connectionString: TEST_URL, max: 1 });
-    try {
-      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE; CREATE SCHEMA ${SCHEMA};`);
-    } finally {
-      await setup.end();
-    }
+    pool = await openTestSchema(TEST_URL as string, SCHEMA);
+    await applyAllMigrations(pool);
 
-    pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
-
-    // READ from disk, never a hand-kept list — the same reasoning the invitation
-    // spec documents: a list goes stale the day somebody adds a migration.
-    const migrations = join(__dirname, '..', '..', 'migrations');
-    const files = (await readdir(migrations)).filter((f) => f.endsWith('.sql')).sort();
-    for (const file of files) {
-      await pool.query(await readFile(join(migrations, file), 'utf8'));
-    }
-
-    const database: Database = {
-      query: async <T>(text: string, params?: readonly unknown[]): Promise<T[]> =>
-        (await pool.query(text, params as unknown[])).rows as T[],
-      transaction: async <T>(work: (tx: DatabaseQuery) => Promise<T>): Promise<T> => {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-          const result = await work({
-            query: async <R>(text: string, params?: readonly unknown[]): Promise<R[]> =>
-              (await client.query(text, params as unknown[])).rows as R[],
-          });
-          await client.query('COMMIT');
-          return result;
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
-      },
-    };
+    const database = poolAsDatabase(pool);
 
     const config = {
       get allowedEmailDomains() {
@@ -241,6 +195,81 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       expect(account?.account_type).toBe('employee');
       // An employee still lands in their unit, in the same transaction.
       expect(await membershipsOf(employee.user.id)).toHaveLength(1);
+    });
+  });
+
+  // ==================================== the invariant the pairing rests on ==
+
+  /**
+   * ★ TWO COMBINATIONS THE BUSINESS DOES NOT HAVE.
+   *
+   * Making `departmentId` optional is what let a driver be created at all, and
+   * the same change opened two shapes nothing else would catch: an employee
+   * with no unit, and a driver with one. No constraint refuses either — `users`
+   * has never required a membership — so an employee provisioned without a
+   * department would just hold no permissions and read as an authorization bug,
+   * and a driver with one would appear in an org chart as staff of a department
+   * that never hired them.
+   */
+  describe('★ account type and department are one decision', () => {
+    it('refuses an employee with no department', async () => {
+      await expect(
+        provisioning.provision({
+          displayName: 'Nhân Viên',
+          email: 'khong.phong.ban@hoanglonglti.com',
+          // accountType omitted — the default is `employee`, and that is the
+          // case every existing caller takes.
+          initialPassword: 'Tam-2026!',
+        }),
+      ).rejects.toBeInstanceOf(ConflictError);
+
+      const identities = await sql(`SELECT id FROM identities WHERE subject = $1`, [
+        'khong.phong.ban@hoanglonglti.com',
+      ]);
+      expect(identities).toHaveLength(0);
+    });
+
+    it('refuses a driver WITH a department', async () => {
+      await expect(
+        provisioning.provision({
+          displayName: 'Tài Xế',
+          email: 'taixe.co.phong@hoanglonglti.com',
+          accountType: 'driver',
+          departmentId: department,
+          initialPassword: 'Tam-2026!',
+        }),
+      ).rejects.toBeInstanceOf(ConflictError);
+
+      const identities = await sql(`SELECT id FROM identities WHERE subject = $1`, [
+        'taixe.co.phong@hoanglonglti.com',
+      ]);
+      expect(identities).toHaveLength(0);
+    });
+
+    it('accepts an employee WITH a department, and enrolls them', async () => {
+      const account = await provisioning.provision({
+        displayName: 'Nhân Viên',
+        email: 'nhanvien.hople@hoanglonglti.com',
+        departmentId: department,
+        initialPassword: 'Tam-2026!',
+      });
+
+      const [row] = await accountOf(account.user.id);
+      expect(row?.account_type).toBe('employee');
+      expect(await membershipsOf(account.user.id)).toHaveLength(1);
+    });
+
+    it('accepts a driver with NO department, and enrolls them nowhere', async () => {
+      const account = await provisioning.provision({
+        displayName: 'Tài Xế',
+        email: 'taixe.hople@hoanglonglti.com',
+        accountType: 'driver',
+        initialPassword: 'Tam-2026!',
+      });
+
+      const [row] = await accountOf(account.user.id);
+      expect(row?.account_type).toBe('driver');
+      expect(await membershipsOf(account.user.id)).toHaveLength(0);
     });
   });
 

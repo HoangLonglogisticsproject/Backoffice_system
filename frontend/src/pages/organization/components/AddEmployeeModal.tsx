@@ -514,7 +514,12 @@ export function AddEmployeeModal({
           <DepartmentPicker isGlobal={isGlobal} value={chosenDepartment} onChange={setChosenDepartment} />
         )}
 
-        {isGlobal && (
+        {/* ★ A DRIVER HAS NO DEPARTMENT ROLE TO CHOOSE. They are not a member of
+            a unit and cannot head one, so offering MEMBER / DEPARTMENT_HEAD
+            here would ask for something that has nowhere to be stored — and
+            `role === 'DEPARTMENT_HEAD'` would then try to appoint them to a
+            department they do not belong to. */}
+        {isGlobal && !creatingDriver && (
           <div className="space-y-2">
             <label htmlFor="employee-role" className="text-sm font-medium text-gray-700">
               {t('roleLabel')}
