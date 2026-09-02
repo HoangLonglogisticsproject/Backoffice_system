@@ -966,3 +966,44 @@ jobs:
 # If automatic analysis is ever switched off, the scanner belongs here as a job
 # that runs AFTER the test jobs (it needs their coverage output), reading
 # SONAR_TOKEN from GitHub Secrets and never from a file.
+#
+# ---------------------------------------------------------------------------
+# ★ THE ONE SUPPRESSED RULE, AND WHERE IT LIVES
+# ---------------------------------------------------------------------------
+#
+# One project setting is configured server-side, because automatic analysis
+# reads no configuration file for it. Recorded here so it is not invisible:
+#
+#   sonar.issue.ignore.multicriteria
+#     ruleKey     = plsql:S1192
+#     resourceKey = backend/migrations/**/*.sql
+#
+# SonarCloud UI: Administration → General Settings → Analysis Scope → Issues →
+# "Ignore Issues on Multiple Criteria". It is an ISSUE exclusion scoped to one
+# rule, NOT a source exclusion — `sonar.exclusions` is deliberately empty, so
+# the migrations are still analysed and every other rule still reports on them.
+#
+# ⚠ A `.sonarcloud.properties` file does NOT work for this. Automatic analysis
+# supports only a small subset of keys there, and `sonar.issue.ignore.*` is not
+# among them — tried, and the six findings survived the analysis unchanged.
+#
+# WHY THE RULE IS SUPPRESSED. S1192 is "define a constant instead of duplicating
+# this literal". The flagged literals are values like 'active', 'pending' and
+# 'immutable' that appear in a column DEFAULT and again in the CHECK constraint
+# listing that column's domain — how DDL states a default and its values, not
+# duplication to factor out. Plain PostgreSQL DDL has no constants; the only
+# alternatives are dynamic SQL via `DO $$ … format(…) $$`, or psql `\set`
+# variables, which the `pg` driver the migration runner uses does not understand
+# and which would BREAK every migration.
+#
+# The rule key is also `plsql:` — SonarSource's ORACLE analyser, applied to
+# PostgreSQL because the extension is `.sql`.
+#
+# And the files cannot be edited anyway: the runner checksums applied migrations
+# and refuses to start if one changes (README §7). A finding whose only remedy
+# is rewriting applied history must not be acted on.
+#
+# ⚠ THIS IS NOT "MIGRATIONS ARE UNCHECKED". `backend/tests/migrations/` holds
+# schema and integration specs, and the integration job applies all 17
+# migrations to a real PostgreSQL 17 cluster on every run, asserting the
+# constraints, triggers and partial uniques those literals define.
