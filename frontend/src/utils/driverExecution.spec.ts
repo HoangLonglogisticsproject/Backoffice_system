@@ -223,6 +223,38 @@ describe('★ the canonical reading — DL-86', () => {
 
     expect(canonicalEventOf([...events].reverse(), 'PICKUP_CONFIRMED')?.id).toBe('second');
   });
+
+  /**
+   * ★ THE CASE THE FOLD MUST NOT BE HANDED.
+   *
+   * Reading nothing answers `null`. That was true before the seed was made
+   * explicit and it is true now — the point of pinning it is that it used to
+   * depend on a length check standing in front of a `reduce()` that would have
+   * thrown on an empty list, and nothing tested the guard itself.
+   */
+  it('answers null when the milestone has no reading at all', () => {
+    expect(canonicalEventOf([], 'ARRIVED_PICKUP')).toBeNull();
+    expect(
+      canonicalEventOf([event('PICKUP_CONFIRMED', { id: 'other' })], 'ARRIVED_PICKUP'),
+    ).toBeNull();
+  });
+
+  it('answers null when every reading of it was withdrawn', () => {
+    const allVoided = [
+      event('ARRIVED_PICKUP', { id: 'v1', voidedAt: EARLIER }),
+      event('ARRIVED_PICKUP', { id: 'v2', voidedAt: EARLIER }),
+    ];
+
+    expect(canonicalEventOf(allVoided, 'ARRIVED_PICKUP')).toBeNull();
+  });
+
+  it('returns the only reading when there is exactly one, without comparing it to itself', () => {
+    // One live event means the fold has a seed and nothing to fold — the branch
+    // that used to be `reduce`'s implicit first element.
+    const one = [event('ARRIVED_PICKUP', { id: 'only', actualAt: EARLIER })];
+
+    expect(canonicalEventOf(one, 'ARRIVED_PICKUP')?.id).toBe('only');
+  });
 });
 
 describe('the four steps', () => {

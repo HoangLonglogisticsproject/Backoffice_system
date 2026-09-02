@@ -65,11 +65,26 @@ export const canonicalEventOf = (
   type: ExecutionEventType,
 ): ExecutionEvent | null => {
   const live = events.filter((event) => event.type === type && event.voidedAt === null);
-  if (live.length === 0) return null;
+
+  /**
+   * ★ THE FIRST READING IS THE SEED, AND THE REST ARE THE CONTEST.
+   *
+   * `live.reduce(f)` with no initial value does exactly this already — it takes
+   * element 0 as the accumulator and starts folding at element 1 — but it also
+   * throws on an empty array, so it only worked because of a length check
+   * standing guard two lines above it. Spelling the seed out makes the empty
+   * case a value the types can see rather than a rule a reader has to notice,
+   * and `first` narrows away the `undefined` that indexing would leave.
+   *
+   * `arr.reduce(f)` ≡ `arr.slice(1).reduce(f, arr[0])`, so the winner is the
+   * same event it always was.
+   */
+  const [first, ...rest] = live;
+  if (!first) return null;
 
   const wantsEarliest = type === 'ARRIVED_PICKUP' || type === 'ARRIVED_DELIVERY';
 
-  return live.reduce((chosen, event) => (beats(event, chosen, wantsEarliest) ? event : chosen));
+  return rest.reduce((chosen, event) => (beats(event, chosen, wantsEarliest) ? event : chosen), first);
 };
 
 /**

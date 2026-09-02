@@ -42,13 +42,26 @@ const keyFor = (tripId: string) => `driver-expense-draft:${tripId}`;
 /**
  * A stable id for one declaration attempt.
  *
- * `crypto.randomUUID` where it exists — every browser this portal supports has
- * it over HTTPS, which the session cookie already requires. The fallback is for
- * the test environment rather than for production.
+ * ★ WHAT THIS ID IS, BECAUSE IT DECIDES WHAT IT NEEDS TO BE. It is an
+ * IDEMPOTENCY KEY, not a credential. The server takes it as an optional string
+ * and uses it for one thing — `findByClientRequestId`, so a retried tap becomes
+ * the same expense line instead of a second one. Nothing is authorised by it;
+ * a driver already has to hold the trip to write to it at all. So the property
+ * that matters is UNIQUENESS, and unpredictability is not a requirement it has.
+ *
+ * ★ THE `Math.random()` FALLBACK IS GONE, AND IT WAS NEVER REACHED.
+ *
+ * It was written for "the test environment rather than production", and that
+ * premise was simply wrong: jsdom exposes `crypto.randomUUID`, so the tests ran
+ * the primary path all along. Production serves the session cookie with
+ * `Secure`, dev runs on localhost, and both are secure contexts where
+ * `randomUUID` is guaranteed. There was no third environment.
+ *
+ * So it is deleted rather than swapped for a different generator. A branch that
+ * cannot run is not a safety net; it is a second definition of the id nobody
+ * would ever see fail, and the weaker one.
  */
-export const newRequestId = (): string =>
-  globalThis.crypto?.randomUUID?.() ??
-  `draft-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+export const newRequestId = (): string => crypto.randomUUID();
 
 export const readDraft = (tripId: string): ExpenseDraft | null => {
   try {
