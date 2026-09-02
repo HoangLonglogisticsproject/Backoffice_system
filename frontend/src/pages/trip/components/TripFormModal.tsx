@@ -53,6 +53,11 @@ interface FormState {
   deliveryContact: string;
   pickupAt: string;
   deliveryAt: string;
+  /** As typed. `''` is "no point"; the server refuses one half without the other. */
+  pickupLatitude: string;
+  pickupLongitude: string;
+  deliveryLatitude: string;
+  deliveryLongitude: string;
   note: string;
   status: TripStatus;
 }
@@ -68,9 +73,20 @@ const emptyForm = (): FormState => ({
   deliveryContact: '',
   pickupAt: '',
   deliveryAt: '',
+  pickupLatitude: '',
+  pickupLongitude: '',
+  deliveryLatitude: '',
+  deliveryLongitude: '',
   note: '',
   status: 'awaiting_production',
 });
+
+/** A number as the input holds it. `String(null)` is `"null"`, so not that. */
+const numberField = (value: number | null): string => (value === null ? '' : String(value));
+
+/** Back again. An empty box is `null` — a cleared coordinate, not zero. */
+const numberOrNull = (value: string): number | null =>
+  value.trim() === '' ? null : Number(value);
 
 /** What a `CatalogueSelect` offers. Mirrors its own prop type. */
 interface Option {
@@ -120,6 +136,10 @@ const formFor = (trip: TripScheduleWithRefs): FormState => ({
   deliveryContact: trip.deliveryContact ?? '',
   pickupAt: toDateTimeLocalValue(trip.pickupAt),
   deliveryAt: toDateTimeLocalValue(trip.deliveryAt),
+  pickupLatitude: numberField(trip.pickupLatitude),
+  pickupLongitude: numberField(trip.pickupLongitude),
+  deliveryLatitude: numberField(trip.deliveryLatitude),
+  deliveryLongitude: numberField(trip.deliveryLongitude),
   note: trip.note ?? '',
   status: trip.status,
 });
@@ -193,6 +213,10 @@ export function TripFormModal({
       deliveryContact: blank(form.deliveryContact),
       pickupAt: fromDateTimeLocalValue(form.pickupAt),
       deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
+      pickupLatitude: numberOrNull(form.pickupLatitude),
+      pickupLongitude: numberOrNull(form.pickupLongitude),
+      deliveryLatitude: numberOrNull(form.deliveryLatitude),
+      deliveryLongitude: numberOrNull(form.deliveryLongitude),
       note: blank(form.note),
       status: form.status,
     };
@@ -413,6 +437,33 @@ export function TripFormModal({
           </div>
         </div>
 
+        {/*
+          ★ NUMBERS BESIDE A PROSE ADDRESS, AND THAT IS THE POINT (GAP-14). The
+          address is what a person reads; the pair is what the server measures
+          the driver's GPS against when they confirm the pickup. Native number
+          inputs with the axis bounds — the server and the database both refuse
+          the range again, and refuse one half without the other.
+        */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <CoordinateFields
+            idPrefix="trip-pickup"
+            label={t('fieldPickupLocation')}
+            latitude={form.pickupLatitude}
+            longitude={form.pickupLongitude}
+            onLatitude={(value) => set('pickupLatitude', value)}
+            onLongitude={(value) => set('pickupLongitude', value)}
+          />
+          <CoordinateFields
+            idPrefix="trip-delivery"
+            label={t('fieldDeliveryLocation')}
+            latitude={form.deliveryLatitude}
+            longitude={form.deliveryLongitude}
+            onLatitude={(value) => set('deliveryLatitude', value)}
+            onLongitude={(value) => set('deliveryLongitude', value)}
+          />
+        </div>
+        <p className="text-xs text-gray-500">{t('coordinatesHint')}</p>
+
         <TextArea
           id="trip-note"
           label={t('fieldNote')}
@@ -427,6 +478,57 @@ export function TripFormModal({
         )}
       </form>
     </Modal>
+  );
+}
+
+/** One point: two bounded number inputs under one heading. */
+function CoordinateFields({
+  idPrefix,
+  label,
+  latitude,
+  longitude,
+  onLatitude,
+  onLongitude,
+}: Readonly<{
+  idPrefix: string;
+  label: string;
+  latitude: string;
+  longitude: string;
+  onLatitude: (value: string) => void;
+  onLongitude: (value: string) => void;
+}>) {
+  const { t } = useLanguage();
+
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium text-gray-700">{label}</legend>
+      <div className="grid grid-cols-2 gap-2">
+        <Input
+          id={`${idPrefix}-latitude`}
+          type="number"
+          inputMode="decimal"
+          step="any"
+          min={-90}
+          max={90}
+          placeholder={t('fieldLatitude')}
+          aria-label={`${label} — ${t('fieldLatitude')}`}
+          value={latitude}
+          onChange={(event) => onLatitude(event.target.value)}
+        />
+        <Input
+          id={`${idPrefix}-longitude`}
+          type="number"
+          inputMode="decimal"
+          step="any"
+          min={-180}
+          max={180}
+          placeholder={t('fieldLongitude')}
+          aria-label={`${label} — ${t('fieldLongitude')}`}
+          value={longitude}
+          onChange={(event) => onLongitude(event.target.value)}
+        />
+      </div>
+    </fieldset>
   );
 }
 

@@ -64,6 +64,8 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0015_trip_execution_event.sql` | project | trip_execution_events · composite FK · idempotency `(trip_id, client_event_id)` |
 | `0016_trip_cost_lifecycle.sql` | project | MỞ RỘNG `trip_costs`: `state`/`source`/snapshot/lock · trip_cost_edits · **trigger T2** |
 | `0017_trip_completion_and_history.sql` | project | trip_completion_requests · trip_status_history · `closed_at`/`driver_instructions` · **trigger T1 + T3** |
+| `0018_driver_account.sql` | project | `users.account_type` — tài khoản tài xế |
+| `0019_trip_location.sql` | project | GAP-14: `pickup_*`/`delivery_*` lat/lng trên `trip_schedules` · bằng chứng vị trí + verdict geofence trên `trip_execution_events` · CHECK phạm vi + cặp đủ đôi |
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
 gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0011`
@@ -93,6 +95,7 @@ Mỗi migration có một spec kiểm **hình dạng** file, chạy không cần
 `migration-schema.spec.ts` cho `0001`, `organization-schema.spec.ts` cho `0003`,
 `authorization-schema.spec.ts` cho `0004` và `0005`,
 `trip-schedule-schema.spec.ts` cho `0011`,
-`trip-operational-schema.spec.ts` cho `0013`–`0017`.
+`trip-operational-schema.spec.ts` cho `0013`–`0017`,
+`trip-location-schema.spec.ts` cho `0019`.
 Chúng bắt đúng loại lỗi sống sót qua review rồi thành lỗ hổng: thiếu unique index,
 cascade ăn mất lịch sử, seed dữ liệu nghiệp vụ.

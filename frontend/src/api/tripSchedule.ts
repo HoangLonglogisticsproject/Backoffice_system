@@ -34,6 +34,11 @@ export interface CreateTripInput {
   /** ISO instant, or null. May land on a later day than `scheduledOn`. */
   pickupAt?: string | null;
   deliveryAt?: string | null;
+  /** Both halves of a pair or neither; the server refuses half a point. */
+  pickupLatitude?: number | null;
+  pickupLongitude?: number | null;
+  deliveryLatitude?: number | null;
+  deliveryLongitude?: number | null;
   note?: string | null;
   status?: TripStatus;
 }

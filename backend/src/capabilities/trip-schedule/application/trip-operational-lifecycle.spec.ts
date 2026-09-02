@@ -575,6 +575,178 @@ describe('execution events', () => {
       ValidationError,
     );
   });
+
+  /**
+   * ★ THE GEOFENCE IS THE SERVICE'S DECISION, MADE FROM THE TRIP'S OWN POINT.
+   *
+   * The reading comes from the client; the verdict never does. Every case here
+   * hands the service a reading and asserts what it WROTE — `geofencePassed`
+   * and `distanceM` are computed inside the transaction, and a refusal writes
+   * nothing at all.
+   */
+  describe('confirming a pickup', () => {
+    /** Tân Sơn Nhất cargo, roughly. */
+    const PICKUP = { pickupLatitude: 10.8188, pickupLongitude: 106.6564 };
+    const SENT_AT = new Date('2026-08-30T02:31:00Z');
+    const goodFix = {
+      latitude: 10.8188,
+      longitude: 106.6564,
+      accuracyM: 12,
+      capturedAt: new Date(SENT_AT.getTime() - 5_000),
+    };
+
+    const located = (over: Record<string, unknown> = {}) => {
+      const built = build({
+        // The arrival already stands, so a confirmation is admissible.
+        listByTrip: jest.fn().mockResolvedValue([{ type: 'ARRIVED_PICKUP' }]),
+      });
+      built.trips.lockActive.mockResolvedValue(openTrip({ ...PICKUP, ...over }));
+      return built;
+    };
+
+    const confirming = {
+      tripId: TRIP,
+      type: 'PICKUP_CONFIRMED' as const,
+      deviceReportedAt: SENT_AT,
+      clientEventId: 'tap-2',
+      recordedBy: DRIVER,
+    };
+
+    const rejected = async (
+      service: TripExecutionService,
+      input: Parameters<TripExecutionService['recordEvent']>[0],
+      reason: string,
+    ) => {
+      const failure = await service.recordEvent(input).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ValidationError);
+      expect((failure as ValidationError).details).toEqual({ location: reason });
+    };
+
+    it('★ writes the verdict and the distance it computed, beside the reading', async () => {
+      const { service, events } = located();
+
+      await service.recordEvent({ ...confirming, location: goodFix });
+
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'PICKUP_CONFIRMED',
+          location: goodFix,
+          geofencePassed: true,
+          distanceM: 0,
+        }),
+        TX,
+      );
+    });
+
+    it('★ stamps actual_at from the SERVER, not from the fix', async () => {
+      const { service, events } = located();
+      const before = Date.now();
+
+      await service.recordEvent({ ...confirming, location: goodFix });
+
+      const written = events.record.mock.calls[0][0] as { actualAt: Date; deviceReportedAt: Date };
+      expect(written.actualAt.getTime()).toBeGreaterThanOrEqual(before);
+      expect(written.actualAt.getTime()).toBeLessThanOrEqual(Date.now());
+      // Neither handset stamp is the business time; both are kept beside it.
+      expect(written.actualAt).not.toEqual(goodFix.capturedAt);
+      expect(written.deviceReportedAt).toEqual(SENT_AT);
+    });
+
+    it('refuses a confirmation with no reading, and writes nothing', async () => {
+      const { service, events } = located();
+
+      await rejected(service, confirming, 'LOCATION_REQUIRED');
+      expect(events.record).not.toHaveBeenCalled();
+    });
+
+    it('★ refuses when the trip has no pickup coordinates — the office’s problem, named as such', async () => {
+      const { service, events } = located({ pickupLatitude: null, pickupLongitude: null });
+
+      await rejected(service, { ...confirming, location: goodFix }, 'DESTINATION_MISSING');
+      expect(events.record).not.toHaveBeenCalled();
+    });
+
+    it('refuses a reading outside the radius', async () => {
+      const { service, events } = located();
+      // ~1.1 km north.
+      const far = { ...goodFix, latitude: goodFix.latitude + 0.01 };
+
+      await rejected(service, { ...confirming, location: far }, 'OUTSIDE_GEOFENCE');
+      expect(events.record).not.toHaveBeenCalled();
+    });
+
+    it('refuses a reading too loose to place the lorry', async () => {
+      const { service } = located();
+      await rejected(
+        service,
+        { ...confirming, location: { ...goodFix, accuracyM: 750 } },
+        'ACCURACY_INSUFFICIENT',
+      );
+    });
+
+    it('refuses a fix older than the freshness window', async () => {
+      const { service } = located();
+      const old = { ...goodFix, capturedAt: new Date(SENT_AT.getTime() - 10 * 60_000) };
+      await rejected(service, { ...confirming, location: old }, 'LOCATION_STALE');
+    });
+
+    it('★ ages the fix against the handset’s own send time, so a wrong clock cancels out', async () => {
+      // Both stamps five years behind; five seconds apart. Fresh.
+      const { service, events } = located();
+      const sentAt = new Date('2021-01-01T00:00:00Z');
+      const fix = { ...goodFix, capturedAt: new Date(sentAt.getTime() - 5_000) };
+
+      await service.recordEvent({ ...confirming, deviceReportedAt: sentAt, location: fix });
+
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ geofencePassed: true }),
+        TX,
+      );
+    });
+
+    it('answers a retry with the event already written, BEFORE any location check', async () => {
+      // A retry after a timeout carries no new reading and must not need one:
+      // the pickup already happened.
+      const { service, events } = located();
+      events.findByClientEventId.mockResolvedValue({ id: 'event-2', type: 'PICKUP_CONFIRMED' });
+
+      const result = await service.recordEvent(confirming);
+
+      expect(result).toEqual({ id: 'event-2', type: 'PICKUP_CONFIRMED' });
+      expect(events.record).not.toHaveBeenCalled();
+    });
+
+    it('still checks ownership before location, so the refusal is the right one', async () => {
+      const { service, assignments } = located();
+      assignments.lockActive.mockResolvedValue({ ...activeAssignment, driverUserId: OTHER });
+
+      await expect(service.recordEvent({ ...confirming, location: goodFix })).rejects.toThrow(
+        ForbiddenError,
+      );
+    });
+
+    it('records an arrival without a reading, with no verdict', async () => {
+      const { service, events } = build();
+
+      await service.recordEvent(arriving);
+
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ location: null, geofencePassed: null, distanceM: null }),
+        TX,
+      );
+    });
+
+    it('keeps a reading sent with an arrival as evidence, but reaches no verdict on it', async () => {
+      const { service, events } = build();
+
+      await service.recordEvent({ ...arriving, location: goodFix });
+
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ location: goodFix, geofencePassed: null, distanceM: null }),
+        TX,
+      );
+    });
+  });
 });
 
 describe('driver assignment', () => {

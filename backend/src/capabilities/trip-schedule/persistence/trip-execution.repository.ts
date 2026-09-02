@@ -8,6 +8,7 @@ import type {
   ExpenseDeclaration,
   VehicleOwnership,
 } from '../domain/trip-execution';
+import type { LocationEvidence } from '../domain/trip-location';
 
 /**
  * SQL for the operational half of a trip. Opens no transaction; decides nothing.
@@ -190,6 +191,12 @@ interface EventRow {
   actual_at: Date;
   recorded_at: Date;
   device_reported_at: Date | null;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy_m: number | null;
+  location_captured_at: Date | null;
+  geofence_passed: boolean | null;
+  distance_m: number | null;
   recorded_by: string;
   recorded_by_display_name: string;
   voided_at: Date | null;
@@ -208,6 +215,21 @@ const toEvent = (row: EventRow): ExecutionEvent => ({
   actualAt: row.actual_at,
   recordedAt: row.recorded_at,
   deviceReportedAt: row.device_reported_at,
+  // The four move together — 0019's CHECK says so — so one null means all.
+  location:
+    row.latitude !== null &&
+    row.longitude !== null &&
+    row.accuracy_m !== null &&
+    row.location_captured_at !== null
+      ? {
+          latitude: row.latitude,
+          longitude: row.longitude,
+          accuracyM: row.accuracy_m,
+          capturedAt: row.location_captured_at,
+        }
+      : null,
+  geofencePassed: row.geofence_passed,
+  distanceM: row.distance_m,
   recordedBy: row.recorded_by,
   recordedByUser: { id: row.recorded_by, displayName: row.recorded_by_display_name },
   voidedAt: row.voided_at,
@@ -235,6 +257,12 @@ const eventColumns = (alias = ''): string =>
     'actual_at',
     'recorded_at',
     'device_reported_at',
+    'latitude',
+    'longitude',
+    'accuracy_m',
+    'location_captured_at',
+    'geofence_passed',
+    'distance_m',
     'recorded_by',
     'voided_at',
     'voided_by',
@@ -276,6 +304,10 @@ export class ExecutionEventRepository {
       deviceReportedAt: Date | null;
       clientEventId: string;
       recordedBy: string;
+      /** The reading, the verdict and the figure — decided by the service. */
+      location: LocationEvidence | null;
+      geofencePassed: boolean | null;
+      distanceM: number | null;
     },
     executor: DatabaseQuery = this.db,
   ): Promise<ExecutionEvent> {
@@ -283,8 +315,10 @@ export class ExecutionEventRepository {
       `WITH written AS (
          INSERT INTO trip_execution_events
            (trip_id, driver_assignment_id, event_type, vehicle_id, vehicle_ownership,
-            scheduled_at, actual_at, device_reported_at, client_event_id, recorded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            scheduled_at, actual_at, device_reported_at, client_event_id, recorded_by,
+            latitude, longitude, accuracy_m, location_captured_at,
+            geofence_passed, distance_m)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          RETURNING ${eventColumns()}
        )
        SELECT written.*, u.display_name AS recorded_by_display_name
@@ -300,6 +334,12 @@ export class ExecutionEventRepository {
         input.deviceReportedAt,
         input.clientEventId,
         input.recordedBy,
+        input.location?.latitude ?? null,
+        input.location?.longitude ?? null,
+        input.location?.accuracyM ?? null,
+        input.location?.capturedAt ?? null,
+        input.geofencePassed,
+        input.distanceM,
       ],
     );
 

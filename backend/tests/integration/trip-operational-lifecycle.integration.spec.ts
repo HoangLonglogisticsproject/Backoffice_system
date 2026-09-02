@@ -10,7 +10,7 @@ import {
   poolAsDatabase,
 } from '../helpers/integration-database';
 import type { Database, DatabaseQuery } from '@common/types/database.port';
-import { ConflictError, ValidationError } from '@common/errors/domain.error';
+import { ConflictError, ForbiddenError, ValidationError } from '@common/errors/domain.error';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripCompletionService } from '../../src/capabilities/trip-schedule/application/trip-completion.service';
 import { TripCostService } from '../../src/capabilities/trip-schedule/application/trip-cost.service';
@@ -117,6 +117,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // 0018 adds `users.account_type`, which provisioning now writes on every
       // insert — so every spec that creates a user needs it.
       '0018_driver_account.sql',
+      '0019_trip_location.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -215,12 +216,24 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     return row!.id;
   };
 
+  /** Tân Sơn Nhất cargo, roughly. Every helper-made trip picks up here. */
+  const PICKUP_POINT = { latitude: 10.8188, longitude: 106.6564 };
+
+  /**
+   * A fresh reading at the pickup point. PICKUP_CONFIRMED is geofenced since
+   * 0019, so every case that confirms a pickup sends one — the cases that are
+   * ABOUT the reading build their own.
+   */
+  const atPickup = () => ({ ...PICKUP_POINT, accuracyM: 12, capturedAt: new Date() });
+
   const newTrip = async (vehicleId: string | null = null): Promise<string> => {
     const trip = await board.create({
       scheduledOn: '2026-08-30',
       vehicleId,
       pickupAt: new Date('2026-08-30T02:00:00Z'),
       deliveryAt: new Date('2026-08-30T09:00:00Z'),
+      pickupLatitude: PICKUP_POINT.latitude,
+      pickupLongitude: PICKUP_POINT.longitude,
       createdBy: operator,
     });
     return trip.id;
@@ -1077,6 +1090,279 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   // ====================================================== the whole lifecycle ==
 
+  // ====================================================== pickup location ==
+
+  /**
+   * ★ WHERE THE DRIVER WAS, AGAINST A REAL SERVER.
+   *
+   * The unit spec proves the service calls the rule; this proves what lands
+   * in the row — the reading, the verdict, the distance, and a server-stamped
+   * `actual_at` that is not the handset's fix time — and that 0019's CHECKs
+   * refuse what the DTO would have.
+   */
+  describe('★ confirming a pickup with a location', () => {
+    const SCSC = PICKUP_POINT;
+
+    /** Driver A on a located trip, arrival already reported. */
+    const locatedTrip = async (): Promise<{ trip: string; assignment: string }> => {
+      const running = await runningTrip();
+      await execution.recordEvent({
+        tripId: running.trip,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'arrive',
+        recordedBy: driverA,
+      });
+      return running;
+    };
+
+    /** The same, on a trip Operations has NOT located yet. */
+    const unlocatedTrip = async (): Promise<{ trip: string; assignment: string }> => {
+      const vehicle = await newVehicle(`51D-${Math.floor(Math.random() * 90000) + 10000}`);
+      const trip = await board.create({ scheduledOn: '2026-08-30', vehicleId: vehicle, createdBy: operator });
+      const assignment = await execution.assign(trip.id, driverA, operator);
+      await execution.recordEvent({
+        tripId: trip.id,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'arrive',
+        recordedBy: driverA,
+      });
+      return { trip: trip.id, assignment: assignment.id };
+    };
+
+    /** A reading taken thirty seconds before the handset sent it. */
+    const fresh = (sentAt: Date, over: Record<string, number> = {}) => ({
+      latitude: SCSC.latitude,
+      longitude: SCSC.longitude,
+      accuracyM: 12,
+      capturedAt: new Date(sentAt.getTime() - 30_000),
+      ...over,
+    });
+
+    const confirm = (trip: string, location: ReturnType<typeof fresh> | null, sentAt: Date, id = 'confirm') =>
+      execution.recordEvent({
+        tripId: trip,
+        type: 'PICKUP_CONFIRMED',
+        deviceReportedAt: sentAt,
+        location,
+        clientEventId: id,
+        recordedBy: driverA,
+      });
+
+    const confirmations = (trip: string) =>
+      sql(
+        `SELECT latitude, longitude, accuracy_m, location_captured_at, geofence_passed,
+                distance_m, actual_at, device_reported_at, driver_assignment_id
+           FROM trip_execution_events
+          WHERE trip_id = $1 AND event_type = 'PICKUP_CONFIRMED'`,
+        [trip],
+      ) as Promise<Record<string, unknown>[]>;
+
+    it('★ persists the reading, the verdict and the distance — and a SERVER actual_at', async () => {
+      const { trip, assignment } = await locatedTrip();
+      // The handset's clock is a year behind. Neither of its stamps may
+      // become the pickup's time.
+      const sentAt = new Date('2025-08-30T02:31:00Z');
+      const before = Date.now();
+
+      const event = await confirm(trip, fresh(sentAt), sentAt);
+
+      const rows = await confirmations(trip);
+      expect(rows).toHaveLength(1);
+      const [row] = rows as [Record<string, unknown>];
+      expect(row['latitude']).toBe(SCSC.latitude);
+      expect(row['longitude']).toBe(SCSC.longitude);
+      expect(row['accuracy_m']).toBe(12);
+      expect(row['geofence_passed']).toBe(true);
+      expect(row['distance_m']).toBe(0);
+      expect(row['driver_assignment_id']).toBe(assignment);
+      expect(row['location_captured_at']).toEqual(new Date(sentAt.getTime() - 30_000));
+      expect(row['device_reported_at']).toEqual(sentAt);
+
+      const actualAt = (row['actual_at'] as Date).getTime();
+      expect(actualAt).toBeGreaterThanOrEqual(before - 1000);
+      expect(actualAt).toBeLessThanOrEqual(Date.now() + 1000);
+
+      expect(event.location).toEqual(fresh(sentAt));
+      expect(event.geofencePassed).toBe(true);
+      expect(event.distanceM).toBe(0);
+    });
+
+    it('refuses a reading outside the radius, and writes no row', async () => {
+      const { trip } = await locatedTrip();
+      const sentAt = new Date();
+
+      const failure = await confirm(trip, fresh(sentAt, { latitude: SCSC.latitude + 0.01 }), sentAt).catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(ValidationError);
+      expect((failure as ValidationError).details).toEqual({ location: 'OUTSIDE_GEOFENCE' });
+      expect(await confirmations(trip)).toHaveLength(0);
+    });
+
+    it('refuses a reading too loose to place the lorry', async () => {
+      const { trip } = await locatedTrip();
+      const sentAt = new Date();
+
+      await expect(confirm(trip, fresh(sentAt, { accuracyM: 500 }), sentAt)).rejects.toMatchObject({
+        details: { location: 'ACCURACY_INSUFFICIENT' },
+      });
+      expect(await confirmations(trip)).toHaveLength(0);
+    });
+
+    it('refuses a fix older than the freshness window', async () => {
+      const { trip } = await locatedTrip();
+      const sentAt = new Date();
+      const stale = { ...fresh(sentAt), capturedAt: new Date(sentAt.getTime() - 15 * 60_000) };
+
+      await expect(confirm(trip, stale, sentAt)).rejects.toMatchObject({
+        details: { location: 'LOCATION_STALE' },
+      });
+    });
+
+    it('refuses a confirmation with no reading at all', async () => {
+      const { trip } = await locatedTrip();
+
+      await expect(confirm(trip, null, new Date())).rejects.toMatchObject({
+        details: { location: 'LOCATION_REQUIRED' },
+      });
+    });
+
+    it('★ refuses a trip whose pickup has no coordinates yet', async () => {
+      const { trip } = await unlocatedTrip();
+      const sentAt = new Date();
+
+      await expect(confirm(trip, fresh(sentAt), sentAt)).rejects.toMatchObject({
+        details: { location: 'DESTINATION_MISSING' },
+      });
+      expect(await confirmations(trip)).toHaveLength(0);
+    });
+
+    it('★ answers a double-tap and a retry with the ONE row it wrote', async () => {
+      const { trip } = await locatedTrip();
+      const sentAt = new Date();
+
+      const results = await Promise.allSettled([
+        confirm(trip, fresh(sentAt), sentAt, 'tap'),
+        confirm(trip, fresh(sentAt), sentAt, 'tap'),
+        confirm(trip, fresh(sentAt), sentAt, 'tap'),
+      ]);
+      // And the retry after everything settled — no reading needed, because
+      // the pickup already happened.
+      const later = await confirm(trip, null, new Date(), 'tap');
+
+      expect(await confirmations(trip)).toHaveLength(1);
+      const ids = results
+        .filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof confirm>>> => r.status === 'fulfilled')
+        .map((r) => r.value.id);
+      expect(ids.length).toBeGreaterThanOrEqual(1);
+      expect(new Set([...ids, later.id]).size).toBe(1);
+    });
+
+    it('refuses a driver confirming somebody else’s trip, whatever the reading says', async () => {
+      const { trip } = await locatedTrip();
+      const sentAt = new Date();
+
+      await expect(
+        execution.recordEvent({
+          tripId: trip,
+          type: 'PICKUP_CONFIRMED',
+          deviceReportedAt: sentAt,
+          location: fresh(sentAt),
+          clientEventId: 'b',
+          recordedBy: driverB,
+        }),
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it('refuses a closed trip', async () => {
+      const { trip } = await locatedTrip();
+      await sql(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+      const sentAt = new Date();
+
+      await expect(confirm(trip, fresh(sentAt), sentAt)).rejects.toThrow(ConflictError);
+    });
+
+    describe('0019 in the database', () => {
+      it('refuses a pickup latitude with no longitude on the trip', async () => {
+        const { trip } = await runningTrip();
+        expect(
+          await codeOf(() => sql(`UPDATE trip_schedules SET pickup_longitude = NULL WHERE id = $1`, [trip])),
+        ).toBe(CHECK_VIOLATION);
+      });
+
+      it('refuses a latitude off the planet', async () => {
+        const { trip } = await runningTrip();
+        expect(
+          await codeOf(() =>
+            sql(
+              `UPDATE trip_schedules SET pickup_latitude = 91, pickup_longitude = 106 WHERE id = $1`,
+              [trip],
+            ),
+          ),
+        ).toBe(CHECK_VIOLATION);
+      });
+
+      it('refuses a verdict with no reading behind it', async () => {
+        const { trip, assignment } = await runningTrip();
+        expect(
+          await codeOf(() =>
+            sql(
+              `INSERT INTO trip_execution_events
+                 (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by,
+                  geofence_passed, distance_m)
+               VALUES ($1, $2, 'ARRIVED_PICKUP', now(), 'raw', $3, true, 0)`,
+              [trip, assignment, driverA],
+            ),
+          ),
+        ).toBe(CHECK_VIOLATION);
+      });
+
+      it('refuses a reading missing its accuracy', async () => {
+        const { trip, assignment } = await runningTrip();
+        expect(
+          await codeOf(() =>
+            sql(
+              `INSERT INTO trip_execution_events
+                 (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by,
+                  latitude, longitude, location_captured_at)
+               VALUES ($1, $2, 'ARRIVED_PICKUP', now(), 'raw', $3, 10.8, 106.6, now())`,
+              [trip, assignment, driverA],
+            ),
+          ),
+        ).toBe(CHECK_VIOLATION);
+      });
+
+      it('stores a pair from the board and hands it back to the driver read model', async () => {
+        const vehicle = await newVehicle(`51D-${Math.floor(Math.random() * 90000) + 10000}`);
+        const trip = await board.create({
+          scheduledOn: '2026-08-30',
+          vehicleId: vehicle,
+          pickupLatitude: SCSC.latitude,
+          pickupLongitude: SCSC.longitude,
+          createdBy: operator,
+        });
+        await execution.assign(trip.id, driverA, operator);
+
+        const [row] = (await sql(
+          `SELECT pickup_latitude, pickup_longitude, delivery_latitude FROM trip_schedules WHERE id = $1`,
+          [trip.id],
+        )) as Record<string, unknown>[];
+        expect(row).toEqual({
+          pickup_latitude: SCSC.latitude,
+          pickup_longitude: SCSC.longitude,
+          delivery_latitude: null,
+        });
+      });
+
+      it('refuses half a pair from the board before it reaches the database', async () => {
+        await expect(
+          board.create({ scheduledOn: '2026-08-30', pickupLatitude: 10.8, createdBy: operator }),
+        ).rejects.toThrow(ValidationError);
+      });
+    });
+  });
+
   describe('★ the loop, end to end', () => {
     it('runs declare → submit → reject → correct → resubmit → approve → DONE', async () => {
       const { trip } = await runningTrip();
@@ -1088,6 +1374,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           actualAt: new Date('2026-08-30T03:00:00Z'),
           clientEventId: `tap-${type}`,
           recordedBy: driverA,
+          ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
         });
       }
 
@@ -1472,6 +1759,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           actualAt: at,
           clientEventId: 'tap-' + type,
           recordedBy: driverA,
+          ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
         });
         seen.push((await view(new Date('2026-08-30T03:00:00Z')))[0]!.stage);
       }
@@ -1808,7 +2096,14 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       clientEventId: string,
       actualAt?: Date,
     ) =>
-      execution.recordEvent({ tripId: trip, type, clientEventId, recordedBy: driverA, ...(actualAt ? { actualAt } : {}) });
+      execution.recordEvent({
+        tripId: trip,
+        type,
+        clientEventId,
+        recordedBy: driverA,
+        ...(actualAt ? { actualAt } : {}),
+        ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+      });
 
     // ------------------------------------------------------------ ordering --
 
@@ -2052,7 +2347,14 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       trip: string,
       type: 'ARRIVED_PICKUP' | 'PICKUP_CONFIRMED' | 'ARRIVED_DELIVERY' | 'DELIVERY_CONFIRMED',
       clientEventId: string,
-    ) => execution.recordEvent({ tripId: trip, type, clientEventId, recordedBy: driverA });
+    ) =>
+      execution.recordEvent({
+        tripId: trip,
+        type,
+        clientEventId,
+        recordedBy: driverA,
+        ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+      });
 
     it('★ refuses PICKUP_CONFIRMED before ARRIVED_PICKUP', async () => {
       const { trip } = await runningTrip();
@@ -2295,7 +2597,15 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       type: 'ARRIVED_PICKUP' | 'PICKUP_CONFIRMED' | 'ARRIVED_DELIVERY' | 'DELIVERY_CONFIRMED',
       clientEventId: string,
       actualAt: Date,
-    ) => execution.recordEvent({ tripId: trip, type, clientEventId, recordedBy: driverA, actualAt });
+    ) =>
+      execution.recordEvent({
+        tripId: trip,
+        type,
+        clientEventId,
+        recordedBy: driverA,
+        actualAt,
+        ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+      });
 
     const board = (trip: string) =>
       operations

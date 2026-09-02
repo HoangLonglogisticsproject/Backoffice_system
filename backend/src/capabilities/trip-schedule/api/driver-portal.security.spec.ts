@@ -391,6 +391,79 @@ describe('driver-portal HTTP security', () => {
   });
 
 
+  // --------------------------------------------- ★ the browser is a sensor --
+
+  describe('★ a location reading is forwarded; a location VERDICT is stripped', () => {
+    const post = (body: Record<string, unknown>) =>
+      authed('post', `/driver/trips/${TRIP_A}/execution-events`).send({
+        type: 'PICKUP_CONFIRMED',
+        clientEventId: 'tap-2',
+        ...body,
+      });
+
+    const reading = {
+      latitude: 10.8188,
+      longitude: 106.6564,
+      accuracyM: 12,
+      capturedAt: '2026-08-30T02:30:55.000Z',
+    };
+
+    it('forwards the four fields of a reading, with the capture time parsed', async () => {
+      await post({ location: reading }).expect(201);
+
+      expect(execution.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          location: { ...reading, capturedAt: new Date(reading.capturedAt) },
+        }),
+      );
+    });
+
+    it('★ drops geofencePassed, distance and isInside sent by a client', async () => {
+      // A handset that says "I am inside" is a handset saying nothing. The
+      // service computes the distance from the trip's own coordinates and
+      // never receives these keys at all.
+      await post({
+        location: { ...reading, isInside: true, distance: 0, geofencePassed: true },
+        geofencePassed: true,
+        distanceM: 0,
+        distance: 0,
+      }).expect(201);
+
+      const [input] = execution.recordEvent.mock.calls[0] as [Record<string, unknown>];
+      expect(input).not.toHaveProperty('geofencePassed');
+      expect(input).not.toHaveProperty('distanceM');
+      expect(input).not.toHaveProperty('distance');
+      expect(Object.keys(input['location'] as object).sort()).toEqual([
+        'accuracyM',
+        'capturedAt',
+        'latitude',
+        'longitude',
+      ]);
+    });
+
+    it.each([
+      ['latitude out of range', { ...reading, latitude: 91 }],
+      ['longitude out of range', { ...reading, longitude: -180.5 }],
+      ['latitude not a number', { ...reading, latitude: 'ten' }],
+      ['longitude null', { ...reading, longitude: null }],
+      ['accuracy missing', { latitude: 10.8, longitude: 106.6, capturedAt: reading.capturedAt }],
+      ['accuracy negative', { ...reading, accuracyM: -1 }],
+      ['capture time unparseable', { ...reading, capturedAt: 'yesterday-ish' }],
+    ])('refuses %s with 422 before any service runs', async (_label, location) => {
+      const response = await post({ location });
+
+      expect(response.status).toBe(422);
+      expect(response.body.error.code).toBe('VALIDATION_FAILED');
+      expect(execution.recordEvent).not.toHaveBeenCalled();
+    });
+
+    it('forwards a milestone with no reading — whether one is required is the service’s rule', async () => {
+      await post({}).expect(201);
+      const [input] = execution.recordEvent.mock.calls[0] as [Record<string, unknown>];
+      expect(input['location']).toBeUndefined();
+    });
+  });
+
   // ============================ the API is the boundary, not the interface ==
 
   describe('★ event order — the CONTROLLER forwards, the SERVICE decides', () => {

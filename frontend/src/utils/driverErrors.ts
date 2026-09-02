@@ -1,4 +1,5 @@
 import type { TranslationKey } from '@/types/translate';
+import { isLocationError, type LocationFailure } from './driverLocation';
 import { isApiError } from './errors';
 
 /**
@@ -29,7 +30,36 @@ const CONFLICT_MESSAGES: Record<string, TranslationKey> = {
   CONFLICT: 'driverErrConflict',
 };
 
+/**
+ * The phone could not say where it is. Each is a different thing to do next.
+ */
+const LOCATION_FAILURE_KEYS: Record<LocationFailure, TranslationKey> = {
+  unsupported: 'driverErrLocationUnsupported',
+  denied: 'driverErrLocationDenied',
+  unavailable: 'driverErrLocationUnavailable',
+  timeout: 'driverErrLocationTimeout',
+};
+
+/**
+ * The server looked at the reading and refused. The CODE rides in
+ * `details.location` on a 422; the server's sentence is for the office and is
+ * never shown here. Nothing about the radius, the distance measured, or the
+ * accuracy ceiling reaches this screen — a driver needs to know what to do,
+ * not what the rule is.
+ */
+const LOCATION_REJECTION_KEYS: Record<string, TranslationKey> = {
+  DESTINATION_MISSING: 'driverErrDestinationMissing',
+  LOCATION_REQUIRED: 'driverErrLocationRequired',
+  INVALID_COORDINATES: 'driverErrLocationInvalid',
+  ACCURACY_INSUFFICIENT: 'driverErrLocationAccuracy',
+  LOCATION_STALE: 'driverErrLocationStale',
+  OUTSIDE_GEOFENCE: 'driverErrOutsideGeofence',
+};
+
 export function driverErrorKey(error: unknown): TranslationKey {
+  // Never reached the server: the handset itself could not produce a reading.
+  if (isLocationError(error)) return LOCATION_FAILURE_KEYS[error.kind];
+
   if (!isApiError(error)) return 'driverErrUnknown';
 
   // Status 0 is `client.ts` saying the request never reached the server at all:
@@ -48,7 +78,10 @@ export function driverErrorKey(error: unknown): TranslationKey {
 
   if (error.status === 404) return 'driverErrNotFound';
 
-  if (error.status === 422) return 'driverErrValidation';
+  if (error.status === 422) {
+    const rejection = error.details?.['location'];
+    return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
+  }
 
   if (error.status === 429) return 'driverErrTooMany';
 

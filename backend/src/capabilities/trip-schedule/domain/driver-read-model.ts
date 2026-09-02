@@ -4,6 +4,7 @@ import type {
   ExpenseAccountability,
 } from './trip-execution';
 import type { TripCost } from './trip-cost';
+import type { Coordinates } from './trip-location';
 
 /**
  * What a driver is shown about a trip. An EXPLICIT WHITELIST, and nothing else.
@@ -66,6 +67,14 @@ export interface DriverTrip {
   deliveryAddress: string | null;
   deliveryContact: string | null;
   cargoInfo: string | null;
+
+  /**
+   * Where each end is, when Operations has entered it. Operational, not
+   * commercial: a driver has to drive there. `null` on the pickup means the
+   * pickup cannot be confirmed yet, and the portal says so BEFORE the tap.
+   */
+  pickupLocation: Coordinates | null;
+  deliveryLocation: Coordinates | null;
 
   /** Planned, not actual. The actual times live on the execution events. */
   scheduledPickupAt: Date | null;

@@ -1,8 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
+import { ConflictError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
 import { toOffsetPage, type OffsetPage } from '../../../common/pagination/offset-page';
 import type { DateRangePageQuery } from '../../../common/pagination/date-range-page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
+import { isLatitude, isLongitude } from '../domain/trip-location';
 import type { TripSchedule, TripScheduleWithRefs, TripStatus } from '../domain/trip-schedule';
 import {
   canTransition,
@@ -35,6 +36,11 @@ export interface CreateTripInput {
   deliveryContact?: string | null;
   pickupAt?: Date | null;
   deliveryAt?: Date | null;
+  /** Each pair both-or-neither: half a point is refused, not stored. */
+  pickupLatitude?: number | null;
+  pickupLongitude?: number | null;
+  deliveryLatitude?: number | null;
+  deliveryLongitude?: number | null;
   note?: string | null;
   status?: TripStatus;
 }
@@ -184,6 +190,11 @@ export class TripScheduleService {
         deliveryContact: 'deliveryContact' in patch ? patch.deliveryContact : current.deliveryContact,
         pickupAt: 'pickupAt' in patch ? patch.pickupAt : current.pickupAt,
         deliveryAt: 'deliveryAt' in patch ? patch.deliveryAt : current.deliveryAt,
+        pickupLatitude: 'pickupLatitude' in patch ? patch.pickupLatitude : current.pickupLatitude,
+        pickupLongitude: 'pickupLongitude' in patch ? patch.pickupLongitude : current.pickupLongitude,
+        deliveryLatitude: 'deliveryLatitude' in patch ? patch.deliveryLatitude : current.deliveryLatitude,
+        deliveryLongitude:
+          'deliveryLongitude' in patch ? patch.deliveryLongitude : current.deliveryLongitude,
         note: 'note' in patch ? patch.note : current.note,
         status: patch.status ?? current.status,
       };
@@ -400,8 +411,43 @@ export class TripScheduleService {
       deliveryContact: blankToNull(input.deliveryContact),
       pickupAt: input.pickupAt ?? null,
       deliveryAt: input.deliveryAt ?? null,
+      ...coordinatePair('pickup', input.pickupLatitude, input.pickupLongitude),
+      ...coordinatePair('delivery', input.deliveryLatitude, input.deliveryLongitude),
       note: blankToNull(input.note),
       status: input.status ?? fallbackStatus,
     };
   }
 }
+
+/**
+ * A point, or no point. Never half of one.
+ *
+ * ★ REFUSED HERE AND AGAIN BY 0019's CHECK. A latitude with no longitude is not
+ * a location that is partly known; it is a value a geofence check would have to
+ * invent the other half of. The range is checked too, so a caller gets a
+ * sentence rather than a constraint name.
+ */
+const coordinatePair = <End extends 'pickup' | 'delivery'>(
+  end: End,
+  latitude: number | null | undefined,
+  longitude: number | null | undefined,
+): Record<`${End}Latitude` | `${End}Longitude`, number | null> => {
+  const lat = latitude ?? null;
+  const lng = longitude ?? null;
+
+  if ((lat === null) !== (lng === null)) {
+    throw new ValidationError(`The ${end} location needs both a latitude and a longitude, or neither.`, {
+      [`${end}Latitude`]: 'Both halves of a location are required together.',
+    });
+  }
+  if (lat !== null && (!isLatitude(lat) || !isLongitude(lng))) {
+    throw new ValidationError(`The ${end} location is not a place on Earth.`, {
+      [`${end}Latitude`]: 'Latitude must be within [-90, 90] and longitude within [-180, 180].',
+    });
+  }
+
+  return {
+    [`${end}Latitude`]: lat,
+    [`${end}Longitude`]: lng,
+  } as Record<`${End}Latitude` | `${End}Longitude`, number | null>;
+};

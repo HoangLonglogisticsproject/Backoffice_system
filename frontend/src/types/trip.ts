@@ -86,6 +86,16 @@ export interface TripSchedule {
   pickupAt: string | null;
   deliveryAt: string | null;
 
+  /**
+   * Where the two ends ARE. Each pair is both-or-neither, and `null` on every
+   * row until Operations enters it — the pickup pair is what a driver's
+   * PICKUP_CONFIRMED is measured against on the server.
+   */
+  pickupLatitude: number | null;
+  pickupLongitude: number | null;
+  deliveryLatitude: number | null;
+  deliveryLongitude: number | null;
+
   note: string | null;
   status: TripStatus;
 

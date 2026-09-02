@@ -17,6 +17,24 @@ import type { TripCost } from './tripCost';
 /** Whose lorry it is. `null` means nobody has classified it — never "company". */
 export type VehicleOwnership = 'company' | 'outsourced';
 
+/** A point on Earth, as the server stores it. */
+export interface Coordinates {
+  latitude: number;
+  longitude: number;
+}
+
+/**
+ * What the handset said about where it was, as the server kept it. Four
+ * fields that move together. EVIDENCE — the server measured it and reached
+ * the verdict; the portal only ever sent the reading.
+ */
+export interface LocationEvidence extends Coordinates {
+  /** The handset's own error estimate, metres. */
+  accuracyM: number;
+  /** The handset's clock at the fix. Diagnostic, like `deviceReportedAt`. */
+  capturedAt: string;
+}
+
 /**
  * The four things a driver reports, in the order they happen.
  *
@@ -50,6 +68,12 @@ export interface ExecutionEvent {
   recordedAt: string;
   /** What the handset's own clock said. Diagnostic only — never displayed as fact. */
   deviceReportedAt: string | null;
+
+  /** The reading sent with this milestone, if one was. */
+  location: LocationEvidence | null;
+  /** The SERVER's verdict on a geofenced milestone. `null` where none applied. */
+  geofencePassed: boolean | null;
+  distanceM: number | null;
 
   recordedBy: string;
   recordedByUser: UserSummary;
@@ -110,6 +134,14 @@ export interface DriverTrip {
   deliveryAddress: string | null;
   deliveryContact: string | null;
   cargoInfo: string | null;
+
+  /**
+   * Where each end is, when the office has entered it. `null` on the pickup
+   * means the pickup cannot be confirmed yet — the server refuses it — so the
+   * screen says so before the driver taps.
+   */
+  pickupLocation: Coordinates | null;
+  deliveryLocation: Coordinates | null;
 
   scheduledPickupAt: string | null;
   scheduledDeliveryAt: string | null;
