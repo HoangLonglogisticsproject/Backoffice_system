@@ -178,8 +178,37 @@ export class TripExecutionService {
       throw new ValidationError('An event needs a client event id, so a retry cannot duplicate it.');
     }
 
+    // ★ AN IDEMPOTENCY KEY IDENTIFIES ONE INTENT, NOT ONE SLOT PER TRIP.
+    //
+    // Returning the stored event on a match is what makes a retry safe. But
+    // matching on the key ALONE answered a DIFFERENT milestone with the old
+    // one and a success status: a handset that reused a key — a bug, a stale
+    // draft, a request rebuilt from a queue — was told its arrival had been
+    // recorded when what came back was the confirmation from an hour ago.
+    // The milestone was never written and nothing anywhere said so, which in a
+    // record used to apportion delay is the worst way to lose a fact.
+    //
+    // So the key is only honoured for the intent it was minted for. A repeat
+    // of the SAME milestone is the retry it was designed for; the same key
+    // carrying a DIFFERENT one is a caller contradicting itself, and it is
+    // refused rather than absorbed.
+    //
+    // ⚠ CEILING: this read is outside the transaction, so two simultaneous
+    // requests sharing a key can both miss it and the second meets the
+    // `uq_trip_execution_event_client` unique index instead. No duplicate is
+    // ever stored — the index is the real guarantee and this is the fast path
+    // in front of it. It is deliberately not moved inside the lock: a retry
+    // that arrives after the trip closed still has to be able to read back the
+    // event it already wrote, and `lockOpenTrip` would refuse it first.
     const already = await this.events.findByClientEventId(input.tripId, clientEventId);
-    if (already) return already;
+    if (already) {
+      if (already.type !== input.type) {
+        throw new ConflictError(
+          `That client event id was already used to report ${already.type}, so it cannot now report ${input.type}. Use a new id for a new milestone.`,
+        );
+      }
+      return already;
+    }
 
     return this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(input.tripId, tx);

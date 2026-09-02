@@ -1962,6 +1962,45 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(await execution.listEvents(trip)).toHaveLength(1);
     });
 
+    it('★ refuses the same client id carrying a DIFFERENT milestone, and stores nothing', async () => {
+      // THE BUG THIS PINS. Matching on the key alone answered this request with
+      // the arrival and a success status, so a handset reusing a key — a stale
+      // draft, a request rebuilt from an offline queue — was told its
+      // confirmation had been recorded. It never was, and nothing said so.
+      //
+      // A key identifies ONE intent. Reused for another milestone it is a
+      // caller contradicting itself, and that is refused rather than absorbed.
+      const { trip } = await runningTrip();
+      const arrival = await report(trip, 'ARRIVED_PICKUP', 'one-tap', at('02:00'));
+
+      await expect(report(trip, 'PICKUP_CONFIRMED', 'one-tap', at('03:00'))).rejects.toBeInstanceOf(
+        ConflictError,
+      );
+
+      // The refusal wrote nothing and disturbed nothing: the arrival is intact
+      // and the confirmation is genuinely absent, not silently aliased to it.
+      const stored = await execution.listEvents(trip);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]!.id).toBe(arrival.id);
+      expect(stored[0]!.type).toBe('ARRIVED_PICKUP');
+    });
+
+    it('still answers a retry of the SAME milestone idempotently after that refusal', async () => {
+      // The narrowing must not cost the guarantee it protects: the honest
+      // retry — same key, same milestone — still comes back unchanged.
+      const { trip } = await runningTrip();
+      const first = await report(trip, 'ARRIVED_PICKUP', 'one-tap', at('02:00'));
+
+      await expect(report(trip, 'PICKUP_CONFIRMED', 'one-tap', at('03:00'))).rejects.toBeInstanceOf(
+        ConflictError,
+      );
+
+      const retry = await report(trip, 'ARRIVED_PICKUP', 'one-tap', at('04:00'));
+
+      expect(retry.id).toBe(first.id);
+      expect(await execution.listEvents(trip)).toHaveLength(1);
+    });
+
     it('refuses a duplicate client id at the database, not only in the service', async () => {
       const { trip } = await runningTrip();
       await report(trip, 'ARRIVED_PICKUP', 'tap-1', at('02:00'));
@@ -2104,13 +2143,34 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // THE ANSWER TO "would an ordering check be race-free". `recordEvent`
       // opens a transaction and takes `SELECT … FOR UPDATE` on the trip row
       // before it reads anything, so two taps on the same trip cannot both
-      // evaluate a predicate against the same stale state. An ordering rule
-      // added to the service would therefore need no new database machinery.
+      // evaluate a predicate against the same stale state.
+      //
+      // ★ THE ARRIVAL IS SEEDED FIRST, AND THAT IS THE WHOLE FIX.
+      //
+      // This raced ARRIVED_PICKUP against PICKUP_CONFIRMED on an EMPTY trip and
+      // asserted both landed. That was written while the ordering rule was
+      // still hypothetical. Once DL-87 made the prefix rule real the assertion
+      // became a coin toss: the lock grants one transaction first, and if
+      // PICKUP_CONFIRMED wins it is refused for a missing arrival — which is
+      // the rule working, not a failure. The test was asserting a LOCK ORDER,
+      // and no lock promises one. It passed or failed by scheduling luck.
+      //
+      // Seeding the arrival leaves two events that are both legal in EITHER
+      // order, so the outcome no longer depends on who wins the lock and what
+      // remains under test is exactly what the title claims: two simultaneous
+      // writers on one trip row serialise, and neither write is lost. The
+      // gated pair keeps its own test, directly below.
       const { trip } = await runningTrip();
 
+      await report(trip, 'ARRIVED_PICKUP', 'seed');
+
       const results = await Promise.allSettled([
-        report(trip, 'ARRIVED_PICKUP', 'a'),
-        report(trip, 'PICKUP_CONFIRMED', 'b'),
+        // Prerequisite already satisfied by the seed.
+        report(trip, 'PICKUP_CONFIRMED', 'a'),
+        // A repeat is never refused: it is the first milestone, so it has no
+        // prerequisite, and a driver who leaves and comes back reports an
+        // arrival twice.
+        report(trip, 'ARRIVED_PICKUP', 'b'),
       ]);
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
@@ -2121,10 +2181,49 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         [trip],
       )) as { event_type: string; actual_at: Date }[];
 
-      expect(rows).toHaveLength(2);
-      // Distinct commits, so the two stamps are ordered rather than identical
-      // by accident — evidence the writes did not interleave.
+      // The seed plus both racers: three writes, none lost to the other.
+      expect(rows).toHaveLength(3);
+      // Distinct commits, so the stamps are ordered rather than identical by
+      // accident — evidence the writes did not interleave.
       expect(rows[0]!.actual_at.getTime()).toBeLessThanOrEqual(rows[1]!.actual_at.getTime());
+      expect(rows[1]!.actual_at.getTime()).toBeLessThanOrEqual(rows[2]!.actual_at.getTime());
+    });
+
+    it('★ a gated pair raced together resolves to a SERIAL outcome, never an interleaved one', async () => {
+      // The scenario the test above used to run, asserted the way a race can
+      // honestly be asserted: not "both land" — that depends on who wins the
+      // lock — but "whatever landed is a history the rule would have allowed
+      // had the two arrived one after the other".
+      //
+      // Both branches are legal, and the point is that NOTHING ELSE is:
+      //   arrival first → both stored
+      //   confirmation first → refused for the missing arrival, arrival stored
+      //
+      // What must never happen is a confirmation stored with no arrival behind
+      // it, which is precisely what an unserialised read of the event list
+      // would produce.
+      const { trip } = await runningTrip();
+
+      const [confirmed, arrived] = await Promise.allSettled([
+        report(trip, 'PICKUP_CONFIRMED', 'b'),
+        report(trip, 'ARRIVED_PICKUP', 'a'),
+      ]);
+
+      // The arrival has no prerequisite, so it is stored whichever order the
+      // lock granted. Only the confirmation's fate is open.
+      expect(arrived!.status).toBe('fulfilled');
+
+      const stored = (await execution.listEvents(trip)).map((event) => event.type);
+
+      expect(stored).toContain('ARRIVED_PICKUP');
+
+      if (confirmed!.status === 'fulfilled') {
+        expect(stored).toContain('PICKUP_CONFIRMED');
+      } else {
+        // Refused for the one reason the rule allows, and nothing was written.
+        expect((confirmed as PromiseRejectedResult).reason).toBeInstanceOf(ConflictError);
+        expect(stored).not.toContain('PICKUP_CONFIRMED');
+      }
     });
 
     it('★ concurrency cannot manufacture an invalid sequence', async () => {
