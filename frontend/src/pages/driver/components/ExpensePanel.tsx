@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Loader2, Lock, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -100,6 +100,9 @@ export function ExpensePanel({
   }, [openForm]);
 
   const lines = liveExpenses(trip.expenses);
+  // `null` when a line is not a plain decimal — see `sumMoney`. Computed here
+  // rather than in the markup so the fallback is a value, not a branch.
+  const declaredTotal = sumMoney(lines.map((line) => line.amount));
   const categories = allowedCategories(vehicleOwnershipOf(trip), TRIP_COST_CATEGORIES);
   const open = canDeclareExpense(trip);
 
@@ -149,8 +152,14 @@ export function ExpensePanel({
             <span>
               {lines.length} {t('driverLineCount')}
             </span>
+            {/* ★ AN EXACT TOTAL OR A DASH — never a number that is not the sum.
+                `sumMoney` answers `null` when a line is not a plain decimal,
+                which is the case that used to throw out of render and blank
+                the screen. A dash tells the driver the total is unavailable;
+                every individual line is still listed above, so nothing is
+                hidden from them. */}
             <span className="tabular-nums">
-              {formatMoney(sumMoney(lines.map((line) => line.amount)))}
+              {declaredTotal === null ? '—' : formatMoney(declaredTotal)}
             </span>
           </div>
         </>
@@ -273,18 +282,52 @@ function ExpenseForm({
 }>) {
   const { t } = useLanguage();
 
+  /**
+   * ★ UNIQUE PER FORM, BECAUSE TWO OF THESE FORMS CAN BE OPEN AT ONCE.
+   *
+   * `editingId` and `adding` are independent, so a driver correcting one line
+   * while declaring another had two `id="driver-expense-amount"` inputs on the
+   * page. Duplicate ids are not merely invalid: `htmlFor` resolves to the FIRST
+   * match, so tapping the amount label of the second form put the cursor in the
+   * first one — and on a phone, where the label is the easiest thing to hit,
+   * that is the amount going into the wrong line.
+   */
+  const fieldId = useId();
+  const amountId = `${fieldId}-amount`;
+  const noteId = `${fieldId}-note`;
+
   const [draft, setDraft] = useState<ExpenseDraft>(() => {
+    // Whatever the restored draft says, the category must be one this trip can
+    // actually accept.
+    const fallbackCategory = initial?.category ?? categories[0] ?? 'warehouse';
     const restored = tripId ? readDraft(tripId) : null;
 
-    return (
-      restored ?? {
-        category: initial?.category ?? categories[0] ?? 'warehouse',
-        amount: initial?.amount ?? '',
-        note: initial?.note ?? '',
-        // Minted once, with the draft. One id per intent — see `driverDraft`.
-        clientRequestId: newRequestId(),
-      }
-    );
+    if (restored) {
+      /**
+       * ★ THE SAVED CATEGORY IS RE-CHECKED, NOT TRUSTED.
+       *
+       * `allowedCategories` drops `fuel` and `toll` once the lorry turns out to
+       * be a hired one, and a draft outlives that discovery: pick `fuel` while
+       * the ownership is still unknown, come back after the first event
+       * resolved it to `outsourced`, and the restored draft named a category
+       * with no button to match it. Nothing looked selected, and sending it
+       * earned a refusal the driver could do nothing about.
+       *
+       * The typed figure and note are what the draft exists to save, so they
+       * are kept; only the impossible choice is replaced.
+       */
+      return categories.includes(restored.category)
+        ? restored
+        : { ...restored, category: fallbackCategory };
+    }
+
+    return {
+      category: fallbackCategory,
+      amount: initial?.amount ?? '',
+      note: initial?.note ?? '',
+      // Minted once, with the draft. One id per intent — see `driverDraft`.
+      clientRequestId: newRequestId(),
+    };
   });
 
   useEffect(() => {
@@ -323,13 +366,13 @@ function ExpenseForm({
 
       <div>
         <label
-          htmlFor="driver-expense-amount"
+          htmlFor={amountId}
           className="mb-1.5 block text-xs font-medium text-muted-foreground"
         >
           {t('driverAmount')}
         </label>
         <Input
-          id="driver-expense-amount"
+          id={amountId}
           // ★ NOT `type="number"`. That hands back a float — the rounding the
           // NUMERIC column exists to prevent — and offers a spinner nobody
           // wants on a phone. `decimal` gives the numeric keypad and keeps the
@@ -344,13 +387,13 @@ function ExpenseForm({
 
       <div>
         <label
-          htmlFor="driver-expense-note"
+          htmlFor={noteId}
           className="mb-1.5 block text-xs font-medium text-muted-foreground"
         >
           {t('driverNote')}
         </label>
         <Input
-          id="driver-expense-note"
+          id={noteId}
           placeholder={t(NOTE_HINT[draft.category])}
           maxLength={2000}
           value={draft.note}

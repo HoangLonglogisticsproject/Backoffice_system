@@ -85,4 +85,43 @@ describe('sumMoney', () => {
   it('never returns a number', () => {
     expect(typeof sumMoney(['1.00'])).toBe('string');
   });
+
+  // ------------------------------------------------ malformed input --
+
+  /**
+   * ★ THESE PIN A CRASH, NOT A PREFERENCE.
+   *
+   * `BigInt('1,500,000')` throws, and `sumMoney` is called while
+   * `ExpensePanel` renders — so one unexpected shape from the server did not
+   * show an odd total, it took the whole screen down and left the driver with
+   * a blank page and their receipts undeclared.
+   */
+  it.each([
+    ['a thousands separator', '1,500,000'],
+    ['letters', 'abc'],
+    ['a lone sign', '-'],
+    ['digits with a suffix', '12a'],
+    ['two decimal points', '1.2.3'],
+    ['an empty string', ''],
+    ['whitespace only', '   '],
+    // Refused rather than answered wrongly: the column is CHECK (amount > 0),
+    // `formatMoney` refuses negatives too, and the old arithmetic turned
+    // '-1.50' into '-0.50'.
+    ['a negative amount', '-1.50'],
+  ])('answers null rather than throwing on %s', (_case, bad) => {
+    expect(() => sumMoney([bad])).not.toThrow();
+    expect(sumMoney([bad])).toBeNull();
+  });
+
+  it('refuses the whole total when ONE line is malformed, rather than skipping it', () => {
+    // ★ THE DANGEROUS ALTERNATIVE, REJECTED ON PURPOSE. Dropping the bad line
+    // would answer '1500000.00' — a total quietly missing somebody's fuel
+    // receipt, wrong in the direction nobody checks.
+    expect(sumMoney(['1500000.00', 'not-a-number'])).toBeNull();
+  });
+
+  it('still totals exactly when every line is well formed', () => {
+    // The guard must not cost the guarantee it protects.
+    expect(sumMoney(['1500000.00', '0.5', '250000'])).toBe('1750000.50');
+  });
 });

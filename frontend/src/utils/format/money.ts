@@ -72,21 +72,57 @@ export function formatMoney(amount: string): string {
  * never sent to a driver and cannot be summed from lines they do not have.
  *
  * Returns the same shape the server sends: two decimal places, always.
+ *
+ * ★ `null` MEANS "THIS CANNOT BE TOTALLED EXACTLY", AND IT IS NOT A ZERO.
+ *
+ * `BigInt('1,500,000')` throws, and this ran inside `ExpensePanel`'s render —
+ * so one amount the server sent in an unexpected shape did not produce an odd
+ * total, it unmounted the screen and left the driver with nothing. A formatter
+ * that can blank the page is worse than no formatter.
+ *
+ * Skipping the bad line was the other option and is the more dangerous one: a
+ * total quietly missing somebody's fuel receipt is wrong in the direction
+ * nobody checks. So an exact answer or an admission — never a plausible number
+ * that is not the sum. `formatMoney` already takes this line, handing back
+ * anything that is not a plain decimal untouched rather than mangling it.
  */
-export function sumMoney(amounts: readonly string[]): string {
-  const total = amounts.reduce((running, amount) => running + toMinorUnits(amount), 0n);
+export function sumMoney(amounts: readonly string[]): string | null {
+  let total = 0n;
 
-  const sign = total < 0n ? '-' : '';
-  const absolute = total < 0n ? -total : total;
-  const major = absolute / 100n;
-  const minor = absolute % 100n;
+  for (const amount of amounts) {
+    const minor = toMinorUnits(amount);
+    if (minor === null) return null;
+    total += minor;
+  }
 
-  return `${sign}${major}.${minor.toString().padStart(2, '0')}`;
+  return `${total / 100n}.${(total % 100n).toString().padStart(2, '0')}`;
 }
 
-/** `"1500000.5"` → `150000050n`. Tolerates 0, 1 or 2 decimal places. */
-function toMinorUnits(amount: string): bigint {
-  const [major = '0', minor = ''] = amount.trim().split('.');
+/**
+ * A plain non-negative decimal, which is the only thing the column can hold.
+ *
+ * ★ NEGATIVES ARE REFUSED RATHER THAN HANDLED. `trip_costs.amount` is
+ * `CHECK (amount > 0)`, so a negative cannot arrive from the server, and
+ * `formatMoney` already refuses one — its whole-part test is `^\d+$`. The
+ * arithmetic here used to accept a sign and get it WRONG for anything with
+ * cents: `-1.50` split to `-1` and `50` came out as `-0.50`. A branch that
+ * cannot be reached and would answer wrongly if it were is worth deleting, not
+ * keeping.
+ */
+const PLAIN_DECIMAL = /^\d+(\.\d+)?$/;
+
+/**
+ * `"1500000.5"` → `150000050n`, or `null` if it is not a plain decimal.
+ *
+ * ★ VALIDATES BEFORE IT CONVERTS. `BigInt` throws on everything from a
+ * thousands separator to an empty string, and a throw from here reaches the
+ * caller as a blank screen rather than as a number that looks wrong.
+ */
+function toMinorUnits(amount: string): bigint | null {
+  const trimmed = amount.trim();
+  if (!PLAIN_DECIMAL.test(trimmed)) return null;
+
+  const [major = '0', minor = ''] = trimmed.split('.');
   // Padded then truncated: the column holds two places, and a third would have
   // been refused long before it reached here.
   const cents = `${minor}00`.slice(0, 2);

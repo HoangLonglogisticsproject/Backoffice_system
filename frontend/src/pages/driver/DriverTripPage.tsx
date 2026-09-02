@@ -41,9 +41,25 @@ export default function DriverTripPage() {
    */
   const [openExpenseForm, setOpenExpenseForm] = useState(false);
 
-  /** Brings the figures into view — used by the checkpoint and by a rejection. */
+  /**
+   * Brings the figures into view — used by the checkpoint and by a rejection.
+   *
+   * ★ `?.scrollIntoView?.()`, AND THE SECOND `?.` IS THE ONE THAT MATTERS. The
+   * first guards a missing element; the second guards a missing METHOD, which
+   * is a different failure and the one that actually bit. `scrollIntoView` is
+   * not implemented by jsdom, so the call threw inside a click handler and took
+   * the whole render down with it — 581 tests passed while two unhandled errors
+   * failed the run.
+   *
+   * Scrolling is a courtesy. Somewhere that cannot scroll should show the
+   * driver an unscrolled page, never a broken one — the same reasoning that
+   * wraps every `sessionStorage` access in `driverDraft`.
+   */
   const goToExpenses = useCallback(() => {
-    document.getElementById('driver-expenses')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('driver-expenses')?.scrollIntoView?.({
+      behavior: 'smooth',
+      block: 'start',
+    });
   }, []);
 
   /**
