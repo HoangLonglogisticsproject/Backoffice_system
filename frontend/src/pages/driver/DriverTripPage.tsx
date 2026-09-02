@@ -70,13 +70,15 @@ export default function DriverTripPage() {
    * another device — so the screen is showing a state that no longer exists.
    * Re-reading turns a dead end into a screen that explains itself.
    */
-  const run = async (work: () => Promise<unknown>) => {
+  const run = async (work: () => Promise<unknown>): Promise<boolean> => {
     setActionError(null);
     try {
       await work();
+      return true;
     } catch (failure) {
       setActionError(failure);
       if (shouldReloadAfter(failure)) reload();
+      return false;
     }
   };
 
@@ -140,12 +142,22 @@ export default function DriverTripPage() {
     }
   };
 
+  /**
+   * ★ ANSWERS WHETHER THE SERVER ACCEPTED, for the same reason `declareExpense`
+   * does: the form may only close on a yes.
+   *
+   * A correction is the one write with NO draft behind it — persisting it would
+   * resurrect an abandoned edit on the next reload, which is why `driverDraft`
+   * is not used here. That makes the open form the only place the driver's
+   * retyped figure exists, so closing it before the server has agreed is the
+   * moment the figure is lost.
+   */
   const correctExpense = (input: {
     costId: string;
     category: TripCostCategory;
     amount: string;
     note: string | null;
-  }) => void run(() => correct.mutateAsync(input));
+  }): Promise<boolean> => run(() => correct.mutateAsync(input));
 
   const submitCompletion = (declaration: ExpenseDeclaration) =>
     void run(() => complete.mutateAsync(declaration));

@@ -356,6 +356,65 @@ describe('expenses', () => {
     );
   });
 
+  /**
+   * ★ THE CORRECTION FORM CLOSES ON A YES, AND ONLY ON A YES.
+   *
+   * It used to fire the request and close in the same breath. A 409 or a dead
+   * network then left the driver looking at the OLD figure with an error above
+   * it and their retyped one gone — and a correction keeps NO draft, by design,
+   * so there was nothing anywhere to restore it from. The declare path already
+   * waited; this one did not.
+   */
+  it('★ closes the correction form once the server accepts', async () => {
+    fetchMyTrip.mockResolvedValue(trip({ expenses: [cost()] }));
+    editExpense.mockResolvedValue(cost({ amount: '1550000.00' }));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+    fireEvent.change(screen.getByLabelText(/số tiền/i), { target: { value: '1550000' } });
+    fireEvent.click(screen.getByRole('button', { name: /^lưu$/i }));
+
+    await waitFor(() => expect(editExpense).toHaveBeenCalled());
+    // Back to the row, so the form is gone.
+    await waitFor(() => expect(screen.queryByLabelText(/số tiền/i)).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Sửa' })).toBeInTheDocument();
+  });
+
+  it('★ keeps the correction form open and filled when the server refuses it', async () => {
+    fetchMyTrip.mockResolvedValue(trip({ expenses: [cost()] }));
+    editExpense.mockRejectedValue(new ApiError(409, 'CONFLICT', 'Cost is locked.'));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+    fireEvent.change(screen.getByLabelText(/số tiền/i), { target: { value: '1550000' } });
+    fireEvent.change(screen.getByLabelText(/ghi chú/i), { target: { value: 'Đổ thêm ở Dầu Giây' } });
+    fireEvent.click(screen.getByRole('button', { name: /^lưu$/i }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    // The form is still there, and so is every keystroke.
+    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1550000');
+    expect(screen.getByLabelText(/ghi chú/i)).toHaveValue('Đổ thêm ở Dầu Giây');
+    expect(screen.getByRole('button', { name: /^lưu$/i })).toBeInTheDocument();
+  });
+
+  it('★ keeps the correction form open and filled when the connection dies', async () => {
+    fetchMyTrip.mockResolvedValue(trip({ expenses: [cost()] }));
+    editExpense.mockRejectedValue(new ApiError(0, undefined, 'Network error'));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+    fireEvent.change(screen.getByLabelText(/số tiền/i), { target: { value: '1550000' } });
+    // The heading the driver corrected must survive too, not just the figure.
+    fireEvent.click(screen.getByRole('button', { name: /phí kho/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^lưu$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/không có kết nối/i);
+
+    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1550000');
+    expect(screen.getByRole('button', { name: /phí kho/i })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('★ offers no correction on a locked figure', async () => {
     fetchMyTrip.mockResolvedValue(trip({ expenses: [cost({ state: 'locked' })] }));
     renderDetail();

@@ -64,12 +64,20 @@ interface Props {
     note: string | null;
     clientRequestId: string;
   }) => Promise<boolean>;
+  /**
+   * ★ RESOLVES TO WHETHER THE SERVER ACCEPTED, exactly like `onDeclare`.
+   *
+   * A correction carries no draft — persisting one would resurrect an abandoned
+   * edit on the next reload — so the open form is the ONLY place the retyped
+   * figure exists. The panel therefore has to know the answer before it may
+   * close the form.
+   */
   onCorrect: (input: {
     costId: string;
     category: TripCostCategory;
     amount: string;
     note: string | null;
-  }) => void;
+  }) => Promise<boolean>;
   saving: boolean;
   /**
    * Opened from the completion checkpoint.
@@ -131,9 +139,17 @@ export function ExpensePanel({
                     initial={{ category: line.category, amount: line.amount, note: line.note ?? '' }}
                     saving={saving}
                     onCancel={() => setEditingId(null)}
-                    onSubmit={(values) => {
-                      onCorrect({ costId: line.id, ...values });
-                      setEditingId(null);
+                    onSubmit={async (values) => {
+                      // ★ CLOSES ON A YES AND ONLY ON A YES. This used to fire
+                      // and close in the same breath, so a 409 or a dead
+                      // network left the driver looking at the OLD figure with
+                      // an error above it and their correction gone — and
+                      // corrections keep no draft, so there was nothing to
+                      // restore. Staying open keeps what they typed exactly
+                      // where they typed it.
+                      if (await onCorrect({ costId: line.id, ...values })) {
+                        setEditingId(null);
+                      }
                     }}
                   />
                 ) : (
