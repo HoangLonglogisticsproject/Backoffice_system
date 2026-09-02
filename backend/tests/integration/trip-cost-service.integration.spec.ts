@@ -1,8 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import { ConflictError, NotFoundError, ValidationError } from '@common/errors/domain.error';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
@@ -35,16 +42,8 @@ import { buildDateRangePageQuerySchema } from '@common/pagination/date-range-pag
  *   COST OUTLIVES THE TRIP'S STATE a finished or archived trip still takes
  *                                  money, because cost is a later workflow
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 const SCHEMA = 'trip_cost_service_itest';
 
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-  if (!/test/i.test(name)) {
-    throw new Error(`DATABASE_URL_TEST points at "${name}", which is not named as a test database.`);
-  }
-}
 
 describeIntegration('Trip cost service against real PostgreSQL', () => {
   jest.setTimeout(30_000);
@@ -97,27 +96,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
 
-    const database: Database = {
-      query: async <T>(sql: string, params?: readonly unknown[]): Promise<T[]> =>
-        (await pool.query(sql, params as unknown[])).rows as T[],
-      transaction: async <T>(work: (tx: DatabaseQuery) => Promise<T>): Promise<T> => {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-          const result = await work({
-            query: async <R>(sql: string, params?: readonly unknown[]): Promise<R[]> =>
-              (await client.query(sql, params as unknown[])).rows as R[],
-          });
-          await client.query('COMMIT');
-          return result;
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
-      },
-    };
+    const database = poolAsDatabase(pool);
 
     trips = new TripScheduleRepository(database);
     const vehicles = new TripVehicleRepository(database);

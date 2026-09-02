@@ -1,8 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import { ConflictError, NotFoundError } from '@common/errors/domain.error';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
 import { buildDateRangePageQuerySchema } from '@common/pagination/date-range-page-query.dto';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import {
@@ -31,16 +38,8 @@ import { TripScheduleService } from '../../src/capabilities/trip-schedule/applic
  *                                  refused by the index, not merely by a check
  *                                  the service could forget to run
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 const SCHEMA = 'trip_itest';
 
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-  if (!/test/i.test(name)) {
-    throw new Error(`DATABASE_URL_TEST points at "${name}", which is not named as a test database.`);
-  }
-}
 
 describeIntegration('Trip schedule against real PostgreSQL', () => {
   jest.setTimeout(30_000);
@@ -93,27 +92,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
 
-    const database: Database = {
-      query: async <T>(sql: string, params?: readonly unknown[]): Promise<T[]> =>
-        (await pool.query(sql, params as unknown[])).rows as T[],
-      transaction: async <T>(work: (tx: DatabaseQuery) => Promise<T>): Promise<T> => {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-          const result = await work({
-            query: async <R>(sql: string, params?: readonly unknown[]): Promise<R[]> =>
-              (await client.query(sql, params as unknown[])).rows as R[],
-          });
-          await client.query('COMMIT');
-          return result;
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
-      },
-    };
+    const database = poolAsDatabase(pool);
 
     const vehicles = new TripVehicleRepository(database);
     const customers = new TripCustomerRepository(database);
