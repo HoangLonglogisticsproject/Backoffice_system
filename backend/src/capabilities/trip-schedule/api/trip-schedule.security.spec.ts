@@ -13,6 +13,8 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { SESSION_COOKIE } from '../../../core/identity/api/session.cookie';
 import { SessionService } from '../../../core/identity/application/session.service';
 import { TripCatalogueService } from '../application/trip-catalogue.service';
+import { OperationalBoardService } from '../application/operational-board.service';
+import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService } from '../application/trip-schedule.service';
 import { TripCatalogueController } from './trip-catalogue.controller';
 import { TripScheduleController } from './trip-schedule.controller';
@@ -68,6 +70,8 @@ describe('trip-schedule HTTP security', () => {
   let app: INestApplication;
   let trips: TripServiceMock;
   let catalogue: CatalogueServiceMock;
+  let operations: { list: jest.Mock; listUnresolvedCompletions: jest.Mock };
+  let execution: { listEvents: jest.Mock };
   let context: AuthorizationContext;
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
@@ -116,6 +120,12 @@ describe('trip-schedule HTTP security', () => {
       archive: jest.fn().mockResolvedValue(storedTrip),
     };
 
+    operations = {
+      list: jest.fn().mockResolvedValue([]),
+      listUnresolvedCompletions: jest.fn().mockResolvedValue([]),
+    };
+    execution = { listEvents: jest.fn().mockResolvedValue([]) };
+
     catalogue = {
       listVehicles: jest.fn().mockResolvedValue([]),
       createVehicle: jest.fn().mockResolvedValue({ id: VEHICLE, plate: '50H-49266' }),
@@ -135,6 +145,8 @@ describe('trip-schedule HTTP security', () => {
         AuthGuard,
         CsrfGuard,
         { provide: TripScheduleService, useValue: trips },
+        { provide: OperationalBoardService, useValue: operations },
+        { provide: TripExecutionService, useValue: execution },
         { provide: TripCatalogueService, useValue: catalogue },
         { provide: AppConfig, useValue: { isProduction: true } },
         {
@@ -185,6 +197,13 @@ describe('trip-schedule HTTP security', () => {
   const READS = [
     ['get', '/trip-schedules'],
     ['get', `/trip-schedules/${TRIP}`],
+    ['get', `/trip-schedules/${TRIP}/status-history`],
+    // The operational board is dispatch information behind the same two guards.
+    ['get', '/operational-board'],
+    // The review queue: outstanding work, deliberately not date-filtered.
+    ['get', '/completion-review-queue'],
+    // The reviewer's timeline read. Same permission as the board; no money in it.
+    ['get', `/trip-schedules/${TRIP}/execution-events`],
     ['get', '/trip-vehicles'],
     ['get', '/trip-customers'],
   ] as const;
@@ -203,7 +222,12 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('calls nothing on the services', () => {
-      for (const mock of [...Object.values(trips), ...Object.values(catalogue)]) {
+      for (const mock of [
+        ...Object.values(trips),
+        ...Object.values(catalogue),
+        ...Object.values(operations),
+        ...Object.values(execution),
+      ]) {
         expect(mock).not.toHaveBeenCalled();
       }
     });
@@ -350,14 +374,21 @@ describe('trip-schedule HTTP security', () => {
         .send({ note: 'TÀI XẾ KIỂM TRA LẠI SỐ LƯỢNG' })
         .expect(200);
 
-      expect(trips.update).toHaveBeenCalledWith(TRIP, {
-        note: 'TÀI XẾ KIỂM TRA LẠI SỐ LƯỢNG',
-      });
+      // The actor rides along because this route can move the status too, and
+      // every board move is recorded against whoever made it.
+      expect(trips.update).toHaveBeenCalledWith(
+        TRIP,
+        { note: 'TÀI XẾ KIỂM TRA LẠI SỐ LƯỢNG' },
+        ACTOR,
+      );
     });
 
     it('moves a row along the board', async () => {
       await authed('patch', `/trip-schedules/${TRIP}/status`).send({ status: 'done' }).expect(200);
-      expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'done');
+      // ★ THE ACTOR IS NOT OPTIONAL HERE. A board move with no author is the
+      // gap `trip_status_history` exists to close, so the route passes the
+      // session user and never a value from the body.
+      expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'done', ACTOR, null);
     });
 
     it('archives rather than deletes, and gets the archived row back', async () => {
@@ -415,7 +446,7 @@ describe('trip-schedule HTTP security', () => {
 
       // `null` survives the schema. If it were stripped, "remove the delivery
       // address" and "leave it alone" would be the same request.
-      expect(trips.update).toHaveBeenCalledWith(TRIP, { deliveryAddress: null });
+      expect(trips.update).toHaveBeenCalledWith(TRIP, { deliveryAddress: null }, ACTOR);
     });
 
     it('strips a field the body must not decide', async () => {

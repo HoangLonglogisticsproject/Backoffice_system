@@ -1,4 +1,5 @@
 import type { UserSummary } from '../../../common/types/user-summary';
+import type { VehicleOwnership } from './trip-execution';
 
 /**
  * Hoàng Long's dispatch board, as data.
@@ -134,6 +135,20 @@ export interface TripVehicle {
   plate: string;
   note: string | null;
   status: CatalogueStatus;
+
+  /**
+   * Whose lorry it is.
+   *
+   * ★ `null` MEANS NOT YET CLASSIFIED, AND IT IS NOT A THIRD KIND OF LORRY.
+   * 0013 added this column without a default on purpose: writing `company` onto
+   * every existing row would have been the system inventing a fleet nobody
+   * asserted. Until somebody classifies a lorry the honest answer is absence,
+   * and no reader may substitute one.
+   */
+  ownership: VehicleOwnership | null;
+  /** The carrier a hired lorry belongs to. Set exactly when `ownership` is `outsourced`. */
+  carrierId: string | null;
+
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;

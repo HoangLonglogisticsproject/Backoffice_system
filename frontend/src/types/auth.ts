@@ -30,7 +30,13 @@ export type PermissionKey =
   // today — a fail-closed placeholder until role mapping is designed.
   | 'cost.read'
   | 'cost.create'
-  | 'cost.void';
+  | 'cost.void'
+  // ★ CLOSING A TRIP, AND DELIBERATELY NOT `trip.write`. A dispatcher
+  // correcting a delivery address and a reviewer closing a trip's books are
+  // different acts with different consequences — approval is irreversible —
+  // so sharing a key would mean the narrower one could never be granted
+  // without the wider. GLOBAL, because the contract reserves it to one actor.
+  | 'trip.complete.review';
 
 export type UserStatus = 'active' | 'disabled';
 

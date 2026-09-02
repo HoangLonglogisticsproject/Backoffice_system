@@ -10,6 +10,7 @@ import {
   TripVehicleRepository,
 } from '../../src/capabilities/trip-schedule/persistence/trip-catalogue.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
+import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
 import { TripCatalogueService } from '../../src/capabilities/trip-schedule/application/trip-catalogue.service';
 import { TripScheduleService } from '../../src/capabilities/trip-schedule/application/trip-schedule.service';
 
@@ -77,6 +78,14 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       '0001_identity.sql',
       '0002_users_updated_at.sql',
       '0011_trip_schedule.sql',
+      '0012_trip_cost.sql',
+      // The operational lifecycle. Listed in full because 0016 and 0017 carry
+      // foreign keys back into 0013 and 0014 — a subset simply fails to apply.
+      '0013_trip_carrier_and_vehicle_ownership.sql',
+      '0014_trip_driver_assignment.sql',
+      '0015_trip_execution_event.sql',
+      '0016_trip_cost_lifecycle.sql',
+      '0017_trip_completion_and_history.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -106,7 +115,13 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     const vehicles = new TripVehicleRepository(database);
     const customers = new TripCustomerRepository(database);
 
-    trips = new TripScheduleService(database, new TripScheduleRepository(database), vehicles, customers);
+    trips = new TripScheduleService(
+      database,
+      new TripScheduleRepository(database),
+      vehicles,
+      customers,
+      new TripStatusHistoryRepository(database),
+    );
     catalogue = new TripCatalogueService(vehicles, customers);
 
     author = (await new UserRepository(database).insertUser({ displayName: 'Điều Độ' })).id;
@@ -117,9 +132,20 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('DELETE FROM trip_schedules');
-    await pool.query('DELETE FROM trip_vehicles');
-    await pool.query('DELETE FROM trip_customers');
+    // ★ TRUNCATE, NOT DELETE, AND 0017 IS THE REASON. Its `deny_delete` trigger
+    // refuses a row-level DELETE on every historical table — which is the point
+    // of it. TRUNCATE is a different statement that fires no row triggers, so a
+    // disposable test database can still be emptied between cases while the
+    // guarantee holds for every path the application could ever take.
+    //
+    // CASCADE because `trip_status_history` and the execution tables now carry
+    // foreign keys back to `trip_schedules`.
+    await pool.query(
+      `TRUNCATE trip_status_history, trip_completion_requests, trip_execution_events,
+                trip_cost_edits, trip_costs, trip_outsource_hires,
+                trip_driver_assignments, trip_schedules, trip_vehicles, trip_customers
+       RESTART IDENTITY CASCADE`,
+    );
   });
 
   // ------------------------------------------------------------ the day ----
@@ -302,7 +328,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         createdBy: author,
       });
 
-      const updated = await trips.update(created.id, { deliveryAddress: null });
+      const updated = await trips.update(created.id, { deliveryAddress: null }, author);
 
       expect(updated.deliveryAddress).toBeNull();
       expect(updated.note).toBe('giữ nguyên');
@@ -383,7 +409,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       await catalogue.archiveVehicle(vehicle.id);
 
-      const updated = await trips.update(trip.id, { note: 'sau' });
+      const updated = await trips.update(trip.id, { note: 'sau' }, author);
 
       expect(updated.note).toBe('sau');
       // The historical assignment is intact — not cleared, not swapped.
@@ -400,7 +426,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       await catalogue.archiveCustomer(customer.id);
 
-      const updated = await trips.update(trip.id, { cargoInfo: '17CTN / 1.22CBM' });
+      const updated = await trips.update(trip.id, { cargoInfo: '17CTN / 1.22CBM' }, author);
 
       expect(updated.cargoInfo).toBe('17CTN / 1.22CBM');
       expect(updated.customerId).toBe(customer.id);
@@ -419,9 +445,14 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       await catalogue.archiveVehicle(vehicle.id);
       await catalogue.archiveCustomer(customer.id);
 
-      const updated = await trips.update(trip.id, { status: 'done' });
+      // `external_booking` rather than `done`: this case is about RETIRED
+      // REFERENCES surviving an edit, and any status change demonstrates that
+      // equally well. `done` is no longer reachable from the edit path at all —
+      // 0017 makes it permanent, so completing a trip belongs to the completion
+      // approval and to nothing else.
+      const updated = await trips.update(trip.id, { status: 'external_booking' }, author);
 
-      expect(updated.status).toBe('done');
+      expect(updated.status).toBe('external_booking');
       expect(updated.vehicleId).toBe(vehicle.id);
       expect(updated.customerId).toBe(customer.id);
     });
@@ -438,7 +469,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
       await catalogue.archiveVehicle(vehicle.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: vehicle.id, note: 'sau' });
+      const updated = await trips.update(trip.id, { vehicleId: vehicle.id, note: 'sau' }, author);
 
       expect(updated.vehicleId).toBe(vehicle.id);
       expect(updated.note).toBe('sau');
@@ -457,7 +488,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
 
       await expect(
-        trips.update(trip.id, { vehicleId: retired.id }),
+        trips.update(trip.id, { vehicleId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
 
       // The refusal is a refusal: the transaction rolled back and nothing moved.
@@ -478,7 +509,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
 
       await expect(
-        trips.update(trip.id, { customerId: retired.id }),
+        trips.update(trip.id, { customerId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
 
       const after = await trips.findById(trip.id);
@@ -494,7 +525,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const trip = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
 
       await expect(
-        trips.update(trip.id, { vehicleId: retired.id }),
+        trips.update(trip.id, { vehicleId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
     });
 
@@ -509,7 +540,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
       await catalogue.archiveVehicle(vehicle.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: null });
+      const updated = await trips.update(trip.id, { vehicleId: null }, author);
 
       expect(updated.vehicleId).toBeNull();
     });
@@ -524,7 +555,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       });
       await catalogue.archiveVehicle(retired.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: replacement.id });
+      const updated = await trips.update(trip.id, { vehicleId: replacement.id }, author);
 
       expect(updated.vehicleId).toBe(replacement.id);
     });
@@ -559,7 +590,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const created = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
       await trips.archive(created.id, author);
 
-      await expect(trips.update(created.id, { note: 'x' })).rejects.toBeInstanceOf(NotFoundError);
+      await expect(trips.update(created.id, { note: 'x' }, author)).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 

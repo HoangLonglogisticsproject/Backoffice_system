@@ -339,6 +339,19 @@ export default function MainLayout() {
                 label={t('tripMasterData')}
                 isSidebarOpen={isSidebarOpen}
               />
+              {/* ★ GATED, UNLIKE THE TWO ABOVE. `trip.complete.review` is not
+                  held by every signed-in caller — it closes a trip permanently
+                  — so a link that led everybody to a screen of buttons the
+                  server refuses would be a menu that lies. The screen itself
+                  re-checks, and the server decides regardless. */}
+              {can('trip.complete.review') && (
+                <NavItem
+                  to="/dispatch/completion-review"
+                  icon={CheckSquare}
+                  label={t('reviewNav')}
+                  isSidebarOpen={isSidebarOpen}
+                />
+              )}
             </SidebarSection>
 
             <SidebarSection title={t('system')} isSidebarOpen={isSidebarOpen}>

@@ -5,6 +5,8 @@ import { ConflictError, NotFoundError, ValidationError } from '@common/errors/do
 import type { Database, DatabaseQuery } from '@common/types/database.port';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
+import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
+import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
 import {
   OutsourceHireRepository,
   TripCostRepository,
@@ -81,6 +83,13 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       '0002_users_updated_at.sql',
       '0011_trip_schedule.sql',
       '0012_trip_cost.sql',
+      // The operational lifecycle. Listed in full because 0016 and 0017 carry
+      // foreign keys back into 0013 and 0014 — a subset simply fails to apply.
+      '0013_trip_carrier_and_vehicle_ownership.sql',
+      '0014_trip_driver_assignment.sql',
+      '0015_trip_execution_event.sql',
+      '0016_trip_cost_lifecycle.sql',
+      '0017_trip_completion_and_history.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -108,17 +117,23 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     };
 
     trips = new TripScheduleRepository(database);
+    const vehicles = new TripVehicleRepository(database);
+
     board = new TripScheduleService(
       database,
       trips,
-      new TripVehicleRepository(database),
+      vehicles,
       new TripCustomerRepository(database),
+      new TripStatusHistoryRepository(database),
     );
     money = new TripCostService(
+      database,
       trips,
       new TripCostRepository(database),
       new OutsourceHireRepository(database),
       new TripCostTotalsRepository(database),
+      new DriverAssignmentRepository(database),
+      vehicles,
     );
 
     author = (await new UserRepository(database).insertUser({ displayName: 'Kế Toán' })).id;
@@ -129,9 +144,20 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('DELETE FROM trip_costs');
-    await pool.query('DELETE FROM trip_outsource_hires');
-    await pool.query('DELETE FROM trip_schedules');
+    // ★ TRUNCATE, NOT DELETE, AND 0017 IS THE REASON. Its `deny_delete` trigger
+    // refuses a row-level DELETE on every historical table — which is the point
+    // of it. TRUNCATE is a different statement that fires no row triggers, so a
+    // disposable test database can still be emptied between cases while the
+    // guarantee holds for every path the application could ever take.
+    //
+    // CASCADE because `trip_status_history` and the execution tables now carry
+    // foreign keys back to `trip_schedules`.
+    await pool.query(
+      `TRUNCATE trip_status_history, trip_completion_requests, trip_execution_events,
+                trip_cost_edits, trip_costs, trip_outsource_hires,
+                trip_driver_assignments, trip_schedules, trip_vehicles, trip_customers
+       RESTART IDENTITY CASCADE`,
+    );
     trip = await newTrip();
   });
 
@@ -454,23 +480,71 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       expect(all.items.find((row) => row.id === right.id)?.voidedAt).toBeNull();
     });
 
-    it('★ offers no way to change an amount, a category or a trip', () => {
-      // The rule is not merely unenforced elsewhere — it is unspellable. If a
-      // future change adds an update path, this fails and somebody has to say
-      // so out loud.
-      const surface = Object.getOwnPropertyNames(Object.getPrototypeOf(money));
-      expect(surface).toEqual(
-        expect.arrayContaining([
-          'createCost',
-          'listCosts',
-          'voidCost',
-          'createHire',
-          'listHires',
-          'voidHire',
-          'summary',
-        ]),
+    it('★ offers exactly ONE edit path, and it reaches only a driver’s unlocked line', () => {
+      // ★ THIS ASSERTION DID ITS JOB, AND THIS IS SOMEBODY SAYING SO OUT LOUD.
+      //
+      // It used to read `…filter(/^(update|edit|…)/).toEqual([])` — no edit path
+      // may exist at all, 0012's rule. `editCost` now exists, deliberately: the
+      // business contract (§9.1) gives a DRIVER-DECLARED figure a life before it
+      // is final, because a mistyped digit at a fuel station should not produce
+      // two rows and a void reason reading "typo".
+      //
+      // The old rule is NARROWED, not dropped, and the narrowing is what this
+      // case now pins:
+      //
+      //   · a BACKOFFICE line is still unreachable — `editCost` refuses it
+      //   · a LOCKED or IMMUTABLE line is still unreachable
+      //   · no OTHER edit-shaped method exists, so a second path would fail here
+      //
+      // The list is exhaustive rather than `arrayContaining`, so adding a method
+      // to this service breaks this test on purpose.
+      const surface = Object.getOwnPropertyNames(Object.getPrototypeOf(money))
+        .filter((name) => name !== 'constructor')
+        .sort();
+
+      // `ownershipOf` and `requireTrip` are `private` in TypeScript, which is a
+      // COMPILE-TIME idea — the prototype carries them at runtime like any other
+      // method. Listed rather than filtered out, so the list stays a literal
+      // description of what is actually there.
+      expect(surface).toEqual([
+        'createCost',
+        'createHire',
+        'declareCost',
+        'editCost',
+        'listCostEdits',
+        'listCosts',
+        'listHires',
+        'ownershipOf',
+        'requireTrip',
+        'summary',
+        'voidCost',
+        'voidHire',
+      ]);
+
+      // Exactly one, and it is the driver's.
+      expect(surface.filter((name) => /^(update|edit|patch|set|delete|remove)/i.test(name))).toEqual(
+        ['editCost'],
       );
-      expect(surface.filter((name) => /^(update|edit|patch|set|delete|remove)/i.test(name))).toEqual([]);
+    });
+
+    it('★ refuses to edit a BACKOFFICE line, which is still corrected by voiding', async () => {
+      // The half of 0012's rule that did NOT change. A clerk's invoice line is
+      // born `immutable`, so the only correction is a void plus a new row.
+      const line = await money.createCost({
+        tripId: trip,
+        category: 'overtime',
+        amount: '500000',
+        createdBy: author,
+      });
+
+      await expect(
+        money.editCost(trip, line.id, { amount: '400000' }, author),
+      ).rejects.toThrow(ConflictError);
+
+      // And the figure really did not move.
+      expect((await money.listCosts(trip)).items.find((row) => row.id === line.id)?.amount).toBe(
+        '500000.00',
+      );
     });
   });
 

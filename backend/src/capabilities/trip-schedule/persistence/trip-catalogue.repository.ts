@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { CatalogueStatus, TripCustomer, TripVehicle } from '../domain/trip-schedule';
+import type { VehicleOwnership } from '../domain/trip-execution';
 
 /**
  * SQL for the two catalogues behind the dispatch board.
@@ -26,16 +27,19 @@ interface VehicleRow {
   plate: string;
   note: string | null;
   status: CatalogueStatus;
+  ownership: VehicleOwnership | null;
+  carrier_id: string | null;
   created_by: string;
   created_at: Date;
   updated_at: Date;
 }
 
-interface CustomerRow extends Omit<VehicleRow, 'plate'> {
+interface CustomerRow extends Omit<VehicleRow, 'plate' | 'ownership' | 'carrier_id'> {
   name: string;
 }
 
-const VEHICLE_COLUMNS = 'id, plate, note, status, created_by, created_at, updated_at';
+const VEHICLE_COLUMNS =
+  'id, plate, note, status, ownership, carrier_id, created_by, created_at, updated_at';
 const CUSTOMER_COLUMNS = 'id, name, note, status, created_by, created_at, updated_at';
 
 const toVehicle = (row: VehicleRow): TripVehicle => ({
@@ -43,6 +47,8 @@ const toVehicle = (row: VehicleRow): TripVehicle => ({
   plate: row.plate,
   note: row.note,
   status: row.status,
+  ownership: row.ownership,
+  carrierId: row.carrier_id,
   createdBy: row.created_by,
   createdAt: row.created_at,
   updatedAt: row.updated_at,

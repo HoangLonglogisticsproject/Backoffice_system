@@ -66,10 +66,42 @@ interface FinancialRecord {
   voidReason: string | null;
 }
 
+/**
+ * Where a declared figure is in its life.
+ *
+ * ★ `locked` IS NOT `immutable`. Locking is TEMPORARY — a rejected completion
+ * reopens every line back to `editable`. Only approval makes a figure permanent.
+ * A backoffice line is born `immutable`: it never passes through a completion
+ * request at all.
+ */
+export type TripCostState = 'editable' | 'locked' | 'immutable';
+
+/** Which channel typed a figure. Not derivable from `createdBy`. */
+export type TripCostSource = 'driver_portal' | 'backoffice';
+
 /** One line of what running our own lorry cost. */
 export interface TripCost extends FinancialRecord {
   category: TripCostCategory;
   amount: string;
+
+  state: TripCostState;
+  source: TripCostSource;
+
+  /** The turn at the wheel that declared this. `null` for a backoffice line. */
+  driverAssignmentId: string | null;
+
+  /**
+   * What was true when the figure was written.
+   *
+   * ★ NEVER RE-READ FROM THE TRIP. `vehicleOwnership` is `null` wherever nobody
+   * has classified the lorry, and that must never be read as `company`.
+   */
+  vehicleId: string | null;
+  vehicleOwnership: 'company' | 'outsourced' | null;
+
+  /** When a completion request froze it. A rejection clears both. */
+  lockedAt: string | null;
+  lockedBy: string | null;
 }
 
 /** What we agreed to pay somebody else's lorry for one run. */

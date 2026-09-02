@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatMoney } from './money';
+import { formatMoney, sumMoney } from './money';
 
 /**
  * ★ THE FORMATTER MUST NEVER PARSE.
@@ -44,5 +44,45 @@ describe('formatMoney', () => {
     expect(formatMoney('-1')).toBe('-1');
     expect(formatMoney('abc')).toBe('abc');
     expect(formatMoney('')).toBe('');
+  });
+});
+
+/**
+ * ★ SUMMING MUST NOT GO THROUGH A FLOAT EITHER.
+ *
+ * A driver reviewing three fuel receipts before submitting wants a total. The
+ * naive one — `amounts.reduce((a, b) => a + parseFloat(b), 0)` — is right for
+ * small figures and wrong for the ones that matter, which is the worst failure
+ * mode available: nothing looks broken.
+ */
+describe('sumMoney', () => {
+  it('★ adds the classic float trap exactly', () => {
+    // 0.1 + 0.2 === 0.30000000000000004 in float64.
+    expect(sumMoney(['0.10', '0.20'])).toBe('0.30');
+  });
+
+  it('adds real trip figures', () => {
+    expect(sumMoney(['1500000.00', '200000.00', '300000.00'])).toBe('2000000.00');
+  });
+
+  it('carries between minor and major units', () => {
+    expect(sumMoney(['0.99', '0.02'])).toBe('1.01');
+  });
+
+  it('holds the largest figure the column can store', () => {
+    // NUMERIC(14,2) → 12 digits before the point.
+    expect(sumMoney(['999999999999.99', '0.01'])).toBe('1000000000000.00');
+  });
+
+  it('is zero for no lines, which is what an empty trip shows', () => {
+    expect(sumMoney([])).toBe('0.00');
+  });
+
+  it('tolerates the shapes a server or a form can produce', () => {
+    expect(sumMoney(['1500000', '0.5'])).toBe('1500000.50');
+  });
+
+  it('never returns a number', () => {
+    expect(typeof sumMoney(['1.00'])).toBe('string');
   });
 });

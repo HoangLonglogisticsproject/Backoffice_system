@@ -51,3 +51,45 @@ export function formatMoney(amount: string): string {
 
   return fraction && /[1-9]/.test(fraction) ? `${grouped},${fraction}` : grouped;
 }
+
+/**
+ * Adds decimal money strings EXACTLY, without ever touching a float.
+ *
+ * ★ THE WHOLE FILE EXISTS TO AVOID `Number()`, AND SO DOES THIS.
+ *
+ * `NUMERIC(14,2)` was chosen because binary floating point cannot hold `0.1`.
+ * Summing a driver's fuel lines through `parseFloat` would be right for small
+ * figures and wrong for the ones that matter — the worst failure mode there is,
+ * because nothing looks broken.
+ *
+ * So the strings are split at the point and added as integer MINOR UNITS via
+ * `BigInt`, which has no rounding at all. `14` digits of precision is far
+ * inside what `BigInt` handles.
+ *
+ * ⚠ ONLY FOR FIGURES THE VIEWER MAY ALREADY SEE. This adds what is on screen;
+ * it is not a way to reconstruct a total the server deliberately withheld — a
+ * trip's real total includes the price agreed with a hired carrier, which is
+ * never sent to a driver and cannot be summed from lines they do not have.
+ *
+ * Returns the same shape the server sends: two decimal places, always.
+ */
+export function sumMoney(amounts: readonly string[]): string {
+  const total = amounts.reduce((running, amount) => running + toMinorUnits(amount), 0n);
+
+  const sign = total < 0n ? '-' : '';
+  const absolute = total < 0n ? -total : total;
+  const major = absolute / 100n;
+  const minor = absolute % 100n;
+
+  return `${sign}${major}.${minor.toString().padStart(2, '0')}`;
+}
+
+/** `"1500000.5"` → `150000050n`. Tolerates 0, 1 or 2 decimal places. */
+function toMinorUnits(amount: string): bigint {
+  const [major = '0', minor = ''] = amount.trim().split('.');
+  // Padded then truncated: the column holds two places, and a third would have
+  // been refused long before it reached here.
+  const cents = `${minor}00`.slice(0, 2);
+
+  return BigInt(major) * 100n + BigInt(cents);
+}
