@@ -9,6 +9,7 @@ import {
 import type { OffsetPage } from '../../../common/pagination/offset-page';
 import { PermissionGuard, RequirePermission } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
+import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
@@ -164,7 +165,7 @@ export class TripScheduleController {
    * uses and for the same reason ADR-0003 gives.
    */
   @Get('operational-board')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async operationalBoard(
     @Query(new ZodValidationPipe(dateRangePageQuerySchema)) query: DateRangePageQuery,
@@ -198,14 +199,14 @@ export class TripScheduleController {
    * `trip.read`, like the board: no money rides on this response.
    */
   @Get('completion-review-queue')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async completionReviewQueue(): Promise<OperationalBoardRow[]> {
     return this.operations.listUnresolvedCompletions();
   }
 
   @Get('trip-schedules')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async list(
     @Query(new ZodValidationPipe(dateRangePageQuerySchema)) query: DateRangePageQuery,
@@ -214,7 +215,7 @@ export class TripScheduleController {
   }
 
   @Get('trip-schedules/:tripId')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async findOne(
     @Param('tripId', UuidParam) tripId: string,
@@ -223,7 +224,7 @@ export class TripScheduleController {
   }
 
   @Post('trip-schedules')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.create')
   async create(
     @Body(new ZodValidationPipe(createTripSchema)) body: CreateTripBody,
@@ -235,7 +236,7 @@ export class TripScheduleController {
   }
 
   @Patch('trip-schedules/:tripId')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   async update(
     @Param('tripId', UuidParam) tripId: string,
@@ -258,7 +259,7 @@ export class TripScheduleController {
    * a change to one decorator rather than a redesign of the edit path.
    */
   @Patch('trip-schedules/:tripId/status')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   async updateStatus(
     @Param('tripId', UuidParam) tripId: string,
@@ -276,7 +277,7 @@ export class TripScheduleController {
    * UUID cannot be shown to anybody.
    */
   @Get('trip-schedules/:tripId/status-history')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async statusHistory(
     @Param('tripId', UuidParam) tripId: string,
@@ -297,7 +298,7 @@ export class TripScheduleController {
    * somebody auditing a correction is looking for.
    */
   @Get('trip-schedules/:tripId/execution-events')
-  @UseGuards(AuthGuard, PermissionGuard)
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async executionEvents(
     @Param('tripId', UuidParam) tripId: string,
@@ -316,7 +317,7 @@ export class TripScheduleController {
    * it just removed.
    */
   @Post('trip-schedules/:tripId/archive')
-  @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   @HttpCode(HttpStatus.OK)
   async archive(

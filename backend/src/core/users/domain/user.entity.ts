@@ -6,9 +6,26 @@
  * calls their job — arrives in later phases and lives elsewhere. A `User` that
  * grows business fields is a foundation that stops being reusable.
  */
+/**
+ * What KIND of account this is — and it is stored, not derived.
+ *
+ * ★ "HAS NO DEPARTMENT" WOULD HAVE BEEN THE WRONG TEST. It is true of a driver,
+ * and equally true of every employee who has been offboarded, so inferring the
+ * answer would have quietly reclassified people the day they left.
+ *
+ * ★ AND IT IS NOT A ROLE. It grants nothing and denies nothing on its own:
+ * authorization still comes from role assignments and memberships, and a driver
+ * simply holds neither. The one place it decides anything is the Backoffice
+ * boundary, where a driver is refused the company-wide trip reads that
+ * `trip.read` would otherwise give any authenticated caller.
+ */
+export const ACCOUNT_TYPES = ['employee', 'driver'] as const;
+export type AccountType = (typeof ACCOUNT_TYPES)[number];
+
 export interface User {
   id: string;
   displayName: string;
+  accountType: AccountType;
   status: UserStatus;
   createdAt: Date;
   updatedAt: Date;

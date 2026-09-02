@@ -19,6 +19,7 @@ describe('AuthenticationService', () => {
   const activeUser: User = {
     id: 'user-1',
     displayName: 'A Person',
+    accountType: 'employee',
     status: 'active',
     createdAt: new Date(),
     updatedAt: new Date(),

@@ -270,6 +270,58 @@ const PHRASES = {
   aiCoordinator: { vi: 'AI Điều phối', en: 'AI Coordinator' },
   settings: { vi: 'Cài đặt', en: 'Settings' },
 
+  // Driver accounts — account type, proposal and review
+  accountTypeLabel: { vi: 'Loại tài khoản', en: 'Account type' },
+  accountTypeEmployee: { vi: 'Nhân viên', en: 'Employee' },
+  accountTypeDriver: { vi: 'Tài xế', en: 'Driver' },
+  driverNoDepartmentNote: {
+    vi: 'Tài xế không thuộc phòng ban.',
+    en: 'Drivers do not belong to a department.',
+  },
+  driverNoDepartmentWhy: {
+    vi: 'Tài xế đăng nhập vào Driver Portal và chỉ thấy chuyến được phân công cho mình. Việc phân công chuyến là một nghiệp vụ riêng, không thực hiện ở đây.',
+    en: 'A driver signs in to the Driver Portal and sees only the trips assigned to them. Assigning trips is a separate task and is not done here.',
+  },
+  driverProposeTitle: { vi: 'Đề xuất tài khoản tài xế', en: 'Propose a driver account' },
+  driverProposeNote: {
+    vi: 'Bạn có thể đề xuất; tài khoản chỉ được kích hoạt sau khi SuperAdmin duyệt. Mật khẩu tạm sẽ do hệ thống sinh lúc duyệt.',
+    en: 'You may propose one; the account is activated only after a SuperAdmin approves it. The temporary password is generated at approval.',
+  },
+  driverProposeSubmit: { vi: 'Gửi đề xuất', en: 'Send proposal' },
+  driverProposeSent: {
+    vi: 'Đã gửi đề xuất. Đang chờ SuperAdmin duyệt.',
+    en: 'Proposal sent. Awaiting a SuperAdmin decision.',
+  },
+  driverRequestQueue: { vi: 'Đề xuất tài khoản tài xế', en: 'Driver account requests' },
+  driverRequestQueueEmpty: {
+    vi: 'Không có đề xuất nào đang chờ.',
+    en: 'No requests are waiting.',
+  },
+  driverRequestMine: { vi: 'Đề xuất của tôi', en: 'My proposals' },
+  driverRequestRequester: { vi: 'Người đề xuất', en: 'Proposed by' },
+  driverRequestedAt: { vi: 'Thời điểm đề xuất', en: 'Proposed at' },
+  driverRequestDecidedBy: { vi: 'Người duyệt', en: 'Decided by' },
+  driverRequestDecidedAt: { vi: 'Thời điểm duyệt', en: 'Decided at' },
+  driverRequestStatusPending: { vi: 'Chờ duyệt', en: 'Awaiting decision' },
+  driverRequestStatusApproved: { vi: 'Đã duyệt', en: 'Approved' },
+  driverRequestStatusRejected: { vi: 'Đã từ chối', en: 'Rejected' },
+  driverRequestApprove: { vi: 'Duyệt', en: 'Approve' },
+  driverRequestReject: { vi: 'Từ chối', en: 'Reject' },
+  driverRequestRejectReason: { vi: 'Lý do từ chối', en: 'Reason for rejection' },
+  driverRequestRejectReasonHint: {
+    vi: 'Bắt buộc — người đề xuất cần biết phải sửa gì.',
+    en: 'Required — the requester needs to know what to fix.',
+  },
+  driverRequestReasonRequired: {
+    vi: 'Phải nhập lý do từ chối.',
+    en: 'A reason is required.',
+  },
+  driverRequestApproveWarning: {
+    vi: 'Duyệt sẽ tạo tài khoản tài xế và kích hoạt ngay. Mật khẩu tạm chỉ hiện một lần.',
+    en: 'Approving creates the driver account and activates it. The temporary password is shown once.',
+  },
+  driverCreatedTitle: { vi: 'Đã tạo tài khoản tài xế', en: 'Driver account created' },
+
   // Employee Management Page
   employeeList: { vi: 'Danh sách nhân viên', en: 'Employee List' },
   addEmployee: { vi: 'Thêm nhân viên', en: 'Add Employee' },

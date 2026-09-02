@@ -250,6 +250,11 @@ describe('grantedPermissions()', () => {
 
   it('lists what a head holds somewhere, including correcting the board', () => {
     expect(grantedPermissions(headOfA()).sort()).toEqual([
+      // ★ PROPOSING A DRIVER, BUT NOT CREATING ONE. `driver.account.request` is
+      // `head-anywhere`, so every head holds it; `user.write` is `global` and
+      // stays absent from this list, which is what keeps the proposal separate
+      // from the decision.
+      'driver.account.request',
       'trip.create',
       'trip.read',
       'trip.write',

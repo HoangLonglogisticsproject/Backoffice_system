@@ -92,6 +92,9 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       '0004_authorization.sql',
       '0005_identity_credential_state.sql',
       '0008_role_assignment_membership_fk_index.sql',
+      // 0018 adds `users.account_type`, which provisioning now writes on every
+      // insert — so every spec that creates a user needs it.
+      '0018_driver_account.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }

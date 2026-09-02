@@ -50,6 +50,22 @@ export const PERMISSIONS = [
    * The action is REVIEW, and the two outcomes are what the route says.
    */
   'trip.complete.review',
+
+  /**
+   * ★ PROPOSE A DRIVER ACCOUNT — AND NOTHING MORE.
+   *
+   * Holding this lets somebody put a name and an address in front of a global
+   * administrator. It does not create an account, does not activate one, and
+   * carries no route that could. Approving is `user.write`, which is `'global'`
+   * and which no department head holds — that separation is the whole design.
+   *
+   * ★ ONE KEY, NOT ONE PER DEPARTMENT. Operations and Accounting were named
+   * separately in the requirement, but they are the same act by the same kind
+   * of person: a head, proposing. `'head-anywhere'` says exactly that and stays
+   * true when a third department starts hiring drivers. Keys named after
+   * departments would turn the org chart into the permission set.
+   */
+  'driver.account.request',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];
@@ -179,6 +195,16 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
    * not scoped to a department — and WHICH accounts hold it stays data.
    */
   'trip.complete.review': 'global',
+
+  /**
+   * ★ `head-anywhere`, WHICH IS THE TIER THIS CASE WAS BUILT FOR.
+   *
+   * A driver belongs to no department, so there is no unit to name and no
+   * target to scope against — asking for one would refuse every head at the
+   * guard. Heading ANY department is the whole test, and an ordinary member
+   * fails it, which is what the specification asks for.
+   */
+  'driver.account.request': 'head-anywhere',
 };
 
 export function isPermissionKey(value: string): value is PermissionKey {

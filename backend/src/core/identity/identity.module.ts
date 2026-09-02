@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthController } from './api/auth.controller';
 import { AuthGuard } from './api/auth.guard';
+import { BackofficeOnlyGuard } from './api/backoffice-only.guard';
 import { AuthenticationService } from './application/authentication.service';
 import { CsrfGuard } from './api/csrf.guard';
 import { LoginThrottleService } from './application/login-throttle.service';
@@ -23,9 +24,17 @@ import { SessionService } from './application/session.service';
     SessionService,
     AuthenticationService,
     AuthGuard,
+    BackofficeOnlyGuard,
     CsrfGuard,
     LoginThrottleService,
   ],
-  exports: [SessionService, SessionRepository, IdentityRepository, AuthGuard, AuthenticationService],
+  exports: [
+    SessionService,
+    SessionRepository,
+    IdentityRepository,
+    AuthGuard,
+    BackofficeOnlyGuard,
+    AuthenticationService,
+  ],
 })
 export class IdentityModule {}

@@ -36,7 +36,13 @@ export type PermissionKey =
   // different acts with different consequences — approval is irreversible —
   // so sharing a key would mean the narrower one could never be granted
   // without the wider. GLOBAL, because the contract reserves it to one actor.
-  | 'trip.complete.review';
+  | 'trip.complete.review'
+  /**
+   * ★ PROPOSE A DRIVER ACCOUNT, AND NOTHING MORE. Tier `head-anywhere` on the
+   * server: any department head holds it. It does not create an account —
+   * approving is `user.write`, which is global.
+   */
+  | 'driver.account.request';
 
 export type UserStatus = 'active' | 'disabled';
 

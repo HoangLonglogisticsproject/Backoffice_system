@@ -118,6 +118,9 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
       '0002_users_updated_at.sql',
       '0011_trip_schedule.sql',
       '0012_trip_cost.sql',
+      // 0018 adds `users.account_type`, which provisioning now writes on every
+      // insert — so every spec that creates a user needs it.
+      '0018_driver_account.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
