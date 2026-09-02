@@ -1,7 +1,15 @@
 import { Pool } from 'pg';
+import type { Database, DatabaseQuery } from '@common/types/database.port';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
 import { DepartmentRepository } from '@core/organization/persistence/department.repository';
 import { MembershipRepository } from '@core/organization/persistence/membership.repository';
 import { DepartmentService } from '@core/organization/application/department.service';
@@ -24,8 +32,6 @@ import { MembershipService } from '@core/organization/application/membership.ser
  * Skipped unless DATABASE_URL_TEST names a database this test may WIPE. It
  * truncates between cases, so never point it at anything you care about.
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
-const describeIntegration = TEST_URL ? describe : describe.skip;
 
 /**
  * This suite's own schema inside the test database.
@@ -37,16 +43,6 @@ const describeIntegration = TEST_URL ? describe : describe.skip;
 const SCHEMA = 'organization_itest';
 
 /** Same guard as the migration runner suite, and for the same reason. */
-function assertLooksLikeATestDatabase(url: string): void {
-  const name = new URL(url).pathname.replace(/^\//, '');
-
-  if (!/test/i.test(name)) {
-    throw new Error(
-      `DATABASE_URL_TEST points at "${name}", which is not named as a test database. ` +
-        'This suite TRUNCATES tables — point it at a disposable database whose name contains "test".',
-    );
-  }
-}
 
 describeIntegration('Organization against real PostgreSQL', () => {
   jest.setTimeout(30_000);

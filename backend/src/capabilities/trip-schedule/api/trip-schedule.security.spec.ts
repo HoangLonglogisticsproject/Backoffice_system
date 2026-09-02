@@ -349,26 +349,53 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('does everything a member does', async () => {
-      await authed('get', '/trip-schedules').expect(200);
-      await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(201);
+      // ★ ASSERTED ON THE RESPONSE AND ON THE SERVICE. A status alone would not
+      // say the head got THROUGH — the claim is that seniority adds and never
+      // subtracts, so what matters is that the same two calls a member makes
+      // still reach the same two service methods.
+      const read = await authed('get', '/trip-schedules');
+      const write = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' });
+
+      expect(read.status).toBe(200);
+      expect(write.status).toBe(201);
+      expect(trips.list).toHaveBeenCalled();
+      expect(trips.create).toHaveBeenCalled();
     });
 
     it('★ corrects, restatuses and archives a row — the shift senior', async () => {
       // 'head-anywhere'. The route names no department because a trip belongs
       // to none, so what is being asked here is seniority, not a relation to a
       // target. See PERMISSION_REQUIREMENT for why that needed its own tier.
-      await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' }).expect(200);
-      await authed('patch', `/trip-schedules/${TRIP}/status`)
-        .send({ status: 'done' })
-        .expect(200);
-      await authed('post', `/trip-schedules/${TRIP}/archive`).expect(200);
+      const corrected = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
+      const restatused = await authed('patch', `/trip-schedules/${TRIP}/status`).send({
+        status: 'done',
+      });
+      const archived = await authed('post', `/trip-schedules/${TRIP}/archive`);
+
+      expect(corrected.status).toBe(200);
+      expect(restatused.status).toBe(200);
+      expect(archived.status).toBe(200);
+
+      // ★ ALL THREE REACHED THE SERVICE. "Does the work" is the claim; three
+      // 200s from a controller that never called anything would satisfy the
+      // status check and say nothing about the tier.
+      expect(trips.update).toHaveBeenCalled();
+      expect(trips.updateStatus).toHaveBeenCalled();
+      expect(trips.archive).toHaveBeenCalled();
     });
 
     it('★ may correct the board while heading a department it has nothing to do with', async () => {
       // Deliberate, and the cost of putting company-wide data behind a
       // departmental role: there is no "the department that owns this trip".
       context = asContext({ headOf: [DEPT], memberOf: [] });
-      await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' }).expect(200);
+
+      const response = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
+
+      expect(response.status).toBe(200);
+      // ★ THE POINT OF THE CASE: the write happened even though this head leads
+      // a department with no relation to the trip. `head-anywhere` asks for
+      // seniority, not for a target — and reaching `update` is what proves it.
+      expect(trips.update).toHaveBeenCalled();
     });
 
     it('★ is refused when the head assignment is only a membership', async () => {
@@ -432,8 +459,19 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('refuses a day written any other way', async () => {
-      await authed('post', '/trip-schedules').send({ scheduledOn: '04/08/2026' }).expect(422);
-      await authed('post', '/trip-schedules').send({ scheduledOn: '2026-8-4' }).expect(422);
+      const slashes = await authed('post', '/trip-schedules').send({ scheduledOn: '04/08/2026' });
+      const unpadded = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-8-4' });
+
+      expect(slashes.status).toBe(422);
+      expect(unpadded.status).toBe(422);
+      // Named the same way the sibling case above names it, so a reader sees
+      // one contract rather than two spellings of a refusal.
+      expect(slashes.body.error.details).toHaveProperty('scheduledOn');
+      expect(unpadded.body.error.details).toHaveProperty('scheduledOn');
+
+      // ★ REFUSED AT THE BOUNDARY. A date the server could not parse must never
+      // reach the service, where it would become a row nobody can read back.
+      expect(trips.create).not.toHaveBeenCalled();
     });
 
     it('refuses a status outside the five the board has', async () => {
@@ -446,9 +484,19 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('refuses a backwards range and an oversized one, rather than trimming them', async () => {
-      await authed('get', '/trip-schedules?from=2026-08-31&to=2026-08-01').expect(422);
-      await authed('get', '/trip-schedules?from=2020-01-01&to=2026-12-31').expect(422);
-      await authed('get', '/trip-schedules?limit=5000').expect(422);
+      const backwards = await authed('get', '/trip-schedules?from=2026-08-31&to=2026-08-01');
+      const tooWide = await authed('get', '/trip-schedules?from=2020-01-01&to=2026-12-31');
+      const tooMany = await authed('get', '/trip-schedules?limit=5000');
+
+      expect(backwards.status).toBe(422);
+      expect(tooWide.status).toBe(422);
+      expect(tooMany.status).toBe(422);
+
+      // ★ "RATHER THAN TRIMMING THEM" IS THE WHOLE CLAIM, and only this line
+      // measures it. A server that silently clamped `limit=5000` to 100 would
+      // answer 200 — but one that clamped and still answered 422 would pass a
+      // status-only check while having queried the database anyway.
+      expect(trips.list).not.toHaveBeenCalled();
     });
 
     it('answers 422 for a malformed id, in the same envelope as everything else', async () => {

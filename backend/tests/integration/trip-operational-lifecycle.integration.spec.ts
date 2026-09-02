@@ -1,8 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool, type PoolClient } from 'pg';
-import { ConflictError, ValidationError } from '@common/errors/domain.error';
+import {
+  TEST_URL,
+  assertLooksLikeATestDatabase,
+  describeIntegration,
+  fakeHasher,
+  openTestSchema,
+  poolAsDatabase,
+} from '../helpers/integration-database';
 import type { Database, DatabaseQuery } from '@common/types/database.port';
+import { ConflictError, ValidationError } from '@common/errors/domain.error';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripCompletionService } from '../../src/capabilities/trip-schedule/application/trip-completion.service';
 import { TripCostService } from '../../src/capabilities/trip-schedule/application/trip-cost.service';
@@ -49,7 +57,6 @@ import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedul
  * it, and `require-database.ts` has already refused to let it point anywhere
  * that is not a disposable local database.
  */
-const TEST_URL = process.env['DATABASE_URL_TEST'];
 const SCHEMA = 'trip_operational_itest';
 
 /** PostgreSQL error codes, spelled out where they are asserted. */
@@ -94,15 +101,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     (await pool.query(text, params as unknown[])).rows;
 
   beforeAll(async () => {
-    const setup = new Pool({ connectionString: TEST_URL, max: 1 });
-    try {
-      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-      await setup.query(`CREATE SCHEMA ${SCHEMA}`);
-    } finally {
-      await setup.end();
-    }
-
-    pool = new Pool({ connectionString: TEST_URL, max: 8, options: `-c search_path=${SCHEMA}` });
+    pool = await openTestSchema(TEST_URL as string, SCHEMA);
 
     const migrations = join(__dirname, '..', '..', 'migrations');
     for (const file of [
