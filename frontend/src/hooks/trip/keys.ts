@@ -40,6 +40,9 @@ export const tripKeys = {
   drivers: () => [...tripKeys.all, 'drivers'] as const,
 
   catalogues: () => [...tripKeys.all, 'catalogue'] as const,
+  /** One customer's places. Under the catalogue prefix, so a reload clears them too. */
+  locations: (customerId: string, includeArchived: boolean) =>
+    [...tripKeys.catalogues(), 'locations', customerId, { includeArchived }] as const,
   vehicles: (includeArchived: boolean) =>
     [...tripKeys.catalogues(), 'vehicles', { includeArchived }] as const,
   customers: (includeArchived: boolean) =>

@@ -99,6 +99,15 @@ export interface TripSchedule {
   note: string | null;
   status: TripStatus;
 
+  /**
+   * Which of the customer's places each snapshot was copied from — provenance,
+   * not a live reference. `null` on trips typed before places existed and on
+   * any end entered as free text. The snapshot fields above are what every
+   * screen renders.
+   */
+  pickupLocationId: string | null;
+  deliveryLocationId: string | null;
+
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -120,6 +129,34 @@ export interface TripScheduleWithRefs extends TripSchedule {
   createdByUser: UserSummary;
   /** Who is driving it NOW — the active assignment. `null` while nobody is. */
   driver: UserSummary | null;
+  /** The master places behind the two snapshots, by name. */
+  pickupLocation: TripLocationRef | null;
+  deliveryLocation: TripLocationRef | null;
+}
+
+export interface TripLocationRef {
+  id: string;
+  name: string;
+}
+
+/**
+ * One of a customer's places. Always read and written under its customer;
+ * there is no company-wide list. Coordinates are optional — "not located
+ * yet" is a real state the screens say out loud.
+ */
+export interface TripLocation {
+  id: string;
+  customerId: string;
+  name: string;
+  address: string;
+  contact: string | null;
+  note: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  status: CatalogueStatus;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TripVehicleRef {

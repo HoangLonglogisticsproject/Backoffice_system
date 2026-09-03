@@ -15,6 +15,9 @@ const archiveTripVehicle = vi.fn();
 const archiveTripCustomer = vi.fn();
 const useSession = vi.fn();
 
+const fetchTripLocations = vi.fn();
+const createTripLocation = vi.fn();
+const archiveTripLocation = vi.fn();
 vi.mock('@/api/tripCatalogue', () => ({
   fetchTripVehicles: (...a: unknown[]) => fetchTripVehicles(...a),
   fetchTripCustomers: (...a: unknown[]) => fetchTripCustomers(...a),
@@ -24,6 +27,10 @@ vi.mock('@/api/tripCatalogue', () => ({
   updateTripCustomer: (...a: unknown[]) => updateTripCustomer(...a),
   archiveTripVehicle: (...a: unknown[]) => archiveTripVehicle(...a),
   archiveTripCustomer: (...a: unknown[]) => archiveTripCustomer(...a),
+  fetchTripLocations: (...a: unknown[]) => fetchTripLocations(...a),
+  createTripLocation: (...a: unknown[]) => createTripLocation(...a),
+  updateTripLocation: vi.fn(),
+  archiveTripLocation: (...a: unknown[]) => archiveTripLocation(...a),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
@@ -184,6 +191,128 @@ describe('TripMasterDataPage', () => {
       renderPage();
 
       expect(await screen.findByText('Không có quyền')).toBeTruthy();
+    });
+  });
+
+
+  /**
+   * ★ PLACES LIVE UNDER THEIR CUSTOMER. No tab, no sidebar entry, no global
+   * list: the door is the customer's row. What the panel says about each
+   * place is the one thing a dispatcher needs before a trip — whether it has
+   * been located.
+   */
+  describe('★ a customer’s places', () => {
+    const location = (over: Record<string, unknown> = {}) => ({
+      id: 'l1',
+      customerId: 'c1',
+      name: 'Kho OSC',
+      address: 'KCN Sóng Thần',
+      contact: null,
+      note: null,
+      latitude: 10.8,
+      longitude: 106.6,
+      status: 'active',
+      createdBy: 'u9',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      ...over,
+    });
+
+    const openPlaces = async (permissions = ['trip.read', 'trip.create', 'trip.write']) => {
+      useSession.mockReturnValue(session(permissions));
+      fetchTripCustomers.mockResolvedValue([customer()]);
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Khách hàng' }));
+      await screen.findByText('VIỄN ĐẠT');
+      fireEvent.click(screen.getByRole('button', { name: 'Địa điểm' }));
+      await waitFor(() => expect(fetchTripLocations).toHaveBeenCalledWith('c1', false));
+    };
+
+    beforeEach(() => {
+      fetchTripLocations.mockReset().mockResolvedValue([]);
+      createTripLocation.mockReset();
+      archiveTripLocation.mockReset();
+    });
+
+    it('★ opens from the customer’s row and asks for that customer’s places only', async () => {
+      fetchTripLocations.mockResolvedValue([
+        location(),
+        location({ id: 'l2', name: 'Nhà máy Bình Dương', latitude: null, longitude: null }),
+      ]);
+      await openPlaces();
+
+      expect(await screen.findByText('Kho OSC')).toBeInTheDocument();
+      expect(screen.getByText('Đã định vị')).toBeInTheDocument();
+      expect(screen.getByText('Nhà máy Bình Dương')).toBeInTheDocument();
+      expect(screen.getByText('Chưa định vị')).toBeInTheDocument();
+      expect(fetchTripLocations).toHaveBeenCalledTimes(1);
+    });
+
+    it('says the customer has no places yet', async () => {
+      await openPlaces();
+      expect(await screen.findByText('Khách hàng chưa có địa điểm.')).toBeInTheDocument();
+    });
+
+    it('★ adds a place under that customer, unlocated when no coordinates were typed', async () => {
+      createTripLocation.mockResolvedValue(location({ id: 'l9', name: 'Kho mới' }));
+      await openPlaces();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Thêm địa điểm' }));
+      fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho mới' } });
+      fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'Thủ Dầu Một' } });
+      fireEvent.change(screen.getByLabelText('Liên hệ'), { target: { value: 'Anh Tư' } });
+      expect(screen.getByText(/Chưa định vị/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() =>
+        expect(createTripLocation).toHaveBeenCalledWith('c1', {
+          name: 'Kho mới',
+          address: 'Thủ Dầu Một',
+          contact: 'Anh Tư',
+          note: null,
+          latitude: null,
+          longitude: null,
+        }),
+      );
+    });
+
+    it('sends the pair when both coordinates were typed', async () => {
+      createTripLocation.mockResolvedValue(location({ id: 'l9' }));
+      await openPlaces();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Thêm địa điểm' }));
+      fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho OSC' } });
+      fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'KCN Sóng Thần' } });
+      fireEvent.change(screen.getByLabelText('Vĩ độ'), { target: { value: '10.8' } });
+      fireEvent.change(screen.getByLabelText('Kinh độ'), { target: { value: '106.6' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() =>
+        expect(createTripLocation).toHaveBeenCalledWith('c1', expect.objectContaining({ latitude: 10.8, longitude: 106.6 })),
+      );
+    });
+
+    it('archives a place, after asking', async () => {
+      fetchTripLocations.mockResolvedValue([location()]);
+      archiveTripLocation.mockResolvedValue(location({ status: 'archived' }));
+      await openPlaces();
+      await screen.findByText('Kho OSC');
+
+      const archives = screen.getAllByRole('button', { name: 'Lưu trữ' });
+      fireEvent.click(archives[archives.length - 1]!);
+      const confirms = screen.getAllByRole('button', { name: 'Lưu trữ' });
+      fireEvent.click(confirms[confirms.length - 1]!);
+
+      await waitFor(() => expect(archiveTripLocation).toHaveBeenCalledWith('c1', 'l1'));
+    });
+
+    it('★ shows a reader the places but no way to change them', async () => {
+      fetchTripLocations.mockResolvedValue([location()]);
+      await openPlaces(['trip.read']);
+
+      expect(await screen.findByText('Kho OSC')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Thêm địa điểm' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
     });
   });
 

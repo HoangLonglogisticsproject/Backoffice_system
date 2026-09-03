@@ -34,11 +34,13 @@ export interface CreateTripInput {
   /** ISO instant, or null. May land on a later day than `scheduledOn`. */
   pickupAt?: string | null;
   deliveryAt?: string | null;
-  /** Both halves of a pair or neither; the server refuses half a point. */
-  pickupLatitude?: number | null;
-  pickupLongitude?: number | null;
-  deliveryLatitude?: number | null;
-  deliveryLongitude?: number | null;
+  /**
+   * ★ THE CUSTOMER'S PLACE FOR EACH END, never a coordinate. The server copies
+   * the place's address, contact and coordinates onto the trip; there is no
+   * field on this body through which a coordinate could be typed.
+   */
+  pickupLocationId?: string | null;
+  deliveryLocationId?: string | null;
   note?: string | null;
   status?: TripStatus;
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, Pencil, Plus } from 'lucide-react';
+import { Archive, MapPin, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
@@ -25,6 +25,7 @@ import {
 import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
 import type { TranslationKey } from '@/types/translate';
+import { CustomerLocationsModal } from './components/CustomerLocationsModal';
 
 /**
  * The two catalogues behind the dispatch board.
@@ -67,6 +68,8 @@ export default function TripMasterDataPage() {
    */
   const [editing, setEditing] = useState<CatalogueRowData | null>(null);
   const [archiving, setArchiving] = useState<CatalogueRowData | null>(null);
+  /** The customer whose places are being managed. Places live under a customer, nowhere else. */
+  const [locationsFor, setLocationsFor] = useState<CatalogueRowData | null>(null);
 
   const canManage = can('trip.write');
   const canAdd = can('trip.create');
@@ -125,7 +128,7 @@ export default function TripMasterDataPage() {
               </TableHead>
               <TableHead className="font-semibold text-gray-600">{t('colNote')}</TableHead>
               <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
-              {canManage && (
+              {(canManage || tab === 'customers') && (
                 <TableHead className="font-semibold text-gray-600">{t('colActions')}</TableHead>
               )}
             </TableRow>
@@ -138,6 +141,7 @@ export default function TripMasterDataPage() {
                 canManage={canManage}
                 onEdit={() => setEditing(row)}
                 onArchive={() => setArchiving(row)}
+                onLocations={tab === 'customers' ? () => setLocationsFor(row) : undefined}
               />
             ))}
           </TableBody>
@@ -180,6 +184,15 @@ export default function TripMasterDataPage() {
           onArchived={catalogue.reload}
         />
       )}
+
+      {locationsFor && (
+        <CustomerLocationsModal
+          customer={{ id: locationsFor.id, name: locationsFor.label }}
+          canAdd={canAdd}
+          canManage={canManage}
+          onClose={() => setLocationsFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -210,11 +223,14 @@ function CatalogueRow({
   canManage,
   onEdit,
   onArchive,
+  onLocations,
 }: Readonly<{
   row: CatalogueRowData;
   canManage: boolean;
   onEdit: () => void;
   onArchive: () => void;
+  /** Customers only: their places. A vehicle has none. */
+  onLocations?: () => void;
 }>) {
   const { t } = useLanguage();
 
@@ -236,9 +252,22 @@ function CatalogueRow({
           {t(archived ? 'statusArchived' : 'statusActive')}
         </span>
       </TableCell>
-      {canManage && (
+      {(canManage || onLocations) && (
         <TableCell>
           <div className="flex items-center gap-1">
+            {onLocations && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1 px-2 text-gray-600"
+                onClick={onLocations}
+              >
+                <MapPin className="h-3.5 w-3.5" />
+                <span className="sr-only">{t('manageLocations')}</span>
+              </Button>
+            )}
+            {canManage && (
+              <>
             <Button
               variant="outline"
               size="sm"
@@ -261,6 +290,8 @@ function CatalogueRow({
               <Archive className="h-3.5 w-3.5" />
               <span className="sr-only">{t('archive')}</span>
             </Button>
+              </>
+            )}
           </div>
         </TableCell>
       )}
