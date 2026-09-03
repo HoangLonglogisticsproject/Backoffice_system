@@ -1,30 +1,45 @@
 import { useCallback, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, MapPin, MessageSquare, Package, Phone, Truck, User } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Package, Truck, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { StatusPill } from '@/components/common/StatusPill';
+import { Stepper } from '@/components/common/Stepper';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useDriverActions, useMyTrip } from '@/hooks/driver';
 import { driverErrorKey, shouldReloadAfter } from '@/utils/driverErrors';
+import { currentStage, workflowStages, type WorkflowStage } from '@/utils/driverExecution';
 import { captureLocation } from '@/utils/driverLocation';
 import { formatCalendarDay } from '@/utils/format/datetime';
-import type { ExecutionEventType, ExpenseDeclaration, LocationEvidence } from '@/types/driver';
+import type { TranslationKey } from '@/types/translate';
+import type { DriverTripDetail, ExecutionEventType, ExpenseDeclaration, LocationEvidence } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
 import { CompletionPanel } from './components/CompletionPanel';
-import { ExecutionTimeline } from './components/ExecutionTimeline';
 import { ExpensePanel } from './components/ExpensePanel';
+import { FactRow } from './components/FactRow';
+import { MilestoneCard } from './components/MilestoneCard';
 
 /**
  * One trip, everything the driver needs, in the order they need it.
  *
- * ★ THE ORDER OF THE SECTIONS IS THE JOB, not a layout preference: where am I
- * going, what have I reported, what did I spend, am I finished. A driver
- * scrolls top to bottom once per trip.
+ * ★ THE ORDER OF THE SECTIONS IS THE JOB, not a layout preference: where do I
+ * stand, what is this trip, the pickup, the delivery, what did I spend, am I
+ * finished. A driver scrolls top to bottom once per trip, and the section
+ * that is live is the one lit up.
  *
  * ★ EVERY BUSINESS RULE ON THIS PAGE COMES FROM `utils/driverExecution`. This
  * file wires data to components and turns failures into sentences; it decides
  * no lifecycle. That is what keeps the rules testable without a browser and
  * stops them drifting from the server quietly.
  */
+
+const STAGE_LABEL: Record<WorkflowStage, TranslationKey> = {
+  pickup: 'driverStagePickup',
+  delivery: 'driverStageDelivery',
+  expense: 'driverStageExpense',
+  completion: 'driverStageCompletion',
+};
+
 export default function DriverTripPage() {
   const { tripId } = useParams<{ tripId: string }>();
   const { t, language } = useLanguage();
@@ -52,14 +67,9 @@ export default function DriverTripPage() {
    *
    * ★ `?.scrollIntoView?.()`, AND THE SECOND `?.` IS THE ONE THAT MATTERS. The
    * first guards a missing element; the second guards a missing METHOD, which
-   * is a different failure and the one that actually bit. `scrollIntoView` is
-   * not implemented by jsdom, so the call threw inside a click handler and took
-   * the whole render down with it — 581 tests passed while two unhandled errors
-   * failed the run.
-   *
-   * Scrolling is a courtesy. Somewhere that cannot scroll should show the
-   * driver an unscrolled page, never a broken one — the same reasoning that
-   * wraps every `sessionStorage` access in `driverDraft`.
+   * is a different failure and the one that actually bit: `scrollIntoView` is
+   * not implemented by jsdom. Scrolling is a courtesy; somewhere that cannot
+   * scroll should show an unscrolled page, never a broken one.
    */
   const goToExpenses = useCallback(() => {
     document.getElementById('driver-expenses')?.scrollIntoView?.({
@@ -126,16 +136,11 @@ export default function DriverTripPage() {
       await report.mutateAsync({
         type,
         // ★ NO TIME IS SENT, AND THAT IS THE RULE RATHER THAN AN OMISSION.
-        //
-        // `actual_at` is what every delay in the system is measured from, and a
-        // phone's clock is set by the phone's owner — a handset an hour out
-        // would write an hour of lateness nobody caused. The server stamps it
-        // when the tap arrives.
-        //
-        // The handset's own reading goes in `deviceReportedAt`, which is
-        // DIAGNOSTIC: kept so a disagreement can be investigated, never read by
-        // anything that computes a delay or an order. Stamped AFTER the fix so
-        // the server can age the fix against the same clock that took it.
+        // `actual_at` is what every delay is measured from, and a phone's
+        // clock is set by the phone's owner. The server stamps it when the
+        // tap arrives. The handset's own reading goes in `deviceReportedAt`,
+        // which is DIAGNOSTIC — kept so a disagreement can be investigated,
+        // never read by anything that computes a delay or an order.
         deviceReportedAt: new Date().toISOString(),
         ...(location ? { location } : {}),
         // ★ ONE ID PER INTENT, NOT PER ATTEMPT. A retried request must collide
@@ -168,13 +173,8 @@ export default function DriverTripPage() {
 
   /**
    * ★ ANSWERS WHETHER THE SERVER ACCEPTED, for the same reason `declareExpense`
-   * does: the form may only close on a yes.
-   *
-   * A correction is the one write with NO draft behind it — persisting it would
-   * resurrect an abandoned edit on the next reload, which is why `driverDraft`
-   * is not used here. That makes the open form the only place the driver's
-   * retyped figure exists, so closing it before the server has agreed is the
-   * moment the figure is lost.
+   * does: the form may only close on a yes. A correction carries no draft, so
+   * the open form is the only place the retyped figure exists.
    */
   const correctExpense = (input: {
     costId: string;
@@ -186,18 +186,26 @@ export default function DriverTripPage() {
   const submitCompletion = (declaration: ExpenseDeclaration) =>
     void run(() => complete.mutateAsync(declaration));
 
+  const stages = workflowStages(trip);
+  const stage = currentStage(trip);
+  const now = new Date();
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon-lg" aria-label={t('driverBackToTrips')} render={<Link to="/driver" />}>
           <ArrowLeft />
         </Button>
-        <div className="min-w-0">
-          <h1 className="truncate font-semibold">{trip.customer?.name ?? t('driverNotSet')}</h1>
-          <p className="text-xs text-muted-foreground">
-            {formatCalendarDay(trip.scheduledOn, language)}
-          </p>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-base font-semibold">{trip.customer?.name ?? t('driverNotSet')}</h1>
+          <p className="text-xs text-muted-foreground">{formatCalendarDay(trip.scheduledOn, language)}</p>
         </div>
+        {/* Where the trip stands, in one word — the same reading the stepper draws. */}
+        {stage ? (
+          <StatusPill tone="amber">{t(STAGE_LABEL[stage])}</StatusPill>
+        ) : (
+          <StatusPill tone="green">{t('driverStageCompletion')}</StatusPill>
+        )}
       </div>
 
       {actionError ? (
@@ -209,18 +217,23 @@ export default function DriverTripPage() {
         </p>
       ) : null}
 
+      <Card size="sm">
+        <CardContent>
+          <Stepper
+            label={t('driverProgress')}
+            steps={stages.map((step) => ({ key: step.stage, label: t(STAGE_LABEL[step.stage]), state: step.state }))}
+          />
+        </CardContent>
+      </Card>
+
       <TripFacts trip={trip} />
 
-      <ExecutionTimeline
-        trip={trip}
-        now={new Date()}
-        onReport={reportEvent}
-        reporting={report.isPending}
-        locating={locating}
-      />
+      <MilestoneCard end="pickup" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} locating={locating} />
+      <MilestoneCard end="delivery" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} locating={locating} />
 
       <ExpensePanel
         trip={trip}
+        live={stage === 'expense'}
         onDeclare={declareExpense}
         onCorrect={correctExpense}
         saving={declare.isPending || correct.isPending}
@@ -230,6 +243,7 @@ export default function DriverTripPage() {
 
       <CompletionPanel
         trip={trip}
+        live={stage === 'expense' || stage === 'completion'}
         onSubmit={submitCompletion}
         submitting={complete.isPending}
         onDeclareExpenses={() => {
@@ -243,62 +257,37 @@ export default function DriverTripPage() {
 }
 
 /**
- * The whitelisted facts, and only those.
+ * The whitelisted facts about the trip itself. The two ends have their own
+ * cards; this is what is true of the whole trip.
  *
  * ★ THERE IS NO PRICE, NO COST, NO HIRE AMOUNT AND NO `note` HERE — not because
  * they are filtered, but because the server never sends them. A field can only
- * appear on this screen after it appears in the server's whitelist, which is
- * the point of building it that way round.
+ * appear on this screen after it appears in the server's whitelist.
  */
-function TripFacts({ trip }: Readonly<{ trip: ReturnType<typeof useMyTrip>['trip'] }>) {
-  const { t } = useLanguage();
-  if (!trip) return null;
-
-  return (
-    <section className="space-y-3 rounded-xl border border-border bg-background p-4">
-      <Fact icon={<Truck />} label={t('driverVehicle')} value={trip.vehicle?.plate ?? null} />
-      <Fact icon={<User />} label={t('driverCustomer')} value={trip.customer?.name ?? null} />
-
-      <Fact icon={<MapPin />} label={t('driverPickup')} value={trip.pickupAddress} />
-      <Fact icon={<Phone />} label={t('driverContact')} value={trip.pickupContact} />
-
-      <Fact icon={<MapPin />} label={t('driverDelivery')} value={trip.deliveryAddress} />
-      <Fact icon={<Phone />} label={t('driverContact')} value={trip.deliveryContact} />
-
-      <Fact icon={<Package />} label={t('driverCargo')} value={trip.cargoInfo} />
-
-      {/* ★ THE ONE FIELD WRITTEN FOR THE DRIVER, so it is the one given room. */}
-      {trip.driverInstructions ? (
-        <div className="rounded-lg bg-muted/60 p-3">
-          <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <MessageSquare className="size-3.5" aria-hidden />
-            {t('driverInstructions')}
-          </p>
-          <p className="text-sm whitespace-pre-wrap">{trip.driverInstructions}</p>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function Fact({
-  icon,
-  label,
-  value,
-}: Readonly<{ icon: React.ReactNode; label: string; value: string | null }>) {
+function TripFacts({ trip }: Readonly<{ trip: DriverTripDetail }>) {
   const { t } = useLanguage();
 
   return (
-    <div className="flex gap-2.5">
-      <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4" aria-hidden>
-        {icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className={value ? 'text-sm' : 'text-sm text-muted-foreground'}>
-          {value ?? t('driverNotSet')}
-        </p>
-      </div>
-    </div>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>{t('driverTripSummary')}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <FactRow icon={<User />} label={t('driverCustomer')} value={trip.customer?.name ?? null} />
+        <FactRow icon={<Truck />} label={t('driverVehicle')} value={trip.vehicle?.plate ?? null} />
+        <FactRow icon={<Package />} label={t('driverCargo')} value={trip.cargoInfo} />
+
+        {/* ★ THE ONE FIELD WRITTEN FOR THE DRIVER, so it is the one given room. */}
+        {trip.driverInstructions ? (
+          <div className="rounded-lg bg-muted/60 p-3">
+            <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <MessageSquare className="size-3.5" aria-hidden />
+              {t('driverInstructions')}
+            </p>
+            <p className="text-sm whitespace-pre-wrap">{trip.driverInstructions}</p>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

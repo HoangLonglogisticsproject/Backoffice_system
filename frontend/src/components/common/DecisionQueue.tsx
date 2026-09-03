@@ -37,7 +37,8 @@ export type EmptyStateKey =
   | 'emptyRoster'
   | 'driverRequestQueueEmpty'
   | 'driverRequestMineEmpty'
-  | 'driverListEmpty';
+  | 'driverListEmpty'
+  | 'driverNoTrips';
 
 /**
  * An endpoint that returns the whole list at once, as ONE page. For queues
@@ -70,6 +71,7 @@ export function QueueStates({
   emptyKey,
   showLoading = false,
   onRetry,
+  errorMessage,
 }: Readonly<{
   loading: boolean;
   forbidden: boolean;
@@ -80,6 +82,8 @@ export function QueueStates({
   showLoading?: boolean;
   /** Offer a retry under the failure, for lists with no pagination bar to retry from. */
   onRetry?: () => void;
+  /** A sentence for the failure, where the caller knows a better one than "could not load". */
+  errorMessage?: string;
 }>) {
   const { t } = useLanguage();
 
@@ -98,7 +102,7 @@ export function QueueStates({
     return (
       <div className="px-6 py-10 text-center">
         <p role="alert" className="text-sm text-red-600">
-          {t('loadFailed')}
+          {errorMessage ?? t('loadFailed')}
         </p>
         {onRetry ? (
           <Button variant="outline" size="sm" className="mt-3 h-8" onClick={onRetry}>

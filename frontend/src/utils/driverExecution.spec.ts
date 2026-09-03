@@ -13,6 +13,8 @@ import {
   nextEvent,
   suggestedDeclaration,
   vehicleOwnershipOf,
+  workflowStages,
+  currentStage,
 } from './driverExecution';
 import { TRIP_COST_CATEGORIES } from '@/types/tripCost';
 import type { TripCost } from '@/types/tripCost';
@@ -458,5 +460,43 @@ describe('the suggested declaration', () => {
 
   it('suggests "none" when there are no live lines', () => {
     expect(suggestedDeclaration(trip({ expenses: [cost({ voidedAt: EARLIER })] }))).toBe('none');
+  });
+});
+
+describe('★ the four workflow stages', () => {
+  const states = (t: DriverTripDetail) => workflowStages(t).map((step) => step.state);
+  const JOURNEY = (['ARRIVED_PICKUP', 'PICKUP_CONFIRMED', 'ARRIVED_DELIVERY', 'DELIVERY_CONFIRMED'] as const).map((type) =>
+    event(type),
+  );
+
+  it('starts on pickup', () => {
+    expect(states(trip())).toEqual(['current', 'upcoming', 'upcoming', 'upcoming']);
+    expect(currentStage(trip())).toBe('pickup');
+  });
+
+  it('moves to delivery once the pickup is confirmed — an arrival alone does not', () => {
+    expect(states(trip({ events: [event('ARRIVED_PICKUP')] }))).toEqual(['current', 'upcoming', 'upcoming', 'upcoming']);
+    expect(currentStage(trip({ events: [event('ARRIVED_PICKUP'), event('PICKUP_CONFIRMED')] }))).toBe('delivery');
+  });
+
+  it('reaches the expense checkpoint when the journey is reported', () => {
+    expect(states(trip({ events: JOURNEY }))).toEqual(['done', 'done', 'current', 'upcoming']);
+  });
+
+  it('stays on the checkpoint after a rejection — the figures are open again', () => {
+    const rejected = trip({ events: JOURNEY, completion: request({ state: 'rejected' }) });
+    expect(states(rejected)).toEqual(['done', 'done', 'current', 'upcoming']);
+  });
+
+  it('is on the review while a request is pending', () => {
+    const pending = trip({ events: JOURNEY, completion: request({ state: 'pending' }) });
+    expect(states(pending)).toEqual(['done', 'done', 'done', 'current']);
+    expect(currentStage(pending)).toBe('completion');
+  });
+
+  it('is all done once approved, with no current stage', () => {
+    const approved = trip({ events: JOURNEY, accountability: 'APPROVED_IMMUTABLE', completion: request({ state: 'approved' }) });
+    expect(states(approved)).toEqual(['done', 'done', 'done', 'done']);
+    expect(currentStage(approved)).toBeNull();
   });
 });
