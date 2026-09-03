@@ -27,6 +27,10 @@ interface ModalProps {
  */
 const openDialogs = new Set<HTMLElement>();
 
+/** Is another open dialog rendered inside this one — is this one NOT on top? */
+const hasOpenChild = (self: HTMLElement): boolean =>
+  Array.from(openDialogs).some((other) => other !== self && self.contains(other));
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -78,17 +82,23 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: R
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
-    dialogRef.current?.focus();
-
+    // Registered BEFORE focus is taken, so that "is another open dialog
+    // inside me" is answerable from the first line, whichever effect ran
+    // first.
     const self = dialogRef.current;
     if (self) openDialogs.add(self);
+
+    // ★ FOCUS GOES TO THE TOPMOST DIALOG, WHATEVER ORDER THE EFFECTS RAN. When
+    // a child dialog mounts together with its parent, React runs the child's
+    // effect first: the child focuses itself, and this — the parent's effect,
+    // running second — must not take the focus back. Escape below asks the
+    // same question, and mount order does not enter into either answer.
+    if (self && !hasOpenChild(self)) self.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         // Another open dialog inside this one: the Escape is that one's.
-        for (const other of openDialogs) {
-          if (self && other !== self && self.contains(other)) return;
-        }
+        if (self && hasOpenChild(self)) return;
         onCloseRef.current();
         return;
       }

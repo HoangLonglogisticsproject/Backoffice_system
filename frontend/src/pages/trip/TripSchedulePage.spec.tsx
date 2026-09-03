@@ -613,6 +613,140 @@ describe('TripSchedulePage', () => {
       expect(body.pickupLocationId).not.toBe('la');
     });
 
+    /**
+     * ★ A PLACE THAT HAS SINCE BEEN ARCHIVED IS STILL THE TRIP'S PLACE. The
+     * active list no longer carries it, so the form shows the trip's own copy
+     * — read-only, like any chosen place — keeps it selected, and leaves that
+     * end OUT of the patch: the server would refuse a fresh copy of an
+     * archived place, and nothing about the end changed.
+     */
+    describe('★ editing a trip whose place has since been archived', () => {
+      const openEdit = async (over: Record<string, unknown>) => {
+        useSession.mockReturnValue(session(write));
+        fetchTripSchedules.mockResolvedValue({
+          items: [trip({ customerId: 'c1', customer: { id: 'c1', name: 'WWL' }, ...over })],
+          page: 1, limit: 20, total: 1, totalPages: 1,
+        });
+        fetchTripCustomers.mockResolvedValue([{ id: 'c1', name: 'WWL', note: null, status: 'active' }]);
+        // Only the still-active place comes back for the customer.
+        fetchTripLocations.mockImplementation(async (customerId: string) =>
+          customerId === 'c1' ? [place({ id: 'lb', customerId: 'c1', name: 'Nhà máy A', address: 'Bình Dương' })] : [],
+        );
+        renderPage();
+        await screen.findByText('WWL');
+        fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+        await screen.findByLabelText('Khách hàng');
+        await waitFor(() => expect(fetchTripLocations).toHaveBeenCalledWith('c1', false));
+      };
+
+      // The board row behind the dialog prints the same address: read the dialog.
+      const dialog = () => within(screen.getByRole('dialog'));
+
+      const save = async () => {
+        const saves = screen.getAllByRole('button', { name: 'Lưu' });
+        fireEvent.click(saves[saves.length - 1]!);
+        await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+        return updateTripSchedule.mock.calls[0]![1] as Record<string, unknown>;
+      };
+
+      const archivedPickup = {
+        pickupLocationId: 'la',
+        pickupLocation: { id: 'la', name: 'Kho A' },
+        pickupAddress: 'Kho A cũ, Dĩ An',
+        pickupContact: '0909 000 111',
+        pickupLatitude: null,
+        pickupLongitude: null,
+      };
+
+      it('★ pickup: shows the trip’s copy read-only, keeps it selected, and does not name it in the patch', async () => {
+        await openEdit(archivedPickup);
+        const pickup = screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement;
+        await within(pickup).findByRole('option', { name: 'Kho A (Đã lưu trữ)' });
+
+        expect(pickup.value).toBe('la');
+        expect(dialog().getByText('Kho A cũ, Dĩ An')).toBeTruthy();
+        expect(dialog().getByText('0909 000 111')).toBeTruthy();
+        expect(screen.queryByLabelText('Địa chỉ lấy hàng')).toBeNull();
+        expect(screen.queryByLabelText('Liên hệ lấy hàng')).toBeNull();
+
+        const body = await save();
+        expect(body).not.toHaveProperty('pickupLocationId');
+        expect(body).not.toHaveProperty('pickupAddress');
+        expect(body).not.toHaveProperty('pickupContact');
+        // The other end has no place: its typed address travels as before.
+        expect(body).toMatchObject({ deliveryLocationId: null, deliveryAddress: 'TCS' });
+      });
+
+      it('delivery: the same, on the other end', async () => {
+        await openEdit({
+          deliveryLocationId: 'ld',
+          deliveryLocation: { id: 'ld', name: 'Nhà máy cũ' },
+          deliveryAddress: 'Thuận An',
+          deliveryContact: null,
+        });
+        const delivery = screen.getByLabelText('Điểm giao hàng') as HTMLSelectElement;
+        await within(delivery).findByRole('option', { name: 'Nhà máy cũ (Đã lưu trữ)' });
+
+        expect(delivery.value).toBe('ld');
+        expect(dialog().getByText('Thuận An')).toBeTruthy();
+        expect(screen.queryByLabelText('Địa chỉ giao hàng')).toBeNull();
+        expect(screen.queryByLabelText('Liên hệ giao hàng')).toBeNull();
+
+        const body = await save();
+        expect(body).not.toHaveProperty('deliveryLocationId');
+        expect(body).not.toHaveProperty('deliveryAddress');
+        expect(body).toMatchObject({ pickupLocationId: null, pickupAddress: 'BÃI XE MIỀN NAM' });
+      });
+
+      it('archived pickup beside an active delivery: both stay chosen, neither is renamed in the patch', async () => {
+        await openEdit({
+          ...archivedPickup,
+          deliveryLocationId: 'lb',
+          deliveryLocation: { id: 'lb', name: 'Nhà máy A' },
+          deliveryAddress: 'Bình Dương',
+        });
+        await within(screen.getByLabelText('Điểm giao hàng')).findByRole('option', { name: 'Nhà máy A' });
+
+        expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('la');
+        expect((screen.getByLabelText('Điểm giao hàng') as HTMLSelectElement).value).toBe('lb');
+        expect(screen.queryByLabelText('Địa chỉ lấy hàng')).toBeNull();
+        expect(screen.queryByLabelText('Địa chỉ giao hàng')).toBeNull();
+
+        const body = await save();
+        expect(body).not.toHaveProperty('pickupLocationId');
+        expect(body).not.toHaveProperty('deliveryLocationId');
+        expect(body).not.toHaveProperty('pickupAddress');
+        expect(body).not.toHaveProperty('deliveryAddress');
+      });
+
+      it('clearing the archived place frees the end: typed address, and the patch says so', async () => {
+        await openEdit(archivedPickup);
+        const pickup = screen.getByLabelText('Điểm lấy hàng');
+        await within(pickup).findByRole('option', { name: 'Kho A (Đã lưu trữ)' });
+
+        fireEvent.change(pickup, { target: { value: '' } });
+
+        const address = await screen.findByLabelText('Địa chỉ lấy hàng');
+        fireEvent.change(address, { target: { value: 'Bãi tạm Q9' } });
+
+        const body = await save();
+        expect(body).toMatchObject({ pickupLocationId: null, pickupAddress: 'Bãi tạm Q9' });
+      });
+
+      it('choosing an active place instead names it, and the server copies it afresh', async () => {
+        await openEdit(archivedPickup);
+        const pickup = screen.getByLabelText('Điểm lấy hàng');
+        await within(pickup).findByRole('option', { name: 'Nhà máy A' });
+
+        fireEvent.change(pickup, { target: { value: 'lb' } });
+
+        expect(dialog().getByText('Bình Dương')).toBeTruthy();
+        expect(dialog().queryByText('Kho A cũ, Dĩ An')).toBeNull();
+        const body = await save();
+        expect(body).toMatchObject({ pickupLocationId: 'lb', pickupAddress: null, pickupContact: null });
+      });
+    });
+
     it('★ keeps the new place selected when the list re-read is slow — the id is set only after the list holds it', async () => {
       await openAddForm();
       await chooseCustomer('c9');

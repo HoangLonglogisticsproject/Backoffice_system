@@ -212,6 +212,35 @@ describe('Modal', () => {
       expect(onChildClose).toHaveBeenCalledTimes(1);
     });
 
+    it('★ gives initial focus to the child when both mount together, and the parent does not take it back', () => {
+      const view = render(<Nested child onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+
+      // React ran the child's effect first; the parent's ran after it and left
+      // the focus where it was.
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Child' }));
+
+      // A re-render of the parent is not a reopen: nothing moves.
+      view.rerender(<Nested child onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Child' }));
+
+      // Escape still goes to the child, whose dialog holds the focus.
+      const onChildClose = vi.fn();
+      const onParentClose = vi.fn();
+      view.rerender(<Nested child onParentClose={onParentClose} onChildClose={onChildClose} />);
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onChildClose).toHaveBeenCalledTimes(1);
+      expect(onParentClose).not.toHaveBeenCalled();
+    });
+
+    it('focuses a child opened later inside an already-open parent', () => {
+      const view = render(<Nested child={false} onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Parent' }));
+
+      view.rerender(<Nested child onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Child' }));
+    });
+
     it('closes a lone dialog on Escape as before', () => {
       const onParentClose = vi.fn();
       render(<Nested child={false} onParentClose={onParentClose} onChildClose={vi.fn()} />);

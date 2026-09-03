@@ -230,6 +230,26 @@ export function TripFormModal({
         : { ...current, customerId: id, pickupLocationId: null, deliveryLocationId: null },
     );
 
+  /**
+   * ★ THE ROW'S OWN PLACE, WITH THE TRIP'S SNAPSHOT OF IT. The active list does
+   * not carry an archived place, but the trip still names it and still holds
+   * what was copied from it. That copy is what the form shows for it — read
+   * only, as for any chosen place — and the reference stays selected. Nothing
+   * is reactivated and nothing is replaced; choosing another place or clearing
+   * it is the dispatcher's to do.
+   */
+  const ownPlace = (end: 'pickup' | 'delivery'): ChosenPlace | null => {
+    if (!trip) return null;
+    if (end === 'pickup') {
+      return trip.pickupLocation
+        ? { ...trip.pickupLocation, address: trip.pickupAddress ?? '', contact: trip.pickupContact, latitude: trip.pickupLatitude ?? null }
+        : null;
+    }
+    return trip.deliveryLocation
+      ? { ...trip.deliveryLocation, address: trip.deliveryAddress ?? '', contact: trip.deliveryContact, latitude: trip.deliveryLatitude ?? null }
+      : null;
+  };
+
   /** Which end a "new place" dialog was opened for; the new place is selected there on save. */
   const [addingFor, setAddingFor] = useState<'pickup' | 'delivery' | null>(null);
 
@@ -251,17 +271,32 @@ export function TripFormModal({
     // and the server copies that place's address, contact and coordinates onto
     // the trip. The typed address and contact travel only for an end with no
     // place — the hand-typed path every trip took before places existed.
+    //
+    // ★ AN END WHOSE PLACE IS UNCHANGED IS NOT IN THE PATCH. The server copies
+    // a place afresh only when the patch names it, and refuses to copy an
+    // archived one — so an edit that leaves the place alone must not name it.
+    // Otherwise correcting a note on a trip whose warehouse has since closed
+    // would be refused, and on any other trip would quietly rewrite last
+    // week's snapshot from today's master. Omitted, the trip's own copy — and
+    // its reference, archived or not — stands. An end with no place is always
+    // sent: its typed address may be what changed.
+    const endFields = (end: 'pickup' | 'delivery'): UpdateTripInput => {
+      const [id, was, address, contact] =
+        end === 'pickup'
+          ? [form.pickupLocationId, trip?.pickupLocationId, form.pickupAddress, form.pickupContact]
+          : [form.deliveryLocationId, trip?.deliveryLocationId, form.deliveryAddress, form.deliveryContact];
+      if (trip && id !== null && id === was) return {};
+      return end === 'pickup'
+        ? { pickupLocationId: id, pickupAddress: id ? null : blank(address), pickupContact: id ? null : blank(contact) }
+        : { deliveryLocationId: id, deliveryAddress: id ? null : blank(address), deliveryContact: id ? null : blank(contact) };
+    };
     const payload: CreateTripInput & UpdateTripInput = {
       scheduledOn: form.scheduledOn,
       vehicleId: form.vehicleId,
       customerId: form.customerId,
       cargoInfo: blank(form.cargoInfo),
-      pickupLocationId: form.pickupLocationId,
-      deliveryLocationId: form.deliveryLocationId,
-      pickupAddress: form.pickupLocationId ? null : blank(form.pickupAddress),
-      deliveryAddress: form.deliveryLocationId ? null : blank(form.deliveryAddress),
-      pickupContact: form.pickupLocationId ? null : blank(form.pickupContact),
-      deliveryContact: form.deliveryLocationId ? null : blank(form.deliveryContact),
+      ...endFields('pickup'),
+      ...endFields('delivery'),
       pickupAt: fromDateTimeLocalValue(form.pickupAt),
       deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
       note: blank(form.note),
@@ -429,7 +464,7 @@ export function TripFormModal({
             label={t('fieldPickupLocation')}
             customerId={form.customerId}
             locations={locations.data ?? []}
-            current={trip?.pickupLocation ?? null}
+            current={ownPlace('pickup')}
             value={form.pickupLocationId}
             onChange={(id) => set('pickupLocationId', id)}
             onAdd={() => setAddingFor('pickup')}
@@ -443,7 +478,7 @@ export function TripFormModal({
             label={t('fieldDeliveryLocation')}
             customerId={form.customerId}
             locations={locations.data ?? []}
-            current={trip?.deliveryLocation ?? null}
+            current={ownPlace('delivery')}
             value={form.deliveryLocationId}
             onChange={(id) => set('deliveryLocationId', id)}
             onAdd={() => setAddingFor('delivery')}
@@ -522,6 +557,15 @@ export function TripFormModal({
   );
 }
 
+/** What the read-only block after a choice shows: an active place, or the trip's own copy of an archived one. */
+interface ChosenPlace {
+  id: string;
+  name: string;
+  address: string;
+  contact: string | null;
+  latitude: number | null;
+}
+
 /**
  * One end of the trip: the customer's place, chosen — or, with none chosen,
  * the address typed by hand as before.
@@ -549,8 +593,8 @@ function LocationEnd({
   label: string;
   customerId: string | null;
   locations: TripLocation[];
-  /** The row's own place, kept selectable even when archived. */
-  current: { id: string; name: string } | null;
+  /** The row's own place with the trip's snapshot of it, kept selectable and shown even when archived. */
+  current: ChosenPlace | null;
   value: string | null;
   onChange: (id: string | null) => void;
   onAdd: () => void;
@@ -561,10 +605,14 @@ function LocationEnd({
 }>) {
   const { t } = useLanguage();
   const selectId = `trip-${end}-location`;
-  const chosen = locations.find((location) => location.id === value) ?? null;
-  const options = locations.some((location) => location.id === current?.id) || !current
-    ? locations
-    : [...locations, { id: current.id, name: `${current.name} (${t('statusArchived')})` } as TripLocation];
+  // An archived place is absent from the active list but is still the trip's
+  // choice: it is shown from the trip's own copy, read-only like any other.
+  const chosen: ChosenPlace | null =
+    locations.find((location) => location.id === value) ?? (current && current.id === value ? current : null);
+  const options: { id: string; name: string }[] =
+    locations.some((location) => location.id === current?.id) || !current
+      ? locations
+      : [...locations, { id: current.id, name: `${current.name} (${t('statusArchived')})` }];
 
   return (
     <div className="space-y-2">
