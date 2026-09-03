@@ -1,6 +1,15 @@
 import { Injectable, type MessageEvent } from '@nestjs/common';
 import { Observable, Subject, finalize, interval, map, merge } from 'rxjs';
-import type { NotificationSignal } from '../domain/notification';
+import { TooManyConnectionsError, type NotificationSignal } from '../domain/notification';
+
+/** How many live streams may exist: per account, and in the whole process. */
+export interface StreamLimits {
+  perUser: number;
+  total: number;
+}
+
+/** The env defaults, repeated here so a bare `new NotificationStream()` is safe too. */
+export const DEFAULT_STREAM_LIMITS: StreamLimits = { perUser: 5, total: 1000 };
 
 /**
  * The open connections, and who each one belongs to.
@@ -34,6 +43,14 @@ import type { NotificationSignal } from '../domain/notification';
 @Injectable()
 export class NotificationStream {
   private readonly subscribers = new Map<string, Set<Subject<NotificationSignal>>>();
+  /**
+   * Live connections across every user. Moved in the same synchronous frame
+   * as the set it mirrors — never across an `await` — so the two cannot
+   * disagree and no interleaved subscribe can slip past the check.
+   */
+  private total = 0;
+
+  constructor(private readonly limits: StreamLimits = DEFAULT_STREAM_LIMITS) {}
 
   /**
    * Keeps the connection alive through every proxy on the way.
@@ -44,11 +61,33 @@ export class NotificationStream {
    */
   static readonly HEARTBEAT_MS = 25_000;
 
+  /**
+   * ★ THE LIMITS ARE CHECKED BEFORE ANYTHING IS CREATED, AND THE CHECK AND THE
+   * INSERT SHARE ONE SYNCHRONOUS FRAME. Node runs this on one thread and there
+   * is no `await` between reading the counts and registering the subject, so
+   * two requests arriving together are handled one after the other in full:
+   * the second sees the first's insert. A refusal throws — the controller
+   * never returns an Observable, Nest answers 429 — and nothing is registered,
+   * so a refused request leaves no subject, no heartbeat and no slot behind.
+   */
   subscribe(userId: string): Observable<MessageEvent> {
-    const subject = new Subject<NotificationSignal>();
     const mine = this.subscribers.get(userId) ?? new Set<Subject<NotificationSignal>>();
+
+    if (mine.size >= this.limits.perUser) {
+      throw new TooManyConnectionsError(
+        'This account already holds as many live notification streams as it may. Close another tab and try again.',
+      );
+    }
+    if (this.total >= this.limits.total) {
+      throw new TooManyConnectionsError(
+        'The server is holding as many live notification streams as it may right now. Try again shortly.',
+      );
+    }
+
+    const subject = new Subject<NotificationSignal>();
     mine.add(subject);
     this.subscribers.set(userId, mine);
+    this.total += 1;
 
     const signals = subject.pipe(
       map((data): MessageEvent => ({ type: 'notification', data })),
@@ -59,11 +98,19 @@ export class NotificationStream {
 
     return merge(signals, heartbeat).pipe(
       finalize(() => {
-        mine.delete(subject);
+        // `delete` answers whether this subject was still registered, so a
+        // slot is given back exactly once however the stream ended —
+        // unsubscribe, completion or error.
+        if (mine.delete(subject)) this.total -= 1;
         if (mine.size === 0) this.subscribers.delete(userId);
         subject.complete();
       }),
     );
+  }
+
+  /** Live connections in the process. For tests and for a health line. */
+  totalConnections(): number {
+    return this.total;
   }
 
   /** To every connection the recipient has open, and to nobody else's. */

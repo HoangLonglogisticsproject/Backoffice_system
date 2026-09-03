@@ -1387,7 +1387,7 @@ describe('★ a completion decision is told to the driver', () => {
       history as never,
       notifications as never,
     );
-    return { service, assignments, notifications };
+    return { service, assignments, requests, notifications };
   };
 
   it('★ carries the reason on a rejection, to the driver on the trip', async () => {
@@ -1418,22 +1418,28 @@ describe('★ a completion decision is told to the driver', () => {
     );
   });
 
-  it('falls back to whoever submitted when nobody is on the trip any more', async () => {
-    const { service, assignments, notifications } = build();
+  it('★ falls back to whoever submitted when nobody is on the trip any more', async () => {
+    // The submitter is NOT the driver the fixture normally names, so this
+    // only passes if `pending.submittedBy` is what gets used.
+    const { service, assignments, requests, notifications } = build();
+    requests.lockPending.mockResolvedValue({ id: 'request-1', state: 'pending', submittedBy: OTHER });
     assignments.findActive.mockResolvedValue(null);
 
     await service.approve(TRIP, BOSS);
 
     expect(notifications.record).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientUserId: OTHER }),
+      TX,
+    );
+    expect(notifications.record).not.toHaveBeenCalledWith(
       expect.objectContaining({ recipientUserId: DRIVER }),
       TX,
     );
   });
 
   it('delivers nothing when the decision is refused', async () => {
-    const { service, assignments, notifications } = build();
-    assignments.lockActive.mockResolvedValue(activeAssignment);
-    (service as unknown as { requests: { lockPending: jest.Mock } }).requests.lockPending.mockResolvedValue(null);
+    const { service, requests, notifications } = build();
+    requests.lockPending.mockResolvedValue(null);
 
     await expect(service.approve(TRIP, BOSS)).rejects.toThrow(ConflictError);
     expect(notifications.deliver).not.toHaveBeenCalled();

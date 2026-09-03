@@ -1,3 +1,15 @@
+import { DomainError } from '../../../common/errors/domain.error';
+
+/**
+ * Refused because the caller — or the process — already holds as many live
+ * streams as it may. 429, with the time after which one is worth retrying.
+ * Thrown BEFORE anything is registered, so a refused request costs nothing.
+ */
+export class TooManyConnectionsError extends DomainError {
+  readonly code = 'TOO_MANY_CONNECTIONS';
+  readonly retryAfterSeconds = 30;
+}
+
 /**
  * What a driver is told.
  *

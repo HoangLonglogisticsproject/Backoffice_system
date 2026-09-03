@@ -1465,6 +1465,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
    */
   describe('★ assignment, and what the driver is told', () => {
     const notesFor = (userId: string) => notificationRows.listForUser(userId);
+    /** The business signals only. A heartbeat is a keep-alive, not a fact. */
+    const signalsOf = (events: readonly unknown[]) =>
+      events.filter((event) => (event as { type?: string }).type === 'notification');
 
     it('★ writes TRIP_ASSIGNED for the driver in the same transaction as the assignment', async () => {
       const trip = await newTrip(await newVehicle('51D-10001'));
@@ -1484,7 +1487,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         readAt: null,
       });
       // And the phone heard exactly that row, as a signal, after commit.
-      expect(heard).toEqual([
+      expect(signalsOf(heard)).toEqual([
         { type: 'notification', data: expect.objectContaining({ id: notes[0]!.id, type: 'TRIP_ASSIGNED', tripId: trip }) },
       ]);
       expect(assignment.driverUserId).toBe(driverA);
@@ -1668,9 +1671,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
         await execution.assign(trip, driverA, operator);
 
-        expect(a1).toHaveLength(1);
-        expect(a2).toHaveLength(1);
-        expect(b).toHaveLength(0);
+        expect(signalsOf(a1)).toHaveLength(1);
+        expect(signalsOf(a2)).toHaveLength(1);
+        expect(signalsOf(b)).toHaveLength(0);
         for (const s of subs) s.unsubscribe();
         expect(stream.connections(driverA)).toBe(0);
       });
@@ -1682,7 +1685,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
         await execution.assign(trip, driverA, operator);
 
-        expect(Object.keys(heard[0]!.data).sort()).toEqual(['createdAt', 'id', 'tripId', 'type']);
+        const [signal] = signalsOf(heard) as { data: Record<string, unknown> }[];
+        expect(Object.keys(signal!.data).sort()).toEqual(['createdAt', 'id', 'tripId', 'type']);
         sub.unsubscribe();
       });
     });

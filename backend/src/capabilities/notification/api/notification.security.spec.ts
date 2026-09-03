@@ -38,7 +38,8 @@ describe('notification HTTP security', () => {
       ),
       record: jest.fn(),
     };
-    stream = new NotificationStream();
+    // One stream per account, so the HTTP refusal can be exercised below.
+    stream = new NotificationStream({ perUser: 1, total: 10 });
 
     const moduleRef = await Test.createTestingModule({
       controllers: [NotificationController],
@@ -162,6 +163,18 @@ describe('notification HTTP security', () => {
 
       subscription.unsubscribe();
       expect(stream.connections(ME)).toBe(0);
+    });
+
+    it('★ answers 429 with a Retry-After once the account holds its ceiling, registering nothing', async () => {
+      const held = stream.subscribe(ME).subscribe();
+
+      const response = await authed('get', '/notifications/stream');
+
+      expect(response.status).toBe(429);
+      expect(response.body.error.code).toBe('TOO_MANY_CONNECTIONS');
+      expect(Number(response.headers['retry-after'])).toBeGreaterThan(0);
+      expect(stream.connections(ME)).toBe(1);
+      held.unsubscribe();
     });
 
     it('is refused without a session, like every other route', async () => {

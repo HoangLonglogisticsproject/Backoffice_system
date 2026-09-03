@@ -38,6 +38,16 @@ Chọn SSE vì `deploy/nginx.conf` xoá header `Connection` trên `/api/` — We
 cần sửa proxy, thêm ba package và một đường xác thực handshake riêng, trong khi
 nhu cầu chỉ là server → client.
 
+**Giới hạn kết nối.** Mỗi stream mở là một socket, một Subject và một heartbeat
+sống suốt đời tab, nên có trần: `SSE_MAX_CONNECTIONS_PER_USER` (mặc định **5**
+mỗi tài khoản — điện thoại, máy tính bảng, vài tab thừa) và
+`SSE_MAX_CONNECTIONS` (mặc định **1000** cả tiến trình). Kiểm tra và đăng ký
+trong **cùng một frame đồng bộ** — không có `await` ở giữa — nên hai request
+tới cùng lúc vẫn được xử lý lần lượt và không lọt. Vượt ngưỡng: `429
+TOO_MANY_CONNECTIONS` kèm `Retry-After: 30`, **không** đăng ký gì. Slot trả về
+đúng một lần khi stream kết thúc (unsubscribe, complete hay error). Ở tầng
+ingress, `deploy/nginx.conf` thêm `limit_conn` riêng cho `/api/notifications/stream`.
+
 `NotificationStream` giữ kết nối **trong bộ nhớ, một tiến trình** — đúng với
 `docker-compose.yml` hiện tại. Có instance thứ hai thì `publish()` cần fan-out
 (PostgreSQL `LISTEN/NOTIFY` là bước nhỏ nhất) và không caller nào phải đổi.

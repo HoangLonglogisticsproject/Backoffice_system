@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AppConfig } from '../../config/app.config';
 import { IdentityModule } from '../../core/identity/identity.module';
 import { NotificationController } from './api/notification.controller';
 import { NotificationStream } from './application/notification-stream';
@@ -20,7 +21,22 @@ import { NotificationRepository } from './persistence/notification.repository';
 @Module({
   imports: [IdentityModule],
   controllers: [NotificationController],
-  providers: [NotificationService, NotificationStream, NotificationRepository],
+  providers: [
+    NotificationService,
+    NotificationRepository,
+    // The limits come from the validated environment, like every other
+    // deployment knob; the class itself takes them as a plain value so a test
+    // or an integration spec can construct one with its own.
+    {
+      provide: NotificationStream,
+      useFactory: (config: AppConfig) =>
+        new NotificationStream({
+          perUser: config.sseMaxConnectionsPerUser,
+          total: config.sseMaxConnections,
+        }),
+      inject: [AppConfig],
+    },
+  ],
   exports: [NotificationService],
 })
 export class NotificationModule {}
