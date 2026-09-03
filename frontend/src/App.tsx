@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import MainLayout from './layouts/MainLayout'
 import DriverLayout from './layouts/DriverLayout'
 
@@ -30,6 +30,7 @@ import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
 import AccountSecurityPage from './pages/account/AccountSecurityPage'
 import DriverTripsPage from './pages/driver/DriverTripsPage'
 import DriverTripPage from './pages/driver/DriverTripPage'
+import DriverNotificationsPage from './pages/driver/DriverNotificationsPage'
 import { RequireSession } from './components/common/SessionGuard'
 
 function App() {
@@ -49,21 +50,30 @@ function App() {
           own routes are guarded there by the active assignment. */}
       <Route
         element={
-          <RequireSession>
+          <RequireSession portal="driver">
             <DriverLayout />
           </RequireSession>
         }
       >
         <Route path="/driver" element={<DriverTripsPage />} />
         <Route path="/driver/trips/:tripId" element={<DriverTripPage />} />
+        {/* What the driver has been told. The API's list, not the stream's. */}
+        <Route path="/driver/notifications" element={<DriverNotificationsPage />} />
+        {/* The one account function a driver has: their password. Same page
+            as the Backoffice's, inside the driver's own shell. */}
+        <Route path="/driver/account/security" element={<AccountSecurityPage />} />
+        {/* An unknown `/driver/...` path is a mistyped one, and the only
+            useful answer is the trip list. */}
+        <Route path="/driver/*" element={<Navigate to="/driver" replace />} />
       </Route>
 
       {/* Everything below needs a session. RequireSession routes the three
-          session states (§3b); it does not decide permissions — the server
-          does that on every request. */}
+          session states (§3b) and the account to its own shell — a driver
+          holding any of these URLs is sent to `/driver`. It does not decide
+          permissions; the server does that on every request. */}
       <Route
         element={
-          <RequireSession>
+          <RequireSession portal="backoffice">
             <MainLayout />
           </RequireSession>
         }

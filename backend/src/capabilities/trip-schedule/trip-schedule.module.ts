@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AuthorizationModule } from '../../core/authorization/authorization.module';
 import { IdentityModule } from '../../core/identity/identity.module';
+import { UsersModule } from '../../core/users/users.module';
+import { NotificationModule } from '../notification/notification.module';
 import { ActiveAssignmentGuard } from './api/active-assignment.guard';
 import { DriverPortalController } from './api/driver-portal.controller';
 import { TripCatalogueController } from './api/trip-catalogue.controller';
@@ -45,7 +47,10 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
  * same thing the routes say by not carrying a `:departmentId`.
  */
 @Module({
-  imports: [AuthorizationModule, IdentityModule],
+  // `UsersModule` for driver eligibility — is this account a live driver —
+  // and `NotificationModule` because an assignment is something the driver
+  // has to be told about, inside the transaction that made it.
+  imports: [AuthorizationModule, IdentityModule, UsersModule, NotificationModule],
   controllers: [
     TripScheduleController,
     TripCatalogueController,

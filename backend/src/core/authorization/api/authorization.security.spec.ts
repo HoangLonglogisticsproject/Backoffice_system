@@ -88,7 +88,12 @@ describe('authorization HTTP security', () => {
           useValue: {
             resolve: jest
               .fn()
-              .mockResolvedValue({ id: USER, displayName: 'A Person', status: 'active' }),
+              .mockImplementation(async () => ({
+                id: USER,
+                displayName: 'A Person',
+                status: 'active',
+                accountType,
+              })),
           },
         },
         {
@@ -117,6 +122,12 @@ describe('authorization HTTP security', () => {
       [method](path)
       .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
       .set('X-Requested-With', 'XMLHttpRequest');
+
+  /** What kind of account the session row says is calling. Employee unless a case says otherwise. */
+  let accountType: 'employee' | 'driver' = 'employee';
+  beforeEach(() => {
+    accountType = 'employee';
+  });
 
   // --------------------------------------------------------- unauthenticated --
 
@@ -379,11 +390,26 @@ describe('authorization HTTP security', () => {
       expect(response.body).toEqual({
         userId: USER,
         username: 'hieu.truong',
+        accountType: 'employee',
         role: 'DEPARTMENT_HEAD',
         departmentIds: [A],
         permissions: expect.arrayContaining(['unit.read', 'unit.member.read']),
       });
       expect(response.body.permissions).not.toContain('unit.member.write');
+    });
+
+    it('★ reports a driver account as one, so the client can route it to its own shell', async () => {
+      // A driver's permissions still list `trip.read` — it is `'any'` — and
+      // every Backoffice route still refuses them. The account type is what
+      // lets a client stop drawing a menu the server would 403 row by row.
+      accountType = 'driver';
+      context = asContext();
+
+      const response = await authed('get', '/authorization/me').expect(200);
+
+      expect(response.body.accountType).toBe('driver');
+      expect(response.body.role).toBe('MEMBER');
+      expect(response.body.departmentIds).toEqual([]);
     });
 
     it('reports a SuperAdmin as global with no departments', async () => {

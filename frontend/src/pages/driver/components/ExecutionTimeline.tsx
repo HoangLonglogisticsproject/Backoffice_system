@@ -128,7 +128,11 @@ export function ExecutionTimeline({
       {next ? (
         <NextAction
           next={next}
-          pickupLocated={trip.pickupLocation !== null}
+          located={
+            next === 'PICKUP_CONFIRMED'
+              ? trip.pickupLocation !== null
+              : trip.deliveryLocation !== null
+          }
           reporting={reporting}
           locating={locating}
           onReport={onReport}
@@ -142,55 +146,61 @@ export function ExecutionTimeline({
   );
 }
 
+/** The two confirmations are geofenced; the two arrivals are not. */
+const isGeofenced = (type: ExecutionEventType): boolean =>
+  type === 'PICKUP_CONFIRMED' || type === 'DELIVERY_CONFIRMED';
+
 /**
  * The one button, and what is said above it.
  *
- * ★ THE PICKUP CHECK IS ANNOUNCED BEFORE THE TAP. A permission prompt that
- * appears with no warning gets refused; and a pickup point the office has not
- * located yet is the office's problem — said here, and the button is DISABLED
- * for it, because the server refuses that confirmation without exception and
- * a driver retrying a button that cannot succeed learns nothing.
+ * ★ THE LOCATION CHECK IS ANNOUNCED BEFORE THE TAP, at both ends of the trip.
+ * A permission prompt that appears with no warning gets refused; and a point
+ * the office has not located yet is the office's problem — said here, and the
+ * button is DISABLED for it, because the server refuses that confirmation
+ * without exception and a driver retrying a button that cannot succeed learns
+ * nothing.
  */
 function NextAction({
   next,
-  pickupLocated,
+  located,
   reporting,
   locating,
   onReport,
 }: Readonly<{
   next: ExecutionEventType;
-  pickupLocated: boolean;
+  /** Whether the point this milestone is measured against has coordinates. */
+  located: boolean;
   reporting: boolean;
   locating: boolean;
   onReport: (type: ExecutionEventType) => void;
 }>) {
   const { t } = useLanguage();
 
-  const pickupIsNext = next === 'PICKUP_CONFIRMED';
-  const pickupUnlocated = pickupIsNext && !pickupLocated;
+  const geofenced = isGeofenced(next);
+  const unlocated = geofenced && !located;
   const busy = reporting || locating;
 
   return (
     <>
-      {pickupIsNext ? (
+      {geofenced ? (
         <p
           className={cn(
             'mt-5 flex items-start gap-1.5 rounded-lg px-3 py-2 text-xs',
-            pickupUnlocated
+            unlocated
               ? 'bg-destructive/5 font-medium text-destructive'
               : 'bg-muted/60 text-muted-foreground',
           )}
         >
           <MapPin className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          {t(pickupUnlocated ? 'driverPickupNoCoordinates' : 'driverPickupNeedsLocation')}
+          {t(unlocated ? 'driverPickupNoCoordinates' : 'driverPickupNeedsLocation')}
         </p>
       ) : null}
       <Button
         size="lg"
         // Full width and tall: this is the primary action of the whole
         // screen and it is pressed with a thumb, outdoors.
-        className={cn('h-12 w-full text-base', pickupIsNext ? 'mt-3' : 'mt-5')}
-        disabled={busy || pickupUnlocated}
+        className={cn('h-12 w-full text-base', geofenced ? 'mt-3' : 'mt-5')}
+        disabled={busy || unlocated}
         onClick={() => onReport(next)}
       >
         {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}

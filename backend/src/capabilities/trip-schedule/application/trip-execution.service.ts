@@ -16,7 +16,7 @@ import {
   type VehicleOwnership,
 } from '../domain/trip-execution';
 import {
-  checkPickupLocation,
+  checkMilestoneLocation,
   type Coordinates,
   type LocationEvidence,
   type LocationRejection,
@@ -27,6 +27,14 @@ import {
   ExecutionEventRepository,
 } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
+import type { UserSummary } from '../../../common/types/user-summary';
+import { UserRepository } from '../../../core/users/persistence/user.repository';
+import { NotificationService } from '../../notification/application/notification.service';
+import {
+  eventKeys,
+  type NotificationInput,
+  type NotificationType,
+} from '../../notification/domain/notification';
 
 /**
  * Who is driving a trip, and what they report.
@@ -49,6 +57,8 @@ export class TripExecutionService {
     private readonly assignments: DriverAssignmentRepository,
     private readonly events: ExecutionEventRepository,
     private readonly vehicles: TripVehicleRepository,
+    private readonly users: UserRepository,
+    private readonly notifications: NotificationService,
   ) {}
 
   // ------------------------------------------------------------ assignment ----
@@ -71,8 +81,8 @@ export class TripExecutionService {
     driverUserId: string,
     assignedBy: string,
   ): Promise<DriverAssignment> {
-    return this.db.transaction(async (tx) => {
-      await this.lockOpenTrip(tripId, tx);
+    const { assignment, told } = await this.db.transaction(async (tx) => {
+      const trip = await this.lockOpenTrip(tripId, tx);
 
       const current = await this.assignments.lockActive(tripId, tx);
       if (current) {
@@ -81,8 +91,18 @@ export class TripExecutionService {
         );
       }
 
-      return this.assignments.assign({ tripId, driverUserId, assignedBy }, tx);
+      await this.requireEligibleDriver(driverUserId, tx);
+      const assignment = await this.assignments.assign({ tripId, driverUserId, assignedBy }, tx);
+
+      // ★ THE NOTIFICATION IS PART OF THE SAME TRANSACTION, keyed by the
+      // assignment row, so it exists exactly when the assignment does and
+      // exactly once. Pushing to the phone happens after COMMIT, below.
+      const told = [await this.notifications.record(tell('TRIP_ASSIGNED', trip, assignment), tx)];
+      return { assignment, told };
     });
+
+    this.notifications.deliver(told);
+    return assignment;
   }
 
   /**
@@ -104,8 +124,8 @@ export class TripExecutionService {
   ): Promise<DriverAssignment> {
     const reason = requireReason(input.reason);
 
-    return this.db.transaction(async (tx) => {
-      await this.lockOpenTrip(tripId, tx);
+    const { assignment, told } = await this.db.transaction(async (tx) => {
+      const trip = await this.lockOpenTrip(tripId, tx);
 
       const current = await this.assignments.lockActive(tripId, tx);
       if (!current) throw new ConflictError('That trip has no driver to replace.');
@@ -114,18 +134,37 @@ export class TripExecutionService {
         throw new ConflictError('That driver is already assigned to this trip.');
       }
 
-      await this.assignments.end({ tripId, endedBy: input.by, reason, now: new Date() }, tx);
+      await this.requireEligibleDriver(driverUserId, tx);
+      const ended = await this.assignments.end(
+        { tripId, endedBy: input.by, reason, now: new Date() },
+        tx,
+      );
+      if (!ended) throw new ConflictError('That trip has no driver to replace.');
 
-      return this.assignments.assign({ tripId, driverUserId, assignedBy: input.by }, tx);
+      const assignment = await this.assignments.assign(
+        { tripId, driverUserId, assignedBy: input.by },
+        tx,
+      );
+
+      // Both people learn, each about their own turn: the one leaving that
+      // their turn ended, the one arriving that theirs began.
+      const told = [
+        await this.notifications.record(tell('TRIP_UNASSIGNED', trip, ended), tx),
+        await this.notifications.record(tell('TRIP_ASSIGNED', trip, assignment), tx),
+      ];
+      return { assignment, told };
     });
+
+    this.notifications.deliver(told);
+    return assignment;
   }
 
   /** Takes the driver off without naming a replacement. */
   async endAssignment(tripId: string, input: { by: string; reason: string }): Promise<DriverAssignment> {
     const reason = requireReason(input.reason);
 
-    return this.db.transaction(async (tx) => {
-      await this.lockOpenTrip(tripId, tx);
+    const { ended, told } = await this.db.transaction(async (tx) => {
+      const trip = await this.lockOpenTrip(tripId, tx);
 
       const ended = await this.assignments.end(
         { tripId, endedBy: input.by, reason, now: new Date() },
@@ -133,8 +172,43 @@ export class TripExecutionService {
       );
       if (!ended) throw new ConflictError('That trip has no driver to remove.');
 
-      return ended;
+      const told = [await this.notifications.record(tell('TRIP_UNASSIGNED', trip, ended), tx)];
+      return { ended, told };
     });
+
+    this.notifications.deliver(told);
+    return ended;
+  }
+
+  /**
+   * Who a dispatcher may put on a trip: every live driver account, by name.
+   *
+   * ★ THE ONLY LIST OF PEOPLE THIS CAPABILITY EXPOSES, and it is id and name.
+   * No email, no status other than the `active` the query already required.
+   */
+  async listEligibleDrivers(): Promise<UserSummary[]> {
+    const drivers = await this.users.listActiveByAccountType('driver');
+    return drivers.map((user) => ({ id: user.id, displayName: user.displayName }));
+  }
+
+  /**
+   * ★ ELIGIBILITY IS THREE FACTS ABOUT THE ACCOUNT, AND NOTHING SPECULATIVE.
+   * The person exists, they are a driver account, and the account is live.
+   * There is no rule about how many trips a driver may hold or when — the
+   * business has not defined one, and inventing it here would block real
+   * dispatch on a guess.
+   */
+  private async requireEligibleDriver(driverUserId: string, tx: DatabaseQuery): Promise<void> {
+    const user = await this.users.findById(driverUserId, tx);
+    if (!user) throw new NotFoundError('Driver not found.');
+    if (user.accountType !== 'driver') {
+      throw new ValidationError('Only a driver account can be assigned to a trip.', {
+        driverUserId: 'This account is not a driver account.',
+      });
+    }
+    if (user.status !== 'active') {
+      throw new ConflictError('That driver account is disabled and cannot be assigned.');
+    }
   }
 
   async listAssignments(tripId: string): Promise<DriverAssignment[]> {
@@ -266,9 +340,17 @@ export class TripExecutionService {
 
       // ★ THE GEOFENCE IS DECIDED HERE, UNDER THE LOCK, FROM THE TRIP'S OWN
       // COORDINATES. The browser sent a reading; it did not send a verdict, and
-      // could not have — see the DTO. What the trip says its pickup point is
-      // was read a moment ago under `FOR UPDATE`, so Operations correcting the
-      // point mid-request cannot make this measure against a stale one.
+      // could not have — see the DTO. What the trip says its pickup or delivery
+      // point is was read a moment ago under `FOR UPDATE`, so Operations
+      // correcting the point mid-request cannot make this measure against a
+      // stale one. The same rule, the same radius, at both ends of the trip.
+      //
+      // ⚠ IDENTITY ASSURANCE AT DELIVERY IS THE SESSION, THE ASSIGNMENT AND
+      // THE POSITION — and nothing more today. There is no reference photo, no
+      // biometric provider and no liveness check anywhere in this deployment,
+      // so nothing here pretends to one. If one arrives, this is the point at
+      // which its verdict would be required before `DELIVERY_CONFIRMED` is
+      // written, beside the location verdict.
       //
       // Freshness is measured against the HANDSET's send time when it gave
       // one: `capturedAt` and `deviceReportedAt` come off the same clock, so
@@ -278,9 +360,10 @@ export class TripExecutionService {
       let geofencePassed: boolean | null = null;
       let distanceM: number | null = null;
 
-      if (input.type === 'PICKUP_CONFIRMED') {
-        const verdict = checkPickupLocation(
-          pickupPointOf(trip),
+      const destination = geofencedPointOf(trip, input.type);
+      if (destination !== undefined) {
+        const verdict = checkMilestoneLocation(
+          destination,
           location,
           input.deviceReportedAt ?? new Date(),
         );
@@ -395,11 +478,39 @@ const requireReason = (value: string): string => {
   return trimmed;
 };
 
-/** The trip's pickup point, or `null` while Operations has not entered one. */
-const pickupPointOf = (trip: TripSchedule): Coordinates | null =>
-  trip.pickupLatitude !== null && trip.pickupLongitude !== null
-    ? { latitude: trip.pickupLatitude, longitude: trip.pickupLongitude }
-    : null;
+const pointOf = (latitude: number | null, longitude: number | null): Coordinates | null =>
+  latitude !== null && longitude !== null ? { latitude, longitude } : null;
+
+/**
+ * Which point a milestone is measured against.
+ *
+ * `undefined` for the two ARRIVALS, which are not geofenced: arriving is what
+ * the driver says on the way in, and the check happens at the confirmation
+ * that follows. `null` for a confirmation whose point Operations has not
+ * entered yet — refused, and named as the office's problem.
+ */
+const geofencedPointOf = (
+  trip: TripSchedule,
+  type: ExecutionEventType,
+): Coordinates | null | undefined => {
+  if (type === 'PICKUP_CONFIRMED') return pointOf(trip.pickupLatitude, trip.pickupLongitude);
+  if (type === 'DELIVERY_CONFIRMED') return pointOf(trip.deliveryLatitude, trip.deliveryLongitude);
+  return undefined;
+};
+
+/** A notification about one turn on one trip, addressed to the driver of that turn. */
+const tell = (
+  type: NotificationType,
+  trip: TripSchedule,
+  assignment: DriverAssignment,
+): NotificationInput => ({
+  recipientUserId: assignment.driverUserId,
+  type,
+  tripId: trip.id,
+  tripScheduledOn: trip.scheduledOn,
+  eventKey:
+    type === 'TRIP_ASSIGNED' ? eventKeys.assigned(assignment.id) : eventKeys.unassigned(assignment.id),
+});
 
 /**
  * One sentence per refusal, for whoever reads the API directly. The portal
@@ -408,11 +519,11 @@ const pickupPointOf = (trip: TripSchedule): Coordinates | null =>
  */
 const LOCATION_REFUSALS: Record<LocationRejection, string> = {
   DESTINATION_MISSING:
-    'This trip has no pickup coordinates yet, so a pickup cannot be confirmed against them. Ask Operations to enter the pickup location.',
-  LOCATION_REQUIRED: 'Confirming a pickup needs the handset’s current position.',
+    'This trip has no coordinates for that point yet, so it cannot be confirmed against them. Ask Operations to enter the location.',
+  LOCATION_REQUIRED: 'Confirming this milestone needs the handset’s current position.',
   INVALID_COORDINATES: 'The position sent is not a place on Earth.',
   ACCURACY_INSUFFICIENT:
     'The handset is not sure enough where it is. Move to open sky and try again.',
   LOCATION_STALE: 'That position is too old. Capture a fresh one and try again.',
-  OUTSIDE_GEOFENCE: 'That position is not at the pickup point.',
+  OUTSIDE_GEOFENCE: 'That position is not at the point being confirmed.',
 };

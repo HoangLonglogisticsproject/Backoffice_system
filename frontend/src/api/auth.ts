@@ -1,6 +1,7 @@
 import { httpClient } from './client';
 import { ApiError } from '@/utils/errors';
 import type { AuthorizationMe, Identity, LoginResult } from '@/types/auth';
+import { ACCOUNT_TYPES } from '@/types/auth';
 
 /**
  * The four identity endpoints, exactly as contract §1 describes them.
@@ -66,6 +67,7 @@ export async function fetchAuthorization(): Promise<AuthorizationMe> {
 }
 
 const ROLES = new Set<string>(['SUPERADMIN', 'DEPARTMENT_HEAD', 'MEMBER']);
+const ACCOUNT_TYPE_VALUES = new Set<string>(ACCOUNT_TYPES);
 
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === 'string');
@@ -99,6 +101,10 @@ function isAuthorizationMe(value: unknown): value is AuthorizationMe {
     (typeof candidate.username === 'string' || candidate.username === null) &&
     typeof candidate.role === 'string' &&
     ROLES.has(candidate.role) &&
+    // Closed, like `role`: the shell is chosen on it, and an unknown kind of
+    // account has no shell to be sent to.
+    typeof candidate.accountType === 'string' &&
+    ACCOUNT_TYPE_VALUES.has(candidate.accountType) &&
     isStringArray(candidate.departmentIds) &&
     isStringArray(candidate.permissions)
   );

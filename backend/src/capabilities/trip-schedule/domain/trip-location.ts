@@ -92,7 +92,7 @@ export interface LocationPolicy {
  * it to configuration the day a second deployment or a per-customer radius is
  * asked for, and not before.
  */
-export const PICKUP_LOCATION_POLICY: LocationPolicy = {
+export const MILESTONE_LOCATION_POLICY: LocationPolicy = {
   geofenceRadiusM: 300,
   maxAccuracyM: 100,
   maxAgeMs: 2 * 60 * 1000,
@@ -124,7 +124,9 @@ export type LocationVerdict =
   | { passed: false; reason: LocationRejection; distanceM: number | null };
 
 /**
- * The geofence, decided.
+ * The geofence, decided — for whichever milestone is being confirmed. The
+ * pickup is measured against the pickup point and the delivery against the
+ * delivery point; the rule, the radius and the thresholds are the same one.
  *
  * `reportedAt` is what the fix's age is measured from. The caller passes the
  * HANDSET's send time when it has one — the same clock that stamped
@@ -136,11 +138,11 @@ export type LocationVerdict =
  * fresh. Boundaries are where two callers with the same numbers disagree, so
  * the rule says which way they fall.
  */
-export const checkPickupLocation = (
+export const checkMilestoneLocation = (
   destination: Coordinates | null,
   evidence: LocationEvidence | null,
   reportedAt: Date,
-  policy: LocationPolicy = PICKUP_LOCATION_POLICY,
+  policy: LocationPolicy = MILESTONE_LOCATION_POLICY,
 ): LocationVerdict => {
   if (!isCoordinates(destination)) return { passed: false, reason: 'DESTINATION_MISSING', distanceM: null };
   if (!evidence) return { passed: false, reason: 'LOCATION_REQUIRED', distanceM: null };

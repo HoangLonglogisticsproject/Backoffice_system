@@ -80,6 +80,7 @@ describe('auth repository', () => {
       data: {
         userId: 'fab71f53-0000-4000-8000-000000000000',
         username: 'boss',
+        accountType: 'employee',
         role: 'SUPERADMIN',
         departmentIds: [],
         permissions: [],

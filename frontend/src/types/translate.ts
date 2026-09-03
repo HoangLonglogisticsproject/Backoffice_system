@@ -161,14 +161,15 @@ const PHRASES = {
   // ------------------------------------------------ pickup location check --
   driverLocating: { vi: 'Đang xác định vị trí…', en: 'Finding your location…' },
   // Said BEFORE the tap, so the permission prompt is not a surprise.
+  // Said at both ends: the pickup confirmation and the delivery confirmation.
   driverPickupNeedsLocation: {
-    vi: 'Xác nhận lấy hàng dùng vị trí GPS của điện thoại. Hãy đứng gần điểm lấy hàng.',
-    en: 'Confirming pickup uses your phone’s location. Stand near the pickup point.',
+    vi: 'Xác nhận dùng vị trí GPS của điện thoại. Hãy đứng gần điểm lấy/giao hàng.',
+    en: 'Confirming uses your phone’s location. Stand near the pickup or delivery point.',
   },
   // ★ NOT THE DRIVER'S TO FIX. The office has not entered the point yet.
   driverPickupNoCoordinates: {
-    vi: 'Điểm lấy hàng chưa có toạ độ. Liên hệ điều độ để bổ sung trước khi xác nhận.',
-    en: 'The pickup point has no coordinates yet. Ask the office to add them before confirming.',
+    vi: 'Điểm này chưa có toạ độ. Liên hệ điều độ để bổ sung trước khi xác nhận.',
+    en: 'This point has no coordinates yet. Ask the office to add them before confirming.',
   },
   driverErrLocationUnsupported: {
     vi: 'Điện thoại này không hỗ trợ định vị. Dùng điện thoại khác hoặc báo văn phòng.',
@@ -191,8 +192,8 @@ const PHRASES = {
     en: 'A location is needed to confirm pickup. Try again.',
   },
   driverErrDestinationMissing: {
-    vi: 'Điểm lấy hàng chưa có toạ độ nên chưa xác nhận được. Liên hệ điều độ.',
-    en: 'The pickup point has no coordinates yet, so pickup cannot be confirmed. Contact the office.',
+    vi: 'Điểm này chưa có toạ độ nên chưa xác nhận được. Liên hệ điều độ.',
+    en: 'This point has no coordinates yet, so it cannot be confirmed. Contact the office.',
   },
   driverErrLocationInvalid: {
     vi: 'Vị trí nhận được không hợp lệ. Thử lại.',
@@ -208,8 +209,44 @@ const PHRASES = {
   },
   // ⚠ No distance and no radius: what to do, not what the rule is.
   driverErrOutsideGeofence: {
-    vi: 'Bạn chưa ở tại điểm lấy hàng. Đến đúng điểm rồi thử lại; nếu đã đúng chỗ, báo văn phòng.',
-    en: 'You are not at the pickup point. Go to it and try again; if you are there, tell the office.',
+    vi: 'Bạn chưa ở đúng điểm lấy/giao hàng. Đến đúng điểm rồi thử lại; nếu đã đúng chỗ, báo văn phòng.',
+    en: 'You are not at the pickup or delivery point. Go to it and try again; if you are there, tell the office.',
+  },
+
+  // ------------------------------------------------------- notifications --
+  driverNotifications: { vi: 'Thông báo', en: 'Notifications' },
+  driverUnread: { vi: 'chưa đọc', en: 'unread' },
+  driverNoNotifications: { vi: 'Chưa có thông báo nào.', en: 'No notifications yet.' },
+  driverTripOn: { vi: 'Chuyến ngày', en: 'Trip on' },
+  notifReason: { vi: 'Lý do', en: 'Reason' },
+  notifTripAssigned: { vi: 'Bạn được phân công chuyến', en: 'You have been assigned a trip' },
+  notifTripUnassigned: {
+    vi: 'Chuyến đã được điều chỉnh phân công — bạn không còn lái chuyến này',
+    en: 'This trip’s assignment changed — you are no longer driving it',
+  },
+  notifCompletionRejected: {
+    vi: 'Yêu cầu hoàn tất bị trả lại — cần sửa và gửi lại',
+    en: 'Completion request sent back — correct it and send again',
+  },
+  notifCompletionApproved: { vi: 'Chuyến đã được duyệt hoàn tất', en: 'Trip completion approved' },
+
+  // ---------------------------------------------- driver assignment (board) --
+  colDriver: { vi: 'Tài xế', en: 'Driver' },
+  driverUnassigned: { vi: 'Chưa phân công', en: 'Not assigned' },
+  assignDriver: { vi: 'Phân công', en: 'Assign' },
+  changeDriver: { vi: 'Thay đổi', en: 'Change' },
+  assignDriverTitle: { vi: 'Phân công tài xế', en: 'Assign driver' },
+  currentDriver: { vi: 'Tài xế hiện tại', en: 'Current driver' },
+  selectDriver: { vi: 'Chọn tài xế', en: 'Choose a driver' },
+  assignReason: { vi: 'Lý do thay đổi', en: 'Reason for the change' },
+  noEligibleDrivers: {
+    vi: 'Chưa có tài khoản tài xế nào đang hoạt động để phân công.',
+    en: 'There is no active driver account to assign.',
+  },
+  // ★ A 409 IS THE BOARD MOVING. The list has already been re-read.
+  assignConflict: {
+    vi: 'Phân công vừa thay đổi ở nơi khác hoặc chuyến đã đóng. Danh sách đã được cập nhật — kiểm tra lại.',
+    en: 'The assignment just changed elsewhere or the trip is closed. The board has been refreshed — check again.',
   },
 
   driverExpenses: { vi: 'Chi phí tôi đã khai', en: 'Expenses I declared' },

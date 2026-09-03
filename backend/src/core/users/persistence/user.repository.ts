@@ -42,6 +42,23 @@ export class UserRepository {
   }
 
   /**
+   * Every live account of one kind, by name. The trip module reads the driver
+   * kind to offer a dispatcher somebody to assign; it is bounded by the size
+   * of the fleet's crew, so it is not paginated.
+   */
+  async listActiveByAccountType(
+    accountType: AccountType,
+    executor: DatabaseQuery = this.db,
+  ): Promise<User[]> {
+    const rows = await executor.query<UserRow>(
+      `SELECT * FROM users WHERE account_type = $1 AND status = 'active'
+        ORDER BY display_name ASC, id ASC`,
+      [accountType],
+    );
+    return rows.map(toUser);
+  }
+
+  /**
    * Inserts the person. Their credential is a separate insert, in another
    * context's repository, and both belong to ONE transaction the caller owns:
    * half an account — somebody who cannot log in — is invisible to whoever

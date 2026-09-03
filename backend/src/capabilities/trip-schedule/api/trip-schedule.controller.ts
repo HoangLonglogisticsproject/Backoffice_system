@@ -17,7 +17,8 @@ import { OperationalBoardService } from '../application/operational-board.servic
 import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService } from '../application/trip-schedule.service';
 import type { OperationalBoardRow } from '../domain/operational-board';
-import type { ExecutionEvent } from '../domain/trip-execution';
+import type { UserSummary } from '../../../common/types/user-summary';
+import type { DriverAssignment, ExecutionEvent } from '../domain/trip-execution';
 import type { TripStatusChange } from '../domain/trip-status-history';
 import { TRIP_STATUSES, type TripSchedule, type TripScheduleWithRefs } from '../domain/trip-schedule';
 
@@ -141,6 +142,25 @@ const updateTripSchema = createTripSchema.partial();
  * and catalogue routes use.
  */
 const includeVoidedSchema = z.object({ includeVoided: z.enum(['true', 'false']).optional() });
+
+/**
+ * Putting a driver on a trip, or taking one off.
+ *
+ * `driverUserId` is the ONLY thing a caller names; whether that account is a
+ * driver, is live, and whether the trip is still open are the service's to
+ * decide under its lock. A reason is required on a change and on a removal
+ * — an ended turn with no explanation is the row nobody can account for.
+ */
+const assignDriverSchema = z.object({ driverUserId: z.string().uuid() });
+const replaceDriverSchema = z.object({
+  driverUserId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(2000),
+});
+const endAssignmentSchema = z.object({ reason: z.string().trim().min(1).max(2000) });
+
+type AssignDriverBody = z.infer<typeof assignDriverSchema>;
+type ReplaceDriverBody = z.infer<typeof replaceDriverSchema>;
+type EndAssignmentBody = z.infer<typeof endAssignmentSchema>;
 
 type IncludeVoidedQuery = z.infer<typeof includeVoidedSchema>;
 
@@ -318,6 +338,84 @@ export class TripScheduleController {
     @Query(new ZodValidationPipe(includeVoidedSchema)) query: IncludeVoidedQuery,
   ): Promise<ExecutionEvent[]> {
     return this.execution.listEvents(tripId, query.includeVoided === 'true');
+  }
+
+  // ------------------------------------------------------- driver assignment --
+
+  /**
+   * Who may be put on a trip: every live driver account, id and name.
+   *
+   * ★ `trip.write`, THE SAME AUTHORITY THAT ASSIGNS. A list of the company's
+   * drivers is dispatch information; the people who hold it are the people who
+   * dispatch. Declared before `trip-schedules/:tripId` as a matter of habit —
+   * the prefixes differ, so the order is not load-bearing here.
+   */
+  @Get('trip-drivers')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  async eligibleDrivers(): Promise<UserSummary[]> {
+    return this.execution.listEligibleDrivers();
+  }
+
+  /** Every turn on this trip, newest first. History, so `trip.read`. */
+  @Get('trip-schedules/:tripId/driver-assignments')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async assignments(@Param('tripId', UuidParam) tripId: string): Promise<DriverAssignment[]> {
+    return this.execution.listAssignments(tripId);
+  }
+
+  /**
+   * Puts a driver on a trip that has none.
+   *
+   * ★ `trip.write` — GLOBAL, OR THE HEAD OF ANY DEPARTMENT — and no new key.
+   * Assigning a driver is a correction to the board of exactly the kind
+   * `trip.write` already governs (who is on the row), held by the same senior
+   * people dispatch escalates to, and by nobody else: `BackofficeOnlyGuard`
+   * refuses a driver account before the permission is even asked, so a driver
+   * cannot put themselves or anybody else on a trip.
+   *
+   * 409 when the trip already has a driver: replacing is its own route with
+   * its own reason, so a second assignment can never silently become one.
+   */
+  @Post('trip-schedules/:tripId/driver-assignments')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  async assignDriver(
+    @Param('tripId', UuidParam) tripId: string,
+    @Body(new ZodValidationPipe(assignDriverSchema)) body: AssignDriverBody,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<DriverAssignment> {
+    return this.execution.assign(tripId, body.driverUserId, actor.id);
+  }
+
+  /** Swaps the driver. The previous turn is ended with the reason, never erased. */
+  @Post('trip-schedules/:tripId/driver-assignments/replace')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  @HttpCode(HttpStatus.OK)
+  async replaceDriver(
+    @Param('tripId', UuidParam) tripId: string,
+    @Body(new ZodValidationPipe(replaceDriverSchema)) body: ReplaceDriverBody,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<DriverAssignment> {
+    return this.execution.replaceDriver(tripId, body.driverUserId, {
+      by: actor.id,
+      reason: body.reason,
+    });
+  }
+
+  /** Takes the driver off without naming a replacement. */
+  @Post('trip-schedules/:tripId/driver-assignments/end')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  @HttpCode(HttpStatus.OK)
+  async endAssignment(
+    @Param('tripId', UuidParam) tripId: string,
+    @Body(new ZodValidationPipe(endAssignmentSchema)) body: EndAssignmentBody,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<DriverAssignment> {
+    return this.execution.endAssignment(tripId, { by: actor.id, reason: body.reason });
   }
 
   /**

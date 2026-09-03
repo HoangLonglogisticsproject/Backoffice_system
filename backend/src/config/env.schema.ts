@@ -182,6 +182,22 @@ export const envSchema = z.object({
         .map((domain) => domain.trim().toLowerCase())
         .filter((domain) => domain.length > 0),
     ),
+
+  /**
+   * How many live notification streams (server-sent events) one account may
+   * hold, and how many the whole process may hold.
+   *
+   * Every open stream is a socket, a Subject and a heartbeat timer for as
+   * long as the tab lives. Without a ceiling one session — or one script
+   * holding a stolen cookie — could open connections until the process ran
+   * out of descriptors, which is CWE-400. The per-user default covers a phone,
+   * a tablet and a couple of stray tabs; the process default is far above
+   * anything a fleet's worth of drivers opens and far below what one Node
+   * process can hold. Beyond either, the request is answered 429 with a
+   * Retry-After, and nothing is registered for it.
+   */
+  SSE_MAX_CONNECTIONS_PER_USER: z.coerce.number().int().min(1).default(5),
+  SSE_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(1000),
 });
 
 export type Env = z.infer<typeof envSchema>;

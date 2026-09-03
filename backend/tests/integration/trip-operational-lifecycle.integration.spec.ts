@@ -34,6 +34,10 @@ import { OperationalBoardService } from '../../src/capabilities/trip-schedule/ap
 import { OperationalBoardRepository } from '../../src/capabilities/trip-schedule/persistence/operational-board.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
+import { NotificationService } from '../../src/capabilities/notification/application/notification.service';
+import { NotificationStream } from '../../src/capabilities/notification/application/notification-stream';
+import { NotificationRepository } from '../../src/capabilities/notification/persistence/notification.repository';
+import { NotFoundError } from '@common/errors/domain.error';
 
 /**
  * The operational lifecycle, against a REAL PostgreSQL.
@@ -81,6 +85,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   let assignments: DriverAssignmentRepository;
   let costs: TripCostRepository;
+  let notificationRows: NotificationRepository;
+  let stream: NotificationStream;
 
   let operator: string;
   let driverA: string;
@@ -118,9 +124,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // insert — so every spec that creates a user needs it.
       '0018_driver_account.sql',
       '0019_trip_location.sql',
-      // 0021 relaxes 0012's void constraint so a withdrawal needs no reason.
-      // Without it this list tests a schema the running code no longer targets.
-      '0021_void_reason_optional.sql',
+      '0020_notifications.sql',
+      '0021_void_reason_optional.sql'
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -157,7 +162,19 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const requests = new CompletionRequestRepository(database);
 
     board = new TripScheduleService(database, trips, vehicles, customers, history);
-    execution = new TripExecutionService(database, trips, assignments, events, vehicles);
+    const users = new UserRepository(database);
+    notificationRows = new NotificationRepository(database);
+    stream = new NotificationStream();
+    const notifications = new NotificationService(notificationRows, stream);
+    execution = new TripExecutionService(
+      database,
+      trips,
+      assignments,
+      events,
+      vehicles,
+      users,
+      notifications,
+    );
     money = new TripCostService(
       database,
       trips,
@@ -167,13 +184,21 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       assignments,
       vehicles,
     );
-    completion = new TripCompletionService(database, trips, assignments, requests, costs, history);
+    completion = new TripCompletionService(
+      database,
+      trips,
+      assignments,
+      requests,
+      costs,
+      history,
+      notifications,
+    );
     operations = new OperationalBoardService(new OperationalBoardRepository(database));
 
-    const users = new UserRepository(database);
     operator = (await users.insertUser({ displayName: 'Điều Độ' })).id;
-    driverA = (await users.insertUser({ displayName: 'Tài Xế A' })).id;
-    driverB = (await users.insertUser({ displayName: 'Tài Xế B' })).id;
+    // ★ DRIVER ACCOUNTS. Assignment now checks the kind; an employee is refused.
+    driverA = (await users.insertUser({ displayName: 'Tài Xế A', accountType: 'driver' })).id;
+    driverB = (await users.insertUser({ displayName: 'Tài Xế B', accountType: 'driver' })).id;
     reviewer = (await users.insertUser({ displayName: 'SuperAdmin' })).id;
   });
 
@@ -185,7 +210,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     // TRUNCATE, not DELETE: 0017's `deny_delete` refuses a row-level DELETE on
     // every historical table, which is exactly what it is for.
     await pool.query(
-      `TRUNCATE trip_status_history, trip_completion_requests, trip_execution_events,
+      `TRUNCATE notifications, trip_status_history, trip_completion_requests, trip_execution_events,
                 trip_cost_edits, trip_costs, trip_outsource_hires,
                 trip_driver_assignments, trip_schedules, trip_vehicles,
                 trip_customers, trip_carriers
@@ -219,15 +244,27 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     return row!.id;
   };
 
-  /** Tân Sơn Nhất cargo, roughly. Every helper-made trip picks up here. */
+  /** Tân Sơn Nhất cargo, roughly. Every helper-made trip picks up here… */
   const PICKUP_POINT = { latitude: 10.8188, longitude: 106.6564 };
+  /** …and delivers in District 1. */
+  const DELIVERY_POINT = { latitude: 10.7769, longitude: 106.7009 };
 
   /**
-   * A fresh reading at the pickup point. PICKUP_CONFIRMED is geofenced since
-   * 0019, so every case that confirms a pickup sends one — the cases that are
-   * ABOUT the reading build their own.
+   * A fresh reading at a point. Both confirmations are geofenced since 0019,
+   * so every case that confirms a pickup or a delivery sends one — the cases
+   * that are ABOUT the reading build their own.
    */
-  const atPickup = () => ({ ...PICKUP_POINT, accuracyM: 12, capturedAt: new Date() });
+  const readingAt = (point: { latitude: number; longitude: number }) => ({
+    ...point,
+    accuracyM: 12,
+    capturedAt: new Date(),
+  });
+  const atPickup = () => readingAt(PICKUP_POINT);
+  const readingFor = (type: string) => {
+    if (type === 'PICKUP_CONFIRMED') return { location: readingAt(PICKUP_POINT) };
+    if (type === 'DELIVERY_CONFIRMED') return { location: readingAt(DELIVERY_POINT) };
+    return {};
+  };
 
   const newTrip = async (vehicleId: string | null = null): Promise<string> => {
     const trip = await board.create({
@@ -237,6 +274,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       deliveryAt: new Date('2026-08-30T09:00:00Z'),
       pickupLatitude: PICKUP_POINT.latitude,
       pickupLongitude: PICKUP_POINT.longitude,
+      deliveryLatitude: DELIVERY_POINT.latitude,
+      deliveryLongitude: DELIVERY_POINT.longitude,
       createdBy: operator,
     });
     return trip.id;
@@ -1413,6 +1452,247 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
   });
 
+  // =================================================== assignment, notified ==
+
+  /**
+   * ★ ASSIGN → NOTIFY → RECEIVE → EXECUTE, against a real server.
+   *
+   * The unit spec proves the services call the notification service; this
+   * proves the ROW: written in the same transaction as the assignment, once
+   * per business event whatever is retried, readable only by its recipient,
+   * and never deletable. And it proves the scenario that matters most — a
+   * driver whose trip was given to somebody else, still holding the old
+   * screen, is refused every write.
+   */
+  describe('★ assignment, and what the driver is told', () => {
+    const notesFor = (userId: string) => notificationRows.listForUser(userId);
+    /** The business signals only. A heartbeat is a keep-alive, not a fact. */
+    const signalsOf = (events: readonly unknown[]) =>
+      events.filter((event) => (event as { type?: string }).type === 'notification');
+
+    it('★ writes TRIP_ASSIGNED for the driver in the same transaction as the assignment', async () => {
+      const trip = await newTrip(await newVehicle('51D-10001'));
+      const heard: unknown[] = [];
+      const subscription = stream.subscribe(driverA).subscribe((event) => heard.push(event));
+
+      const assignment = await execution.assign(trip, driverA, operator);
+
+      const notes = await notesFor(driverA);
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toMatchObject({
+        recipientUserId: driverA,
+        type: 'TRIP_ASSIGNED',
+        tripId: trip,
+        tripScheduledOn: '2026-08-30',
+        detail: null,
+        readAt: null,
+      });
+      // And the phone heard exactly that row, as a signal, after commit.
+      expect(signalsOf(heard)).toEqual([
+        { type: 'notification', data: expect.objectContaining({ id: notes[0]!.id, type: 'TRIP_ASSIGNED', tripId: trip }) },
+      ]);
+      expect(assignment.driverUserId).toBe(driverA);
+      subscription.unsubscribe();
+    });
+
+    it('★ a retried assignment is refused AND leaves one notification', async () => {
+      const trip = await newTrip(await newVehicle('51D-10002'));
+      await execution.assign(trip, driverA, operator);
+
+      await expect(execution.assign(trip, driverA, operator)).rejects.toThrow(ConflictError);
+
+      expect(await notesFor(driverA)).toHaveLength(1);
+    });
+
+    it('★ a replacement tells the old driver they are off and the new one they are on', async () => {
+      const trip = await newTrip(await newVehicle('51D-10003'));
+      await execution.assign(trip, driverA, operator);
+
+      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'đổi ca' });
+
+      expect((await notesFor(driverA)).map((n) => n.type)).toEqual(['TRIP_UNASSIGNED', 'TRIP_ASSIGNED']);
+      expect((await notesFor(driverB)).map((n) => n.type)).toEqual(['TRIP_ASSIGNED']);
+    });
+
+    it('keeps every turn of an A → B → C → A reassignment, with one active', async () => {
+      const trip = await newTrip(await newVehicle('51D-10004'));
+      await execution.assign(trip, driverA, operator);
+      await execution.replaceDriver(trip, driverB, { by: operator, reason: '1' });
+      await execution.replaceDriver(trip, driverA, { by: operator, reason: '2' });
+
+      const history = await execution.listAssignments(trip);
+      expect(history).toHaveLength(3);
+      expect(history.filter((a) => a.state === 'active')).toHaveLength(1);
+      expect(history.filter((a) => a.state === 'ended').every((a) => a.endReason && a.endedBy)).toBe(true);
+    });
+
+    it('tells the driver taken off a trip with nobody named in their place', async () => {
+      const trip = await newTrip(await newVehicle('51D-10005'));
+      await execution.assign(trip, driverA, operator);
+
+      await execution.endAssignment(trip, { by: operator, reason: 'chuyến huỷ' });
+
+      expect((await notesFor(driverA)).map((n) => n.type)).toEqual(['TRIP_UNASSIGNED', 'TRIP_ASSIGNED']);
+    });
+
+    it('★ refuses an employee account, an unknown id and a disabled driver', async () => {
+      const trip = await newTrip(await newVehicle('51D-10006'));
+      const users = new UserRepository(database);
+      const disabled = (await users.insertUser({ displayName: 'Nghỉ', accountType: 'driver' })).id;
+      await users.setStatus({ userId: disabled, status: 'disabled', expectedCurrent: 'active' });
+
+      await expect(execution.assign(trip, operator, operator)).rejects.toThrow(ValidationError);
+      await expect(
+        execution.assign(trip, '00000000-0000-4000-8000-000000000000', operator),
+      ).rejects.toThrow(NotFoundError);
+      await expect(execution.assign(trip, disabled, operator)).rejects.toThrow(ConflictError);
+
+      expect(await execution.listAssignments(trip)).toHaveLength(0);
+      expect(await notesFor(disabled)).toHaveLength(0);
+    });
+
+    it('refuses to assign, replace or remove on a closed trip', async () => {
+      const { trip } = await runningTrip();
+      await sql(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+
+      await expect(execution.replaceDriver(trip, driverB, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
+      await expect(execution.endAssignment(trip, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
+      expect(await notesFor(driverB)).toHaveLength(0);
+    });
+
+    it('★ THE CRITICAL SCENARIO: a driver holding a stale screen after reassignment is refused every write', async () => {
+      const { trip } = await runningTrip();
+      await execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId: 'a', recordedBy: driverA });
+
+      // Operations moves the trip to B while A's screen still shows it.
+      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'đổi ca' });
+
+      const sentAt = new Date();
+      const fix = { ...PICKUP_POINT, accuracyM: 10, capturedAt: sentAt };
+
+      await expect(
+        execution.recordEvent({ tripId: trip, type: 'PICKUP_CONFIRMED', deviceReportedAt: sentAt, location: fix, clientEventId: 'stale-pickup', recordedBy: driverA }),
+      ).rejects.toThrow(ForbiddenError);
+      await expect(
+        money.declareCost({ tripId: trip, category: 'fuel', amount: '100000.00', declaredBy: driverA }),
+      ).rejects.toThrow(ForbiddenError);
+      await expect(completion.submit(trip, driverA, 'none')).rejects.toThrow(ConflictError);
+
+      // Nothing of A's landed…
+      const events = (await sql(`SELECT recorded_by FROM trip_execution_events WHERE trip_id = $1 AND event_type = 'PICKUP_CONFIRMED'`, [trip])) as { recorded_by: string }[];
+      expect(events).toHaveLength(0);
+      expect(await sql(`SELECT 1 FROM trip_costs WHERE trip_id = $1`, [trip])).toHaveLength(0);
+      expect(await sql(`SELECT 1 FROM trip_completion_requests WHERE trip_id = $1`, [trip])).toHaveLength(0);
+
+      // …B was told, and B can carry on from where the journey stands.
+      expect((await notesFor(driverB)).map((n) => n.type)).toEqual(['TRIP_ASSIGNED']);
+      const confirmed = await execution.recordEvent({ tripId: trip, type: 'PICKUP_CONFIRMED', deviceReportedAt: sentAt, location: fix, clientEventId: 'b-pickup', recordedBy: driverB });
+      expect(confirmed.geofencePassed).toBe(true);
+    });
+
+    it('★ the completion decision reaches the driver with the reason, once, and approval closes the loop', async () => {
+      const { trip } = await runningTrip();
+      await completion.submit(trip, driverA, 'none');
+
+      await completion.reject(trip, { by: reviewer, reason: 'Thiếu hoá đơn dầu' });
+      const rejected = (await notesFor(driverA)).find((n) => n.type === 'COMPLETION_REJECTED');
+      expect(rejected).toMatchObject({ detail: 'Thiếu hoá đơn dầu', tripId: trip });
+
+      await completion.submit(trip, driverA, 'none');
+      await completion.approve(trip, reviewer);
+      await expect(completion.approve(trip, reviewer)).rejects.toThrow(ConflictError);
+
+      const types = (await notesFor(driverA)).map((n) => n.type);
+      expect(types.filter((t) => t === 'COMPLETION_APPROVED')).toHaveLength(1);
+      expect(types.filter((t) => t === 'COMPLETION_REJECTED')).toHaveLength(1);
+    });
+
+    describe('the notification row itself', () => {
+      it('★ is written once per event key, whatever retries', async () => {
+        const trip = await newTrip();
+        const input = { recipientUserId: driverA, type: 'TRIP_ASSIGNED' as const, tripId: trip, tripScheduledOn: '2026-08-30', eventKey: 'assignment:x:assigned' };
+        const first = await database.transaction((tx) => notificationRows.record(input, tx));
+        const second = await database.transaction((tx) => notificationRows.record(input, tx));
+
+        expect(first).not.toBeNull();
+        expect(second).toBeNull();
+        expect(await notesFor(driverA)).toHaveLength(1);
+      });
+
+      it('★ is readable and markable only by its recipient', async () => {
+        const trip = await newTrip(await newVehicle('51D-10007'));
+        await execution.assign(trip, driverA, operator);
+        const [note] = await notesFor(driverA);
+
+        expect(await notesFor(driverB)).toHaveLength(0);
+        expect(await notificationRows.markRead(note!.id, driverB, new Date())).toBeNull();
+        expect((await notesFor(driverA))[0]!.readAt).toBeNull();
+
+        const read = await notificationRows.markRead(note!.id, driverA, new Date());
+        expect(read?.readAt).toBeInstanceOf(Date);
+        // Idempotent: a second tap keeps the first time.
+        const again = await notificationRows.markRead(note!.id, driverA, new Date(Date.now() + 60_000));
+        expect(again?.readAt).toEqual(read?.readAt);
+      });
+
+      it('counts unread per recipient', async () => {
+        const trip = await newTrip(await newVehicle('51D-10008'));
+        await execution.assign(trip, driverA, operator);
+        expect(await notificationRows.countUnread(driverA)).toBe(1);
+        expect(await notificationRows.countUnread(driverB)).toBe(0);
+      });
+
+      it('cannot be deleted — T3', async () => {
+        const trip = await newTrip(await newVehicle('51D-10009'));
+        await execution.assign(trip, driverA, operator);
+        expect(await codeOf(() => sql(`DELETE FROM notifications WHERE recipient_user_id = $1`, [driverA]))).toBe(RESTRICT_VIOLATION);
+      });
+
+      it('refuses a type the business does not have, and a trip that does not exist', async () => {
+        expect(
+          await codeOf(() => sql(`INSERT INTO notifications (recipient_user_id, type, trip_id, trip_scheduled_on, event_key) VALUES ($1, 'PRICE_CHANGED', gen_random_uuid(), '2026-08-30', 'k')`, [driverA])),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await codeOf(() => sql(`INSERT INTO notifications (recipient_user_id, type, trip_id, trip_scheduled_on, event_key) VALUES ($1, 'TRIP_ASSIGNED', gen_random_uuid(), '2026-08-30', 'k')`, [driverA])),
+        ).toBe(FOREIGN_KEY_VIOLATION);
+      });
+    });
+
+    describe('the live stream', () => {
+      it('★ reaches only the recipient, on every connection they hold', async () => {
+        const a1: unknown[] = [];
+        const a2: unknown[] = [];
+        const b: unknown[] = [];
+        const subs = [
+          stream.subscribe(driverA).subscribe((e) => a1.push(e)),
+          stream.subscribe(driverA).subscribe((e) => a2.push(e)),
+          stream.subscribe(driverB).subscribe((e) => b.push(e)),
+        ];
+        const trip = await newTrip(await newVehicle('51D-10010'));
+
+        await execution.assign(trip, driverA, operator);
+
+        expect(signalsOf(a1)).toHaveLength(1);
+        expect(signalsOf(a2)).toHaveLength(1);
+        expect(signalsOf(b)).toHaveLength(0);
+        for (const s of subs) s.unsubscribe();
+        expect(stream.connections(driverA)).toBe(0);
+      });
+
+      it('carries ids and a type only — never the trip', async () => {
+        const heard: { data: Record<string, unknown> }[] = [];
+        const sub = stream.subscribe(driverA).subscribe((e) => heard.push(e as never));
+        const trip = await newTrip(await newVehicle('51D-10011'));
+
+        await execution.assign(trip, driverA, operator);
+
+        const [signal] = signalsOf(heard) as { data: Record<string, unknown> }[];
+        expect(Object.keys(signal!.data).sort()).toEqual(['createdAt', 'id', 'tripId', 'type']);
+        sub.unsubscribe();
+      });
+    });
+  });
+
   describe('★ the loop, end to end', () => {
     it('runs declare → submit → reject → correct → resubmit → approve → DONE', async () => {
       const { trip } = await runningTrip();
@@ -1424,7 +1704,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           actualAt: new Date('2026-08-30T03:00:00Z'),
           clientEventId: `tap-${type}`,
           recordedBy: driverA,
-          ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+          ...readingFor(type),
         });
       }
 
@@ -1809,7 +2089,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           actualAt: at,
           clientEventId: 'tap-' + type,
           recordedBy: driverA,
-          ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+          ...readingFor(type),
         });
         seen.push((await view(new Date('2026-08-30T03:00:00Z')))[0]!.stage);
       }
@@ -2152,7 +2432,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         clientEventId,
         recordedBy: driverA,
         ...(actualAt ? { actualAt } : {}),
-        ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+        ...readingFor(type),
       });
 
     // ------------------------------------------------------------ ordering --
@@ -2403,7 +2683,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         type,
         clientEventId,
         recordedBy: driverA,
-        ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+        ...readingFor(type),
       });
 
     it('★ refuses PICKUP_CONFIRMED before ARRIVED_PICKUP', async () => {
@@ -2654,7 +2934,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         clientEventId,
         recordedBy: driverA,
         actualAt,
-        ...(type === 'PICKUP_CONFIRMED' ? { location: atPickup() } : {}),
+        ...readingFor(type),
       });
 
     const board = (trip: string) =>

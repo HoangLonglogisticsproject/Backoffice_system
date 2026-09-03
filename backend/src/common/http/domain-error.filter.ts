@@ -16,6 +16,9 @@ import {
  */
 const STATUS_BY_CODE = new Map<string, HttpStatus>([
   ['TOO_MANY_ATTEMPTS', HttpStatus.TOO_MANY_REQUESTS],
+  // A caller holding too many live streams. Same status, its own code, so a
+  // client can tell "slow down" from "close a tab".
+  ['TOO_MANY_CONNECTIONS', HttpStatus.TOO_MANY_REQUESTS],
   // Refused like a ForbiddenError but carrying its own code, so it is mapped
   // here rather than by class — the mechanism working as intended.
   ['PASSWORD_CHANGE_REQUIRED', HttpStatus.FORBIDDEN],

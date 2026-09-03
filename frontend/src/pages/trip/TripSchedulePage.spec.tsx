@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { ApiError } from '@/utils/errors';
 
 const fetchTripSchedules = vi.fn();
 const archiveTripSchedule = vi.fn();
@@ -19,6 +20,16 @@ vi.mock('@/api/tripSchedule', () => ({
   createTripSchedule: vi.fn(),
   updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),
   updateTripStatus: (...a: unknown[]) => updateTripStatus(...a),
+}));
+const fetchEligibleDrivers = vi.fn();
+const assignDriver = vi.fn();
+const replaceDriver = vi.fn();
+vi.mock('@/api/tripAssignment', () => ({
+  fetchEligibleDrivers: (...a: unknown[]) => fetchEligibleDrivers(...a),
+  fetchDriverAssignments: vi.fn(),
+  assignDriver: (...a: unknown[]) => assignDriver(...a),
+  replaceDriver: (...a: unknown[]) => replaceDriver(...a),
+  endDriverAssignment: vi.fn(),
 }));
 vi.mock('@/api/tripCatalogue', () => ({
   fetchTripVehicles: (...a: unknown[]) => fetchTripVehicles(...a),
@@ -63,6 +74,7 @@ const trip = (over: Record<string, unknown> = {}) => ({
   status: 'awaiting_vehicle',
   createdBy: 'u9',
   createdByUser: { id: 'u9', displayName: 'Điều Độ' },
+  driver: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   updatedAt: '2026-08-01T00:00:00.000Z',
   ...over,
@@ -115,7 +127,103 @@ describe('TripSchedulePage', () => {
     updateTripSchedule.mockReset().mockResolvedValue(trip());
     fetchTripVehicles.mockReset().mockResolvedValue([]);
     fetchTripCustomers.mockReset().mockResolvedValue([]);
+    fetchEligibleDrivers.mockReset().mockResolvedValue([
+      { id: 'd1', displayName: 'Tài Xế A' },
+      { id: 'd2', displayName: 'Tài Xế B' },
+    ]);
+    assignDriver.mockReset().mockResolvedValue({ id: 'a1', driverUserId: 'd1' });
+    replaceDriver.mockReset().mockResolvedValue({ id: 'a2', driverUserId: 'd2' });
     useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create']));
+  });
+
+  /**
+   * ★ WHO IS DRIVING, AND WHO DECIDES. The column reads the board; the button
+   * is drawn for `trip.write` and never for a driver — the portal has no such
+   * control at all, and the server refuses a driver account the route.
+   */
+  /** The dialog's submit shares its label with the row button; the dialog renders last. */
+  const last = (elements: HTMLElement[]): HTMLElement => elements[elements.length - 1]!;
+
+  describe('driver assignment', () => {
+    it('shows "not assigned" and no control to a reader', async () => {
+      renderPage();
+
+      expect(await screen.findByText(/chưa phân công/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^phân công$/i })).not.toBeInTheDocument();
+    });
+
+    it('shows the driver on the row', async () => {
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ driver: { id: 'd1', displayName: 'Tài Xế A' } })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      renderPage();
+
+      expect(await screen.findByText('Tài Xế A')).toBeInTheDocument();
+    });
+
+    it('★ assigns from the eligible list, sending the id and nothing else', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /^phân công$/i }));
+      const select = await screen.findByLabelText(/chọn tài xế/i);
+      await waitFor(() => expect(fetchEligibleDrivers).toHaveBeenCalled());
+      await screen.findByRole('option', { name: 'Tài Xế B' });
+      fireEvent.change(select, { target: { value: 'd2' } });
+      fireEvent.click(last(screen.getAllByRole('button', { name: /^phân công$/i })));
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledWith('t1', 'd2'));
+      // The board is re-read; the server's row is what the screen shows next.
+      await waitFor(() => expect(fetchTripSchedules.mock.calls.length).toBeGreaterThan(1));
+    });
+
+    it('★ replaces with a reason, and offers only the OTHER drivers', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ driver: { id: 'd1', displayName: 'Tài Xế A' } })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /thay đổi/i }));
+      await screen.findByRole('option', { name: 'Tài Xế B' });
+      expect(screen.queryByRole('option', { name: 'Tài Xế A' })).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.change(screen.getByLabelText(/lý do/i), { target: { value: 'đổi ca' } });
+      fireEvent.click(last(screen.getAllByRole('button', { name: /thay đổi/i })));
+
+      await waitFor(() =>
+        expect(replaceDriver).toHaveBeenCalledWith('t1', { driverUserId: 'd2', reason: 'đổi ca' }),
+      );
+    });
+
+    it('★ tells the dispatcher the board moved on a 409, and re-reads it', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      assignDriver.mockRejectedValue(new ApiError(409, 'CONFLICT', 'That trip already has a driver.'));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /^phân công$/i }));
+      await screen.findByRole('option', { name: 'Tài Xế B' });
+      fireEvent.change(screen.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.click(last(screen.getAllByRole('button', { name: /^phân công$/i })));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/vừa thay đổi/i);
+      await waitFor(() => expect(fetchTripSchedules.mock.calls.length).toBeGreaterThan(1));
+    });
+
+    it('offers no assignment control on a finished trip', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ status: 'done', driver: { id: 'd1', displayName: 'Tài Xế A' } })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      renderPage();
+
+      expect(await screen.findByText('Tài Xế A')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /thay đổi/i })).not.toBeInTheDocument();
+    });
   });
 
   it('opens on the current month, so the first request is already bounded', async () => {
