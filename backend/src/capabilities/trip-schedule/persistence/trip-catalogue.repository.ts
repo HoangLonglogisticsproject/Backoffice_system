@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import type { CatalogueStatus, TripCustomer, TripVehicle } from '../domain/trip-schedule';
+import type { CatalogueStatus, TripCustomer, TripLocation, TripVehicle } from '../domain/trip-schedule';
 import type { VehicleOwnership } from '../domain/trip-execution';
 
 /**
@@ -241,5 +241,152 @@ export class TripCustomerRepository {
       [id],
     );
     return rows[0] ? toCustomer(rows[0]) : null;
+  }
+}
+
+// ------------------------------------------------------------- locations ----
+
+interface LocationRow {
+  id: string;
+  customer_id: string;
+  name: string;
+  address: string;
+  contact: string | null;
+  note: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  status: 'active' | 'archived';
+  created_by: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+const LOCATION_COLUMNS =
+  'id, customer_id, name, address, contact, note, latitude, longitude, status, created_by, created_at, updated_at';
+
+const toLocation = (row: LocationRow): TripLocation => ({
+  id: row.id,
+  customerId: row.customer_id,
+  name: row.name,
+  address: row.address,
+  contact: row.contact,
+  note: row.note,
+  latitude: row.latitude,
+  longitude: row.longitude,
+  status: row.status,
+  createdBy: row.created_by,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+/** What a location row may hold. Coordinates already validated as a pair. */
+export interface TripLocationValues {
+  name: string;
+  address: string;
+  contact: string | null;
+  note: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+/**
+ * A customer's places.
+ *
+ * ★ EVERY READ AND WRITE THAT TAKES A CUSTOMER FILTERS ON IT IN SQL. `findById`
+ * is the one exception, and the service pairs its answer with the customer on
+ * the route before doing anything — a location under the wrong customer is
+ * answered as not found, never as forbidden.
+ */
+@Injectable()
+export class TripLocationRepository {
+  constructor(@Inject(DATABASE) private readonly db: Database) {}
+
+  async listByCustomer(
+    customerId: string,
+    includeArchived: boolean,
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripLocation[]> {
+    const rows = await executor.query<LocationRow>(
+      includeArchived
+        ? `SELECT ${LOCATION_COLUMNS} FROM trip_locations
+            WHERE customer_id = $1 ORDER BY status ASC, name ASC`
+        : `SELECT ${LOCATION_COLUMNS} FROM trip_locations
+            WHERE customer_id = $1 AND status = 'active' ORDER BY name ASC`,
+      [customerId],
+    );
+    return rows.map(toLocation);
+  }
+
+  async findById(id: string, executor: DatabaseQuery = this.db): Promise<TripLocation | null> {
+    const rows = await executor.query<LocationRow>(
+      `SELECT ${LOCATION_COLUMNS} FROM trip_locations WHERE id = $1`,
+      [id],
+    );
+    return rows[0] ? toLocation(rows[0]) : null;
+  }
+
+  async create(
+    input: TripLocationValues & { customerId: string; createdBy: string },
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripLocation> {
+    try {
+      const rows = await executor.query<LocationRow>(
+        `INSERT INTO trip_locations
+           (customer_id, name, address, contact, note, latitude, longitude, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING ${LOCATION_COLUMNS}`,
+        [
+          input.customerId,
+          input.name,
+          input.address,
+          input.contact,
+          input.note,
+          input.latitude,
+          input.longitude,
+          input.createdBy,
+        ],
+      );
+      const row = rows[0];
+      if (!row) throw new Error('INSERT INTO trip_locations returned no row');
+      return toLocation(row);
+    } catch (error) {
+      return asConflict(error, 'That customer already has a location with that name.');
+    }
+  }
+
+  /** Overwrites every settable column of a live row under its customer. */
+  async update(
+    id: string,
+    customerId: string,
+    values: TripLocationValues,
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripLocation | null> {
+    try {
+      const rows = await executor.query<LocationRow>(
+        `UPDATE trip_locations
+            SET name = $3, address = $4, contact = $5, note = $6, latitude = $7, longitude = $8
+          WHERE id = $1 AND customer_id = $2 AND status = 'active'
+          RETURNING ${LOCATION_COLUMNS}`,
+        [id, customerId, values.name, values.address, values.contact, values.note, values.latitude, values.longitude],
+      );
+      return rows[0] ? toLocation(rows[0]) : null;
+    } catch (error) {
+      return asConflict(error, 'That customer already has another location with that name.');
+    }
+  }
+
+  async archive(
+    id: string,
+    customerId: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripLocation | null> {
+    const rows = await executor.query<LocationRow>(
+      `UPDATE trip_locations
+          SET status = 'archived'
+        WHERE id = $1 AND customer_id = $2 AND status = 'active'
+        RETURNING ${LOCATION_COLUMNS}`,
+      [id, customerId],
+    );
+    return rows[0] ? toLocation(rows[0]) : null;
   }
 }
