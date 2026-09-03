@@ -13,6 +13,16 @@ export function FactRow({
 }: Readonly<{ icon: ReactNode; label: string; value: string | null; emphasis?: boolean }>) {
   const { t } = useLanguage();
 
+  // Absent: muted. Present: pre-wrap, larger when the row is the card's headline.
+  let valueClass: string;
+  if (!value) {
+    valueClass = 'text-sm text-muted-foreground';
+  } else if (emphasis) {
+    valueClass = 'text-base font-medium whitespace-pre-wrap';
+  } else {
+    valueClass = 'text-sm whitespace-pre-wrap';
+  }
+
   return (
     <div className="flex gap-2.5">
       <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4" aria-hidden>
@@ -20,15 +30,7 @@ export function FactRow({
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-xs text-muted-foreground">{label}</p>
-        <p
-          className={
-            value
-              ? `${emphasis ? 'text-base font-medium' : 'text-sm'} whitespace-pre-wrap`
-              : 'text-sm text-muted-foreground'
-          }
-        >
-          {value ?? t('driverNotSet')}
-        </p>
+        <p className={valueClass}>{value ?? t('driverNotSet')}</p>
       </div>
     </div>
   );
