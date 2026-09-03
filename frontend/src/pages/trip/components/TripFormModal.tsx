@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
@@ -16,8 +17,17 @@ import {
   todayAsCalendarDay,
   toDateTimeLocalValue,
 } from '@/utils/format/datetime';
-import { DISPATCH_SELECTABLE_STATUSES, type TripCustomer, type TripScheduleWithRefs, type TripStatus, type TripVehicle } from '@/types/trip';
+import { useTripLocations } from '@/hooks/trip';
+import {
+  DISPATCH_SELECTABLE_STATUSES,
+  type TripCustomer,
+  type TripLocation,
+  type TripScheduleWithRefs,
+  type TripStatus,
+  type TripVehicle,
+} from '@/types/trip';
 import { CatalogueSelect } from './CatalogueSelect';
+import { LocationFormModal } from './LocationFormModal';
 import { TRIP_STATUS_STYLES } from './tripStatus';
 
 interface TripFormModalProps {
@@ -53,11 +63,9 @@ interface FormState {
   deliveryContact: string;
   pickupAt: string;
   deliveryAt: string;
-  /** As typed. `''` is "no point"; the server refuses one half without the other. */
-  pickupLatitude: string;
-  pickupLongitude: string;
-  deliveryLatitude: string;
-  deliveryLongitude: string;
+  /** The customer's place for each end, or `null` for a hand-typed address. */
+  pickupLocationId: string | null;
+  deliveryLocationId: string | null;
   note: string;
   status: TripStatus;
 }
@@ -73,20 +81,11 @@ const emptyForm = (): FormState => ({
   deliveryContact: '',
   pickupAt: '',
   deliveryAt: '',
-  pickupLatitude: '',
-  pickupLongitude: '',
-  deliveryLatitude: '',
-  deliveryLongitude: '',
+  pickupLocationId: null,
+  deliveryLocationId: null,
   note: '',
   status: 'awaiting_production',
 });
-
-/** A number as the input holds it. `String(null)` is `"null"`, so not that. */
-const numberField = (value: number | null): string => (value === null ? '' : String(value));
-
-/** Back again. An empty box is `null` — a cleared coordinate, not zero. */
-const numberOrNull = (value: string): number | null =>
-  value.trim() === '' ? null : Number(value);
 
 /** What a `CatalogueSelect` offers. Mirrors its own prop type. */
 interface Option {
@@ -136,10 +135,8 @@ const formFor = (trip: TripScheduleWithRefs): FormState => ({
   deliveryContact: trip.deliveryContact ?? '',
   pickupAt: toDateTimeLocalValue(trip.pickupAt),
   deliveryAt: toDateTimeLocalValue(trip.deliveryAt),
-  pickupLatitude: numberField(trip.pickupLatitude),
-  pickupLongitude: numberField(trip.pickupLongitude),
-  deliveryLatitude: numberField(trip.deliveryLatitude),
-  deliveryLongitude: numberField(trip.deliveryLongitude),
+  pickupLocationId: trip.pickupLocationId,
+  deliveryLocationId: trip.deliveryLocationId,
   note: trip.note ?? '',
   status: trip.status,
 });
@@ -188,6 +185,74 @@ export function TripFormModal({
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
 
+  // ★ THE PLACES ARE THE CHOSEN CUSTOMER'S, AND NOBODY ELSE'S. Read for the
+  // customer on the form; a place still selected after the customer changed
+  // is dropped the moment the new list arrives without it, so a trip for
+  // customer B can never quietly carry customer A's warehouse. The server
+  // refuses that pairing anyway; this keeps the form honest before submit.
+  const locations = useTripLocations(form.customerId);
+  useEffect(() => {
+    if (form.customerId === null) {
+      if (form.pickupLocationId !== null || form.deliveryLocationId !== null) {
+        setForm((current) => ({ ...current, pickupLocationId: null, deliveryLocationId: null }));
+      }
+      return;
+    }
+    if (locations.data === null) return;
+    const known = new Set(locations.data.map((location) => location.id));
+    // The row's own current places may be archived and absent from the active
+    // list; they stay selectable on that trip exactly as a retired vehicle does
+    // — but ONLY while the form still names the trip's own customer. Once the
+    // customer changes they are another customer's places and are not known.
+    if (trip && form.customerId === trip.customerId) {
+      if (trip.pickupLocation) known.add(trip.pickupLocation.id);
+      if (trip.deliveryLocation) known.add(trip.deliveryLocation.id);
+    }
+    setForm((current) => {
+      const pickup = current.pickupLocationId && known.has(current.pickupLocationId) ? current.pickupLocationId : null;
+      const delivery = current.deliveryLocationId && known.has(current.deliveryLocationId) ? current.deliveryLocationId : null;
+      return pickup === current.pickupLocationId && delivery === current.deliveryLocationId
+        ? current
+        : { ...current, pickupLocationId: pickup, deliveryLocationId: delivery };
+    });
+  }, [form.customerId, form.pickupLocationId, form.deliveryLocationId, locations.data, trip]);
+
+  /**
+   * ★ A NEW CUSTOMER MEANS NO PLACE, YET. The places on the form were the old
+   * customer's; both are cleared in the same state change as the customer, so
+   * no render — and no submit — can pair customer B with customer A's place.
+   * The server refuses that pairing anyway; this keeps the form honest.
+   */
+  const chooseCustomer = (id: string | null) =>
+    setForm((current) =>
+      current.customerId === id
+        ? current
+        : { ...current, customerId: id, pickupLocationId: null, deliveryLocationId: null },
+    );
+
+  /**
+   * ★ THE ROW'S OWN PLACE, WITH THE TRIP'S SNAPSHOT OF IT. The active list does
+   * not carry an archived place, but the trip still names it and still holds
+   * what was copied from it. That copy is what the form shows for it — read
+   * only, as for any chosen place — and the reference stays selected. Nothing
+   * is reactivated and nothing is replaced; choosing another place or clearing
+   * it is the dispatcher's to do.
+   */
+  const ownPlace = (end: 'pickup' | 'delivery'): ChosenPlace | null => {
+    if (!trip) return null;
+    if (end === 'pickup') {
+      return trip.pickupLocation
+        ? { ...trip.pickupLocation, address: trip.pickupAddress ?? '', contact: trip.pickupContact, latitude: trip.pickupLatitude ?? null }
+        : null;
+    }
+    return trip.deliveryLocation
+      ? { ...trip.deliveryLocation, address: trip.deliveryAddress ?? '', contact: trip.deliveryContact, latitude: trip.deliveryLatitude ?? null }
+      : null;
+  };
+
+  /** Which end a "new place" dialog was opened for; the new place is selected there on save. */
+  const [addingFor, setAddingFor] = useState<'pickup' | 'delivery' | null>(null);
+
   const close = () => {
     setError(null);
     onClose();
@@ -202,21 +267,38 @@ export function TripFormModal({
     // possible on the PATCH path.
     const blank = (value: string) => (value.trim() === '' ? null : value.trim());
 
+    // ★ NO COORDINATE LEAVES THIS FORM. Each end names the customer's place,
+    // and the server copies that place's address, contact and coordinates onto
+    // the trip. The typed address and contact travel only for an end with no
+    // place — the hand-typed path every trip took before places existed.
+    //
+    // ★ AN END WHOSE PLACE IS UNCHANGED IS NOT IN THE PATCH. The server copies
+    // a place afresh only when the patch names it, and refuses to copy an
+    // archived one — so an edit that leaves the place alone must not name it.
+    // Otherwise correcting a note on a trip whose warehouse has since closed
+    // would be refused, and on any other trip would quietly rewrite last
+    // week's snapshot from today's master. Omitted, the trip's own copy — and
+    // its reference, archived or not — stands. An end with no place is always
+    // sent: its typed address may be what changed.
+    const endFields = (end: 'pickup' | 'delivery'): UpdateTripInput => {
+      const [id, was, address, contact] =
+        end === 'pickup'
+          ? [form.pickupLocationId, trip?.pickupLocationId, form.pickupAddress, form.pickupContact]
+          : [form.deliveryLocationId, trip?.deliveryLocationId, form.deliveryAddress, form.deliveryContact];
+      if (trip && id !== null && id === was) return {};
+      return end === 'pickup'
+        ? { pickupLocationId: id, pickupAddress: id ? null : blank(address), pickupContact: id ? null : blank(contact) }
+        : { deliveryLocationId: id, deliveryAddress: id ? null : blank(address), deliveryContact: id ? null : blank(contact) };
+    };
     const payload: CreateTripInput & UpdateTripInput = {
       scheduledOn: form.scheduledOn,
       vehicleId: form.vehicleId,
       customerId: form.customerId,
       cargoInfo: blank(form.cargoInfo),
-      pickupAddress: blank(form.pickupAddress),
-      deliveryAddress: blank(form.deliveryAddress),
-      pickupContact: blank(form.pickupContact),
-      deliveryContact: blank(form.deliveryContact),
+      ...endFields('pickup'),
+      ...endFields('delivery'),
       pickupAt: fromDateTimeLocalValue(form.pickupAt),
       deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
-      pickupLatitude: numberOrNull(form.pickupLatitude),
-      pickupLongitude: numberOrNull(form.pickupLongitude),
-      deliveryLatitude: numberOrNull(form.deliveryLatitude),
-      deliveryLongitude: numberOrNull(form.deliveryLongitude),
       note: blank(form.note),
       status: form.status,
     };
@@ -358,7 +440,7 @@ export function TripFormModal({
               t('statusArchived'),
             )}
             value={form.customerId}
-            onChange={(id) => set('customerId', id)}
+            onChange={chooseCustomer}
             onCreate={async (name) => {
               const created = await createTripCustomer({ name });
               onCatalogueChanged();
@@ -377,29 +459,33 @@ export function TripFormModal({
         />
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <TextArea
-            id="trip-pickup-address"
-            label={t('fieldPickupAddress')}
-            value={form.pickupAddress}
-            onChange={(value) => set('pickupAddress', value)}
+          <LocationEnd
+            end="pickup"
+            label={t('fieldPickupLocation')}
+            customerId={form.customerId}
+            locations={locations.data ?? []}
+            current={ownPlace('pickup')}
+            value={form.pickupLocationId}
+            onChange={(id) => set('pickupLocationId', id)}
+            onAdd={() => setAddingFor('pickup')}
+            address={form.pickupAddress}
+            contact={form.pickupContact}
+            onAddress={(value) => set('pickupAddress', value)}
+            onContact={(value) => set('pickupContact', value)}
           />
-          <TextArea
-            id="trip-delivery-address"
-            label={t('fieldDeliveryAddress')}
-            value={form.deliveryAddress}
-            onChange={(value) => set('deliveryAddress', value)}
-          />
-          <TextArea
-            id="trip-pickup-contact"
-            label={t('fieldPickupContact')}
-            value={form.pickupContact}
-            onChange={(value) => set('pickupContact', value)}
-          />
-          <TextArea
-            id="trip-delivery-contact"
-            label={t('fieldDeliveryContact')}
-            value={form.deliveryContact}
-            onChange={(value) => set('deliveryContact', value)}
+          <LocationEnd
+            end="delivery"
+            label={t('fieldDeliveryLocation')}
+            customerId={form.customerId}
+            locations={locations.data ?? []}
+            current={ownPlace('delivery')}
+            value={form.deliveryLocationId}
+            onChange={(id) => set('deliveryLocationId', id)}
+            onAdd={() => setAddingFor('delivery')}
+            address={form.deliveryAddress}
+            contact={form.deliveryContact}
+            onAddress={(value) => set('deliveryAddress', value)}
+            onContact={(value) => set('deliveryContact', value)}
           />
 
           <div className="space-y-2">
@@ -437,33 +523,6 @@ export function TripFormModal({
           </div>
         </div>
 
-        {/*
-          ★ NUMBERS BESIDE A PROSE ADDRESS, AND THAT IS THE POINT (GAP-14). The
-          address is what a person reads; the pair is what the server measures
-          the driver's GPS against when they confirm the pickup. Native number
-          inputs with the axis bounds — the server and the database both refuse
-          the range again, and refuse one half without the other.
-        */}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <CoordinateFields
-            idPrefix="trip-pickup"
-            label={t('fieldPickupLocation')}
-            latitude={form.pickupLatitude}
-            longitude={form.pickupLongitude}
-            onLatitude={(value) => set('pickupLatitude', value)}
-            onLongitude={(value) => set('pickupLongitude', value)}
-          />
-          <CoordinateFields
-            idPrefix="trip-delivery"
-            label={t('fieldDeliveryLocation')}
-            latitude={form.deliveryLatitude}
-            longitude={form.deliveryLongitude}
-            onLatitude={(value) => set('deliveryLatitude', value)}
-            onLongitude={(value) => set('deliveryLongitude', value)}
-          />
-        </div>
-        <p className="text-xs text-gray-500">{t('coordinatesHint')}</p>
-
         <TextArea
           id="trip-note"
           label={t('fieldNote')}
@@ -477,58 +536,152 @@ export function TripFormModal({
           </p>
         )}
       </form>
+
+      {addingFor && form.customerId ? (
+        <LocationFormModal
+          customerId={form.customerId}
+          editing={null}
+          onClose={() => setAddingFor(null)}
+          onSaved={async (location) => {
+            // The new place is the customer's and is selected where it was
+            // asked for — AFTER the list has been re-read, so the effect that
+            // drops unknown places never sees the new id before the list
+            // that contains it.
+            const end = addingFor;
+            await locations.reload();
+            set(end === 'pickup' ? 'pickupLocationId' : 'deliveryLocationId', location.id);
+          }}
+        />
+      ) : null}
     </Modal>
   );
 }
 
-/** One point: two bounded number inputs under one heading. */
-function CoordinateFields({
-  idPrefix,
+/** What the read-only block after a choice shows: an active place, or the trip's own copy of an archived one. */
+interface ChosenPlace {
+  id: string;
+  name: string;
+  address: string;
+  contact: string | null;
+  latitude: number | null;
+}
+
+/**
+ * One end of the trip: the customer's place, chosen — or, with none chosen,
+ * the address typed by hand as before.
+ *
+ * ★ WHAT IS SHOWN AFTER A CHOICE IS READ-ONLY. The address and contact come
+ * from the place and will be copied by the server; a dispatcher edits them on
+ * the place, once, not on every trip. And "not located" is said here, before
+ * the trip exists, so nobody is surprised at the pickup gate.
+ */
+function LocationEnd({
+  end,
   label,
-  latitude,
-  longitude,
-  onLatitude,
-  onLongitude,
+  customerId,
+  locations,
+  current,
+  value,
+  onChange,
+  onAdd,
+  address,
+  contact,
+  onAddress,
+  onContact,
 }: Readonly<{
-  idPrefix: string;
+  end: 'pickup' | 'delivery';
   label: string;
-  latitude: string;
-  longitude: string;
-  onLatitude: (value: string) => void;
-  onLongitude: (value: string) => void;
+  customerId: string | null;
+  locations: TripLocation[];
+  /** The row's own place with the trip's snapshot of it, kept selectable and shown even when archived. */
+  current: ChosenPlace | null;
+  value: string | null;
+  onChange: (id: string | null) => void;
+  onAdd: () => void;
+  address: string;
+  contact: string;
+  onAddress: (value: string) => void;
+  onContact: (value: string) => void;
 }>) {
   const { t } = useLanguage();
+  const selectId = `trip-${end}-location`;
+  // An archived place is absent from the active list but is still the trip's
+  // choice: it is shown from the trip's own copy, read-only like any other.
+  const chosen: ChosenPlace | null =
+    locations.find((location) => location.id === value) ?? (current?.id === value ? current : null);
+  const options: { id: string; name: string }[] =
+    locations.some((location) => location.id === current?.id) || !current
+      ? locations
+      : [...locations, { id: current.id, name: `${current.name} (${t('statusArchived')})` }];
 
   return (
-    <fieldset className="space-y-2">
-      <legend className="text-sm font-medium text-gray-700">{label}</legend>
-      <div className="grid grid-cols-2 gap-2">
-        <Input
-          id={`${idPrefix}-latitude`}
-          type="number"
-          inputMode="decimal"
-          step="any"
-          min={-90}
-          max={90}
-          placeholder={t('fieldLatitude')}
-          aria-label={`${label} — ${t('fieldLatitude')}`}
-          value={latitude}
-          onChange={(event) => onLatitude(event.target.value)}
-        />
-        <Input
-          id={`${idPrefix}-longitude`}
-          type="number"
-          inputMode="decimal"
-          step="any"
-          min={-180}
-          max={180}
-          placeholder={t('fieldLongitude')}
-          aria-label={`${label} — ${t('fieldLongitude')}`}
-          value={longitude}
-          onChange={(event) => onLongitude(event.target.value)}
-        />
+    <div className="space-y-2">
+      <label htmlFor={selectId} className="text-sm font-medium text-gray-700">
+        {label}
+      </label>
+      <div className="flex gap-2">
+        <select
+          id={selectId}
+          value={value ?? ''}
+          onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
+          disabled={customerId === null}
+          className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <option value="">{customerId === null ? t('chooseCustomerFirst') : t('selectLocation')}</option>
+          {options.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
+            </option>
+          ))}
+        </select>
+        <Button
+          type="button"
+          variant="outline"
+          className="shrink-0"
+          disabled={customerId === null}
+          onClick={onAdd}
+        >
+          {t('addLocation')}
+        </Button>
       </div>
-    </fieldset>
+
+      {customerId !== null && locations.length === 0 ? (
+        <p className="text-xs text-gray-500">{t('emptyLocations')}</p>
+      ) : null}
+
+      {chosen ? (
+        <div className="space-y-1 rounded-lg bg-gray-50 p-3 text-sm">
+          <p className="flex items-start gap-1.5 whitespace-pre-wrap text-gray-800">
+            <MapPin className="mt-0.5 size-4 shrink-0 text-gray-400" aria-hidden />
+            <span>{chosen.address}</span>
+          </p>
+          {chosen.contact ? <p className="text-xs text-gray-600">{chosen.contact}</p> : null}
+          {chosen.latitude !== null ? (
+            <p className="text-xs text-green-700">{t('locationLocated')}</p>
+          ) : (
+            <output className="block text-xs font-medium text-amber-700">
+              {t('locationUnlocatedWarning')}
+            </output>
+          )}
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-gray-500">{t('noLocationSelected')}</p>
+          <TextArea
+            id={`trip-${end}-address`}
+            label={t(end === 'pickup' ? 'fieldPickupAddress' : 'fieldDeliveryAddress')}
+            value={address}
+            onChange={onAddress}
+          />
+          <TextArea
+            id={`trip-${end}-contact`}
+            label={t(end === 'pickup' ? 'fieldPickupContact' : 'fieldDeliveryContact')}
+            value={contact}
+            onChange={onContact}
+          />
+        </>
+      )}
+    </div>
   );
 }
 

@@ -28,6 +28,28 @@ export const isLongitude = (value: unknown): value is number =>
 export const isCoordinates = (value: Coordinates | null | undefined): value is Coordinates =>
   value != null && isLatitude(value.latitude) && isLongitude(value.longitude);
 
+/**
+ * A point, or no point — never half of one, never off the planet.
+ *
+ * Returns the pair as `null`s when both are absent, the pair when both are
+ * valid, and a REASON otherwise, so the caller can refuse with a sentence.
+ * The database repeats the rule as a CHECK; this exists so a caller gets a
+ * message rather than a constraint name.
+ */
+export const optionalPoint = (
+  // Absent means "no point", exactly as `null` does — a default says so.
+  latitude: number | null = null,
+  longitude: number | null = null,
+):
+  | { ok: true; latitude: number | null; longitude: number | null }
+  | { ok: false; reason: 'HALF_A_POINT' | 'OFF_THE_PLANET' } => {
+  if ((latitude === null) !== (longitude === null)) return { ok: false, reason: 'HALF_A_POINT' };
+  if (latitude !== null && (!isLatitude(latitude) || !isLongitude(longitude))) {
+    return { ok: false, reason: 'OFF_THE_PLANET' };
+  }
+  return { ok: true, latitude, longitude };
+};
+
 /** Mean Earth radius, metres. The figure the haversine formula is quoted for. */
 const EARTH_RADIUS_M = 6_371_008.8;
 

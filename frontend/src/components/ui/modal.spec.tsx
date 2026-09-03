@@ -173,4 +173,81 @@ describe('Modal', () => {
     expect(current).toHaveBeenCalled();
     expect(stale).not.toHaveBeenCalled();
   });
+
+  /**
+   * ★ ESCAPE CLOSES ONE DIALOG: THE TOPMOST. A place dialog opened from the
+   * trip form must not take the trip form — and its unsaved fields — with it.
+   */
+  describe('nested dialogs', () => {
+    const Nested = ({ child, onParentClose, onChildClose }: { child: boolean; onParentClose: () => void; onChildClose: () => void }) => (
+      <LanguageProvider>
+        <Modal isOpen onClose={onParentClose} title="Parent">
+          <input aria-label="unsaved" defaultValue="draft" />
+          {child ? (
+            <Modal isOpen onClose={onChildClose} title="Child">
+              <button type="button">child action</button>
+            </Modal>
+          ) : null}
+        </Modal>
+      </LanguageProvider>
+    );
+
+    it('★ closes only the child while the child is open, keeping the parent and its state', () => {
+      const onParentClose = vi.fn();
+      const onChildClose = vi.fn();
+      const view = render(<Nested child onParentClose={onParentClose} onChildClose={onChildClose} />);
+      fireEvent.change(screen.getByLabelText('unsaved'), { target: { value: 'edited' } });
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(onChildClose).toHaveBeenCalledTimes(1);
+      expect(onParentClose).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('unsaved')).toHaveValue('edited');
+
+      // The child is gone: the next Escape is the parent's.
+      view.rerender(<Nested child={false} onParentClose={onParentClose} onChildClose={onChildClose} />);
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(onParentClose).toHaveBeenCalledTimes(1);
+      expect(onChildClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('★ gives initial focus to the child when both mount together, and the parent does not take it back', () => {
+      const view = render(<Nested child onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+
+      // React ran the child's effect first; the parent's ran after it and left
+      // the focus where it was.
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Child' }));
+
+      // A re-render of the parent is not a reopen: nothing moves.
+      view.rerender(<Nested child onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Child' }));
+
+      // Escape still goes to the child, whose dialog holds the focus.
+      const onChildClose = vi.fn();
+      const onParentClose = vi.fn();
+      view.rerender(<Nested child onParentClose={onParentClose} onChildClose={onChildClose} />);
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onChildClose).toHaveBeenCalledTimes(1);
+      expect(onParentClose).not.toHaveBeenCalled();
+    });
+
+    it('focuses a child opened later inside an already-open parent', () => {
+      const view = render(<Nested child={false} onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Parent' }));
+
+      view.rerender(<Nested child onParentClose={vi.fn()} onChildClose={vi.fn()} />);
+
+      expect(document.activeElement).toBe(screen.getByRole('dialog', { name: 'Child' }));
+    });
+
+    it('closes a lone dialog on Escape as before', () => {
+      const onParentClose = vi.fn();
+      render(<Nested child={false} onParentClose={onParentClose} onChildClose={vi.fn()} />);
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(onParentClose).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -29,6 +29,9 @@ export interface TripScheduleValues {
   pickupLongitude: number | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
+  /** Provenance of the two snapshots. `null` for a hand-typed end. */
+  pickupLocationId: string | null;
+  deliveryLocationId: string | null;
 }
 
 /** An inclusive range of board days, as `YYYY-MM-DD`. */
@@ -65,6 +68,8 @@ interface TripRow {
   pickup_longitude: number | null;
   delivery_latitude: number | null;
   delivery_longitude: number | null;
+  pickup_location_id: string | null;
+  delivery_location_id: string | null;
   created_by: string;
   created_at: Date;
   updated_at: Date;
@@ -77,6 +82,9 @@ type TripJoinedRow = TripRow & {
   /** The ACTIVE assignment's driver, or nulls. At most one exists — 0014. */
   driver_user_id: string | null;
   driver_display_name: string | null;
+  /** The master places behind the snapshots, by name. */
+  pickup_location_name: string | null;
+  delivery_location_name: string | null;
   /**
    * `COUNT(*) OVER()`. PostgreSQL types this `bigint`, and `pg` hands `bigint`
    * back as a STRING to avoid losing precision past 2^53. `Number()` is applied
@@ -112,6 +120,8 @@ const TRIP_COLUMN_NAMES = [
   'pickup_longitude',
   'delivery_latitude',
   'delivery_longitude',
+  'pickup_location_id',
+  'delivery_location_id',
   'created_by',
   'created_at',
   'updated_at',
@@ -145,13 +155,17 @@ const tripsWithRefs = (extraSelect = ''): string => `
          c.name  AS customer_name,
          au.display_name AS created_by_display_name,
          da.driver_user_id,
-         du.display_name AS driver_display_name
+         du.display_name AS driver_display_name,
+         pl.name AS pickup_location_name,
+         dl.name AS delivery_location_name
     FROM trip_schedules t
     LEFT JOIN trip_vehicles  v  ON v.id  = t.vehicle_id
     LEFT JOIN trip_customers c  ON c.id  = t.customer_id
     JOIN      users          au ON au.id = t.created_by
     LEFT JOIN trip_driver_assignments da ON da.trip_id = t.id AND da.state = 'active'
-    LEFT JOIN users          du ON du.id = da.driver_user_id`;
+    LEFT JOIN users          du ON du.id = da.driver_user_id
+    LEFT JOIN trip_locations pl ON pl.id = t.pickup_location_id
+    LEFT JOIN trip_locations dl ON dl.id = t.delivery_location_id`;
 
 const toTrip = (row: TripRow): TripSchedule => ({
   id: row.id,
@@ -171,6 +185,8 @@ const toTrip = (row: TripRow): TripSchedule => ({
   pickupLongitude: row.pickup_longitude,
   deliveryLatitude: row.delivery_latitude,
   deliveryLongitude: row.delivery_longitude,
+  pickupLocationId: row.pickup_location_id,
+  deliveryLocationId: row.delivery_location_id,
   createdBy: row.created_by,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -188,6 +204,14 @@ const toTripWithRefs = (row: TripJoinedRow): TripScheduleWithRefs => ({
   driver:
     row.driver_user_id && row.driver_display_name
       ? { id: row.driver_user_id, displayName: row.driver_display_name }
+      : null,
+  pickupLocation:
+    row.pickup_location_id && row.pickup_location_name
+      ? { id: row.pickup_location_id, name: row.pickup_location_name }
+      : null,
+  deliveryLocation:
+    row.delivery_location_id && row.delivery_location_name
+      ? { id: row.delivery_location_id, name: row.delivery_location_name }
       : null,
 });
 
@@ -209,6 +233,8 @@ const valueParams = (values: TripScheduleValues): unknown[] => [
   values.pickupLongitude,
   values.deliveryLatitude,
   values.deliveryLongitude,
+  values.pickupLocationId,
+  values.deliveryLocationId,
 ];
 
 @Injectable()
@@ -327,9 +353,10 @@ export class TripScheduleRepository {
           pickup_address, delivery_address, pickup_contact, delivery_contact,
           pickup_at, delivery_at, note, status,
           pickup_latitude, pickup_longitude, delivery_latitude, delivery_longitude,
+          pickup_location_id, delivery_location_id,
           created_by)
        VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               $13, $14, $15, $16, $17)
+               $13, $14, $15, $16, $17, $18, $19)
        ${RETURNING_TRIP}`,
       [...valueParams(input), input.createdBy],
     );
@@ -361,7 +388,8 @@ export class TripScheduleRepository {
               pickup_contact = $8, delivery_contact = $9,
               pickup_at = $10, delivery_at = $11, note = $12, status = $13,
               pickup_latitude = $14, pickup_longitude = $15,
-              delivery_latitude = $16, delivery_longitude = $17
+              delivery_latitude = $16, delivery_longitude = $17,
+              pickup_location_id = $18, delivery_location_id = $19
         WHERE id = $1 AND archived_at IS NULL
         ${RETURNING_TRIP}`,
       [id, ...valueParams(values)],

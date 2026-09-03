@@ -20,7 +20,7 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { TripCatalogueService } from '../application/trip-catalogue.service';
-import type { TripCustomer, TripVehicle } from '../domain/trip-schedule';
+import type { TripCustomer, TripLocation, TripVehicle } from '../domain/trip-schedule';
 
 /**
  * The trucks and the customers, as rows rather than as text typed into a cell.
@@ -49,6 +49,27 @@ const updateVehicleSchema = z.object({ plate: plate.optional(), note: note.optio
 
 const createCustomerSchema = z.object({ name: customerName, note: note.optional() });
 const updateCustomerSchema = z.object({ name: customerName.optional(), note: note.optional() });
+
+/**
+ * A customer's place. Coordinates are optional and, when given, a JSON number
+ * each — a measurement, not money — bounded to the axis; `z.number()` refuses
+ * `NaN`, and the service refuses one half without the other.
+ */
+const locationName = z.string().trim().min(1).max(200);
+const address = z.string().trim().min(1).max(4000);
+const contact = z.string().trim().max(2000).nullable();
+const latitude = z.number().min(-90).max(90).nullable();
+const longitude = z.number().min(-180).max(180).nullable();
+
+const createLocationSchema = z.object({
+  name: locationName,
+  address,
+  contact: contact.optional(),
+  note: note.optional(),
+  latitude: latitude.optional(),
+  longitude: longitude.optional(),
+});
+const updateLocationSchema = createLocationSchema.partial();
 
 /**
  * `?includeArchived=true`.
@@ -80,6 +101,8 @@ const wantsArchived = (query: CatalogueQuery): boolean => query.includeArchived 
 type CreateVehicleBody = z.infer<typeof createVehicleSchema>;
 type UpdateVehicleBody = z.infer<typeof updateVehicleSchema>;
 type CreateCustomerBody = z.infer<typeof createCustomerSchema>;
+type CreateLocationBody = z.infer<typeof createLocationSchema>;
+type UpdateLocationBody = z.infer<typeof updateLocationSchema>;
 type UpdateCustomerBody = z.infer<typeof updateCustomerSchema>;
 type CatalogueQuery = z.infer<typeof catalogueQuerySchema>;
 
@@ -157,6 +180,57 @@ export class TripCatalogueController {
     @Body(new ZodValidationPipe(updateCustomerSchema)) body: UpdateCustomerBody,
   ): Promise<TripCustomer> {
     return this.catalogue.updateCustomer(customerId, body);
+  }
+
+  // ------------------------------------------------------------ locations ----
+  //
+  // ★ ALWAYS UNDER A CUSTOMER, NEVER A POOL. Every route names the customer in
+  // its path and the service holds the location to it; there is no
+  // `GET /trip-locations`. Same permissions as the customer catalogue: reading
+  // is `trip.read`, adding is `trip.create`, changing is `trip.write` — and
+  // `BackofficeOnlyGuard` keeps every one of them from a driver account.
+
+  @Get('trip-customers/:customerId/locations')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async listLocations(
+    @Param('customerId', UuidParam) customerId: string,
+    @Query(new ZodValidationPipe(catalogueQuerySchema)) query: CatalogueQuery,
+  ): Promise<TripLocation[]> {
+    return this.catalogue.listLocations(customerId, wantsArchived(query));
+  }
+
+  @Post('trip-customers/:customerId/locations')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.create')
+  async createLocation(
+    @Param('customerId', UuidParam) customerId: string,
+    @Body(new ZodValidationPipe(createLocationSchema)) body: CreateLocationBody,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<TripLocation> {
+    return this.catalogue.createLocation(customerId, { ...body, createdBy: actor.id });
+  }
+
+  @Patch('trip-customers/:customerId/locations/:locationId')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  async updateLocation(
+    @Param('customerId', UuidParam) customerId: string,
+    @Param('locationId', UuidParam) locationId: string,
+    @Body(new ZodValidationPipe(updateLocationSchema)) body: UpdateLocationBody,
+  ): Promise<TripLocation> {
+    return this.catalogue.updateLocation(customerId, locationId, body);
+  }
+
+  @Post('trip-customers/:customerId/locations/:locationId/archive')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  @HttpCode(HttpStatus.OK)
+  async archiveLocation(
+    @Param('customerId', UuidParam) customerId: string,
+    @Param('locationId', UuidParam) locationId: string,
+  ): Promise<TripLocation> {
+    return this.catalogue.archiveLocation(customerId, locationId);
   }
 
   @Post('trip-customers/:customerId/archive')

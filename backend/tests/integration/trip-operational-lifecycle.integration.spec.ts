@@ -18,6 +18,7 @@ import { TripExecutionService } from '../../src/capabilities/trip-schedule/appli
 import { TripScheduleService } from '../../src/capabilities/trip-schedule/application/trip-schedule.service';
 import {
   TripCustomerRepository,
+  TripLocationRepository,
   TripVehicleRepository,
 } from '../../src/capabilities/trip-schedule/persistence/trip-catalogue.repository';
 import {
@@ -125,7 +126,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       '0018_driver_account.sql',
       '0019_trip_location.sql',
       '0020_notifications.sql',
-      '0021_void_reason_optional.sql'
+      '0021_void_reason_optional.sql',
+      '0022_trip_locations.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -161,7 +163,14 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const events = new ExecutionEventRepository(database);
     const requests = new CompletionRequestRepository(database);
 
-    board = new TripScheduleService(database, trips, vehicles, customers, history);
+    board = new TripScheduleService(
+      database,
+      trips,
+      vehicles,
+      customers,
+      history,
+      new TripLocationRepository(database),
+    );
     const users = new UserRepository(database);
     notificationRows = new NotificationRepository(database);
     stream = new NotificationStream();
@@ -210,7 +219,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     // TRUNCATE, not DELETE: 0017's `deny_delete` refuses a row-level DELETE on
     // every historical table, which is exactly what it is for.
     await pool.query(
-      `TRUNCATE notifications, trip_status_history, trip_completion_requests, trip_execution_events,
+      `TRUNCATE trip_locations, notifications, trip_status_history, trip_completion_requests, trip_execution_events,
                 trip_cost_edits, trip_costs, trip_outsource_hires,
                 trip_driver_assignments, trip_schedules, trip_vehicles,
                 trip_customers, trip_carriers

@@ -13,6 +13,24 @@ interface ModalProps {
 }
 
 /** Everything focusable, in document order. */
+/**
+ * ★ THE DIALOGS THAT ARE OPEN. A dialog opened from inside another — a new
+ * place from the trip form — must be the ONLY one Escape closes; otherwise one
+ * keypress closes both and takes the parent's unsaved state with it. Each open
+ * dialog registers its element here, and answers Escape only while no OTHER
+ * open dialog sits inside its own subtree: the child is rendered inside the
+ * parent, so "contains another open dialog" is exactly "is not on top". This
+ * does not depend on mount order — React runs a child's effect before its
+ * parent's when both mount together, so a push-order stack would get it
+ * wrong. A module-level set rather than context, because a provider or a
+ * portal would be machinery for one rule.
+ */
+const openDialogs = new Set<HTMLElement>();
+
+/** Is another open dialog rendered inside this one — is this one NOT on top? */
+const hasOpenChild = (self: HTMLElement): boolean =>
+  Array.from(openDialogs).some((other) => other !== self && self.contains(other));
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -64,10 +82,23 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: R
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
-    dialogRef.current?.focus();
+    // Registered BEFORE focus is taken, so that "is another open dialog
+    // inside me" is answerable from the first line, whichever effect ran
+    // first.
+    const self = dialogRef.current;
+    if (self) openDialogs.add(self);
+
+    // ★ FOCUS GOES TO THE TOPMOST DIALOG, WHATEVER ORDER THE EFFECTS RAN. When
+    // a child dialog mounts together with its parent, React runs the child's
+    // effect first: the child focuses itself, and this — the parent's effect,
+    // running second — must not take the focus back. Escape below asks the
+    // same question, and mount order does not enter into either answer.
+    if (self && !hasOpenChild(self)) self.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // Another open dialog inside this one: the Escape is that one's.
+        if (self && hasOpenChild(self)) return;
         onCloseRef.current();
         return;
       }
@@ -108,6 +139,7 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: R
     document.addEventListener('keydown', onKeyDown);
 
     return () => {
+      if (self) openDialogs.delete(self);
       document.body.style.overflow = previousOverflow;
       document.removeEventListener('keydown', onKeyDown);
       previouslyFocused?.focus?.();

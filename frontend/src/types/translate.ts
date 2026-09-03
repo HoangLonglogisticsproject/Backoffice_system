@@ -521,6 +521,7 @@ const PHRASES = {
   // Add Employee Modal
   addNewEmployee: { vi: 'Thêm nhân viên mới', en: 'Add New Employee' },
   cancel: { vi: 'Hủy bỏ', en: 'Cancel' },
+  close: { vi: 'Đóng', en: 'Close' },
   saveEmployee: { vi: 'Lưu nhân viên', en: 'Save Employee' },
   fullNameLabel: { vi: 'Họ và tên *', en: 'Full Name *' },
   fullNamePlaceholder: { vi: 'Nhập họ và tên', en: 'Enter full name' },
@@ -797,8 +798,36 @@ const PHRASES = {
   fieldPickupContact: { vi: 'Liên hệ lấy hàng', en: 'Pickup contact' },
   fieldDeliveryContact: { vi: 'Liên hệ giao hàng', en: 'Delivery contact' },
   fieldPickupAt: { vi: 'Giờ lấy hàng', en: 'Pickup time' },
-  fieldPickupLocation: { vi: 'Toạ độ điểm lấy hàng', en: 'Pickup coordinates' },
-  fieldDeliveryLocation: { vi: 'Toạ độ điểm giao hàng', en: 'Delivery coordinates' },
+  // ------------------------------------------------ customer locations --
+  locationsTitle: { vi: 'Địa điểm', en: 'Locations' },
+  manageLocations: { vi: 'Địa điểm', en: 'Locations' },
+  emptyLocations: { vi: 'Khách hàng chưa có địa điểm.', en: 'This customer has no locations yet.' },
+  addLocation: { vi: 'Thêm địa điểm', en: 'Add location' },
+  editLocation: { vi: 'Sửa địa điểm', en: 'Edit location' },
+  locationName: { vi: 'Tên địa điểm', en: 'Location name' },
+  locationAddress: { vi: 'Địa chỉ', en: 'Address' },
+  locationContact: { vi: 'Liên hệ', en: 'Contact' },
+  locationCoordinates: { vi: 'Toạ độ', en: 'Coordinates' },
+  locationLocated: { vi: 'Đã định vị', en: 'Located' },
+  locationUnlocated: { vi: 'Chưa định vị', en: 'Not located' },
+  // No map provider yet: the pair is entered here, once, as master data — and
+  // never on a trip.
+  locationCoordinatesHint: {
+    vi: 'Không bắt buộc. Nhập cả hai hoặc để trống cả hai; hệ thống chưa tự tra toạ độ từ địa chỉ.',
+    en: 'Optional. Enter both or leave both empty; the system does not look coordinates up from the address.',
+  },
+  archiveLocationConfirm: { vi: 'Lưu trữ địa điểm', en: 'Archive location' },
+  selectLocation: { vi: 'Chọn địa điểm', en: 'Choose a location' },
+  noLocationSelected: { vi: 'Chưa chọn địa điểm — nhập địa chỉ tự do', en: 'No location chosen — enter the address by hand' },
+  chooseCustomerFirst: { vi: 'Chọn khách hàng trước', en: 'Choose a customer first' },
+  // ★ Said on the trip form the moment an unlocated place is chosen: the driver
+  // will be refused the GPS confirmation there until the place is located.
+  locationUnlocatedWarning: {
+    vi: 'Địa điểm này chưa có toạ độ: tài xế sẽ không xác nhận GPS được tại đây cho tới khi địa điểm được định vị.',
+    en: 'This location has no coordinates: the driver cannot confirm by GPS here until it is located.',
+  },
+  fieldPickupLocation: { vi: 'Điểm lấy hàng', en: 'Pickup location' },
+  fieldDeliveryLocation: { vi: 'Điểm giao hàng', en: 'Delivery location' },
   fieldLatitude: { vi: 'Vĩ độ', en: 'Latitude' },
   fieldLongitude: { vi: 'Kinh độ', en: 'Longitude' },
   // Why the office is asked for numbers next to a prose address.

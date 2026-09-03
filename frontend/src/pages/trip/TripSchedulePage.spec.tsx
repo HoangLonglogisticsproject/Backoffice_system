@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
@@ -14,10 +14,11 @@ const fetchTripVehicles = vi.fn();
 const fetchTripCustomers = vi.fn();
 const useSession = vi.fn();
 
+const createTripSchedule = vi.fn();
 vi.mock('@/api/tripSchedule', () => ({
   fetchTripSchedules: (...a: unknown[]) => fetchTripSchedules(...a),
   archiveTripSchedule: (...a: unknown[]) => archiveTripSchedule(...a),
-  createTripSchedule: vi.fn(),
+  createTripSchedule: (...a: unknown[]) => createTripSchedule(...a),
   updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),
   updateTripStatus: (...a: unknown[]) => updateTripStatus(...a),
 }));
@@ -31,11 +32,17 @@ vi.mock('@/api/tripAssignment', () => ({
   replaceDriver: (...a: unknown[]) => replaceDriver(...a),
   endDriverAssignment: vi.fn(),
 }));
+const fetchTripLocations = vi.fn();
+const createTripLocation = vi.fn();
 vi.mock('@/api/tripCatalogue', () => ({
   fetchTripVehicles: (...a: unknown[]) => fetchTripVehicles(...a),
   fetchTripCustomers: (...a: unknown[]) => fetchTripCustomers(...a),
   createTripVehicle: vi.fn(),
   createTripCustomer: vi.fn(),
+  fetchTripLocations: (...a: unknown[]) => fetchTripLocations(...a),
+  createTripLocation: (...a: unknown[]) => createTripLocation(...a),
+  updateTripLocation: vi.fn(),
+  archiveTripLocation: vi.fn(),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
@@ -75,6 +82,10 @@ const trip = (over: Record<string, unknown> = {}) => ({
   createdBy: 'u9',
   createdByUser: { id: 'u9', displayName: 'Điều Độ' },
   driver: null,
+  pickupLocationId: null,
+  deliveryLocationId: null,
+  pickupLocation: null,
+  deliveryLocation: null,
   createdAt: '2026-08-01T00:00:00.000Z',
   updatedAt: '2026-08-01T00:00:00.000Z',
   ...over,
@@ -125,8 +136,11 @@ describe('TripSchedulePage', () => {
     archiveTripSchedule.mockReset().mockResolvedValue(trip());
     updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'done' }));
     updateTripSchedule.mockReset().mockResolvedValue(trip());
+    createTripSchedule.mockReset().mockResolvedValue(trip());
     fetchTripVehicles.mockReset().mockResolvedValue([]);
     fetchTripCustomers.mockReset().mockResolvedValue([]);
+    fetchTripLocations.mockReset().mockResolvedValue([]);
+    createTripLocation.mockReset();
     fetchEligibleDrivers.mockReset().mockResolvedValue([
       { id: 'd1', displayName: 'Tài Xế A' },
       { id: 'd2', displayName: 'Tài Xế B' },
@@ -423,6 +437,384 @@ describe('TripSchedulePage', () => {
    * These assert the two halves that matter: the reference SURVIVES a save that
    * did not touch it, and a retired row is never offered as an ordinary choice.
    */
+
+  /**
+   * ★ THE FORM NAMES THE CUSTOMER'S PLACE, AND NEVER A COORDINATE (GAP-14,
+   * second half). A dispatcher does not know coordinates; the place carries
+   * them, entered once as master data, and the server copies them onto the
+   * trip. These cases pin what the form offers and what it sends.
+   */
+  describe('★ the trip form names the customer’s places', () => {
+    const write = ['trip.read', 'trip.create', 'trip.write'];
+    const place = (over: Record<string, unknown> = {}) => ({
+      id: 'l1',
+      customerId: 'c9',
+      name: 'Kho OSC',
+      address: 'KCN Sóng Thần, Dĩ An',
+      contact: '0909 111 222',
+      note: null,
+      latitude: 10.8,
+      longitude: 106.6,
+      status: 'active',
+      createdBy: 'u9',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      ...over,
+    });
+
+    const openAddForm = async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripCustomers.mockResolvedValue([
+        { id: 'c9', name: 'WWL', note: null, status: 'active' },
+        { id: 'c8', name: 'VIỄN ĐẠT', note: null, status: 'active' },
+      ]);
+      fetchTripLocations.mockImplementation(async (customerId: string) =>
+        customerId === 'c9'
+          ? [place(), place({ id: 'l2', name: 'Nhà máy Bình Dương', address: 'Bình Dương', contact: null, latitude: null, longitude: null })]
+          : [],
+      );
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+      await screen.findByLabelText('Khách hàng');
+    };
+
+    const chooseCustomer = async (id: string) => {
+      fireEvent.change(screen.getByLabelText('Khách hàng'), { target: { value: id } });
+      await waitFor(() => expect(fetchTripLocations).toHaveBeenCalledWith(id, false));
+    };
+
+    it('★ offers no coordinate input anywhere on the trip form', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+
+      expect(screen.queryByPlaceholderText('Vĩ độ')).toBeNull();
+      expect(screen.queryByPlaceholderText('Kinh độ')).toBeNull();
+      expect(screen.queryByLabelText(/vĩ độ|kinh độ/i)).toBeNull();
+    });
+
+    it('keeps the place pickers closed until a customer is chosen', async () => {
+      await openAddForm();
+
+      expect(screen.getByLabelText('Điểm lấy hàng')).toBeDisabled();
+      expect(screen.getByLabelText('Điểm giao hàng')).toBeDisabled();
+      expect(fetchTripLocations).not.toHaveBeenCalled();
+    });
+
+    it('★ lists the chosen customer’s places, shows the address read-only, and sends the id — no coordinate', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+
+      const pickup = await screen.findByLabelText('Điểm lấy hàng');
+      await within(pickup).findByRole('option', { name: 'Kho OSC' });
+      fireEvent.change(pickup, { target: { value: 'l1' } });
+
+      expect(screen.getByText('KCN Sóng Thần, Dĩ An')).toBeInTheDocument();
+      expect(screen.getByText('0909 111 222')).toBeInTheDocument();
+      expect(screen.getByText('Đã định vị')).toBeInTheDocument();
+      // The typed-address fields for that end are gone: the place is the source.
+      expect(screen.queryByLabelText('Địa chỉ lấy hàng')).toBeNull();
+
+      fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-01' } });
+      const saves = screen.getAllByRole('button', { name: 'Lưu' });
+      fireEvent.click(saves[saves.length - 1]!);
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      expect(body).toMatchObject({ customerId: 'c9', pickupLocationId: 'l1', pickupAddress: null, deliveryLocationId: null });
+      for (const key of ['pickupLatitude', 'pickupLongitude', 'deliveryLatitude', 'deliveryLongitude']) {
+        expect(body).not.toHaveProperty(key);
+      }
+    });
+
+    it('★ warns, before the trip exists, that an unlocated place cannot be confirmed by GPS', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+      const delivery = screen.getByLabelText('Điểm giao hàng');
+      await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương' });
+
+      fireEvent.change(delivery, { target: { value: 'l2' } });
+
+      expect(screen.getByRole('status')).toHaveTextContent(/chưa có toạ độ/i);
+      expect(screen.queryByText('Đã định vị')).toBeNull();
+    });
+
+    it('★ drops a chosen place the moment the customer changes, and says the new one has none', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+      await within(screen.getByLabelText('Điểm lấy hàng')).findByRole('option', { name: 'Kho OSC' });
+      fireEvent.change(screen.getByLabelText('Điểm lấy hàng'), { target: { value: 'l1' } });
+      expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('l1');
+
+      await chooseCustomer('c8');
+
+      await waitFor(() =>
+        expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe(''),
+      );
+      expect(screen.queryAllByRole('option', { name: 'Kho OSC' })).toHaveLength(0);
+      expect(screen.getAllByText('Khách hàng chưa có địa điểm.').length).toBeGreaterThan(0);
+    });
+
+    it('keeps the hand-typed address for an end with no place, as before', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+
+      fireEvent.change(screen.getByLabelText('Địa chỉ giao hàng'), { target: { value: 'Bãi tạm Q9' } });
+      fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-01' } });
+      const saves = screen.getAllByRole('button', { name: 'Lưu' });
+      fireEvent.click(saves[saves.length - 1]!);
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      expect(body).toMatchObject({ deliveryLocationId: null, deliveryAddress: 'Bãi tạm Q9' });
+    });
+
+
+    it('★ editing a trip: switching customer clears the old customer’s places and submits none of them', async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripSchedules.mockResolvedValue({
+        items: [
+          trip({
+            customerId: 'c1',
+            customer: { id: 'c1', name: 'WWL' },
+            pickupLocationId: 'la',
+            pickupLocation: { id: 'la', name: 'Kho A' },
+            deliveryLocationId: 'lb',
+            deliveryLocation: { id: 'lb', name: 'Nhà máy A' },
+          }),
+        ],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      fetchTripCustomers.mockResolvedValue([
+        { id: 'c1', name: 'WWL', note: null, status: 'active' },
+        { id: 'c9', name: 'VIỄN ĐẠT', note: null, status: 'active' },
+      ]);
+      fetchTripLocations.mockImplementation(async (customerId: string) =>
+        customerId === 'c1' ? [place({ id: 'la', customerId: 'c1', name: 'Kho A' }), place({ id: 'lb', customerId: 'c1', name: 'Nhà máy A' })] : [],
+      );
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await screen.findByLabelText('Khách hàng');
+      await waitFor(() => expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('la'));
+
+      await chooseCustomer('c9');
+
+      await waitFor(() => expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe(''));
+      expect((screen.getByLabelText('Điểm giao hàng') as HTMLSelectElement).value).toBe('');
+      expect(screen.queryAllByRole('option', { name: 'Kho A' })).toHaveLength(0);
+
+      const saves = screen.getAllByRole('button', { name: 'Lưu' });
+      fireEvent.click(saves[saves.length - 1]!);
+
+      await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+      const [, body] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+      expect(body).toMatchObject({ customerId: 'c9', pickupLocationId: null, deliveryLocationId: null });
+      expect(body.pickupLocationId).not.toBe('la');
+    });
+
+    /**
+     * ★ A PLACE THAT HAS SINCE BEEN ARCHIVED IS STILL THE TRIP'S PLACE. The
+     * active list no longer carries it, so the form shows the trip's own copy
+     * — read-only, like any chosen place — keeps it selected, and leaves that
+     * end OUT of the patch: the server would refuse a fresh copy of an
+     * archived place, and nothing about the end changed.
+     */
+    describe('★ editing a trip whose place has since been archived', () => {
+      const openEdit = async (over: Record<string, unknown>) => {
+        useSession.mockReturnValue(session(write));
+        fetchTripSchedules.mockResolvedValue({
+          items: [trip({ customerId: 'c1', customer: { id: 'c1', name: 'WWL' }, ...over })],
+          page: 1, limit: 20, total: 1, totalPages: 1,
+        });
+        fetchTripCustomers.mockResolvedValue([{ id: 'c1', name: 'WWL', note: null, status: 'active' }]);
+        // Only the still-active place comes back for the customer.
+        fetchTripLocations.mockImplementation(async (customerId: string) =>
+          customerId === 'c1' ? [place({ id: 'lb', customerId: 'c1', name: 'Nhà máy A', address: 'Bình Dương' })] : [],
+        );
+        renderPage();
+        await screen.findByText('WWL');
+        fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+        await screen.findByLabelText('Khách hàng');
+        await waitFor(() => expect(fetchTripLocations).toHaveBeenCalledWith('c1', false));
+      };
+
+      // The board row behind the dialog prints the same address: read the dialog.
+      const dialog = () => within(screen.getByRole('dialog'));
+
+      const save = async () => {
+        const saves = screen.getAllByRole('button', { name: 'Lưu' });
+        fireEvent.click(saves[saves.length - 1]!);
+        await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+        return updateTripSchedule.mock.calls[0]![1] as Record<string, unknown>;
+      };
+
+      const archivedPickup = {
+        pickupLocationId: 'la',
+        pickupLocation: { id: 'la', name: 'Kho A' },
+        pickupAddress: 'Kho A cũ, Dĩ An',
+        pickupContact: '0909 000 111',
+        pickupLatitude: null,
+        pickupLongitude: null,
+      };
+
+      it('★ pickup: shows the trip’s copy read-only, keeps it selected, and does not name it in the patch', async () => {
+        await openEdit(archivedPickup);
+        const pickup = screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement;
+        await within(pickup).findByRole('option', { name: 'Kho A (Đã lưu trữ)' });
+
+        expect(pickup.value).toBe('la');
+        expect(dialog().getByText('Kho A cũ, Dĩ An')).toBeTruthy();
+        expect(dialog().getByText('0909 000 111')).toBeTruthy();
+        expect(screen.queryByLabelText('Địa chỉ lấy hàng')).toBeNull();
+        expect(screen.queryByLabelText('Liên hệ lấy hàng')).toBeNull();
+
+        const body = await save();
+        expect(body).not.toHaveProperty('pickupLocationId');
+        expect(body).not.toHaveProperty('pickupAddress');
+        expect(body).not.toHaveProperty('pickupContact');
+        // The other end has no place: its typed address travels as before.
+        expect(body).toMatchObject({ deliveryLocationId: null, deliveryAddress: 'TCS' });
+      });
+
+      it('delivery: the same, on the other end', async () => {
+        await openEdit({
+          deliveryLocationId: 'ld',
+          deliveryLocation: { id: 'ld', name: 'Nhà máy cũ' },
+          deliveryAddress: 'Thuận An',
+          deliveryContact: null,
+        });
+        const delivery = screen.getByLabelText('Điểm giao hàng') as HTMLSelectElement;
+        await within(delivery).findByRole('option', { name: 'Nhà máy cũ (Đã lưu trữ)' });
+
+        expect(delivery.value).toBe('ld');
+        expect(dialog().getByText('Thuận An')).toBeTruthy();
+        expect(screen.queryByLabelText('Địa chỉ giao hàng')).toBeNull();
+        expect(screen.queryByLabelText('Liên hệ giao hàng')).toBeNull();
+
+        const body = await save();
+        expect(body).not.toHaveProperty('deliveryLocationId');
+        expect(body).not.toHaveProperty('deliveryAddress');
+        expect(body).toMatchObject({ pickupLocationId: null, pickupAddress: 'BÃI XE MIỀN NAM' });
+      });
+
+      it('archived pickup beside an active delivery: both stay chosen, neither is renamed in the patch', async () => {
+        await openEdit({
+          ...archivedPickup,
+          deliveryLocationId: 'lb',
+          deliveryLocation: { id: 'lb', name: 'Nhà máy A' },
+          deliveryAddress: 'Bình Dương',
+        });
+        await within(screen.getByLabelText('Điểm giao hàng')).findByRole('option', { name: 'Nhà máy A' });
+
+        expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('la');
+        expect((screen.getByLabelText('Điểm giao hàng') as HTMLSelectElement).value).toBe('lb');
+        expect(screen.queryByLabelText('Địa chỉ lấy hàng')).toBeNull();
+        expect(screen.queryByLabelText('Địa chỉ giao hàng')).toBeNull();
+
+        const body = await save();
+        expect(body).not.toHaveProperty('pickupLocationId');
+        expect(body).not.toHaveProperty('deliveryLocationId');
+        expect(body).not.toHaveProperty('pickupAddress');
+        expect(body).not.toHaveProperty('deliveryAddress');
+      });
+
+      it('clearing the archived place frees the end: typed address, and the patch says so', async () => {
+        await openEdit(archivedPickup);
+        const pickup = screen.getByLabelText('Điểm lấy hàng');
+        await within(pickup).findByRole('option', { name: 'Kho A (Đã lưu trữ)' });
+
+        fireEvent.change(pickup, { target: { value: '' } });
+
+        const address = await screen.findByLabelText('Địa chỉ lấy hàng');
+        fireEvent.change(address, { target: { value: 'Bãi tạm Q9' } });
+
+        const body = await save();
+        expect(body).toMatchObject({ pickupLocationId: null, pickupAddress: 'Bãi tạm Q9' });
+      });
+
+      it('choosing an active place instead names it, and the server copies it afresh', async () => {
+        await openEdit(archivedPickup);
+        const pickup = screen.getByLabelText('Điểm lấy hàng');
+        await within(pickup).findByRole('option', { name: 'Nhà máy A' });
+
+        fireEvent.change(pickup, { target: { value: 'lb' } });
+
+        expect(dialog().getByText('Bình Dương')).toBeTruthy();
+        expect(dialog().queryByText('Kho A cũ, Dĩ An')).toBeNull();
+        const body = await save();
+        expect(body).toMatchObject({ pickupLocationId: 'lb', pickupAddress: null, pickupContact: null });
+      });
+    });
+
+    it('★ keeps the new place selected when the list re-read is slow — the id is set only after the list holds it', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+      await within(screen.getByLabelText('Điểm lấy hàng')).findByRole('option', { name: 'Kho OSC' });
+      createTripLocation.mockResolvedValue(place({ id: 'l3', name: 'Kho mới', address: 'Thủ Dầu Một' }));
+
+      // The re-read after creating is held until the test releases it.
+      let releaseRefetch!: () => void;
+      fetchTripLocations.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseRefetch = () => resolve([place(), place({ id: 'l3', name: 'Kho mới', address: 'Thủ Dầu Một' })]);
+          }),
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Thêm địa điểm' })[0]!);
+      fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho mới' } });
+      fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'Thủ Dầu Một' } });
+      const placeSave = screen
+        .getAllByRole('button', { name: 'Lưu' })
+        .find((button) => button.getAttribute('form') === 'location-form');
+      fireEvent.click(placeSave!);
+
+      await waitFor(() => expect(createTripLocation).toHaveBeenCalled());
+      // Created, list not yet re-read: nothing selected, nothing cleared, and
+      // the new place is not offered from a list that does not have it.
+      expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('');
+      expect(screen.queryAllByRole('option', { name: 'Kho mới' })).toHaveLength(0);
+
+      releaseRefetch();
+
+      await waitFor(() =>
+        expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('l3'),
+      );
+      // And it stays: no later effect run takes it away.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('l3');
+    });
+
+    it('★ creates a new place under the chosen customer and selects it', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+      await within(screen.getByLabelText('Điểm lấy hàng')).findByRole('option', { name: 'Kho OSC' });
+      createTripLocation.mockResolvedValue(place({ id: 'l3', name: 'Kho mới', address: 'Thủ Dầu Một' }));
+      fetchTripLocations.mockImplementation(async () => [place(), place({ id: 'l3', name: 'Kho mới', address: 'Thủ Dầu Một' })]);
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Thêm địa điểm' })[0]!);
+      fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho mới' } });
+      fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'Thủ Dầu Một' } });
+      // The place dialog sits inside the trip dialog; its Save is the one
+      // bound to the place form, not the trip form's.
+      const placeSave = screen
+        .getAllByRole('button', { name: 'Lưu' })
+        .find((button) => button.getAttribute('form') === 'location-form');
+      fireEvent.click(placeSave!);
+
+      await waitFor(() =>
+        expect(createTripLocation).toHaveBeenCalledWith(
+          'c9',
+          expect.objectContaining({ name: 'Kho mới', address: 'Thủ Dầu Một', latitude: null, longitude: null }),
+        ),
+      );
+      await waitFor(() =>
+        expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('l3'),
+      );
+    });
+  });
+
   describe('★ editing a trip whose vehicle or customer has been retired', () => {
     const write = ['trip.read', 'trip.create', 'trip.write'];
 

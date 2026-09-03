@@ -18,6 +18,7 @@ import { TripExecutionService } from './application/trip-execution.service';
 import { TripScheduleService } from './application/trip-schedule.service';
 import {
   TripCustomerRepository,
+  TripLocationRepository,
   TripVehicleRepository,
 } from './persistence/trip-catalogue.repository';
 import {
@@ -70,6 +71,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     TripScheduleRepository,
     TripVehicleRepository,
     TripCustomerRepository,
+    TripLocationRepository,
     TripCostRepository,
     OutsourceHireRepository,
     TripCostTotalsRepository,
