@@ -9,6 +9,14 @@
 /** Contract §14. `MEMBER` is the absence of an elevated role, not a stored row. */
 export type Role = 'SUPERADMIN' | 'DEPARTMENT_HEAD' | 'MEMBER';
 
+/**
+ * Which application an account belongs in. A `driver` is refused every
+ * Backoffice route by the server whatever its permissions list, so this is
+ * what the client routes SHELLS on — see `SessionGuard`.
+ */
+export const ACCOUNT_TYPES = ['employee', 'driver'] as const;
+export type AccountType = (typeof ACCOUNT_TYPES)[number];
+
 /** Contract §14. Render hints only — the server re-decides on every request. */
 export type PermissionKey =
   | 'unit.read'
@@ -86,6 +94,8 @@ export interface AuthorizationMe {
    * the null — and the first thing to read it crashed on `undefined`.
    */
   username: string | null;
+  /** Selects the shell (`/driver` or the Backoffice). Never an authorization input. */
+  accountType: AccountType;
   role: Role;
   departmentIds: string[];
   permissions: PermissionKey[];

@@ -7,6 +7,7 @@ import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import logo from '@/assets/img/LOGO.png'
 import bgImage from '@/assets/img/bg-login.png'
 import { useSession } from '@/contexts/SessionProvider'
+import { homeOf } from '@/utils/portal'
 import { loginErrorMessage } from './loginErrorMessage'
 
 /**
@@ -29,7 +30,7 @@ export default function LoginPage() {
 
   // Already signed in: `password-change-required` has its own screen, and
   // sending it to "/" would bounce straight back here.
-  if (state?.status === 'ready') return <Navigate to="/" replace />
+  if (state?.status === 'ready') return <Navigate to={homeOf(state.authorization)} replace />
   if (state?.status === 'password-change-required') return <Navigate to="/change-password" replace />
 
   const handleLogin = async (e: React.FormEvent) => {

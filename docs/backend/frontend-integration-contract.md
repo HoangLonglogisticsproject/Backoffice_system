@@ -136,6 +136,7 @@ khi viết interceptor.
 {
   "userId": "8b18fa79-…",
   "username": "admin",                 // local part của email, server suy ra
+  "accountType": "employee",           // employee | driver — chọn SHELL, không cấp quyền
   "role": "SUPERADMIN",                // SUPERADMIN | DEPARTMENT_HEAD | MEMBER
   "departmentIds": [],                 // rỗng với SUPERADMIN
   "permissions": ["unit.read", "unit.write", "unit.member.read",
@@ -146,6 +147,7 @@ khi viết interceptor.
 | Trường | Dùng để | KHÔNG dùng để |
 |---|---|---|
 | `role` | nhãn, layout | quyết định cho phép |
+| `accountType` | chọn shell: `driver` → `/driver`, còn lại → Backoffice | thay cho `BackofficeOnlyGuard` — server vẫn 403 mọi route Backoffice với driver |
 | `departmentIds` | biết gọi `/departments/:id` nào | suy quyền trên phòng khác |
 | `permissions` | ẩn/hiện nút | thay cho kiểm ở server |
 | `username` | hiển thị | parse lại từ email · đăng nhập · phân quyền |
