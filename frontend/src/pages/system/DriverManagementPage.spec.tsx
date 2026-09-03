@@ -29,7 +29,8 @@ vi.mock('@/api/driverAccounts', () => ({
 
 // ★ THE CREATE DIALOG IS THE APPROVALS SCREEN'S. It reaches for the employee
 // endpoints too; they are mocked so the dialog can mount, and none is called.
-vi.mock('@/api/users', () => ({ createUser: vi.fn() }));
+const createUser = vi.fn();
+vi.mock('@/api/users', () => ({ createUser: (...a: unknown[]) => createUser(...a) }));
 vi.mock('@/api/department', () => ({ fetchDepartments: vi.fn().mockResolvedValue([]) }));
 vi.mock('@/api/department-head', () => ({ assignDepartmentHead: vi.fn() }));
 vi.mock('@/api/account-invitation', () => ({ requestAccountInvitation: vi.fn() }));
@@ -156,8 +157,9 @@ describe('DriverManagementPage', () => {
       fetchDrivers.mockResolvedValue([driver(), driver({ id: 'd9', displayName: 'Lê Văn Mới', username: 'levanmoi' })]);
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm tài xế' }));
-      // The approvals screen's dialog, already on the driver kind: no department asked.
-      expect(dialog().getByRole('button', { name: 'Tài xế', pressed: true })).toBeInTheDocument();
+      // The approvals screen's dialog, locked to the driver kind: no kind to
+      // choose and no department asked.
+      expect(dialog().queryByRole('button', { name: 'Nhân viên' })).toBeNull();
       expect(dialog().queryByLabelText('Phòng ban *')).toBeNull();
       fireEvent.change(dialog().getByLabelText('Họ và tên *'), { target: { value: 'Lê Văn Mới' } });
       fireEvent.change(dialog().getByLabelText('Email *'), { target: { value: 'levanmoi' } });
@@ -181,6 +183,37 @@ describe('DriverManagementPage', () => {
       // The list was re-read, and holds the new driver.
       await waitFor(() => expect(fetchDrivers).toHaveBeenCalledTimes(2));
       expect(await screen.findByText('Lê Văn Mới', { selector: 'td' })).toBeInTheDocument();
+    });
+
+    it('★ never offers the employee kind, and comes back as a driver dialog on every open', async () => {
+      createDriver.mockResolvedValue({ userId: 'd9', displayName: 'Lê Văn Mới', username: 'levanmoi' });
+      renderPage();
+      await screen.findByText('Nguyễn Văn Tài');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm tài xế' }));
+      // Locked: the kind is not a choice here at all.
+      expect(dialog().queryByRole('button', { name: 'Nhân viên' })).toBeNull();
+      expect(dialog().queryByRole('button', { name: 'Tài xế' })).toBeNull();
+      expect(dialog().queryByLabelText('Phòng ban *')).toBeNull();
+      fireEvent.change(dialog().getByLabelText('Họ và tên *'), { target: { value: 'Bỏ dở' } });
+      fireEvent.click(dialog().getByRole('button', { name: 'Hủy bỏ' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      // Second visit: fresh, and still a driver dialog.
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm tài xế' }));
+      expect(dialog().getByLabelText('Họ và tên *')).toHaveValue('');
+      expect(dialog().queryByLabelText('Phòng ban *')).toBeNull();
+      fireEvent.change(dialog().getByLabelText('Họ và tên *'), { target: { value: 'Lê Văn Mới' } });
+      fireEvent.change(dialog().getByLabelText('Email *'), { target: { value: 'levanmoi' } });
+      fireEvent.change(dialog().getByLabelText('Mật khẩu tạm *'), { target: { value: 'Tam-2026!' } });
+      fireEvent.click(dialog().getByRole('button', { name: 'Lưu nhân viên' }));
+
+      await waitFor(() => expect(createDriver).toHaveBeenCalledTimes(1));
+      // ★ The employee endpoint is unreachable from this screen.
+      expect(createUser).not.toHaveBeenCalled();
+      // And the driver list is re-read for the new row.
+      await waitFor(() => expect(fetchDrivers).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole('status')).toHaveTextContent('Đã tạo tài khoản tài xế.');
     });
 
     it('shows the server sentence when creation is refused', async () => {

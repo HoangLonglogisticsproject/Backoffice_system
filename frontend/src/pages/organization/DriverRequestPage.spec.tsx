@@ -136,6 +136,15 @@ describe('DriverRequestPage', () => {
   });
 
   describe('a head’s own proposals', () => {
+    it('says they have proposed nobody — not that nothing is waiting', async () => {
+      useSession.mockReturnValue(session(['driver.account.request']));
+      fetchMyDriverRequests.mockResolvedValue([]);
+      renderPage();
+
+      expect(await screen.findByText('Bạn chưa gửi đề xuất tài khoản tài xế nào.')).toBeInTheDocument();
+      expect(screen.queryByText('Không có đề xuất nào đang chờ.')).toBeNull();
+    });
+
     beforeEach(() => {
       useSession.mockReturnValue(session(['driver.account.request']));
       fetchMyDriverRequests.mockResolvedValue([

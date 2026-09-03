@@ -12,7 +12,7 @@ import {
 import { Modal } from '@/components/ui/modal';
 import { CursorPagination } from '@/components/ui/pagination';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useCursorPages } from '@/hooks/useCursorPages';
+import { useCursorPages, type CursorPages } from '@/hooks/useCursorPages';
 import { isApiError } from '@/utils/errors';
 import type { Page, PageRequest } from '@/types/pagination';
 import type { DecisionStatus } from '@/types/approval';
@@ -36,6 +36,7 @@ export type EmptyStateKey =
   | 'emptyInvitations'
   | 'emptyRoster'
   | 'driverRequestQueueEmpty'
+  | 'driverRequestMineEmpty'
   | 'driverListEmpty';
 
 /**
@@ -136,7 +137,28 @@ export function ReadOnlyQueue<T extends { id: string }>({
   emptyKey: EmptyStateKey;
 }>) {
   const page = useCursorPages<T>(read, [refresh]);
+  return <QueueTable page={page} headers={headers} renderCells={renderCells} emptyKey={emptyKey} />;
+}
 
+/**
+ * The table itself, with its four states and its cursor controls — what a
+ * read-only list and a decision queue have in common, which is everything
+ * except the trailing actions column. That column arrives as a heading and
+ * a cell renderer, so the shell never has to know what the actions are.
+ */
+function QueueTable<T extends { id: string }>({
+  page,
+  headers,
+  renderCells,
+  emptyKey,
+  actions,
+}: Readonly<{
+  page: CursorPages<T>;
+  headers: string[];
+  renderCells: (row: T) => ReactNode;
+  emptyKey: EmptyStateKey;
+  actions?: { header: string; render: (row: T) => ReactNode };
+}>) {
   return (
     <>
       <div className="overflow-x-auto">
@@ -148,12 +170,16 @@ export function ReadOnlyQueue<T extends { id: string }>({
                   {heading}
                 </TableHead>
               ))}
+              {actions ? (
+                <TableHead className="text-right font-semibold text-gray-600 pr-6">{actions.header}</TableHead>
+              ) : null}
             </TableRow>
           </TableHeader>
           <TableBody>
             {page.items.map((row) => (
               <TableRow key={row.id} className="hover:bg-blue-50/30">
                 {renderCells(row)}
+                {actions ? <TableCell className="text-right pr-4">{actions.render(row)}</TableCell> : null}
               </TableRow>
             ))}
           </TableBody>
@@ -223,67 +249,29 @@ export function DecisionQueue<T extends { id: string }>({
 
   return (
     <>
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader className="bg-gray-50/50">
-            <TableRow>
-              {headers.map((heading) => (
-                <TableHead key={heading} className="font-semibold text-gray-600">
-                  {heading}
-                </TableHead>
-              ))}
-              <TableHead className="text-right font-semibold text-gray-600 pr-6">
-                {t('colActions')}
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {page.items.map((row) => (
-              <TableRow key={row.id} className="hover:bg-blue-50/30">
-                {renderCells(row)}
-                <TableCell className="text-right pr-4">
-                  <div className="flex items-center justify-end gap-2">
-                    <Button
-                      size="sm"
-                      className={ROW_ACTION.primary}
-                      onClick={() => setPending({ row, decision: 'approve' })}
-                    >
-                      {t('approve')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className={ROW_ACTION.danger}
-                      onClick={() => setPending({ row, decision: 'reject' })}
-                    >
-                      {t('reject')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-
-        <QueueStates
-          loading={page.loading}
-          forbidden={page.forbidden}
-          error={Boolean(page.error) && !page.forbidden}
-          empty={page.items.length === 0}
-          emptyKey={emptyKey}
-        />
-      </div>
-
-      <CursorPagination
-        shown={page.items.length}
-        hasMore={page.hasMore}
-        canGoBack={page.canGoBack}
-        onNext={page.next}
-        onPrevious={page.previous}
-        pageSize={page.pageSize}
-        onPageSizeChange={page.setPageSize}
-        isLoading={page.loading}
-        className="border-t border-gray-100 bg-gray-50/30"
+      <QueueTable
+        page={page}
+        headers={headers}
+        renderCells={renderCells}
+        emptyKey={emptyKey}
+        actions={{
+          header: t('colActions'),
+          render: (row) => (
+            <div className="flex items-center justify-end gap-2">
+              <Button size="sm" className={ROW_ACTION.primary} onClick={() => setPending({ row, decision: 'approve' })}>
+                {t('approve')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className={ROW_ACTION.danger}
+                onClick={() => setPending({ row, decision: 'reject' })}
+              >
+                {t('reject')}
+              </Button>
+            </div>
+          ),
+        }}
       />
 
       <ConfirmDecision

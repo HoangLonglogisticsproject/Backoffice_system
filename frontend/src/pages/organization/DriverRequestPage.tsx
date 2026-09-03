@@ -116,7 +116,9 @@ function MyDriverRequests() {
         t('driverRequestDecidedBy'),
         t('driverRequestRejectReason'),
       ]}
-      emptyKey="driverRequestQueueEmpty"
+      // Their own history, not the reviewer's queue: "nothing waiting" would be
+      // the wrong sentence for a head who has simply not proposed anybody.
+      emptyKey="driverRequestMineEmpty"
       renderCells={(row) => (
         <>
           <TableCell className="font-medium text-gray-900">{row.displayName}</TableCell>

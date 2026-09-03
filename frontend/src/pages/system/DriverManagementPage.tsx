@@ -153,12 +153,15 @@ export default function DriverManagementPage() {
         </div>
       </div>
 
-      {/* ★ THE SAME DIALOG THE APPROVALS SCREEN OPENS, started on "driver". It
+      {/* ★ THE SAME DIALOG THE APPROVALS SCREEN OPENS, locked to "driver". It
           already knows that a driver has no department and calls the existing
-          create endpoint; the notice above is the approvals screen's too. */}
+          create endpoint; this screen creates drivers and nothing else, so the
+          employee kind is not offered here. The notice above is the approvals
+          screen's too. */}
       <AddEmployeeModal
         isOpen={creating}
         initialAccountType="driver"
+        lockAccountType
         onClose={() => setCreating(false)}
         onCreated={(_outcome, email) => {
           setCreatedEmail(email);

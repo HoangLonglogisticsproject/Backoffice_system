@@ -436,6 +436,10 @@ const PHRASES = {
     en: 'No requests are waiting.',
   },
   driverRequestMine: { vi: 'Đề xuất của tôi', en: 'My proposals' },
+  driverRequestMineEmpty: {
+    vi: 'Bạn chưa gửi đề xuất tài khoản tài xế nào.',
+    en: 'You have not proposed a driver account yet.',
+  },
   driverRequestDecidedBy: { vi: 'Người duyệt', en: 'Decided by' },
   driverRequestRejectReason: { vi: 'Lý do từ chối', en: 'Reason for rejection' },
 

@@ -85,10 +85,20 @@ interface AddEmployeeModalProps {
   departmentId?: string;
   /**
    * Which kind of account the dialog opens on. The approvals screen opens on
-   * an employee; Driver Management opens on a driver. The choice itself is
-   * unchanged and still offered — this only sets where it starts.
+   * an employee; Driver Management opens on a driver. Restored on every open:
+   * the dialog's state is created when it opens and discarded when it closes,
+   * so nothing chosen in one visit can leak into the next.
    */
   initialAccountType?: AccountType;
+  /**
+   * ★ THE WORKFLOW'S INVARIANT, ENFORCED WHERE THE WORKFLOW IS. Driver
+   * Management creates driver accounts and nothing else, so it does not offer
+   * the employee kind at all: the choice is not drawn, the state cannot leave
+   * `initialAccountType`, and the submit path can only reach the driver
+   * endpoints. The approvals and roster screens leave this off and keep the
+   * choice.
+   */
+  lockAccountType?: boolean;
   onClose: () => void;
   /**
    * What happened, and to which ADDRESS.
@@ -144,10 +154,24 @@ interface AddEmployeeModalProps {
  * `lib/companyEmail`. The server enforces the domain either way (§13), so this
  * is a shorter field and an earlier error, never the rule itself.
  */
-export function AddEmployeeModal({
+/**
+ * ★ MOUNTED ONLY WHILE OPEN. `Modal` renders nothing when closed, but a
+ * component that stays mounted keeps its state — so a kind switched, a name
+ * half-typed or an error shown in one visit would still be there on the next,
+ * and a `reset()` that forgot one field would leak it. Creating the dialog on
+ * open and discarding it on close makes "fresh on every open" a property of
+ * the lifecycle rather than a checklist.
+ */
+export function AddEmployeeModal(props: Readonly<AddEmployeeModalProps>) {
+  if (!props.isOpen) return null;
+  return <AddEmployeeDialog {...props} />;
+}
+
+function AddEmployeeDialog({
   isOpen,
   departmentId,
   initialAccountType = 'employee',
+  lockAccountType = false,
   onClose,
   onCreated,
 }: Readonly<AddEmployeeModalProps>) {
@@ -186,6 +210,7 @@ export function AddEmployeeModal({
   const [pending, setPending] = useState<PendingAppointment | null>(null);
 
   const reset = () => {
+    setAccountType(initialAccountType);
     setDisplayName('');
     setLocalPart('');
     setInitialPassword('');
@@ -395,7 +420,7 @@ export function AddEmployeeModal({
             Offered only to somebody who may actually produce a driver one way
             or the other — a member who holds neither key sees the employee form
             unchanged, exactly as before. */}
-        {(isGlobal || mayProposeDriver) && (
+        {(isGlobal || mayProposeDriver) && !lockAccountType && (
           <div className="space-y-2">
             <p className="text-sm font-medium text-gray-700">{t('accountTypeLabel')}</p>
             <div className="grid grid-cols-2 gap-2">
