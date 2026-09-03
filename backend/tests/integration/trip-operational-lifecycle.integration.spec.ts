@@ -1148,24 +1148,37 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       };
     };
 
-    it('★ answers a retry that queued behind the winner’s lock with the row it then finds', async () => {
+    /**
+     * Puts a retry in the losing position and returns only once it is OBSERVED
+     * there: the winner holds the trip row and has written the key without
+     * committing; the retry's pre-transaction lookup has returned empty; the
+     * retry has issued its `FOR UPDATE` and is queued behind the winner. What
+     * the winner does next — commit, or close the trip and commit — is each
+     * test's own, as is every assertion on what the retry is answered with.
+     */
+    const retryQueuedBehindWinner = async (clientEventId: string) => {
       const { trip, assignment } = await runningTrip();
       const winner = await pool.connect();
       const observed = observeRetry();
+      const release = () => {
+        observed.restore();
+        winner.release();
+      };
+
       try {
         await winner.query('BEGIN');
         await winner.query(`SELECT id FROM trip_schedules WHERE id = $1 FOR UPDATE`, [trip]);
         await winner.query(
           `INSERT INTO trip_execution_events
              (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by)
-           VALUES ($1, $2, 'ARRIVED_PICKUP', now(), 'queued', $3)`,
-          [trip, assignment, driverA],
+           VALUES ($1, $2, 'ARRIVED_PICKUP', now(), $4, $3)`,
+          [trip, assignment, driverA, clientEventId],
         );
 
         const retry = execution.recordEvent({
           tripId: trip,
           type: 'ARRIVED_PICKUP',
-          clientEventId: 'queued',
+          clientEventId,
           recordedBy: driverA,
         });
 
@@ -1175,64 +1188,50 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         expect(observed.preTransactionLookup()).toBeNull();
         await observed.lockRequested;
 
+        return { trip, winner, retry, release };
+      } catch (error) {
+        release();
+        throw error;
+      }
+    };
+
+    const eventsOf = (trip: string) =>
+      sql(`SELECT id, actual_at FROM trip_execution_events WHERE trip_id = $1`, [trip]) as Promise<
+        { id: string; actual_at: Date }[]
+      >;
+
+    it('★ answers a retry that queued behind the winner’s lock with the row it then finds', async () => {
+      const { trip, winner, retry, release } = await retryQueuedBehindWinner('queued');
+      try {
         await winner.query('COMMIT');
 
         const answered = await retry;
-        const rows = (await sql(
-          `SELECT id FROM trip_execution_events WHERE trip_id = $1 AND client_event_id = 'queued'`,
-          [trip],
-        )) as { id: string }[];
+        const rows = await eventsOf(trip);
         expect(rows).toHaveLength(1);
         expect(answered.id).toBe(rows[0]!.id);
       } finally {
-        observed.restore();
-        winner.release();
+        release();
       }
     });
 
     it('★ answers a retry that queued behind a completion with the event committed before DONE', async () => {
       // The tap was recorded and the trip was then approved — both before the
       // retry got the lock. The retry is owed its event, not "closed".
-      const { trip, assignment } = await runningTrip();
-      const winner = await pool.connect();
-      const observed = observeRetry();
+      const { trip, winner, retry, release } = await retryQueuedBehindWinner('before-done');
       try {
-        await winner.query('BEGIN');
-        await winner.query(`SELECT id FROM trip_schedules WHERE id = $1 FOR UPDATE`, [trip]);
-        await winner.query(
-          `INSERT INTO trip_execution_events
-             (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by)
-           VALUES ($1, $2, 'ARRIVED_PICKUP', now(), 'before-done', $3)`,
-          [trip, assignment, driverA],
-        );
-
-        const retry = execution.recordEvent({
-          tripId: trip,
-          type: 'ARRIVED_PICKUP',
-          clientEventId: 'before-done',
-          recordedBy: driverA,
-        });
-        await observed.lookedUp;
-        expect(observed.preTransactionLookup()).toBeNull();
-        await observed.lockRequested;
-
         // The completion lands while the retry is still queued: the trip is
         // DONE by the time the retry holds the lock.
         await winner.query(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
         await winner.query('COMMIT');
 
         const answered = await retry;
-        const rows = (await sql(
-          `SELECT id, actual_at FROM trip_execution_events WHERE trip_id = $1`,
-          [trip],
-        )) as { id: string; actual_at: Date }[];
+        const rows = await eventsOf(trip);
         expect(rows).toHaveLength(1);
         expect(answered.id).toBe(rows[0]!.id);
         // The original's own time — nothing was re-stamped.
         expect(answered.actualAt).toEqual(rows[0]!.actual_at);
       } finally {
-        observed.restore();
-        winner.release();
+        release();
       }
 
       // ★ AND DONE STILL TAKES NO NEW MILESTONE. A key that matches nothing on
@@ -1252,11 +1251,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         clientEventId: 'before-done',
         recordedBy: driverA,
       });
-      expect(again.id).toBe(
-        ((await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])) as { id: string }[])[0]!
-          .id,
-      );
-      expect(await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])).toHaveLength(1);
+      const rows = await eventsOf(trip);
+      expect(rows).toHaveLength(1);
+      expect(again.id).toBe(rows[0]!.id);
     });
 
     it('records three different client event ids arriving together as three events', async () => {
