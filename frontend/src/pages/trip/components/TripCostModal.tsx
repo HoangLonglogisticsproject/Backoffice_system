@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
+import { MoneyInput } from '@/components/ui/money-input';
 import {
   Table,
   TableBody,
@@ -42,10 +43,18 @@ import type { TranslationKey } from '@/types/translate';
  * account, which is the one thing the separate `cost.*` permissions exist to
  * prevent.
  *
- * ★ NOTHING IS EDITED HERE, ONLY ADDED AND WITHDRAWN. A financial record is
- * immutable: a wrong figure is voided, with a reason, and a new one recorded.
- * There is no edit control because there is no edit endpoint — the server
- * offers no PATCH, PUT or DELETE on these resources at all.
+ * ★ RECORDING SOMETHING HAPPENS IN PLACE, BENEATH THE LIST IT JOINS. The form
+ * used to be a second dialog stacked on this one — two focus traps fighting for
+ * the same keyboard, two body-scroll locks, and the list you were adding to
+ * hidden behind the thing adding to it. Inline, the new line appears directly
+ * under the rows it will sit among, and the running totals stay on screen while
+ * the figure is typed.
+ *
+ * ★ NOTHING IS EDITED HERE, ONLY ADDED AND REMOVED. A financial record is
+ * immutable: a wrong figure is removed and a new one recorded in its place.
+ * There is no edit control because there is no edit endpoint — and the button
+ * that says "Xóa" is not one either: the server offers no PATCH, PUT or DELETE
+ * on these resources at all, so what it calls is a void, and the row lives on.
  *
  * ⚠ EVERY CONTROL HERE IS A COURTESY, NEVER A BOUNDARY. The server re-decides
  * each request; hiding a button only avoids offering something that would be
@@ -69,16 +78,16 @@ export function TripCostModal({
 
   const [includeVoided, setIncludeVoided] = useState(false);
   const [adding, setAdding] = useState<'cost' | 'hire' | null>(null);
-  const [voiding, setVoiding] = useState<{ kind: 'cost' | 'hire'; id: string } | null>(null);
+  const [deleting, setDeleting] = useState<{ kind: 'cost' | 'hire'; id: string } | null>(null);
 
   const money = useTripCost(tripId, includeVoided);
 
   const canAdd = can('cost.create');
-  const canVoid = can('cost.void');
+  const canDelete = can('cost.void');
 
   const close = () => {
     setAdding(null);
-    setVoiding(null);
+    setDeleting(null);
     setIncludeVoided(false);
     onClose();
   };
@@ -121,7 +130,9 @@ export function TripCostModal({
                       variant="outline"
                       size="sm"
                       className="h-8 gap-1 px-2"
-                      onClick={() => setAdding('cost')}
+                      // A toggle: the form appears below, so the same control
+                      // that opened it is the obvious one to close it.
+                      onClick={() => setAdding(adding === 'cost' ? null : 'cost')}
                     >
                       <Plus className="h-3.5 w-3.5" />
                       {t('addCost')}
@@ -135,10 +146,9 @@ export function TripCostModal({
                   <Table>
                     <TableHeader className="bg-gray-50/50">
                       <TableRow>
-                        <TableHead>{t('colCategory')}</TableHead>
+                        <TableHead className="w-full">{t('colCategory')}</TableHead>
                         <TableHead className="text-right">{t('colAmount')}</TableHead>
-                        <TableHead>{t('colNote')}</TableHead>
-                        {canVoid && <TableHead />}
+                        {canDelete && <TableHead className="w-px" />}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -147,14 +157,22 @@ export function TripCostModal({
                           key={line.id}
                           label={t(CATEGORY_LABEL[line.category])}
                           amount={line.amount}
-                          note={line.note}
                           record={line}
-                          canVoid={canVoid}
-                          onVoid={() => setVoiding({ kind: 'cost', id: line.id })}
+                          canDelete={canDelete}
+                          onDelete={() => setDeleting({ kind: 'cost', id: line.id })}
                         />
                       ))}
                     </TableBody>
                   </Table>
+                )}
+
+                {tripId && adding === 'cost' && (
+                  <AddRecordForm
+                    kind="cost"
+                    tripId={tripId}
+                    onClose={() => setAdding(null)}
+                    onSaved={money.reload}
+                  />
                 )}
               </section>
 
@@ -167,7 +185,7 @@ export function TripCostModal({
                       variant="outline"
                       size="sm"
                       className="h-8 gap-1 px-2"
-                      onClick={() => setAdding('hire')}
+                      onClick={() => setAdding(adding === 'hire' ? null : 'hire')}
                     >
                       <Plus className="h-3.5 w-3.5" />
                       {t('addHire')}
@@ -181,10 +199,10 @@ export function TripCostModal({
                   <Table>
                     <TableHeader className="bg-gray-50/50">
                       <TableRow>
-                        <TableHead>{t('colCarrier')}</TableHead>
+                        <TableHead className="w-full">{t('colCarrier')}</TableHead>
                         <TableHead className="text-right">{t('colAmount')}</TableHead>
                         <TableHead>{t('colDocumentRef')}</TableHead>
-                        {canVoid && <TableHead />}
+                        {canDelete && <TableHead className="w-px" />}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -198,12 +216,21 @@ export function TripCostModal({
                           suffix={hire.amountIncludesVat ? t('vatIncludedShort') : null}
                           note={hire.documentRef}
                           record={hire}
-                          canVoid={canVoid}
-                          onVoid={() => setVoiding({ kind: 'hire', id: hire.id })}
+                          canDelete={canDelete}
+                          onDelete={() => setDeleting({ kind: 'hire', id: hire.id })}
                         />
                       ))}
                     </TableBody>
                   </Table>
+                )}
+
+                {tripId && adding === 'hire' && (
+                  <AddRecordForm
+                    kind="hire"
+                    tripId={tripId}
+                    onClose={() => setAdding(null)}
+                    onSaved={money.reload}
+                  />
                 )}
               </section>
 
@@ -224,22 +251,13 @@ export function TripCostModal({
         </div>
       </Modal>
 
-      {tripId && adding && (
-        <AddRecordModal
-          kind={adding}
+      {tripId && deleting && (
+        <DeleteRecordModal
+          kind={deleting.kind}
           tripId={tripId}
-          onClose={() => setAdding(null)}
-          onSaved={money.reload}
-        />
-      )}
-
-      {tripId && voiding && (
-        <VoidRecordModal
-          kind={voiding.kind}
-          tripId={tripId}
-          recordId={voiding.id}
-          onClose={() => setVoiding(null)}
-          onVoided={money.reload}
+          recordId={deleting.id}
+          onClose={() => setDeleting(null)}
+          onDeleted={money.reload}
         />
       )}
     </>
@@ -253,53 +271,54 @@ function RecordRow({
   note,
   suffix = null,
   record,
-  canVoid,
-  onVoid,
+  canDelete,
+  onDelete,
 }: Readonly<{
   label: string;
   amount: string;
-  note: string | null;
+  note?: string | null;
   suffix?: string | null;
   record: TripCost | OutsourceHire;
-  canVoid: boolean;
-  onVoid: () => void;
+  canDelete: boolean;
+  onDelete: () => void;
 }>) {
   const { t, language } = useLanguage();
-  const voided = record.voidedAt !== null;
+  const deleted = record.voidedAt !== null;
 
   return (
-    <TableRow className={cn(voided && 'opacity-60')}>
+    <TableRow className={cn(deleted && 'opacity-60')}>
       <TableCell className="font-medium text-gray-900">
         {label}
-        {voided && (
+        {deleted && (
           <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
             {t('statusVoided')}
           </span>
         )}
         {/*
-          ★ WHO WROTE THIS FIGURE, AND WHEN — shown on EVERY record, voided ones
+          ★ WHO WROTE THIS FIGURE, AND WHEN — shown on EVERY record, deleted ones
           included. A withdrawn line is kept precisely so it stays answerable,
-          and a line whose author disappeared when it was voided would defeat
+          and a line whose author disappeared when it was deleted would defeat
           that. The name comes from the server; a UUID would say nothing.
         */}
         <p className="mt-0.5 text-xs font-normal text-gray-500">
           {record.createdByUser.displayName} · {formatDateTime(record.createdAt, language)}
         </p>
-        {/* Why it was withdrawn, kept beside it — the whole point of voiding. */}
-        {voided && record.voidReason && (
+        {/* Why it was withdrawn, kept beside it — the whole point of keeping it. */}
+        {deleted && record.voidReason && (
           <p className="mt-0.5 text-xs text-gray-500">{record.voidReason}</p>
         )}
       </TableCell>
-      <TableCell className={cn('text-right tabular-nums', voided && 'line-through')}>
+      <TableCell className={cn('text-right tabular-nums', deleted && 'line-through')}>
         {formatMoney(amount)}
         {suffix && <span className="ml-1 text-xs text-gray-500">{suffix}</span>}
       </TableCell>
-      <TableCell className="text-gray-600">{note ?? '—'}</TableCell>
-      {canVoid && (
-        <TableCell>
-          {/* A voided record cannot be voided again — the server answers 409. */}
-          {!voided && (
-            <Button variant="outline" size="sm" className="h-8 px-2" onClick={onVoid}>
+      {/* Only the outsourced table carries a third column; trip costs go without. */}
+      {note !== undefined && <TableCell className="text-gray-600">{note ?? '—'}</TableCell>}
+      {canDelete && (
+        <TableCell className="w-px text-right">
+          {/* A deleted record cannot be deleted again — the server answers 409. */}
+          {!deleted && (
+            <Button variant="outline" size="sm" className="h-8 px-2" onClick={onDelete}>
               {t('voidRecord')}
             </Button>
           )}
@@ -325,14 +344,17 @@ function Total({
 }
 
 /**
- * Recording a cost line or a hire.
+ * Recording a cost line or a hire, in place beneath the list it joins.
  *
- * ★ THE AMOUNT IS SENT AS THE STRING IT WAS TYPED. Never `Number(...)`: JSON
- * numbers are float64, and the server refuses one outright for that reason. It
- * also refuses a third decimal place, which `NUMERIC(14,2)` would round rather
- * than reject — so the server's message is the honest one to show.
+ * ★ THE AMOUNT IS SENT AS THE DIGITS THAT WERE TYPED, AS A STRING. `MoneyInput`
+ * groups them with commas for reading and hands back the plain decimal, so
+ * `amount` here is already the payload — nothing to strip, and no `Number(...)`
+ * anywhere on the path. JSON numbers are float64 and the server refuses one
+ * outright for that reason. It also refuses a third decimal place, which
+ * `NUMERIC(14,2)` would round rather than reject — so the server's message is
+ * the honest one to show.
  */
-function AddRecordModal({
+function AddRecordForm({
   kind,
   tripId,
   onClose,
@@ -381,141 +403,152 @@ function AddRecordModal({
     }
   };
 
-  const formId = 'trip-cost-form';
-
   return (
-    <Modal
-      isOpen
-      onClose={onClose}
-      title={t(kind === 'cost' ? 'addCost' : 'addHire')}
-      footer={
-        <>
-          <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
-            {t('cancel')}
-          </Button>
-          <Button type="submit" form={formId} disabled={busy} className="bg-blue-600 hover:bg-blue-700">
-            {busy ? t('saving') : t('save')}
-          </Button>
-        </>
-      }
+    <form
+      onSubmit={submit}
+      // Boxed off from the rows above it: this is a line being composed, not a
+      // line that exists yet.
+      className="space-y-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4"
     >
-      <form id={formId} onSubmit={submit} className="space-y-4">
-        {kind === 'cost' ? (
-          <div className="space-y-2">
-            <label htmlFor="cost-category" className="text-sm font-medium text-gray-700">
-              {t('fieldCategory')}
-            </label>
-            <select
-              id="cost-category"
-              value={category}
-              onChange={(event) => setCategory(event.target.value as TripCostCategory)}
-              className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            >
-              {TRIP_COST_CATEGORIES.map((value) => (
-                <option key={value} value={value}>
-                  {t(CATEGORY_LABEL[value])}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <label htmlFor="hire-carrier" className="text-sm font-medium text-gray-700">
-              {t('fieldCarrier')}
-            </label>
-            <Input
-              id="hire-carrier"
-              value={carrierName}
-              onChange={(event) => setCarrierName(event.target.value)}
-              required
-            />
-          </div>
-        )}
+      <h4 className="text-sm font-semibold text-gray-900">
+        {t(kind === 'cost' ? 'addCost' : 'addHire')}
+      </h4>
 
+      {kind === 'cost' ? (
         <div className="space-y-2">
-          <label htmlFor="cost-amount" className="text-sm font-medium text-gray-700">
-            {t(kind === 'cost' ? 'fieldAmount' : 'fieldAgreedAmount')}
+          <label htmlFor="cost-category" className="text-sm font-medium text-gray-700">
+            {t('fieldCategory')}
+          </label>
+          <select
+            id="cost-category"
+            // The first field of a form that just appeared: without this the
+            // keyboard is still wherever the button left it.
+            autoFocus
+            value={category}
+            onChange={(event) => setCategory(event.target.value as TripCostCategory)}
+            className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            {TRIP_COST_CATEGORIES.map((value) => (
+              <option key={value} value={value}>
+                {t(CATEGORY_LABEL[value])}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <label htmlFor="hire-carrier" className="text-sm font-medium text-gray-700">
+            {t('fieldCarrier')}
           </label>
           <Input
-            id="cost-amount"
-            // `inputMode` rather than `type="number"`: a number input hands back
-            // a value the browser has already coerced, and money must reach the
-            // server as the digits somebody typed.
-            inputMode="decimal"
-            value={amount}
-            onChange={(event) => setAmount(event.target.value)}
-            placeholder="1500000"
+            id="hire-carrier"
+            autoFocus
+            value={carrierName}
+            onChange={(event) => setCarrierName(event.target.value)}
             required
           />
-          <p className="text-xs text-gray-500">{t('amountHint')}</p>
         </div>
+      )}
 
-        {kind === 'hire' && (
-          <>
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={includesVat}
-                onChange={(event) => setIncludesVat(event.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
-              />
-              {t('vatIncluded')}
-            </label>
+      <div className="space-y-2">
+        <label htmlFor="cost-amount" className="text-sm font-medium text-gray-700">
+          {t(kind === 'cost' ? 'fieldAmount' : 'fieldAgreedAmount')}
+        </label>
+        <MoneyInput
+          id="cost-amount"
+          value={amount}
+          onChange={setAmount}
+          placeholder="1,500,000"
+          required
+        />
+        <p className="text-xs text-gray-500">{t('amountHint')}</p>
+      </div>
 
-            <div className="space-y-2">
-              <label htmlFor="hire-document" className="text-sm font-medium text-gray-700">
-                {t('fieldDocumentRef')}
-              </label>
-              <Input
-                id="hire-document"
-                value={documentRef}
-                onChange={(event) => setDocumentRef(event.target.value)}
-              />
-            </div>
-          </>
-        )}
-
-        <div className="space-y-2">
-          <label htmlFor="cost-note" className="text-sm font-medium text-gray-700">
-            {t('noteOptional')}
+      {kind === 'hire' && (
+        <>
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={includesVat}
+              onChange={(event) => setIncludesVat(event.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            {t('vatIncluded')}
           </label>
-          <Input id="cost-note" value={note} onChange={(event) => setNote(event.target.value)} />
-        </div>
 
-        {error && (
-          <p role="alert" className="text-sm text-red-600">
-            {error}
-          </p>
-        )}
-      </form>
-    </Modal>
+          <div className="space-y-2">
+            <label htmlFor="hire-document" className="text-sm font-medium text-gray-700">
+              {t('fieldDocumentRef')}
+            </label>
+            <Input
+              id="hire-document"
+              value={documentRef}
+              onChange={(event) => setDocumentRef(event.target.value)}
+            />
+          </div>
+        </>
+      )}
+
+      <div className="space-y-2">
+        <label htmlFor="cost-note" className="text-sm font-medium text-gray-700">
+          {t('noteOptional')}
+        </label>
+        <Input id="cost-note" value={note} onChange={(event) => setNote(event.target.value)} />
+      </div>
+
+      {error && (
+        <p role="alert" className="text-sm text-red-600">
+          {error}
+        </p>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" size="sm" type="button" onClick={onClose} disabled={busy}>
+          {t('cancel')}
+        </Button>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={busy}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
+          {busy ? t('saving') : t('save')}
+        </Button>
+      </div>
+    </form>
   );
 }
 
 /**
- * Withdrawing a record.
+ * Removing a record.
  *
- * The reason is required by the server and by this form: a withdrawal with no
- * reason is the record somebody comes back to months later and cannot explain.
- * The copy says what voiding is NOT, because people read it as a delete.
+ * ★ A CONFIRMATION, NOT A FORM. It asks one question and offers two answers,
+ * because that is what removing a line is: nothing here is composed, so there
+ * is nothing to fill in. The copy then says what this is NOT — the row is kept
+ * and only stops counting — because the button says "Xóa" and people read
+ * that as gone forever.
  */
-function VoidRecordModal({
+function DeleteRecordModal({
   kind,
   tripId,
   recordId,
   onClose,
-  onVoided,
+  onDeleted,
 }: Readonly<{
   kind: 'cost' | 'hire';
   tripId: string;
   recordId: string;
   onClose: () => void;
-  onVoided: () => void;
+  onDeleted: () => void;
 }>) {
   const { t } = useLanguage();
-  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // What is being withdrawn, in the words of the section it came from. The two
+  // lists sit one above the other in the same panel, so a dialog that said only
+  // "record" would leave the reader to remember which button they pressed.
+  const title = t(kind === 'cost' ? 'voidCostTitle' : 'voidHireTitle');
 
   const confirm = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -524,9 +557,9 @@ function VoidRecordModal({
 
     try {
       await (kind === 'cost'
-        ? voidTripCost(tripId, recordId, reason)
-        : voidOutsourceHire(tripId, recordId, reason));
-      onVoided();
+        ? voidTripCost(tripId, recordId)
+        : voidOutsourceHire(tripId, recordId));
+      onDeleted();
       onClose();
     } catch (error_) {
       setError(isApiError(error_) ? error_.message : t('saveFailed'));
@@ -535,38 +568,28 @@ function VoidRecordModal({
     }
   };
 
-  const formId = 'trip-cost-void-form';
+  const formId = 'trip-cost-delete-form';
 
   return (
     <Modal
       isOpen
       onClose={onClose}
-      title={t('voidRecord')}
+      title={title}
       footer={
         <>
           <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
             {t('cancel')}
           </Button>
           <Button type="submit" form={formId} disabled={busy}>
-            {busy ? t('saving') : t('voidRecord')}
+            {busy ? t('saving') : title}
           </Button>
         </>
       }
     >
       <form id={formId} onSubmit={confirm} className="space-y-4">
-        <p className="text-sm text-gray-600">{t('confirmVoidBody')}</p>
-
-        <div className="space-y-2">
-          <label htmlFor="void-reason" className="text-sm font-medium text-gray-700">
-            {t('voidReason')}
-          </label>
-          <Input
-            id="void-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            required
-          />
-        </div>
+        <p className="text-sm text-gray-600">
+          {t(kind === 'cost' ? 'confirmVoidCostBody' : 'confirmVoidHireBody')}
+        </p>
 
         {error && (
           <p role="alert" className="text-sm text-red-600">

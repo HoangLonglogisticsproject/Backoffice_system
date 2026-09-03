@@ -197,7 +197,7 @@ describe('the review queue', () => {
     renderPage();
 
     expect(await screen.findByText(/đã khai: có phát sinh/i)).toBeInTheDocument();
-    expect(screen.queryByText('1.500.000')).not.toBeInTheDocument();
+    expect(screen.queryByText('1,500,000')).not.toBeInTheDocument();
   });
 });
 
@@ -246,7 +246,7 @@ describe('the evidence', () => {
   it('shows the driver’s figures when the reviewer holds cost.read', async () => {
     await openReview();
 
-    expect(screen.getByText('1.500.000')).toBeInTheDocument();
+    expect(screen.getByText('1,500,000')).toBeInTheDocument();
   });
 
   it('★ says so, and asks for nothing, when the reviewer lacks cost.read', async () => {

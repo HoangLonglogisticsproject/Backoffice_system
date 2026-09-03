@@ -398,7 +398,7 @@ describe('expenses', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
 
     // The form is still there, and so is every keystroke.
-    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1550000');
+    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1,550,000');
     expect(screen.getByLabelText(/ghi chú/i)).toHaveValue('Đổ thêm ở Dầu Giây');
     expect(screen.getByRole('button', { name: /^lưu$/i })).toBeInTheDocument();
   });
@@ -416,7 +416,7 @@ describe('expenses', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/không có kết nối/i);
 
-    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1550000');
+    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1,550,000');
     expect(screen.getByRole('button', { name: /phí kho/i })).toHaveAttribute('aria-pressed', 'true');
   });
 
@@ -425,7 +425,7 @@ describe('expenses', () => {
     renderDetail();
 
     // Twice now: once on the line, once in the total the driver reviews.
-    expect((await screen.findAllByText('1.500.000')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('1,500,000')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Sửa' })).not.toBeInTheDocument();
   });
 
@@ -766,7 +766,10 @@ describe('★ the draft survives, and the request is idempotent', () => {
     renderDetail();
 
     fireEvent.click(await screen.findByRole('button', { name: /thêm khoản chi/i }));
-    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1500000');
+    // Grouped on screen, plain underneath: `MoneyInput` puts the commas in for
+    // reading and keeps `1500000` in state, so what was persisted is still the
+    // string the server takes.
+    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1,500,000');
     expect(screen.getByLabelText(/ghi chú/i)).toHaveValue('Đổ ở Long An');
   });
 
@@ -785,7 +788,7 @@ describe('★ the draft survives, and the request is idempotent', () => {
     renderDetail();
     fireEvent.click(await screen.findByRole('button', { name: /thêm khoản chi/i }));
 
-    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1500000');
+    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('1,500,000');
   });
 
   it('forgets the draft once the server has accepted', async () => {
@@ -847,7 +850,7 @@ describe('the expense panel tells the driver where they stand', () => {
     expect(await screen.findByText(/2 khoản/i)).toBeInTheDocument();
     // ★ 0.10 + 0.20 = 0.30 — the classic float trap, exact here because the
     // sum runs through integer minor units rather than `parseFloat`.
-    expect(screen.getByText('1.700.000,30')).toBeInTheDocument();
+    expect(screen.getByText('1,700,000.30')).toBeInTheDocument();
   });
 
   it('shows a hint that belongs to the chosen heading', async () => {

@@ -227,7 +227,7 @@ const PHRASES = {
     vi: 'Chuyến chưa có xe nên chưa khai chi phí được',
     en: 'This trip has no vehicle yet, so expenses cannot be declared',
   },
-  driverAmountHint: { vi: 'Ví dụ: 1500000', en: 'For example: 1500000' },
+  driverAmountHint: { vi: 'Ví dụ: 1,500,000', en: 'For example: 1,500,000' },
 
   driverCompletion: { vi: 'Hoàn tất chuyến', en: 'Completing the trip' },
   driverSubmitCompletion: { vi: 'Gửi hoàn tất chuyến', en: 'Submit for completion' },
@@ -863,21 +863,34 @@ const PHRASES = {
   fieldDocumentRef: { vi: 'Số chứng từ', en: 'Document reference' },
   vatIncluded: { vi: 'Đã bao gồm VAT', en: 'VAT included' },
   vatIncludedShort: { vi: 'Có VAT', en: 'incl. VAT' },
-  // ★ SAYS WHAT VOID IS NOT. A withdrawn line is not deleted — it stays on
-  // the record with a reason, and only stops counting.
-  voidRecord: { vi: 'Hủy khoản', en: 'Void' },
-  voidReason: { vi: 'Lý do hủy *', en: 'Reason for voiding *' },
-  confirmVoidBody: {
-    vi: 'Hủy khoản này? Bản ghi vẫn được giữ lại kèm lý do — chỉ là không còn tính vào tổng.',
-    en: 'Void this record? It is kept, with the reason — it simply stops counting.',
+  // ★ THE WORD ON SCREEN IS "DELETE", THE MECHANISM UNDERNEATH IS NOT. Nothing
+  // is destroyed: the row survives with who removed it and when, and only stops
+  // counting — which is why every line of copy below says so out loud. The
+  // interface speaks the word people already use for this button; the keys, the
+  // API and the column keep saying `void`, because that is what still happens.
+  voidRecord: { vi: 'Xóa', en: 'Delete' },
+  // ★ THE DIALOG NAMES WHAT IT IS ABOUT, THE ROW BUTTON CANNOT. That button
+  // lives in a column one word wide and can only say 'Xóa'; the confirmation it
+  // opens has the room, and needs it — removing a fuel line and removing a hired
+  // truck are not the same act, and a dialog that reads the same for both is one
+  // people click through without reading.
+  voidCostTitle: { vi: 'Xóa chi phí', en: 'Delete cost' },
+  voidHireTitle: { vi: 'Xóa xe thuê ngoài', en: 'Delete hire' },
+  confirmVoidCostBody: {
+    vi: 'Bạn có chắc muốn xóa khoản chi phí này? Bản ghi vẫn được giữ lại — chỉ là không còn tính vào tổng.',
+    en: 'Delete this cost line? It is kept — it simply stops counting.',
   },
-  statusVoided: { vi: 'Đã hủy', en: 'Voided' },
-  showVoided: { vi: 'Hiện cả khoản đã hủy', en: 'Show voided' },
+  confirmVoidHireBody: {
+    vi: 'Bạn có chắc muốn xóa xe thuê ngoài này? Bản ghi vẫn được giữ lại — chỉ là không còn tính vào tổng.',
+    en: 'Delete this outsourced hire? It is kept — it simply stops counting.',
+  },
+  statusVoided: { vi: 'Đã xóa', en: 'Deleted' },
+  showVoided: { vi: 'Hiện cả khoản đã xóa', en: 'Show deleted' },
   emptyCosts: { vi: 'Chưa có chi phí xe nhà.', en: 'No own-vehicle cost yet.' },
   emptyHires: { vi: 'Chưa có xe thuê ngoài.', en: 'No outsourced hire yet.' },
   amountHint: {
-    vi: 'Nhập số tiền, tối đa 2 số lẻ. Ví dụ: 1500000',
-    en: 'A positive amount, at most 2 decimals. e.g. 1500000',
+    vi: 'Nhập số tiền, tối đa 2 số lẻ. Ví dụ: 1,500,000',
+    en: 'A positive amount, at most 2 decimals. e.g. 1,500,000',
   },
 } as const satisfies Record<string, Phrase>;
 

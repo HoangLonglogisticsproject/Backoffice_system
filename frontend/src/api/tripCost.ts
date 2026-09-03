@@ -83,18 +83,19 @@ export async function createTripCost(
 /**
  * Withdraws a cost line.
  *
- * POST and "void", not DELETE: the row survives with who withdrew it and why,
+ * POST and "void", not DELETE: the row survives with who withdrew it and when,
  * because a line counted in last month's total has to stay explicable. The
- * reason is required — the server refuses a blank one.
+ * reason is optional — the interface asks for a plain confirmation — so the
+ * body simply carries none.
  */
 export async function voidTripCost(
   tripId: string,
   costId: string,
-  reason: string,
+  reason?: string,
 ): Promise<TripCost> {
   const { data } = await httpClient.post<TripCost>(
     `${tripPath(tripId)}/costs/${encodeURIComponent(costId)}/void`,
-    { reason },
+    reason ? { reason } : {},
   );
   return data;
 }
@@ -126,11 +127,11 @@ export async function createOutsourceHire(
 export async function voidOutsourceHire(
   tripId: string,
   hireId: string,
-  reason: string,
+  reason?: string,
 ): Promise<OutsourceHire> {
   const { data } = await httpClient.post<OutsourceHire>(
     `${tripPath(tripId)}/outsource-hires/${encodeURIComponent(hireId)}/void`,
-    { reason },
+    reason ? { reason } : {},
   );
   return data;
 }
