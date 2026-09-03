@@ -1,8 +1,9 @@
 import { Link, Outlet, useNavigate } from 'react-router-dom';
-import { KeyRound, LogOut, Truck } from 'lucide-react';
+import { Bell, KeyRound, LogOut, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
+import { useNotificationStream, useNotifications } from '@/hooks/notifications';
 
 /**
  * The Driver Portal's shell.
@@ -30,6 +31,13 @@ export default function DriverLayout() {
   const username = state?.status === 'ready' ? state.authorization.username : null;
   const navigate = useNavigate();
 
+  // ★ THE LIVE CHANNEL IS OPEN EXACTLY WHILE THE PORTAL IS. Mounted here, it
+  // lives as long as the shell and closes with it — a sign-out unmounts the
+  // shell, so no stream outlives the session that opened it. What it hears
+  // triggers refetches; the badge below is read from the API like everything.
+  useNotificationStream();
+  const unread = useNotifications().data?.unreadCount ?? 0;
+
   const leave = async () => {
     await signOut();
     navigate('/login', { replace: true });
@@ -49,6 +57,25 @@ export default function DriverLayout() {
             {/* The name, never the id. */}
             <p className="truncate text-xs text-muted-foreground">{username ?? ''}</p>
           </div>
+          <Button
+            variant="ghost"
+            size="icon-lg"
+            className="relative"
+            aria-label={
+              unread > 0 ? `${t('driverNotifications')} (${unread} ${t('driverUnread')})` : t('driverNotifications')
+            }
+            render={<Link to="/driver/notifications" />}
+          >
+            <Bell />
+            {unread > 0 ? (
+              <span
+                data-testid="unread-badge"
+                className="absolute -top-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[11px] font-semibold text-white"
+              >
+                {unread > 99 ? '99+' : unread}
+              </span>
+            ) : null}
+          </Button>
           {/* The one account function a driver has. Everything else on the
               Backoffice's security screen is unbuilt there too. */}
           <Button

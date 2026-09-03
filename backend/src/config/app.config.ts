@@ -53,6 +53,16 @@ export class AppConfig {
     return this.config.get('TRUSTED_PROXIES', { infer: true });
   }
 
+  /** Live notification streams one account may hold. */
+  get sseMaxConnectionsPerUser(): number {
+    return this.config.get('SSE_MAX_CONNECTIONS_PER_USER', { infer: true });
+  }
+
+  /** Live notification streams the whole process may hold. */
+  get sseMaxConnections(): number {
+    return this.config.get('SSE_MAX_CONNECTIONS', { infer: true });
+  }
+
   get isProduction(): boolean {
     return this.nodeEnv === 'production';
   }

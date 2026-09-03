@@ -118,6 +118,12 @@ export interface TripScheduleWithRefs extends TripSchedule {
   customer: TripCustomerRef | null;
   /** Who wrote the row. Present always — `createdBy` is NOT NULL. */
   createdByUser: UserSummary;
+  /**
+   * Who is driving it NOW — the active assignment, spelled out. `null` while
+   * nobody is. The history behind it is its own read; this is the one fact
+   * the board needs on every row.
+   */
+  driver: UserSummary | null;
 }
 
 /** The smallest useful projection of a vehicle: enough to print, nothing more. */

@@ -1,6 +1,6 @@
 import {
-  PICKUP_LOCATION_POLICY,
-  checkPickupLocation,
+  MILESTONE_LOCATION_POLICY,
+  checkMilestoneLocation,
   distanceMeters,
   isCoordinates,
   isLatitude,
@@ -104,19 +104,19 @@ describe('distanceMeters', () => {
   });
 });
 
-describe('checkPickupLocation', () => {
+describe('checkMilestoneLocation', () => {
   it('passes a fresh, precise reading at the destination', () => {
-    expect(checkPickupLocation(SCSC, fix(), NOW)).toEqual({ passed: true, distanceM: 0 });
+    expect(checkMilestoneLocation(SCSC, fix(), NOW)).toEqual({ passed: true, distanceM: 0 });
   });
 
   it('refuses before anything else when the destination has no coordinates', () => {
     // Even a perfect reading cannot be measured against nowhere — and the
     // driver is told it is not their reading that is wrong.
-    expect(checkPickupLocation(null, fix(), NOW)).toMatchObject({ reason: 'DESTINATION_MISSING' });
+    expect(checkMilestoneLocation(null, fix(), NOW)).toMatchObject({ reason: 'DESTINATION_MISSING' });
   });
 
   it('refuses when no reading was sent', () => {
-    expect(checkPickupLocation(SCSC, null, NOW)).toMatchObject({ reason: 'LOCATION_REQUIRED' });
+    expect(checkMilestoneLocation(SCSC, null, NOW)).toMatchObject({ reason: 'LOCATION_REQUIRED' });
   });
 
   it.each([
@@ -127,36 +127,36 @@ describe('checkPickupLocation', () => {
     ['negative accuracy', fix({ accuracyM: -1 })],
     ['accuracy NaN', fix({ accuracyM: Number.NaN })],
   ])('refuses %s as invalid', (_label, evidence) => {
-    expect(checkPickupLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'INVALID_COORDINATES' });
+    expect(checkMilestoneLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'INVALID_COORDINATES' });
   });
 
   it('refuses a reading looser than the accuracy ceiling', () => {
-    const evidence = fix({ accuracyM: PICKUP_LOCATION_POLICY.maxAccuracyM + 0.1 });
-    expect(checkPickupLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'ACCURACY_INSUFFICIENT' });
+    const evidence = fix({ accuracyM: MILESTONE_LOCATION_POLICY.maxAccuracyM + 0.1 });
+    expect(checkMilestoneLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'ACCURACY_INSUFFICIENT' });
   });
 
   it('accepts a reading exactly at the accuracy ceiling', () => {
-    const evidence = fix({ accuracyM: PICKUP_LOCATION_POLICY.maxAccuracyM });
-    expect(checkPickupLocation(SCSC, evidence, NOW)).toMatchObject({ passed: true });
+    const evidence = fix({ accuracyM: MILESTONE_LOCATION_POLICY.maxAccuracyM });
+    expect(checkMilestoneLocation(SCSC, evidence, NOW)).toMatchObject({ passed: true });
   });
 
   it('refuses a fix older than the freshness window', () => {
-    const evidence = fix({ capturedAt: new Date(NOW.getTime() - PICKUP_LOCATION_POLICY.maxAgeMs - 1) });
-    expect(checkPickupLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'LOCATION_STALE' });
+    const evidence = fix({ capturedAt: new Date(NOW.getTime() - MILESTONE_LOCATION_POLICY.maxAgeMs - 1) });
+    expect(checkMilestoneLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'LOCATION_STALE' });
   });
 
   it('accepts a fix exactly at the freshness window', () => {
-    const evidence = fix({ capturedAt: new Date(NOW.getTime() - PICKUP_LOCATION_POLICY.maxAgeMs) });
-    expect(checkPickupLocation(SCSC, evidence, NOW)).toMatchObject({ passed: true });
+    const evidence = fix({ capturedAt: new Date(NOW.getTime() - MILESTONE_LOCATION_POLICY.maxAgeMs) });
+    expect(checkMilestoneLocation(SCSC, evidence, NOW)).toMatchObject({ passed: true });
   });
 
   it('★ refuses a fix stamped far in the FUTURE — a clock that moved between fix and send', () => {
-    const evidence = fix({ capturedAt: new Date(NOW.getTime() + PICKUP_LOCATION_POLICY.maxAgeMs + 1) });
-    expect(checkPickupLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'LOCATION_STALE' });
+    const evidence = fix({ capturedAt: new Date(NOW.getTime() + MILESTONE_LOCATION_POLICY.maxAgeMs + 1) });
+    expect(checkMilestoneLocation(SCSC, evidence, NOW)).toMatchObject({ reason: 'LOCATION_STALE' });
   });
 
   it('refuses an unparseable capture time as stale', () => {
-    expect(checkPickupLocation(SCSC, fix({ capturedAt: new Date('nope') }), NOW)).toMatchObject({
+    expect(checkMilestoneLocation(SCSC, fix({ capturedAt: new Date('nope') }), NOW)).toMatchObject({
       reason: 'LOCATION_STALE',
     });
   });
@@ -166,33 +166,33 @@ describe('checkPickupLocation', () => {
     // time the fix is five seconds old, which is what matters.
     const wrongNow = new Date('2021-01-01T00:00:00.000Z');
     const evidence = fix({ capturedAt: new Date(wrongNow.getTime() - 5_000) });
-    expect(checkPickupLocation(SCSC, evidence, wrongNow)).toMatchObject({ passed: true });
+    expect(checkMilestoneLocation(SCSC, evidence, wrongNow)).toMatchObject({ passed: true });
   });
 
   it('refuses a good reading that is outside the radius, and says how far', () => {
-    const away = north(SCSC, PICKUP_LOCATION_POLICY.geofenceRadiusM + 50);
-    const verdict = checkPickupLocation(SCSC, fix(away), NOW);
+    const away = north(SCSC, MILESTONE_LOCATION_POLICY.geofenceRadiusM + 50);
+    const verdict = checkMilestoneLocation(SCSC, fix(away), NOW);
 
     expect(verdict).toMatchObject({ passed: false, reason: 'OUTSIDE_GEOFENCE' });
-    expect(verdict.distanceM).toBeGreaterThan(PICKUP_LOCATION_POLICY.geofenceRadiusM);
+    expect(verdict.distanceM).toBeGreaterThan(MILESTONE_LOCATION_POLICY.geofenceRadiusM);
   });
 
   it('★ accepts a reading exactly on the boundary', () => {
-    const edge = north(SCSC, PICKUP_LOCATION_POLICY.geofenceRadiusM);
+    const edge = north(SCSC, MILESTONE_LOCATION_POLICY.geofenceRadiusM);
     // Floating point puts the derived point a hair either side; assert with a
     // policy whose radius is the measured distance, so "exactly on" is exact.
     const distanceM = distanceMeters(SCSC, edge);
-    const policy = { ...PICKUP_LOCATION_POLICY, geofenceRadiusM: distanceM };
+    const policy = { ...MILESTONE_LOCATION_POLICY, geofenceRadiusM: distanceM };
 
-    expect(checkPickupLocation(SCSC, fix(edge), NOW, policy)).toEqual({ passed: true, distanceM });
+    expect(checkMilestoneLocation(SCSC, fix(edge), NOW, policy)).toEqual({ passed: true, distanceM });
   });
 
   it('refuses one metre past the boundary', () => {
-    const edge = north(SCSC, PICKUP_LOCATION_POLICY.geofenceRadiusM);
+    const edge = north(SCSC, MILESTONE_LOCATION_POLICY.geofenceRadiusM);
     const distanceM = distanceMeters(SCSC, edge);
-    const policy = { ...PICKUP_LOCATION_POLICY, geofenceRadiusM: distanceM - 1 };
+    const policy = { ...MILESTONE_LOCATION_POLICY, geofenceRadiusM: distanceM - 1 };
 
-    expect(checkPickupLocation(SCSC, fix(edge), NOW, policy)).toMatchObject({
+    expect(checkMilestoneLocation(SCSC, fix(edge), NOW, policy)).toMatchObject({
       reason: 'OUTSIDE_GEOFENCE',
     });
   });
@@ -200,7 +200,7 @@ describe('checkPickupLocation', () => {
   it('checks accuracy and freshness BEFORE distance, so a bad reading is never called "outside"', () => {
     // A district-wide reading 2 km away is not evidence of being 2 km away.
     const away = north(SCSC, 2_000);
-    const verdict = checkPickupLocation(SCSC, fix({ ...away, accuracyM: 900 }), NOW);
+    const verdict = checkMilestoneLocation(SCSC, fix({ ...away, accuracyM: 900 }), NOW);
     expect(verdict).toMatchObject({ reason: 'ACCURACY_INSUFFICIENT', distanceM: null });
   });
 });

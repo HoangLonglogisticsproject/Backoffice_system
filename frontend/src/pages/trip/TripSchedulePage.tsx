@@ -24,6 +24,7 @@ import { TripFormModal } from './components/TripFormModal';
 import { TripStatusBadge } from './components/TripStatusBadge';
 import { TripStatusSelect } from './components/TripStatusSelect';
 import { TripCostModal } from './components/TripCostModal';
+import { DriverAssignModal } from './components/DriverAssignModal';
 
 /**
  * The dispatch board — the screen that replaces `LỊCH XE - CHI PHÍ XE.xlsx`.
@@ -55,6 +56,8 @@ export default function TripSchedulePage() {
   // hide the only control they need.
   const canViewCost = can('cost.read');
   const [costFor, setCostFor] = useState<string | null>(null);
+  /** The trip whose driver is being chosen. `trip.write`, like every other correction. */
+  const [assigning, setAssigning] = useState<TripScheduleWithRefs | null>(null);
 
   // The list, its date range and its page walk — see `useTripSchedules` for why
   // those three are one hook and not three pieces of page state.
@@ -147,6 +150,7 @@ export default function TripSchedulePage() {
                 </TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colDate')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colVehicle')}</TableHead>
+                <TableHead className="font-semibold text-gray-600">{t('colDriver')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCustomer')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCargo')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colPickup')}</TableHead>
@@ -176,6 +180,31 @@ export default function TripSchedulePage() {
                   </TableCell>
                   <TableCell className="whitespace-nowrap font-medium text-gray-900">
                     {trip.vehicle?.plate ?? <Unset />}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {/*
+                      ★ WHO IS DRIVING, AND THE ONE CONTROL THAT CHANGES IT.
+                      Operations assigns; the driver never does — the portal
+                      has no such button and the server refuses a driver
+                      account the route. Hidden on a finished trip for the
+                      same reason the status dropdown is: the server refuses
+                      every assignment write once a trip is done.
+                    */}
+                    <div className="flex items-center gap-2">
+                      <span className={trip.driver ? 'text-gray-900' : 'text-gray-400'}>
+                        {trip.driver?.displayName ?? t('driverUnassigned')}
+                      </span>
+                      {canManage && trip.status !== 'done' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-gray-600"
+                          onClick={() => setAssigning(trip)}
+                        >
+                          {trip.driver ? t('changeDriver') : t('assignDriver')}
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-gray-900">{trip.customer?.name ?? <Unset />}</TableCell>
                   <TableCell>
@@ -329,6 +358,7 @@ export default function TripSchedulePage() {
       />
 
       <TripCostModal tripId={costFor} onClose={() => setCostFor(null)} />
+      <DriverAssignModal trip={assigning} onClose={() => setAssigning(null)} />
 
       <ArchiveTripDialog
         trip={archiving}

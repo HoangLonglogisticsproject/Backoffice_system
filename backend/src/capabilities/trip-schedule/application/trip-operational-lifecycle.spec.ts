@@ -1,4 +1,9 @@
-import { ConflictError, ForbiddenError, ValidationError } from '../../../common/errors/domain.error';
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+} from '../../../common/errors/domain.error';
 import type { Database, DatabaseQuery } from '../../../common/types/database.port';
 import { accountabilityOf } from '../domain/trip-execution';
 import { TripCompletionService } from './trip-completion.service';
@@ -47,6 +52,18 @@ const openTrip = (over: Record<string, unknown> = {}) => ({
 
 const activeAssignment = { id: 'assignment-1', tripId: TRIP, driverUserId: DRIVER, state: 'active' };
 
+/** A user repository that knows one live driver. */
+const drivers = () => ({
+  findById: jest.fn().mockResolvedValue({ id: DRIVER, accountType: 'driver', status: 'active' }),
+  listActiveByAccountType: jest.fn().mockResolvedValue([{ id: DRIVER, displayName: 'Tài Xế' }]),
+});
+
+/** A notification service that records what it was asked to record. */
+const told = () => ({
+  record: jest.fn().mockImplementation(async (input: unknown) => ({ id: 'note', ...(input as object) })),
+  deliver: jest.fn(),
+});
+
 describe('completion', () => {
   const build = (over: Record<string, unknown> = {}) => {
     const trips = {
@@ -56,7 +73,10 @@ describe('completion', () => {
       exists: jest.fn().mockResolvedValue(true),
       ...over,
     };
-    const assignments = { lockActive: jest.fn().mockResolvedValue(activeAssignment) };
+    const assignments = {
+      lockActive: jest.fn().mockResolvedValue(activeAssignment),
+      findActive: jest.fn().mockResolvedValue(activeAssignment),
+    };
     const requests = {
       lockPending: jest.fn().mockResolvedValue(null),
       submit: jest.fn().mockResolvedValue({ id: 'request-1', attemptNo: 1, state: 'pending' }),
@@ -71,6 +91,7 @@ describe('completion', () => {
       listActiveByTrip: jest.fn().mockResolvedValue([{ id: 'cost-1' }]),
     };
     const history = { record: jest.fn().mockResolvedValue(undefined) };
+    const notifications = told();
 
     const service = new TripCompletionService(
       database(),
@@ -79,9 +100,10 @@ describe('completion', () => {
       requests as never,
       costs as never,
       history as never,
+      notifications as never,
     );
 
-    return { service, trips, assignments, requests, costs, history };
+    return { service, trips, assignments, requests, costs, history, notifications };
   };
 
   describe('submit', () => {
@@ -462,6 +484,8 @@ describe('execution events', () => {
       ...over,
     };
     const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
+    const users = drivers();
+    const notifications = told();
 
     const service = new TripExecutionService(
       database(),
@@ -469,9 +493,11 @@ describe('execution events', () => {
       assignments as never,
       events as never,
       vehicles as never,
+      users as never,
+      notifications as never,
     );
 
-    return { service, trips, assignments, events, vehicles };
+    return { service, trips, assignments, events, vehicles, users, notifications };
   };
 
   const arriving = {
@@ -752,6 +778,8 @@ describe('execution events', () => {
 describe('driver assignment', () => {
   const build = () => {
     const trips = { lockActive: jest.fn().mockResolvedValue(openTrip()), exists: jest.fn() };
+    const users = drivers();
+    const notifications = told();
     const assignments = {
       lockActive: jest.fn().mockResolvedValue(null),
       assign: jest.fn().mockResolvedValue({ id: 'assignment-2', driverUserId: OTHER }),
@@ -763,8 +791,10 @@ describe('driver assignment', () => {
       assignments as never,
       { findByClientEventId: jest.fn() } as never,
       { findById: jest.fn() } as never,
+      users as never,
+      notifications as never,
     );
-    return { service, trips, assignments };
+    return { service, trips, assignments, users, notifications };
   };
 
   it('refuses a second driver rather than silently replacing the first', async () => {
@@ -1098,5 +1128,320 @@ describe('withdrawing an immutable figure', () => {
     await expect(service.voidCost(TRIP, 'cost-1', { by: BOSS, reason: 'Lại nữa.' })).rejects.toThrow(
       ConflictError,
     );
+  });
+});
+
+describe('★ assignment eligibility and what the driver is told', () => {
+  const build = () => {
+    const trips = { lockActive: jest.fn().mockResolvedValue(openTrip()), exists: jest.fn() };
+    const users = drivers();
+    const notifications = told();
+    const assignments = {
+      lockActive: jest.fn().mockResolvedValue(null),
+      assign: jest.fn().mockResolvedValue({ ...activeAssignment, id: 'assignment-2' }),
+      end: jest.fn().mockResolvedValue({ ...activeAssignment, state: 'ended' }),
+    };
+    const service = new TripExecutionService(
+      database(),
+      trips as never,
+      assignments as never,
+      { findByClientEventId: jest.fn() } as never,
+      { findById: jest.fn() } as never,
+      users as never,
+      notifications as never,
+    );
+    return { service, trips, assignments, users, notifications };
+  };
+
+  it('refuses a person who does not exist', async () => {
+    const { service, users } = build();
+    users.findById.mockResolvedValue(null);
+    await expect(service.assign(TRIP, 'nobody', BOSS)).rejects.toThrow(NotFoundError);
+  });
+
+  it('★ refuses an employee account — only a driver account drives', async () => {
+    const { service, users, assignments } = build();
+    users.findById.mockResolvedValue({ id: OTHER, accountType: 'employee', status: 'active' });
+
+    await expect(service.assign(TRIP, OTHER, BOSS)).rejects.toThrow(ValidationError);
+    expect(assignments.assign).not.toHaveBeenCalled();
+  });
+
+  it('refuses a disabled driver account', async () => {
+    const { service, users, assignments } = build();
+    users.findById.mockResolvedValue({ id: DRIVER, accountType: 'driver', status: 'disabled' });
+
+    await expect(service.assign(TRIP, DRIVER, BOSS)).rejects.toThrow(ConflictError);
+    expect(assignments.assign).not.toHaveBeenCalled();
+  });
+
+  it('refuses a closed trip before looking at the driver', async () => {
+    const { service, trips, users } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'done' }));
+
+    await expect(service.assign(TRIP, DRIVER, BOSS)).rejects.toThrow(ConflictError);
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
+  it('★ records TRIP_ASSIGNED inside the transaction and delivers it after', async () => {
+    const { service, notifications } = build();
+
+    await service.assign(TRIP, DRIVER, BOSS);
+
+    expect(notifications.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientUserId: DRIVER,
+        type: 'TRIP_ASSIGNED',
+        tripId: TRIP,
+        eventKey: 'assignment:assignment-2:assigned',
+      }),
+      TX,
+    );
+    expect(notifications.deliver).toHaveBeenCalledTimes(1);
+    expect(notifications.deliver.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it('★ delivers nothing the transaction did not write', async () => {
+    const { service, assignments, notifications } = build();
+    assignments.assign.mockRejectedValue(new Error('unique index'));
+
+    await expect(service.assign(TRIP, DRIVER, BOSS)).rejects.toThrow('unique index');
+    expect(notifications.deliver).not.toHaveBeenCalled();
+  });
+
+  it('★ tells both drivers on a replacement, each about their own turn', async () => {
+    const { service, assignments, users, notifications } = build();
+    assignments.lockActive.mockResolvedValue(activeAssignment);
+    users.findById.mockResolvedValue({ id: OTHER, accountType: 'driver', status: 'active' });
+    assignments.assign.mockResolvedValue({ ...activeAssignment, id: 'assignment-2', driverUserId: OTHER });
+
+    await service.replaceDriver(TRIP, OTHER, { by: BOSS, reason: 'sick' });
+
+    const recorded = notifications.record.mock.calls.map(([input]) => input);
+    expect(recorded).toEqual([
+      expect.objectContaining({ recipientUserId: DRIVER, type: 'TRIP_UNASSIGNED', eventKey: 'assignment:assignment-1:ended' }),
+      expect.objectContaining({ recipientUserId: OTHER, type: 'TRIP_ASSIGNED', eventKey: 'assignment:assignment-2:assigned' }),
+    ]);
+    expect(notifications.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the driver taken off a trip', async () => {
+    const { service, notifications } = build();
+
+    await service.endAssignment(TRIP, { by: BOSS, reason: 'trip cancelled' });
+
+    expect(notifications.record).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientUserId: DRIVER, type: 'TRIP_UNASSIGNED' }),
+      TX,
+    );
+  });
+
+  it('lists live driver accounts as id and name, nothing else', async () => {
+    const { service } = build();
+    await expect(service.listEligibleDrivers()).resolves.toEqual([{ id: DRIVER, displayName: 'Tài Xế' }]);
+  });
+});
+
+describe('★ confirming a delivery is geofenced against the DELIVERY point', () => {
+  const DELIVERY = { deliveryLatitude: 10.7769, deliveryLongitude: 106.7009 };
+  const SENT_AT = new Date('2026-08-30T09:31:00Z');
+  const atDelivery = {
+    latitude: 10.7769,
+    longitude: 106.7009,
+    accuracyM: 8,
+    capturedAt: new Date(SENT_AT.getTime() - 5_000),
+  };
+
+  const build = (over: Record<string, unknown> = {}) => {
+    const trips = {
+      lockActive: jest.fn().mockResolvedValue(
+        openTrip({ pickupLatitude: 10.8188, pickupLongitude: 106.6564, ...DELIVERY, ...over }),
+      ),
+      exists: jest.fn(),
+    };
+    const assignments = { lockActive: jest.fn().mockResolvedValue(activeAssignment) };
+    const events = {
+      findByClientEventId: jest.fn().mockResolvedValue(null),
+      record: jest.fn().mockResolvedValue({ id: 'event-4' }),
+      listByTrip: jest.fn().mockResolvedValue([
+        { type: 'ARRIVED_PICKUP' },
+        { type: 'PICKUP_CONFIRMED' },
+        { type: 'ARRIVED_DELIVERY' },
+      ]),
+    };
+    const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
+    const service = new TripExecutionService(
+      database(),
+      trips as never,
+      assignments as never,
+      events as never,
+      vehicles as never,
+      drivers() as never,
+      told() as never,
+    );
+    return { service, events };
+  };
+
+  const delivering = {
+    tripId: TRIP,
+    type: 'DELIVERY_CONFIRMED' as const,
+    deviceReportedAt: SENT_AT,
+    clientEventId: 'tap-4',
+    recordedBy: DRIVER,
+  };
+
+  it('passes at the delivery point and writes the verdict', async () => {
+    const { service, events } = build();
+
+    await service.recordEvent({ ...delivering, location: atDelivery });
+
+    expect(events.record).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DELIVERY_CONFIRMED', geofencePassed: true, distanceM: 0 }),
+      TX,
+    );
+  });
+
+  it('★ refuses a reading at the PICKUP point — the two ends are different places', async () => {
+    const { service, events } = build();
+    const atPickup = { ...atDelivery, latitude: 10.8188, longitude: 106.6564 };
+
+    const failure = await service
+      .recordEvent({ ...delivering, location: atPickup })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ValidationError);
+    expect((failure as ValidationError).details).toEqual({ location: 'OUTSIDE_GEOFENCE' });
+    expect(events.record).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the trip has no delivery coordinates yet', async () => {
+    const { service } = build({ deliveryLatitude: null, deliveryLongitude: null });
+
+    const failure = await service
+      .recordEvent({ ...delivering, location: atDelivery })
+      .catch((error: unknown) => error);
+
+    expect((failure as ValidationError).details).toEqual({ location: 'DESTINATION_MISSING' });
+  });
+
+  it('refuses a delivery confirmation with no reading', async () => {
+    const { service } = build();
+    const failure = await service.recordEvent(delivering).catch((error: unknown) => error);
+    expect((failure as ValidationError).details).toEqual({ location: 'LOCATION_REQUIRED' });
+  });
+
+  it('still refuses a delivery before the pickup was confirmed, before any location check', async () => {
+    const { service, events } = build();
+    events.listByTrip.mockResolvedValue([{ type: 'ARRIVED_PICKUP' }]);
+
+    await expect(service.recordEvent({ ...delivering, location: atDelivery })).rejects.toThrow(
+      ConflictError,
+    );
+  });
+
+  it('does not geofence the arrival at delivery', async () => {
+    const { service, events } = build();
+    events.listByTrip.mockResolvedValue([{ type: 'ARRIVED_PICKUP' }, { type: 'PICKUP_CONFIRMED' }]);
+
+    await service.recordEvent({ ...delivering, type: 'ARRIVED_DELIVERY', clientEventId: 'tap-3' });
+
+    expect(events.record).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ARRIVED_DELIVERY', geofencePassed: null }),
+      TX,
+    );
+  });
+});
+
+describe('★ a completion decision is told to the driver', () => {
+  const build = () => {
+    const trips = {
+      lockActive: jest.fn().mockResolvedValue(openTrip()),
+      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'done' })),
+      markClosed: jest.fn().mockResolvedValue(undefined),
+      exists: jest.fn().mockResolvedValue(true),
+    };
+    const assignments = {
+      lockActive: jest.fn().mockResolvedValue(activeAssignment),
+      findActive: jest.fn().mockResolvedValue(activeAssignment),
+    };
+    const requests = {
+      lockPending: jest.fn().mockResolvedValue({ id: 'request-1', state: 'pending', submittedBy: DRIVER }),
+      submit: jest.fn(),
+      decide: jest.fn().mockResolvedValue({ id: 'request-1', state: 'approved' }),
+      listByTrip: jest.fn().mockResolvedValue([]),
+    };
+    const costs = {
+      lockForTrip: jest.fn(),
+      unlockForTrip: jest.fn().mockResolvedValue(1),
+      finalizeForTrip: jest.fn().mockResolvedValue(1),
+      listActiveByTrip: jest.fn().mockResolvedValue([]),
+    };
+    const history = { record: jest.fn().mockResolvedValue(undefined) };
+    const notifications = told();
+    const service = new TripCompletionService(
+      database(),
+      trips as never,
+      assignments as never,
+      requests as never,
+      costs as never,
+      history as never,
+      notifications as never,
+    );
+    return { service, assignments, requests, notifications };
+  };
+
+  it('★ carries the reason on a rejection, to the driver on the trip', async () => {
+    const { service, notifications } = build();
+
+    await service.reject(TRIP, { by: BOSS, reason: 'Thiếu hoá đơn dầu' });
+
+    expect(notifications.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientUserId: DRIVER,
+        type: 'COMPLETION_REJECTED',
+        detail: 'Thiếu hoá đơn dầu',
+        eventKey: 'completion:request-1:rejected',
+      }),
+      TX,
+    );
+    expect(notifications.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the driver the trip is closed on approval', async () => {
+    const { service, notifications } = build();
+
+    await service.approve(TRIP, BOSS);
+
+    expect(notifications.record).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'COMPLETION_APPROVED', eventKey: 'completion:request-1:approved' }),
+      TX,
+    );
+  });
+
+  it('★ falls back to whoever submitted when nobody is on the trip any more', async () => {
+    // The submitter is NOT the driver the fixture normally names, so this
+    // only passes if `pending.submittedBy` is what gets used.
+    const { service, assignments, requests, notifications } = build();
+    requests.lockPending.mockResolvedValue({ id: 'request-1', state: 'pending', submittedBy: OTHER });
+    assignments.findActive.mockResolvedValue(null);
+
+    await service.approve(TRIP, BOSS);
+
+    expect(notifications.record).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientUserId: OTHER }),
+      TX,
+    );
+    expect(notifications.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ recipientUserId: DRIVER }),
+      TX,
+    );
+  });
+
+  it('delivers nothing when the decision is refused', async () => {
+    const { service, requests, notifications } = build();
+    requests.lockPending.mockResolvedValue(null);
+
+    await expect(service.approve(TRIP, BOSS)).rejects.toThrow(ConflictError);
+    expect(notifications.deliver).not.toHaveBeenCalled();
   });
 });

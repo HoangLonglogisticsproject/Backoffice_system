@@ -30,6 +30,7 @@ import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
 import AccountSecurityPage from './pages/account/AccountSecurityPage'
 import DriverTripsPage from './pages/driver/DriverTripsPage'
 import DriverTripPage from './pages/driver/DriverTripPage'
+import DriverNotificationsPage from './pages/driver/DriverNotificationsPage'
 import { RequireSession } from './components/common/SessionGuard'
 
 function App() {
@@ -56,6 +57,8 @@ function App() {
       >
         <Route path="/driver" element={<DriverTripsPage />} />
         <Route path="/driver/trips/:tripId" element={<DriverTripPage />} />
+        {/* What the driver has been told. The API's list, not the stream's. */}
+        <Route path="/driver/notifications" element={<DriverNotificationsPage />} />
         {/* The one account function a driver has: their password. Same page
             as the Backoffice's, inside the driver's own shell. */}
         <Route path="/driver/account/security" element={<AccountSecurityPage />} />

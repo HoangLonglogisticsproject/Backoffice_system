@@ -118,6 +118,8 @@ export interface TripScheduleWithRefs extends TripSchedule {
   customer: TripCustomerRef | null;
   /** Who entered the row — the one question the spreadsheet could not answer. */
   createdByUser: UserSummary;
+  /** Who is driving it NOW — the active assignment. `null` while nobody is. */
+  driver: UserSummary | null;
 }
 
 export interface TripVehicleRef {

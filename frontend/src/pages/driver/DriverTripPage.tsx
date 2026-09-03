@@ -107,13 +107,14 @@ export default function DriverTripPage() {
 
   const reportEvent = (type: ExecutionEventType) =>
     void run(async () => {
-      // ★ CONFIRMING A PICKUP ASKS THE PHONE WHERE IT IS, AND SENDS THAT — A
-      // READING, NOT A VERDICT. The server holds the trip's coordinates and
-      // the radius, measures the distance itself, and refuses with a reason
-      // the screen can name. If the phone cannot produce a reading, no
-      // request is made at all: there is no pickup without a position.
+      // ★ CONFIRMING A PICKUP OR A DELIVERY ASKS THE PHONE WHERE IT IS, AND
+      // SENDS THAT — A READING, NOT A VERDICT. The server holds the trip's
+      // coordinates for each end and the radius, measures the distance
+      // itself, and refuses with a reason the screen can name. If the phone
+      // cannot produce a reading, no request is made at all: there is no
+      // confirmation without a position.
       let location: LocationEvidence | undefined;
-      if (type === 'PICKUP_CONFIRMED') {
+      if (type === 'PICKUP_CONFIRMED' || type === 'DELIVERY_CONFIRMED') {
         setLocating(true);
         try {
           location = await captureLocation();

@@ -15,6 +15,8 @@ import {
 } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
+import { NotificationService } from '../../notification/application/notification.service';
+import { eventKeys } from '../../notification/domain/notification';
 
 /**
  * How a trip ends.
@@ -39,6 +41,7 @@ export class TripCompletionService {
     private readonly requests: CompletionRequestRepository,
     private readonly costs: TripCostRepository,
     private readonly history: TripStatusHistoryRepository,
+    private readonly notifications: NotificationService,
   ) {}
 
   /**
@@ -126,7 +129,7 @@ export class TripCompletionService {
    * editable figure on it.
    */
   async approve(tripId: string, decidedBy: string): Promise<CompletionRequest> {
-    return this.db.transaction(async (tx) => {
+    const { decided, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
 
       const pending = await this.requests.lockPending(tripId, tx);
@@ -158,8 +161,24 @@ export class TripCompletionService {
       );
       await this.trips.markClosed(tripId, decidedBy, now, tx);
 
-      return decided;
+      // The driver on the trip now — or, if nobody is, the one who asked.
+      const driver = await this.assignments.findActive(tripId, tx);
+      const told = await this.notifications.record(
+        {
+          recipientUserId: driver?.driverUserId ?? pending.submittedBy,
+          type: 'COMPLETION_APPROVED',
+          tripId,
+          tripScheduledOn: trip.scheduledOn,
+          eventKey: eventKeys.completionApproved(pending.id),
+        },
+        tx,
+      );
+
+      return { decided, told };
     });
+
+    this.notifications.deliver([told]);
+    return decided;
   }
 
   /**
@@ -183,8 +202,8 @@ export class TripCompletionService {
       throw new ValidationError('Sending a completion back needs a reason the driver can act on.');
     }
 
-    return this.db.transaction(async (tx) => {
-      await this.lockOpenTrip(tripId, tx);
+    const { decided, told } = await this.db.transaction(async (tx) => {
+      const trip = await this.lockOpenTrip(tripId, tx);
 
       const pending = await this.requests.lockPending(tripId, tx);
       if (!pending) throw new ConflictError('That trip has no completion request waiting.');
@@ -197,8 +216,26 @@ export class TripCompletionService {
 
       await this.costs.unlockForTrip(tripId, tx);
 
-      return decided;
+      // ★ WITH THE REASON. A driver told only "rejected" has nothing to act on
+      // — the whole argument 0017 makes for the column this is read from.
+      const driver = await this.assignments.findActive(tripId, tx);
+      const told = await this.notifications.record(
+        {
+          recipientUserId: driver?.driverUserId ?? pending.submittedBy,
+          type: 'COMPLETION_REJECTED',
+          tripId,
+          tripScheduledOn: trip.scheduledOn,
+          detail: reason,
+          eventKey: eventKeys.completionRejected(pending.id),
+        },
+        tx,
+      );
+
+      return { decided, told };
     });
+
+    this.notifications.deliver([told]);
+    return decided;
   }
 
   /** Every attempt, newest first — including the rejected ones and why. */

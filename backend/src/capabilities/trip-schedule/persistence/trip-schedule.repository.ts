@@ -74,6 +74,9 @@ type TripJoinedRow = TripRow & {
   vehicle_plate: string | null;
   customer_name: string | null;
   created_by_display_name: string;
+  /** The ACTIVE assignment's driver, or nulls. At most one exists — 0014. */
+  driver_user_id: string | null;
+  driver_display_name: string | null;
   /**
    * `COUNT(*) OVER()`. PostgreSQL types this `bigint`, and `pg` hands `bigint`
    * back as a STRING to avoid losing precision past 2^53. `Number()` is applied
@@ -140,11 +143,15 @@ const tripsWithRefs = (extraSelect = ''): string => `
   SELECT ${extraSelect}${tripColumns('t.')},
          v.plate AS vehicle_plate,
          c.name  AS customer_name,
-         au.display_name AS created_by_display_name
+         au.display_name AS created_by_display_name,
+         da.driver_user_id,
+         du.display_name AS driver_display_name
     FROM trip_schedules t
     LEFT JOIN trip_vehicles  v  ON v.id  = t.vehicle_id
     LEFT JOIN trip_customers c  ON c.id  = t.customer_id
-    JOIN      users          au ON au.id = t.created_by`;
+    JOIN      users          au ON au.id = t.created_by
+    LEFT JOIN trip_driver_assignments da ON da.trip_id = t.id AND da.state = 'active'
+    LEFT JOIN users          du ON du.id = da.driver_user_id`;
 
 const toTrip = (row: TripRow): TripSchedule => ({
   id: row.id,
@@ -178,6 +185,10 @@ const toTripWithRefs = (row: TripJoinedRow): TripScheduleWithRefs => ({
   customer:
     row.customer_id && row.customer_name ? { id: row.customer_id, name: row.customer_name } : null,
   createdByUser: { id: row.created_by, displayName: row.created_by_display_name },
+  driver:
+    row.driver_user_id && row.driver_display_name
+      ? { id: row.driver_user_id, displayName: row.driver_display_name }
+      : null,
 });
 
 /** The values of a full row write, in the order every statement below binds them. */
