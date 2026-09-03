@@ -121,6 +121,9 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
       // 0018 adds `users.account_type`, which provisioning now writes on every
       // insert — so every spec that creates a user needs it.
       '0018_driver_account.sql',
+      // 0021 relaxes the void constraint this file is largely about: a
+      // withdrawal names who and when, and no longer has to say why.
+      '0021_void_reason_optional.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -215,13 +218,32 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
       ['voided_at alone', 'voided_at = now()'],
       ['voided_by alone', 'voided_by = $2'],
       ['void_reason alone', "void_reason = 'nhập nhầm'"],
-      ['at and by without a reason', 'voided_at = now(), voided_by = $2'],
       ['at and reason without a person', "voided_at = now(), void_reason = 'nhập nhầm'"],
     ])('refuses %s', async (_label, assignment) => {
       const { rows } = await addCost();
       expect(await failureOf(
         `UPDATE trip_costs SET ${assignment} WHERE id = $1`,
         assignment.includes('$2') ? [rows[0].id, author] : [rows[0].id],
+      )).toBe(CHECK_VIOLATION);
+    });
+
+    // ★ 0021 TOOK THE REASON OUT OF THE TRIO, AND ONLY THE REASON. A record is
+    // withdrawn through a plain confirmation now, so there is nothing to type;
+    // who withdrew it and when are still inseparable, which is what the rows
+    // above prove.
+    it('accepts a void that names who and when, and says nothing else', async () => {
+      const { rows } = await addCost();
+      expect(await failureOf(
+        `UPDATE trip_costs SET voided_at = now(), voided_by = $2 WHERE id = $1`,
+        [rows[0].id, author],
+      )).toBeNull();
+    });
+
+    it('refuses a reason on a row that was never voided', async () => {
+      const { rows } = await addCost();
+      expect(await failureOf(
+        `UPDATE trip_costs SET void_reason = 'nhập nhầm' WHERE id = $1`,
+        [rows[0].id],
       )).toBe(CHECK_VIOLATION);
     });
 

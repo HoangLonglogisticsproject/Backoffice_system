@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { Loader2, Lock, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
 import {
   allowedCategories,
@@ -414,16 +415,17 @@ function ExpenseForm({
         >
           {t('driverAmount')}
         </label>
-        <Input
+        {/*
+          Grouped while it is typed, and stored plain: `draft.amount` stays the
+          decimal string the server takes, so the persisted draft and the
+          payload are unchanged by the formatting. Why not `type="number"` is
+          explained in `MoneyInput`.
+        */}
+        <MoneyInput
           id={amountId}
-          // ★ NOT `type="number"`. That hands back a float — the rounding the
-          // NUMERIC column exists to prevent — and offers a spinner nobody
-          // wants on a phone. `decimal` gives the numeric keypad and keeps the
-          // value as the text the server expects.
-          inputMode="decimal"
           placeholder={t('driverAmountHint')}
           value={draft.amount}
-          onChange={(event) => set('amount', event.target.value)}
+          onChange={(plain) => set('amount', plain)}
           className="h-11"
         />
       </div>

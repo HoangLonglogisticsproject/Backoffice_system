@@ -82,11 +82,13 @@ export type TripCostCategory = (typeof TRIP_COST_CATEGORIES)[number];
  * What every financial record here carries, whichever kind it is.
  *
  * ★ THERE IS NO `updatedAt`, AND THAT IS THE SHAPE OF THE RULE. A financial
- * record is never edited: a wrong figure is VOIDED, with a reason, and a new
- * record replaces it — so what was believed on Tuesday is still readable on
- * Friday. The three void fields move together or not at all, which the database
- * enforces as well (`*_void_state`), because a withdrawal with no reason is the
- * record somebody comes back to and cannot explain.
+ * record is never edited: a wrong figure is VOIDED and a new record replaces
+ * it — so what was believed on Tuesday is still readable on Friday.
+ * `voidedAt` and `voidedBy` move together or not at all, which the database
+ * enforces as well (`*_void_state`): a withdrawal naming nobody and no moment
+ * is the record somebody comes back to and cannot explain. The reason beside
+ * them is optional since 0021 — withdrawing is a plain confirmation in the
+ * interface, and a sentence nobody typed would be worse than none.
  */
 interface FinancialRecord {
   id: string;

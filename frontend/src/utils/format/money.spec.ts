@@ -12,11 +12,11 @@ import { formatMoney, sumMoney } from './money';
  */
 describe('formatMoney', () => {
   it.each([
-    ['1500000.00', '1.500.000'],
+    ['1500000.00', '1,500,000'],
     ['0.00', '0'],
     ['999.00', '999'],
-    ['1000.00', '1.000'],
-    ['4500000', '4.500.000'],
+    ['1000.00', '1,000'],
+    ['4500000', '4,500,000'],
   ])('renders %p as %p', (input, expected) => {
     expect(formatMoney(input)).toBe(expected);
   });
@@ -24,18 +24,18 @@ describe('formatMoney', () => {
   it('★ renders the largest figure NUMERIC(14,2) can hold, exactly', () => {
     // Number("999999999999.99") is representable, but the habit of parsing is
     // what this guards against — the digits come through untouched.
-    expect(formatMoney('999999999999.99')).toBe('999.999.999.999,99');
+    expect(formatMoney('999999999999.99')).toBe('999,999,999,999.99');
   });
 
   it('★ keeps a non-zero fraction rather than rounding it away', () => {
     // Hiding it would silently disagree with what is stored.
-    // Kept as the two places the column stores, not trimmed to ',5'.
-    expect(formatMoney('1500000.50')).toBe('1.500.000,50');
-    expect(formatMoney('0.01')).toBe('0,01');
+    // Kept as the two places the column stores, not trimmed to '.5'.
+    expect(formatMoney('1500000.50')).toBe('1,500,000.50');
+    expect(formatMoney('0.01')).toBe('0.01');
   });
 
   it('drops a fraction that carries no value, because VND has no subunit in use', () => {
-    expect(formatMoney('250000.00')).toBe('250.000');
+    expect(formatMoney('250000.00')).toBe('250,000');
   });
 
   it('hands back anything that is not a plain decimal, untouched', () => {

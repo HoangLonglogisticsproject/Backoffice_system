@@ -125,6 +125,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       '0018_driver_account.sql',
       '0019_trip_location.sql',
       '0020_notifications.sql',
+      '0021_void_reason_optional.sql'
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }

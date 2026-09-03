@@ -1102,12 +1102,24 @@ describe('withdrawing an immutable figure', () => {
     expect(result.voidReason).toBe('Chứng từ trùng.');
   });
 
-  it('refuses a withdrawal with no reason', async () => {
-    const { service } = build();
+  it('★ withdraws with no reason at all, and stores none', async () => {
+    // 0021 made the reason optional: a record is withdrawn through a plain
+    // confirmation, so nothing is typed. Null, never a manufactured sentence
+    // — a reader cannot tell an invented reason from one a person wrote.
+    const { service, costs } = build();
 
-    await expect(service.voidCost(TRIP, 'cost-1', { by: BOSS, reason: '   ' })).rejects.toThrow(
-      ValidationError,
-    );
+    const result = await service.voidCost(TRIP, 'cost-1', { by: BOSS });
+
+    expect(costs.void).toHaveBeenCalledWith('cost-1', BOSS, null, expect.any(Date));
+    expect(result.voidedBy).toBe(BOSS);
+  });
+
+  it('★ treats a reason of pure whitespace as no reason', async () => {
+    const { service, costs } = build();
+
+    await service.voidCost(TRIP, 'cost-1', { by: BOSS, reason: '   ' });
+
+    expect(costs.void).toHaveBeenCalledWith('cost-1', BOSS, null, expect.any(Date));
   });
 
   it('★ cannot be used to change the figure — void carries no new amount', () => {
