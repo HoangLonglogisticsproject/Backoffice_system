@@ -247,8 +247,19 @@ describe('driver-account HTTP security', () => {
       drivers.get.mockRejectedValue(new NotFoundError('Driver not found.'));
       drivers.setStatus.mockRejectedValue(new NotFoundError('Driver not found.'));
 
-      await authed('get', DETAIL).expect(404);
-      await authed('patch', STATUS).send({ status: 'disabled' }).expect(404);
+      const read = await authed('get', DETAIL);
+      const change = await authed('patch', STATUS).send({ status: 'disabled' });
+
+      // Not "forbidden": an administrator holding an employee's id is told the
+      // driver does not exist, which is all this door knows about it.
+      expect(read.status).toBe(404);
+      expect(read.body.error.code).toBe('NOT_FOUND');
+      expect(change.status).toBe(404);
+      expect(change.body.error.code).toBe('NOT_FOUND');
+      // And nothing about the account rides on the refusal.
+      expect(read.body).not.toHaveProperty('username');
+      expect(read.body).not.toHaveProperty('status');
+      expect(change.body).not.toHaveProperty('status');
     });
 
     it('refuses a status change without the CSRF header, before the service', async () => {

@@ -410,6 +410,7 @@ function StatusConfirmModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disabling = to === 'disabled';
+  const confirmLabel = t(disabling ? 'disableDriverConfirm' : 'enableDriverConfirm');
 
   const confirm = async () => {
     if (busy) return;
@@ -440,7 +441,7 @@ function StatusConfirmModal({
             disabled={busy}
             className={disabling ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-green-600 text-white hover:bg-green-700'}
           >
-            {busy ? t('saving') : t(disabling ? 'disableDriverConfirm' : 'enableDriverConfirm')}
+            {busy ? t('saving') : confirmLabel}
           </Button>
         </>
       }
