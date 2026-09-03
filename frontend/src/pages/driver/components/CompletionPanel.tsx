@@ -1,11 +1,15 @@
 import { useState } from 'react';
-import { CheckCircle2, Clock, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, Flag, Loader2, MapPin, Receipt, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
-import { completionStage, liveExpenses, suggestedDeclaration } from '@/utils/driverExecution';
+import { completionStage, executionSteps, liveExpenses, suggestedDeclaration } from '@/utils/driverExecution';
 import { formatDateTime } from '@/utils/format/datetime';
+import { formatMoney, sumMoney } from '@/utils/format/money';
 import type { DriverTripDetail, ExpenseDeclaration } from '@/types/driver';
+import { FactRow } from './FactRow';
+import { RejectionNotice } from './RejectionNotice';
 
 /**
  * Asking for the trip to be closed, and what came back.
@@ -24,6 +28,8 @@ import type { DriverTripDetail, ExpenseDeclaration } from '@/types/driver';
  */
 interface Props {
   trip: DriverTripDetail;
+  /** This is the stage the driver is on: the card is lit up. */
+  live: boolean;
   onSubmit: (declaration: ExpenseDeclaration) => void;
   submitting: boolean;
   /**
@@ -41,6 +47,7 @@ interface Props {
 
 export function CompletionPanel({
   trip,
+  live,
   onSubmit,
   submitting,
   onDeclareExpenses,
@@ -64,22 +71,32 @@ export function CompletionPanel({
 
   if (stage === 'approved') {
     return (
-      <section className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-center">
-        <CheckCircle2 className="mx-auto mb-2 size-7 text-primary" aria-hidden />
-        <p className="font-semibold">{t('driverCompletionApproved')}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{t('driverCompletionApprovedHint')}</p>
-      </section>
+      <Card className="ring-primary/40 bg-primary/5">
+        <CardContent className="text-center">
+          <CheckCircle2 className="mx-auto mb-2 size-7 text-primary" aria-hidden />
+          <p className="font-semibold">{t('driverCompletionApproved')}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t('driverCompletionApprovedHint')}</p>
+        </CardContent>
+        <CardContent>
+          <TripSummary trip={trip} />
+        </CardContent>
+      </Card>
     );
   }
 
   if (stage === 'pending') {
     return (
-      <section className="rounded-xl border border-border bg-background p-4 text-center">
-        <Clock className="mx-auto mb-2 size-7 text-muted-foreground" aria-hidden />
-        <p className="font-semibold">{t('driverCompletionPending')}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{t('driverCompletionPendingHint')}</p>
-        <AttemptLine request={request} language={language} />
-      </section>
+      <Card className={cn(live && 'ring-primary/60')}>
+        <CardContent className="text-center">
+          <Clock className="mx-auto mb-2 size-7 text-muted-foreground" aria-hidden />
+          <p className="font-semibold">{t('driverCompletionPending')}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t('driverCompletionPendingHint')}</p>
+          <AttemptLine request={request} language={language} />
+        </CardContent>
+        <CardContent>
+          <TripSummary trip={trip} />
+        </CardContent>
+      </Card>
     );
   }
 
@@ -100,38 +117,24 @@ export function CompletionPanel({
   };
 
   return (
-    <section className="rounded-xl border border-border bg-background p-4">
-      <h2 className="mb-3 text-sm font-semibold">{t('driverCompletion')}</h2>
+    <Card className={cn(live && 'ring-primary/60', stage === 'not-ready' && 'opacity-80')}>
+      <CardHeader>
+        <CardTitle>{t('driverCompletion')}</CardTitle>
+      </CardHeader>
 
+      <CardContent className="space-y-4">
       {/*
         ★ THE REJECTION AND ITS REASON COME FIRST. A driver opening this after
         being sent back needs to read WHY before anything else on the panel.
+        The action sends them to the figures, not straight back to the server.
       */}
       {stage === 'rejected' && request ? (
-        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
-          <p className="flex items-center gap-1.5 font-medium text-destructive">
-            <XCircle className="size-4 shrink-0" aria-hidden />
-            {t('driverCompletionRejected')}
-          </p>
-          <p className="mt-1.5 text-xs font-medium text-muted-foreground">
-            {t('driverRejectReason')}
-          </p>
-          <p className="text-sm">{request.decisionReason}</p>
-
-          {/*
-            ★ SENDS THEM TO THE FIGURES, NOT STRAIGHT BACK TO THE SERVER. The
-            button used to resubmit immediately — which is the one thing a
-            rejected driver should not do, because nothing had changed.
-          */}
-          <Button
-            variant="outline"
-            size="lg"
-            className="mt-3 h-11 w-full"
-            onClick={onReviewExpenses}
-          >
-            {t('driverFixAndResubmit')}
-          </Button>
-        </div>
+        <RejectionNotice
+          title={t('driverCompletionRejected')}
+          reason={request.decisionReason}
+          actionLabel={t('driverFixAndResubmit')}
+          onAction={onReviewExpenses}
+        />
       ) : null}
 
       {stage === 'not-ready' ? (
@@ -139,6 +142,12 @@ export function CompletionPanel({
           {t('driverFinishStepsFirst')}
         </p>
       ) : (
+        <TripSummary trip={trip} />
+      )}
+      </CardContent>
+
+      {stage === 'not-ready' ? null : (
+        <CardFooter className="flex-col items-stretch">
         <DeclarationSection
           chosen={chosen}
           declaredCount={declared.length}
@@ -151,8 +160,51 @@ export function CompletionPanel({
           onConfirmAnyway={() => setConfirmingNone(false)}
           onSubmit={() => onSubmit(chosen)}
         />
+        </CardFooter>
       )}
-    </section>
+    </Card>
+  );
+}
+
+/**
+ * What is about to be sent — or was: the trip in five facts, with the times
+ * the SERVER recorded and the driver's own figures added up.
+ *
+ * ★ THE TOTAL IS THE DRIVER'S OWN LINES AND ONLY THOSE. No price, no hire
+ * amount, no margin — none of it is sent here, and none can be reconstructed.
+ */
+function TripSummary({ trip }: Readonly<{ trip: DriverTripDetail }>) {
+  const { t, language } = useLanguage();
+  const steps = executionSteps(trip);
+  const actualOf = (type: 'PICKUP_CONFIRMED' | 'DELIVERY_CONFIRMED') =>
+    steps.find((step) => step.type === type)?.actualAt ?? null;
+  const pickupAt = actualOf('PICKUP_CONFIRMED');
+  const deliveryAt = actualOf('DELIVERY_CONFIRMED');
+  const lines = liveExpenses(trip.expenses);
+  const total = sumMoney(lines.map((line) => line.amount));
+
+  let expenses: string;
+  if (lines.length === 0) {
+    expenses = t('driverExpenseNone');
+  } else {
+    expenses = `${lines.length} ${t('driverLineCount')} · ${total === null ? '—' : formatMoney(total)}`;
+  }
+
+  return (
+    <div className="space-y-2.5 rounded-lg bg-muted/40 p-3">
+      <FactRow icon={<User />} label={t('driverCustomer')} value={trip.customer?.name ?? null} />
+      <FactRow
+        icon={<MapPin />}
+        label={t('driverActualPickup')}
+        value={pickupAt ? formatDateTime(pickupAt, language) : null}
+      />
+      <FactRow
+        icon={<Flag />}
+        label={t('driverActualDelivery')}
+        value={deliveryAt ? formatDateTime(deliveryAt, language) : null}
+      />
+      <FactRow icon={<Receipt />} label={t('driverStageExpense')} value={expenses} />
+    </div>
   );
 }
 

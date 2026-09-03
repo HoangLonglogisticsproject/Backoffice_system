@@ -141,6 +141,18 @@ const PHRASES = {
   driverNotSet: { vi: 'Chưa có', en: 'Not set' },
 
   driverProgress: { vi: 'Tiến trình chuyến', en: 'Trip progress' },
+  // The four stages a driver walks through — the stepper and the header pill.
+  driverStagePickup: { vi: 'Lấy hàng', en: 'Pickup' },
+  driverStageDelivery: { vi: 'Giao hàng', en: 'Delivery' },
+  driverStageExpense: { vi: 'Chi phí', en: 'Expenses' },
+  driverStageCompletion: { vi: 'Hoàn thành', en: 'Completion' },
+  driverStageCurrent: { vi: 'Đang thực hiện', en: 'In progress' },
+  driverTripSummary: { vi: 'Thông tin chuyến', en: 'Trip details' },
+  driverTripUnit: { vi: 'chuyến', en: 'trips' },
+  driverAddress: { vi: 'Địa chỉ', en: 'Address' },
+  driverActualPickup: { vi: 'Lấy hàng lúc', en: 'Picked up at' },
+  driverActualDelivery: { vi: 'Giao hàng lúc', en: 'Delivered at' },
+  driverExpenseNone: { vi: 'Không có khoản chi', en: 'No expenses' },
   driverStepArrivedPickup: { vi: 'Đến điểm lấy hàng', en: 'Arrived at pickup' },
   driverStepPickupConfirmed: { vi: 'Xác nhận lấy hàng', en: 'Pickup confirmed' },
   driverStepArrivedDelivery: { vi: 'Đến điểm giao hàng', en: 'Arrived at delivery' },
@@ -260,6 +272,11 @@ const PHRASES = {
   driverEdit: { vi: 'Sửa', en: 'Edit' },
   driverExpenseLocked: { vi: 'Đang chờ duyệt — chưa sửa được', en: 'Under review — locked' },
   driverExpenseFinal: { vi: 'Đã duyệt — không sửa được', en: 'Approved — final' },
+  driverExpenseRejected: { vi: 'Bị từ chối — cần sửa', en: 'Sent back — needs correction' },
+  // The lifecycle in one word each, for the pill: editable → sent → sent back → approved.
+  driverExpenseSent: { vi: 'Đã gửi', en: 'Sent' },
+  driverExpenseSentBack: { vi: 'Đã từ chối', en: 'Sent back' },
+  driverExpenseApproved: { vi: 'Đã duyệt', en: 'Approved' },
   driverNeedVehicleFirst: {
     vi: 'Chuyến chưa có xe nên chưa khai chi phí được',
     en: 'This trip has no vehicle yet, so expenses cannot be declared',

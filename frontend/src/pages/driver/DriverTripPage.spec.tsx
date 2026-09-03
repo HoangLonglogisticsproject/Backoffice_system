@@ -530,7 +530,9 @@ describe('★ completion', () => {
 
     expect(await screen.findByText(/yêu cầu bị từ chối/i)).toBeInTheDocument();
     // The one thing the driver has to act on.
-    expect(screen.getByText('Số tiền dầu sai.')).toBeInTheDocument();
+    // ★ ONCE AT THE FIGURES, ONCE AT THE REQUEST: the driver reads why on the
+    // panel they have to correct and on the one they have to resend.
+    expect(screen.getAllByText('Số tiền dầu sai.')).toHaveLength(2);
     expect(screen.getByRole('button', { name: /chỉnh sửa và gửi lại/i })).toBeInTheDocument();
   });
 

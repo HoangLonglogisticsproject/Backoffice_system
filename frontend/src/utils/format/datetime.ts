@@ -29,7 +29,7 @@ const LOCALES: Record<Language, string> = {
  * text is unchanged. Verify that before touching them: a difference here is a
  * silent change to every date in the app.
  */
-type FormatterKind = 'date' | 'dateTime' | 'utcDay';
+type FormatterKind = 'date' | 'dateTime' | 'time' | 'utcDay';
 
 const OPTIONS: Record<FormatterKind, Intl.DateTimeFormatOptions> = {
   // `toLocaleDateString()` with no options.
@@ -46,6 +46,9 @@ const OPTIONS: Record<FormatterKind, Intl.DateTimeFormatOptions> = {
   },
 
   // A calendar day, pinned to UTC. See `formatCalendarDay` for why.
+  /** The clock alone — for a window like "08:00 – 13:04" where the day is said once. */
+  time: { hour: '2-digit', minute: '2-digit' },
+
   utcDay: { year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'UTC' },
 };
 
@@ -75,6 +78,12 @@ export function formatDate(iso: string, language: Language): string {
 export function formatDateTime(iso: string, language: Language): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : formatter('dateTime', language).format(date);
+}
+
+/** The time of day only. Same malformed-input rule as `formatDate`. */
+export function formatTime(iso: string, language: Language): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : formatter('time', language).format(date);
 }
 
 /**

@@ -294,6 +294,53 @@ export const completionStage = (trip: DriverTripDetail): CompletionStage => {
   return nextEvent(trip.events) === null ? 'ready' : 'not-ready';
 };
 
+// ----------------------------------------------------------------- workflow --
+
+/**
+ * The four stages a driver walks through, as the screen tells them.
+ *
+ * ★ DERIVED, NEVER STORED. The server keeps execution EVENTS, expense lines
+ * and completion requests; "which stage am I on" is a reading of those, made
+ * here so the header pill, the stepper and the section highlights cannot
+ * disagree. Pickup and delivery each cover two events (arrive, confirm);
+ * expense is the checkpoint the driver answers after the journey; completion
+ * is the review the office decides.
+ */
+export type WorkflowStage = 'pickup' | 'delivery' | 'expense' | 'completion';
+
+export interface WorkflowStep {
+  stage: WorkflowStage;
+  state: StepState;
+}
+
+const stateOf = (done: boolean, current: boolean): StepState => {
+  if (done) return 'done';
+  if (current) return 'current';
+  return 'upcoming';
+};
+
+export const workflowStages = (trip: DriverTripDetail): WorkflowStep[] => {
+  const next = nextEvent(trip.events);
+  const completion = completionStage(trip);
+
+  const pickupDone = next === null || next === 'ARRIVED_DELIVERY' || next === 'DELIVERY_CONFIRMED';
+  const journeyDone = next === null;
+  // The checkpoint is answered the moment a completion is sent: the request
+  // carries the declaration, and the figures freeze with it.
+  const declared = completion === 'pending' || completion === 'approved';
+
+  return [
+    { stage: 'pickup', state: stateOf(pickupDone, !pickupDone) },
+    { stage: 'delivery', state: stateOf(journeyDone, pickupDone && !journeyDone) },
+    { stage: 'expense', state: stateOf(declared, journeyDone && !declared) },
+    { stage: 'completion', state: stateOf(completion === 'approved', completion === 'pending') },
+  ];
+};
+
+/** The stage the driver is on, or `null` once the trip is closed. */
+export const currentStage = (trip: DriverTripDetail): WorkflowStage | null =>
+  workflowStages(trip).find((step) => step.state === 'current')?.stage ?? null;
+
 /** May the driver send, or send again, right now? */
 export const canSubmitCompletion = (trip: DriverTripDetail): boolean => {
   const stage = completionStage(trip);
