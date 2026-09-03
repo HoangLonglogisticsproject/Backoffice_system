@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
@@ -104,7 +104,7 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
 
       // The portal shell — and the trip list, which asked the server with no
       // parameter, because the scope is the session.
-      expect(await screen.findByText(/cổng tài xế/i)).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: /cổng tài xế/i })).toBeInTheDocument();
       expect(await screen.findByText(/chưa được phân công/i)).toBeInTheDocument();
       expect(fetchMyTrips).toHaveBeenCalledWith();
 
@@ -124,7 +124,10 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
     renderAt('/driver');
 
     expect(await screen.findByTestId('unread-badge')).toHaveTextContent('2');
-    expect(screen.getByRole('link', { name: /thông báo/i })).toHaveAttribute('href', '/driver/notifications');
+    // The bell in the top bar and the row in the sidebar — both to the list.
+    const links = screen.getAllByRole('link', { name: /thông báo/i });
+    expect(links.length).toBeGreaterThanOrEqual(2);
+    for (const link of links) expect(link).toHaveAttribute('href', '/driver/notifications');
   });
 
   it('renders the notification list inside the portal', async () => {
@@ -137,7 +140,7 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
   it('offers the one account function a driver has — their password — inside the portal', async () => {
     renderAt('/driver');
 
-    await screen.findByText(/cổng tài xế/i);
+    await screen.findByRole('heading', { name: /cổng tài xế/i });
     expect(screen.getByRole('link', { name: /thay đổi mật khẩu/i })).toHaveAttribute(
       'href',
       '/driver/account/security',
@@ -147,8 +150,74 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
   it('renders the password screen inside the portal shell, not the Backoffice one', async () => {
     renderAt('/driver/account/security');
 
-    expect(await screen.findByText(/cổng tài xế/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /cổng tài xế/i })).toBeInTheDocument();
     expect(screen.getAllByText(/thay đổi mật khẩu/i).length).toBeGreaterThan(0);
     for (const row of BACKOFFICE_ROWS) expect(screen.queryByText(row)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ★ THE PORTAL IS AN APPLICATION, NOT A PAGE. The same shell as the
+ * Backoffice — sidebar, top bar, drawer on a phone — with the driver's own
+ * three destinations and nothing the Backoffice offers.
+ */
+describe('★ the driver’s application shell', () => {
+  const nav = () => within(screen.getByRole('navigation'));
+
+  it('draws the driver’s destinations in the sidebar, and only those', async () => {
+    renderAt('/driver');
+    await screen.findByText(/chưa được phân công/i);
+
+    expect(nav().getByRole('link', { name: /chuyến của tôi/i })).toHaveAttribute('href', '/driver');
+    expect(nav().getByRole('link', { name: /thông báo/i })).toHaveAttribute('href', '/driver/notifications');
+    expect(nav().getByRole('link', { name: /hồ sơ/i })).toHaveAttribute('href', '/driver/account/security');
+    expect(nav().getAllByRole('link')).toHaveLength(3);
+    // Who is signed in, and the way out, in the sidebar.
+    expect(screen.getByText('taixe.a')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /đăng xuất/i })).toBeInTheDocument();
+  });
+
+  it('lights "my trips" on the list AND on a trip’s detail — the same application, a different page', async () => {
+    renderAt('/driver');
+    await screen.findByText(/chưa được phân công/i);
+    expect(nav().getByRole('link', { name: /chuyến của tôi/i })).toHaveAttribute('aria-current', 'page');
+    expect(nav().getByRole('link', { name: /thông báo/i })).not.toHaveAttribute('aria-current');
+
+    cleanup();
+    renderAt('/driver/trips/t1');
+    expect(await screen.findByRole('navigation')).toBeInTheDocument();
+    expect(nav().getByRole('link', { name: /chuyến của tôi/i })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('heading', { name: /cổng tài xế/i })).toBeInTheDocument();
+  });
+
+  it('lights "notifications" on the list of what the driver was told', async () => {
+    renderAt('/driver/notifications');
+    await screen.findByText(/chưa có thông báo nào/i);
+
+    expect(nav().getByRole('link', { name: /thông báo/i })).toHaveAttribute('aria-current', 'page');
+    expect(nav().getByRole('link', { name: /chuyến của tôi/i })).not.toHaveAttribute('aria-current');
+  });
+
+  it('★ on a phone the sidebar is a drawer: the menu opens it, choosing a destination closes it', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) =>
+      ({ matches: false, media: query, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList) as typeof window.matchMedia;
+    try {
+      renderAt('/driver');
+      await screen.findByText(/chưa được phân công/i);
+      const drawer = screen.getByRole('navigation').closest('aside')!;
+      const menu = screen.getByRole('button', { name: /ẩn\/hiện điều hướng/i });
+
+      expect(drawer).toHaveAttribute('data-state', 'closed');
+      fireEvent.click(menu);
+      expect(drawer).toHaveAttribute('data-state', 'open');
+      expect(screen.getByRole('button', { name: /đóng điều hướng/i })).toBeInTheDocument();
+
+      fireEvent.click(nav().getByRole('link', { name: /thông báo/i }));
+      expect(drawer).toHaveAttribute('data-state', 'closed');
+      expect(await screen.findByText(/chưa có thông báo nào/i)).toBeInTheDocument();
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });
