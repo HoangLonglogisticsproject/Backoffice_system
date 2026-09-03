@@ -1069,43 +1069,101 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(results.filter((r) => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1);
     });
 
-    it('★ answers a retried event with the original rather than duplicating it', async () => {
+    it('★ answers every copy of a retried event with the original — none sees the index', async () => {
       const { trip } = await runningTrip();
-
-      const [one, two, three] = await Promise.all([
+      const tap = () =>
         execution.recordEvent({
           tripId: trip,
           type: 'ARRIVED_PICKUP',
           actualAt: new Date('2026-08-30T02:31:00Z'),
           clientEventId: 'tap-retry',
           recordedBy: driverA,
-        }),
-        execution
-          .recordEvent({
-            tripId: trip,
-            type: 'ARRIVED_PICKUP',
-            actualAt: new Date('2026-08-30T02:31:00Z'),
-            clientEventId: 'tap-retry',
-            recordedBy: driverA,
-          })
-          .catch(() => null),
-        execution
-          .recordEvent({
-            tripId: trip,
-            type: 'ARRIVED_PICKUP',
-            actualAt: new Date('2026-08-30T02:31:00Z'),
-            clientEventId: 'tap-retry',
-            recordedBy: driverA,
-          })
-          .catch(() => null),
-      ]);
+        });
+
+      // No `.catch` anywhere: a duplicate-key error reaching ANY caller is
+      // the bug, whichever copy happens to lose the race.
+      const [one, two, three] = await Promise.all([tap(), tap(), tap()]);
 
       const rows = await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip]);
       expect(rows).toHaveLength(1);
-      expect(one.id).toEqual(expect.any(String));
-      for (const result of [two, three]) {
-        if (result) expect(result.id).toBe(one.id);
+      expect(two.id).toBe(one.id);
+      expect(three.id).toBe(one.id);
+    });
+
+    it('★ answers a retry that queued behind the winner’s lock with the row it then finds', async () => {
+      // The losing interleaving, forced rather than hoped for: another
+      // connection has locked the trip and written the key but NOT committed
+      // when the retry runs its pre-transaction lookup (which therefore
+      // misses) and queues on the lock. Once the winner commits, the retry
+      // must find the row under the lock — not run into the unique index.
+      const { trip, assignment } = await runningTrip();
+      const winner = await pool.connect();
+      try {
+        await winner.query('BEGIN');
+        await winner.query(`SELECT id FROM trip_schedules WHERE id = $1 FOR UPDATE`, [trip]);
+        await winner.query(
+          `INSERT INTO trip_execution_events
+             (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by)
+           VALUES ($1, $2, 'ARRIVED_PICKUP', now(), 'queued', $3)`,
+          [trip, assignment, driverA],
+        );
+
+        const retry = execution.recordEvent({
+          tripId: trip,
+          type: 'ARRIVED_PICKUP',
+          clientEventId: 'queued',
+          recordedBy: driverA,
+        });
+        // Let the retry run its lookup and reach the lock before the commit.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await winner.query('COMMIT');
+
+        const answered = await retry;
+        const rows = (await sql(
+          `SELECT id FROM trip_execution_events WHERE trip_id = $1 AND client_event_id = 'queued'`,
+          [trip],
+        )) as { id: string }[];
+        expect(rows).toHaveLength(1);
+        expect(answered.id).toBe(rows[0]!.id);
+      } finally {
+        winner.release();
       }
+    });
+
+    it('records three different client event ids arriving together as three events', async () => {
+      const { trip } = await runningTrip();
+      const tap = (clientEventId: string) =>
+        execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId, recordedBy: driverA });
+
+      const results = await Promise.all([tap('a'), tap('b'), tap('c')]);
+
+      expect(new Set(results.map((r) => r.id)).size).toBe(3);
+      expect(await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])).toHaveLength(3);
+    });
+
+    it('★ refuses the same key carrying a different milestone, concurrently, without leaking the index', async () => {
+      const { trip } = await runningTrip();
+      const arrive = () =>
+        execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId: 'one-key', recordedBy: driverA });
+      const confirmWithSameKey = () =>
+        execution.recordEvent({
+          tripId: trip,
+          type: 'PICKUP_CONFIRMED',
+          clientEventId: 'one-key',
+          deviceReportedAt: new Date(),
+          location: atPickup(),
+          recordedBy: driverA,
+        });
+
+      const results = await Promise.allSettled([arrive(), arrive(), confirmWithSameKey()]);
+
+      // Whatever order they took the lock in, exactly one row exists and
+      // every refusal is the contract's ConflictError, never a raw 23505.
+      expect(await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])).toHaveLength(1);
+      for (const result of results) {
+        if (result.status === 'rejected') expect(result.reason).toBeInstanceOf(ConflictError);
+      }
+      expect(results.filter((r) => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1);
     });
 
     it('answers a retried expense declaration with the original', async () => {
