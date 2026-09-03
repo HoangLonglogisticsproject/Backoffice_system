@@ -1090,14 +1090,68 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(three.id).toBe(one.id);
     });
 
+    /**
+     * ★ A DETERMINISTIC LOSING INTERLEAVING, WITHOUT A TIMER.
+     *
+     * Two gates are opened by the service's own steps: one when the retry's
+     * pre-transaction lookup has RETURNED (empty — the winner has not
+     * committed), one when the retry has ISSUED its `FOR UPDATE` on the trip
+     * row, which the winner still holds. Only then does the winner commit. So
+     * the test does not hope the retry was queued; it observed it.
+     */
+    const internals = () =>
+      execution as unknown as {
+        trips: TripScheduleRepository;
+        events: ExecutionEventRepository;
+      };
+
+    const gate = () => {
+      let open!: () => void;
+      const opened = new Promise<void>((resolve) => (open = resolve));
+      return { open, opened };
+    };
+
+    /** Instruments the retry: reports its pre-transaction lookup and its lock request. */
+    const observeRetry = () => {
+      const { trips, events } = internals();
+      const lookedUp = gate();
+      const lockRequested = gate();
+      let preTransactionLookup: unknown = 'not yet';
+
+      const originalLookup = events.findByClientEventId.bind(events);
+      const originalLock = trips.lockActive.bind(trips);
+
+      const lookupSpy = jest
+        .spyOn(events, 'findByClientEventId')
+        .mockImplementation(async (tripId, key, executor) => {
+          const result = await originalLookup(tripId, key, executor);
+          // The pre-transaction read is the one with no executor.
+          if (executor === undefined) {
+            preTransactionLookup = result;
+            lookedUp.open();
+          }
+          return result;
+        });
+      const lockSpy = jest.spyOn(trips, 'lockActive').mockImplementation((tripId, executor) => {
+        lockRequested.open();
+        return originalLock(tripId, executor);
+      });
+
+      return {
+        lookedUp: lookedUp.opened,
+        lockRequested: lockRequested.opened,
+        preTransactionLookup: () => preTransactionLookup,
+        restore: () => {
+          lookupSpy.mockRestore();
+          lockSpy.mockRestore();
+        },
+      };
+    };
+
     it('★ answers a retry that queued behind the winner’s lock with the row it then finds', async () => {
-      // The losing interleaving, forced rather than hoped for: another
-      // connection has locked the trip and written the key but NOT committed
-      // when the retry runs its pre-transaction lookup (which therefore
-      // misses) and queues on the lock. Once the winner commits, the retry
-      // must find the row under the lock — not run into the unique index.
       const { trip, assignment } = await runningTrip();
       const winner = await pool.connect();
+      const observed = observeRetry();
       try {
         await winner.query('BEGIN');
         await winner.query(`SELECT id FROM trip_schedules WHERE id = $1 FOR UPDATE`, [trip]);
@@ -1114,8 +1168,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           clientEventId: 'queued',
           recordedBy: driverA,
         });
-        // Let the retry run its lookup and reach the lock before the commit.
-        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        // The lookup missed — the row is uncommitted — and the retry is now
+        // waiting on the lock the winner holds.
+        await observed.lookedUp;
+        expect(observed.preTransactionLookup()).toBeNull();
+        await observed.lockRequested;
+
         await winner.query('COMMIT');
 
         const answered = await retry;
@@ -1126,8 +1185,78 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         expect(rows).toHaveLength(1);
         expect(answered.id).toBe(rows[0]!.id);
       } finally {
+        observed.restore();
         winner.release();
       }
+    });
+
+    it('★ answers a retry that queued behind a completion with the event committed before DONE', async () => {
+      // The tap was recorded and the trip was then approved — both before the
+      // retry got the lock. The retry is owed its event, not "closed".
+      const { trip, assignment } = await runningTrip();
+      const winner = await pool.connect();
+      const observed = observeRetry();
+      try {
+        await winner.query('BEGIN');
+        await winner.query(`SELECT id FROM trip_schedules WHERE id = $1 FOR UPDATE`, [trip]);
+        await winner.query(
+          `INSERT INTO trip_execution_events
+             (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by)
+           VALUES ($1, $2, 'ARRIVED_PICKUP', now(), 'before-done', $3)`,
+          [trip, assignment, driverA],
+        );
+
+        const retry = execution.recordEvent({
+          tripId: trip,
+          type: 'ARRIVED_PICKUP',
+          clientEventId: 'before-done',
+          recordedBy: driverA,
+        });
+        await observed.lookedUp;
+        expect(observed.preTransactionLookup()).toBeNull();
+        await observed.lockRequested;
+
+        // The completion lands while the retry is still queued: the trip is
+        // DONE by the time the retry holds the lock.
+        await winner.query(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+        await winner.query('COMMIT');
+
+        const answered = await retry;
+        const rows = (await sql(
+          `SELECT id, actual_at FROM trip_execution_events WHERE trip_id = $1`,
+          [trip],
+        )) as { id: string; actual_at: Date }[];
+        expect(rows).toHaveLength(1);
+        expect(answered.id).toBe(rows[0]!.id);
+        // The original's own time — nothing was re-stamped.
+        expect(answered.actualAt).toEqual(rows[0]!.actual_at);
+      } finally {
+        observed.restore();
+        winner.release();
+      }
+
+      // ★ AND DONE STILL TAKES NO NEW MILESTONE. A key that matches nothing on
+      // the closed trip is refused, and a later plain retry of the recorded
+      // one is still answered.
+      await expect(
+        execution.recordEvent({
+          tripId: trip,
+          type: 'ARRIVED_PICKUP',
+          clientEventId: 'after-done',
+          recordedBy: driverA,
+        }),
+      ).rejects.toThrow(ConflictError);
+      const again = await execution.recordEvent({
+        tripId: trip,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'before-done',
+        recordedBy: driverA,
+      });
+      expect(again.id).toBe(
+        ((await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])) as { id: string }[])[0]!
+          .id,
+      );
+      expect(await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])).toHaveLength(1);
     });
 
     it('records three different client event ids arriving together as three events', async () => {
@@ -1141,9 +1270,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])).toHaveLength(3);
     });
 
-    it('★ refuses the same key carrying a different milestone, concurrently, without leaking the index', async () => {
+    it('★ refuses the same key carrying a different milestone, concurrently, with the contract’s error', async () => {
       const { trip } = await runningTrip();
-      const arrive = () =>
+      // The arrival stands, so a PICKUP_CONFIRMED is admissible on its own
+      // merits: the only thing that can refuse one below is the key rule.
+      await execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId: 'arrive', recordedBy: driverA });
+
+      const arriveAgain = () =>
         execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId: 'one-key', recordedBy: driverA });
       const confirmWithSameKey = () =>
         execution.recordEvent({
@@ -1155,15 +1288,27 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           recordedBy: driverA,
         });
 
-      const results = await Promise.allSettled([arrive(), arrive(), confirmWithSameKey()]);
+      const results = await Promise.allSettled([arriveAgain(), confirmWithSameKey()]);
 
-      // Whatever order they took the lock in, exactly one row exists and
-      // every refusal is the contract's ConflictError, never a raw 23505.
-      expect(await sql(`SELECT id FROM trip_execution_events WHERE trip_id = $1`, [trip])).toHaveLength(1);
-      for (const result of results) {
-        if (result.status === 'rejected') expect(result.reason).toBeInstanceOf(ConflictError);
-      }
-      expect(results.filter((r) => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1);
+      // Whichever took the lock first wrote the key; the other named a
+      // different milestone under it and is refused — with the contract's
+      // error, never a raw 23505.
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]!.reason).toBeInstanceOf(ConflictError);
+      expect((rejected[0]!.reason as ConflictError).code).toBe('CONFLICT');
+
+      const written = (await sql(
+        `SELECT client_event_id, event_type FROM trip_execution_events WHERE trip_id = $1 ORDER BY actual_at, id`,
+        [trip],
+      )) as { client_event_id: string; event_type: string }[];
+      expect(written).toHaveLength(2);
+      expect(written.filter((row) => row.client_event_id === 'one-key')).toHaveLength(1);
+      expect(written.find((row) => row.client_event_id === 'one-key')!.event_type).toBe(
+        (fulfilled[0] as PromiseFulfilledResult<{ type: string }>).value.type,
+      );
     });
 
     it('answers a retried expense declaration with the original', async () => {

@@ -292,7 +292,15 @@ export class TripExecutionService {
     if (already) return sameIntent(already, input.type);
 
     return this.db.transaction(async (tx) => {
-      const trip = await this.lockOpenTrip(input.tripId, tx);
+      // ★ LOCKED WHATEVER ITS STATUS, AND THE KEY IS LOOKED UP BEFORE THE
+      // STATUS IS JUDGED. A retry can queue behind the tap it repeats AND
+      // behind the approval that then closed the trip; when it finally holds
+      // the lock the trip is DONE and its event exists. The event is what it
+      // is owed — refusing it as "closed" would tell a driver their pickup
+      // was never recorded when it was. Only a key that matches NOTHING is
+      // then measured against the status, and on a closed trip refused.
+      const trip = await this.trips.lockActive(input.tripId, tx);
+      if (!trip) throw new NotFoundError('Trip not found.');
 
       // ★ AND CHECKED AGAIN UNDER THE LOCK — THIS IS WHAT MAKES A RETRY SAFE.
       //
@@ -307,6 +315,10 @@ export class TripExecutionService {
       // writer that bypasses this service.
       const written = await this.events.findByClientEventId(input.tripId, clientEventId, tx);
       if (written) return sameIntent(written, input.type);
+
+      // Nothing to answer with, so this is a NEW milestone — and a closed trip
+      // takes none. Same rule `lockOpenTrip` applies everywhere else.
+      if (trip.status === 'done') throw new ConflictError('That trip is closed.');
 
       const assignment = await this.assignments.lockActive(input.tripId, tx);
       if (!assignment) {
