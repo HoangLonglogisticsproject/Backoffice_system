@@ -227,6 +227,8 @@ const PHRASES = {
 
   // ------------------------------------------------------- notifications --
   driverNotifications: { vi: 'Thông báo', en: 'Notifications' },
+  driverProfile: { vi: 'Hồ sơ', en: 'Profile' },
+  driverNavSection: { vi: 'TÀI XẾ', en: 'DRIVER' },
   driverUnread: { vi: 'chưa đọc', en: 'unread' },
   driverNoNotifications: { vi: 'Chưa có thông báo nào.', en: 'No notifications yet.' },
   driverTripOn: { vi: 'Chuyến ngày', en: 'Trip on' },
@@ -610,6 +612,7 @@ const PHRASES = {
   // like everything else a person can perceive.
   closeLabel: { vi: 'Đóng', en: 'Close' },
   toggleNavigation: { vi: 'Ẩn/hiện điều hướng', en: 'Toggle navigation' },
+  closeNavigation: { vi: 'Đóng điều hướng', en: 'Close navigation' },
   pageSizeLabel: { vi: 'Số dòng mỗi trang', en: 'Rows per page' },
   languageLabel: { vi: 'Ngôn ngữ', en: 'Language' },
   copyFailed: { vi: 'Không sao chép được', en: 'Copy failed' },
