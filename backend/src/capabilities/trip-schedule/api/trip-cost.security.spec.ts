@@ -343,14 +343,16 @@ describe('trip-cost HTTP security', () => {
       },
     );
 
-    it('refuses a void with no reason', async () => {
-      await authed('post', `/trip-schedules/${TRIP}/costs/${COST}/void`).send({}).expect(422);
-      expect(money.voidCost).not.toHaveBeenCalled();
+    it('★ accepts a void with no reason — the body may be empty', async () => {
+      // 0020: withdrawing is a confirmation, not a form. An empty body is the
+      // ordinary case, not a malformed request.
+      await authed('post', `/trip-schedules/${TRIP}/costs/${COST}/void`).send({}).expect(200);
+      expect(money.voidCost).toHaveBeenCalledWith(TRIP, COST, { by: ACTOR, reason: undefined });
     });
 
-    it('refuses a void whose reason is only whitespace', async () => {
+    it('★ refuses a reason longer than the column allows', async () => {
       await authed('post', `/trip-schedules/${TRIP}/costs/${COST}/void`)
-        .send({ reason: '   ' })
+        .send({ reason: 'x'.repeat(501) })
         .expect(422);
       expect(money.voidCost).not.toHaveBeenCalled();
     });

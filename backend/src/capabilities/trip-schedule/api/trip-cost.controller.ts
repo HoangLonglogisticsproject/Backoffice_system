@@ -85,8 +85,13 @@ const createHireSchema = z.object({
   note,
 });
 
-/** Voiding always says why. The service refuses a blank one as well. */
-const voidSchema = z.object({ reason: z.string().trim().min(1).max(500) });
+/**
+ * Voiding MAY say why, and usually does not: withdrawing a record is a plain
+ * confirmation in the interface, with no field to type into. A caller that does
+ * send a reason still has it stored and shown beside the row; a blank string is
+ * not a reason, and the service normalises it away.
+ */
+const voidSchema = z.object({ reason: z.string().trim().max(500).optional() });
 
 /**
  * `?includeVoided=true`.

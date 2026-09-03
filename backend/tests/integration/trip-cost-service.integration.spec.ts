@@ -37,8 +37,8 @@ import { buildDateRangePageQuerySchema } from '@common/pagination/date-range-pag
  *                                  text, and a hundred lines total exactly
  *   IMMUTABLE MEANS IMMUTABLE      there is no path from this layer that
  *                                  changes an amount, a category or a trip
- *   A VOID IS FINAL AND EXPLAINED  it needs a reason, cannot be repeated, and
- *                                  removes the record from every total
+ *   A VOID IS FINAL AND ATTRIBUTED it names who and when, cannot be repeated,
+ *                                  and removes the record from every total
  *   COST OUTLIVES THE TRIP'S STATE a finished or archived trip still takes
  *                                  money, because cost is a later workflow
  */
@@ -393,15 +393,24 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       expect((await money.listCosts(trip, true)).items).toHaveLength(1);
     });
 
-    it('refuses a void with no reason', async () => {
+    it('★ withdraws with no reason at all, and stores null rather than a placeholder', async () => {
       const line = await money.createCost({ tripId: trip, category: 'fuel', amount: '100', createdBy: author });
 
-      await expect(
-        money.voidCost(trip, line.id, { by: author, reason: '   ' }),
-      ).rejects.toBeInstanceOf(ValidationError);
+      const voided = await money.voidCost(trip, line.id, { by: author });
 
-      // And nothing happened.
-      expect((await money.listCosts(trip)).items).toHaveLength(1);
+      expect(voided.voidedBy).toBe(author);
+      expect(voided.voidReason).toBeNull();
+      // The row survives the withdrawal, as it always did.
+      expect((await money.listCosts(trip, true)).items).toHaveLength(1);
+      expect((await money.listCosts(trip)).items).toHaveLength(0);
+    });
+
+    it('★ keeps a reason a caller does send', async () => {
+      const line = await money.createCost({ tripId: trip, category: 'fuel', amount: '100', createdBy: author });
+
+      const voided = await money.voidCost(trip, line.id, { by: author, reason: 'nhập nhầm' });
+
+      expect(voided.voidReason).toBe('nhập nhầm');
     });
 
     it('★ refuses to void the same line twice', async () => {

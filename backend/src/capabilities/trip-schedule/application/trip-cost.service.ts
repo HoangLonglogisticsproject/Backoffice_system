@@ -116,9 +116,9 @@ export class TripCostService {
   async voidCost(
     tripId: string,
     costId: string,
-    input: { by: string; reason: string },
+    input: { by: string; reason?: string },
   ): Promise<TripCost> {
-    const reason = requireReason(input.reason);
+    const reason = optionalReason(input.reason);
 
     const current = await this.costs.findById(costId);
     if (current?.tripId !== tripId) throw new NotFoundError('Cost line not found.');
@@ -343,9 +343,9 @@ export class TripCostService {
   async voidHire(
     tripId: string,
     hireId: string,
-    input: { by: string; reason: string },
+    input: { by: string; reason?: string },
   ): Promise<OutsourceHire> {
-    const reason = requireReason(input.reason);
+    const reason = optionalReason(input.reason);
 
     const current = await this.hires.findById(hireId);
     if (current?.tripId !== tripId) throw new NotFoundError('Hire not found.');
@@ -437,12 +437,20 @@ const requireCategory = (value: TripCostCategory): void => {
   );
 };
 
-/** A withdrawal with no reason is the record nobody can explain later. */
-const requireReason = (value: string): string => {
-  const trimmed = value.trim();
-  if (trimmed === '') throw new ValidationError('Voiding a financial record needs a reason.');
-  return trimmed;
-};
+/**
+ * The reason a withdrawal MAY carry.
+ *
+ * ★ NO LONGER MANDATORY, AND THE REPLACEMENT IS NULL RATHER THAN A
+ * DEFAULT STRING. A record is withdrawn through a plain confirmation now, so
+ * there is nothing for anybody to type; inventing 'Voided by user' here would
+ * fill the audit column with a sentence no human wrote and no reader could
+ * tell apart from one they did. A caller that does send a reason still has it
+ * kept and shown beside the row. Whitespace is not a reason either —
+ * 0012's not-blank check is still on the column, and this is what keeps a
+ * write from ever meeting it.
+ */
+const optionalReason = (value: string | null | undefined): string | null =>
+  blankToNull(value);
 
 /** A cell holding only a space is not a value. Same rule as the trip fields. */
 const blankToNull = (value: string | null | undefined): string | null => {

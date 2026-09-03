@@ -263,13 +263,14 @@ export class TripCostRepository {
    *
    * `WHERE voided_at IS NULL` is what makes a second void a no-op the service
    * turns into a refusal, rather than a silent rewrite of who withdrew it and
-   * why. All three columns are set in the one statement, so the database's
-   * `trip_costs_void_state` constraint can never see a half-set row.
+   * why. Both stamp columns are set in the one statement, so the database's
+   * `trip_costs_void_state` constraint can never see a half-set row. The reason
+   * rides along and may be null: 0020 made it optional.
    */
   async void(
     id: string,
     by: string,
-    reason: string,
+    reason: string | null,
     now: Date,
     executor: DatabaseQuery = this.db,
   ): Promise<TripCost | null> {
@@ -608,7 +609,7 @@ export class OutsourceHireRepository {
   async void(
     id: string,
     by: string,
-    reason: string,
+    reason: string | null,
     now: Date,
     executor: DatabaseQuery = this.db,
   ): Promise<OutsourceHire | null> {

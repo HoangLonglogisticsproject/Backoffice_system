@@ -223,3 +223,58 @@ describe('0012_trip_cost.sql', () => {
     });
   });
 });
+
+/**
+ * The migration that made the void reason optional.
+ *
+ * ★ IT WIDENS, IT DOES NOT DELETE. 0012 required all three void columns to
+ * move together; withdrawing a record is a plain confirmation in the interface
+ * now, so there is nothing for anybody to type and the column would only ever
+ * receive a sentence somebody invented. What must NOT slip in with that is the
+ * other half of the old constraint: a voided row still names who withdrew it
+ * and when, and a live row still cannot carry an explanation for a withdrawal
+ * that never happened.
+ */
+describe('0020_void_reason_optional.sql', () => {
+  let sql: string;
+
+  beforeAll(async () => {
+    sql = await readFile(join(MIGRATIONS_DIR, '0020_void_reason_optional.sql'), 'utf8');
+  });
+
+  const code = (): string => sql.replace(/--[^\n]*/g, '').replace(/\s+/g, ' ');
+
+  it.each(['trip_costs', 'trip_outsource_hires'])(
+    'keeps who and when moving together in %s',
+    (table) => {
+      expect(code()).toContain(`ADD CONSTRAINT ${table}_void_state`);
+      expect(code()).toMatch(
+        /\(voided_at IS NULL AND voided_by IS NULL\) OR \(voided_at IS NOT NULL AND voided_by IS NOT NULL\)/,
+      );
+    },
+  );
+
+  it('★ no longer names void_reason in the void_state check', () => {
+    const state = code().slice(code().indexOf('_void_state'));
+    expect(state).not.toMatch(/void_state CHECK \([^;]*void_reason IS NOT NULL/);
+  });
+
+  it.each(['trip_costs', 'trip_outsource_hires'])(
+    'still refuses a reason on a row that was never voided in %s',
+    (table) => {
+      expect(code()).toContain(`ADD CONSTRAINT ${table}_void_reason_needs_void`);
+    },
+  );
+
+  it('★ drops nothing but the constraints it replaces', () => {
+    expect(code()).not.toMatch(/DROP (COLUMN|TABLE|INDEX)/i);
+    expect(code()).not.toMatch(/\bDELETE\b|\bUPDATE\b/i);
+  });
+
+  it('is idempotent: every ADD CONSTRAINT is preceded by a guarded DROP', () => {
+    const added = [...code().matchAll(/ADD CONSTRAINT (\w+)/g)].map((m) => m[1]);
+    for (const name of added) {
+      expect(code()).toContain(`DROP CONSTRAINT IF EXISTS ${name}`);
+    }
+  });
+});
