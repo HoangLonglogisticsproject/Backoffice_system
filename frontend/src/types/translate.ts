@@ -384,6 +384,59 @@ const PHRASES = {
     en: 'Proposal sent. Awaiting a SuperAdmin decision.',
   },
   driverRequestQueue: { vi: 'Đề xuất tài khoản tài xế', en: 'Driver account requests' },
+
+  // ------------------------------------------------------- Driver Management --
+  driverManagement: { vi: 'Quản lý tài xế', en: 'Driver management' },
+  driverManagementIntro: {
+    vi: 'Tài khoản tài xế: tạo mới, xem chi tiết, vô hiệu hóa và kích hoạt lại. Phân công chuyến được thực hiện trên Lịch xe.',
+    en: 'Driver accounts: create, view, disable and re-enable. Trips are assigned on the schedule board.',
+  },
+  addDriver: { vi: 'Thêm tài xế', en: 'Add driver' },
+  createDriverSubmit: { vi: 'Tạo tài khoản', en: 'Create account' },
+  driverListEmpty: { vi: 'Chưa có tài khoản tài xế nào.', en: 'No driver accounts yet.' },
+  driverListFailed: { vi: 'Không tải được danh sách tài xế.', en: 'Could not load the drivers.' },
+  colUsername: { vi: 'Tên đăng nhập', en: 'Username' },
+  colAccountType: { vi: 'Loại tài khoản', en: 'Account type' },
+  colCreatedAt: { vi: 'Ngày tạo', en: 'Created' },
+  viewDetail: { vi: 'Chi tiết', en: 'Details' },
+  driverDetail: { vi: 'Chi tiết tài xế', en: 'Driver details' },
+  driverStatusActive: { vi: 'Đang hoạt động', en: 'Active' },
+  driverStatusDisabled: { vi: 'Đã vô hiệu hóa', en: 'Disabled' },
+  driverCreated: { vi: 'Đã tạo tài khoản tài xế.', en: 'Driver account created.' },
+  driverCreatedNote: {
+    vi: 'Giao mật khẩu tạm cho tài xế theo cách đã thống nhất. Tài xế phải đổi mật khẩu ở lần đăng nhập đầu tiên.',
+    en: 'Hand the temporary password to the driver as agreed. They must change it on first sign-in.',
+  },
+  disableDriver: { vi: 'Vô hiệu hóa', en: 'Disable' },
+  enableDriver: { vi: 'Kích hoạt lại', en: 'Re-enable' },
+  disableDriverTitle: { vi: 'Vô hiệu hóa tài khoản tài xế?', en: 'Disable this driver account?' },
+  enableDriverTitle: { vi: 'Kích hoạt lại tài khoản tài xế?', en: 'Re-enable this driver account?' },
+  disableDriverConfirm: { vi: 'Xác nhận vô hiệu hóa', en: 'Confirm disable' },
+  enableDriverConfirm: { vi: 'Xác nhận kích hoạt', en: 'Confirm re-enable' },
+  disableDriverWarning: {
+    vi: 'Nếu tài xế đang được phân công chuyến, các phân công hiện tại KHÔNG tự động thay đổi. Vô hiệu hóa tài khoản chỉ khiến tài xế không thể đăng nhập; Điều độ phải đổi tài xế trên chuyến nếu chuyến vẫn cần người chạy.',
+    en: 'If this driver is assigned to trips, those assignments do NOT change automatically. Disabling only stops the driver from signing in; Operations must replace the driver on the trip if it still needs one.',
+  },
+  disableDriverEffectLogin: {
+    vi: 'Tài xế không đăng nhập được nữa; các phiên đang mở bị kết thúc.',
+    en: 'The driver can no longer sign in; open sessions are ended.',
+  },
+  disableDriverEffectAssignments: {
+    vi: 'Phân công chuyến hiện tại và sắp tới giữ nguyên — không kết thúc, không thay thế.',
+    en: 'Current and upcoming trip assignments stay as they are — nothing is ended or replaced.',
+  },
+  disableDriverEffectHistory: {
+    vi: 'Lịch sử chuyến, chi phí và xác nhận hoàn thành được giữ nguyên.',
+    en: 'Trip history, expenses and completion records are kept.',
+  },
+  enableDriverEffectLogin: {
+    vi: 'Tài xế đăng nhập được trở lại bằng mật khẩu hiện có.',
+    en: 'The driver can sign in again with their existing password.',
+  },
+  enableDriverEffectNoAssignment: {
+    vi: 'Không phân công chuyến nào được tạo hay khôi phục; lịch sử không thay đổi.',
+    en: 'No trip assignment is created or restored; history is unchanged.',
+  },
   driverRequestQueueEmpty: {
     vi: 'Không có đề xuất nào đang chờ.',
     en: 'No requests are waiting.',

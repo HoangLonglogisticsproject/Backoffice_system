@@ -1,3 +1,4 @@
+import { NotFoundError } from '../../../common/errors/domain.error';
 import { INestApplication } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
@@ -39,6 +40,8 @@ describe('driver-account HTTP security', () => {
   const OPS_DEPT = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
   const ACC_DEPT = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
   const REQUEST = '99999999-9999-9999-9999-999999999999';
+  /** A driver account the administrator manages — not the one that is signed in. */
+  const MANAGED = '66666666-6666-6666-6666-666666666666';
 
   let app: INestApplication;
   let context: AuthorizationContext;
@@ -51,6 +54,9 @@ describe('driver-account HTTP security', () => {
     reject: jest.Mock;
     listPending: jest.Mock;
     listMine: jest.Mock;
+    list: jest.Mock;
+    get: jest.Mock;
+    setStatus: jest.Mock;
   };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
@@ -111,6 +117,16 @@ describe('driver-account HTTP security', () => {
       reject: jest.fn().mockResolvedValue({ id: REQUEST, status: 'rejected' }),
       listPending: jest.fn().mockResolvedValue([]),
       listMine: jest.fn().mockResolvedValue([]),
+      list: jest.fn().mockResolvedValue([]),
+      get: jest.fn().mockResolvedValue({
+        id: MANAGED,
+        displayName: 'Tài Xế A',
+        username: 'taixea',
+        accountType: 'driver',
+        status: 'active',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      setStatus: jest.fn().mockResolvedValue({ id: MANAGED, status: 'disabled' }),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -151,13 +167,16 @@ describe('driver-account HTTP security', () => {
     await app?.close();
   });
 
-  const authed = (method: 'get' | 'post', path: string) =>
+  const authed = (method: 'get' | 'post' | 'patch', path: string) =>
     request(app.getHttpServer())
       [method](path)
       .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
       .set('X-Requested-With', 'XMLHttpRequest');
 
   const CREATE = '/driver-accounts';
+  const LIST = '/driver-accounts';
+  const DETAIL = `${LIST}/${MANAGED}`;
+  const STATUS = `${DETAIL}/status`;
   const REQUESTS = '/driver-account-requests';
   const APPROVE = `${REQUESTS}/${REQUEST}/approve`;
   const REJECT = `${REQUESTS}/${REQUEST}/reject`;
@@ -189,6 +208,56 @@ describe('driver-account HTTP security', () => {
     it('reads the pending queue', async () => {
       await authed('get', REQUESTS).expect(200);
       expect(drivers.listPending).toHaveBeenCalled();
+    });
+
+    // ------------------------------------------------- driver management --
+
+    it('lists the driver accounts', async () => {
+      drivers.list.mockResolvedValue([{ id: MANAGED, displayName: 'Tài Xế A', status: 'disabled' }]);
+
+      const response = await authed('get', LIST).expect(200);
+
+      expect(response.body).toEqual([{ id: MANAGED, displayName: 'Tài Xế A', status: 'disabled' }]);
+    });
+
+    it('reads one driver, and gets only the six management fields', async () => {
+      const response = await authed('get', DETAIL).expect(200);
+
+      expect(drivers.get).toHaveBeenCalledWith(MANAGED);
+      expect(Object.keys(response.body).sort()).toEqual(
+        ['accountType', 'createdAt', 'displayName', 'id', 'status', 'username'].sort(),
+      );
+    });
+
+    it.each(['disabled', 'active'] as const)('★ sets a driver to %s, as the session user', async (status) => {
+      drivers.setStatus.mockResolvedValue({ id: MANAGED, status });
+
+      const response = await authed('patch', STATUS).send({ status }).expect(200);
+
+      expect(drivers.setStatus).toHaveBeenCalledWith({ userId: MANAGED, status, actingUserId: BOSS });
+      expect(response.body).toEqual({ id: MANAGED, status });
+    });
+
+    it('refuses a status that is neither, before any service', async () => {
+      await authed('patch', STATUS).send({ status: 'archived' }).expect(422);
+      expect(drivers.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('★ answers 404 for a target that is not a driver — the service says so, the route repeats it', async () => {
+      drivers.get.mockRejectedValue(new NotFoundError('Driver not found.'));
+      drivers.setStatus.mockRejectedValue(new NotFoundError('Driver not found.'));
+
+      await authed('get', DETAIL).expect(404);
+      await authed('patch', STATUS).send({ status: 'disabled' }).expect(404);
+    });
+
+    it('refuses a status change without the CSRF header, before the service', async () => {
+      await request(app.getHttpServer())
+        .patch(STATUS)
+        .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
+        .send({ status: 'disabled' })
+        .expect(403);
+      expect(drivers.setStatus).not.toHaveBeenCalled();
     });
   });
 
@@ -246,6 +315,19 @@ describe('driver-account HTTP security', () => {
       expect(response.status).toBe(403);
       expect(drivers.listPending).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ['get', LIST],
+      ['get', DETAIL],
+      ['patch', STATUS],
+    ] as const)('★ may not manage driver accounts — %s %s is 403 and reaches no service', async (method, path) => {
+      const response = await authed(method, path).send({ status: 'disabled' });
+
+      expect(response.status).toBe(403);
+      expect(drivers.list).not.toHaveBeenCalled();
+      expect(drivers.get).not.toHaveBeenCalled();
+      expect(drivers.setStatus).not.toHaveBeenCalled();
+    });
   });
 
   // ================================================================= 5 · member ==
@@ -266,6 +348,19 @@ describe('driver-account HTTP security', () => {
       expect(response.status).toBe(403);
       expect(drivers.createDirectly).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ['get', LIST],
+      ['get', DETAIL],
+      ['patch', STATUS],
+    ] as const)('may not manage driver accounts — %s %s', async (method, path) => {
+      const response = await authed(method, path).send({ status: 'active' });
+
+      expect(response.status).toBe(403);
+      expect(drivers.list).not.toHaveBeenCalled();
+      expect(drivers.get).not.toHaveBeenCalled();
+      expect(drivers.setStatus).not.toHaveBeenCalled();
+    });
   });
 
   // ================================================================= 14 · driver ==
@@ -280,8 +375,11 @@ describe('driver-account HTTP security', () => {
       ['get', `${REQUESTS}/mine`],
       ['post', APPROVE],
       ['post', REJECT],
+      ['get', LIST],
+      ['get', DETAIL],
+      ['patch', STATUS],
     ] as const)('refuses %s %s with 403, and reaches no service', async (method, path) => {
-      const response = await authed(method, path).send({ reason: 'x' });
+      const response = await authed(method, path).send({ reason: 'x', status: 'active' });
 
       expect(response.status).toBe(403);
       for (const mock of Object.values(drivers)) expect(mock).not.toHaveBeenCalled();
@@ -296,6 +394,8 @@ describe('driver-account HTTP security', () => {
       ['post', REQUESTS],
       ['get', REQUESTS],
       ['post', APPROVE],
+      ['get', LIST],
+      ['patch', STATUS],
     ] as const)('refuses %s %s with 401, and reaches no service', async (method, path) => {
       const response = await request(app.getHttpServer())
         [method](path)
@@ -342,6 +442,19 @@ describe('driver-account HTTP security', () => {
 
       // Read from the session, never the payload.
       expect(drivers.request).toHaveBeenCalledWith({ ...newDriver, requestedBy: OPS_HEAD });
+    });
+
+    it('takes no actor from the body of a status change', async () => {
+      await authed('patch', STATUS).send({ status: 'disabled', actingUserId: MEMBER }).expect(200);
+
+      expect(drivers.setStatus).toHaveBeenCalledWith({ userId: MANAGED, status: 'disabled', actingUserId: BOSS });
+    });
+
+    it('refuses a malformed driver id on the management routes', async () => {
+      await authed('get', `${LIST}/not-a-uuid`).expect(422);
+      await authed('patch', `${LIST}/not-a-uuid/status`).send({ status: 'disabled' }).expect(422);
+      expect(drivers.get).not.toHaveBeenCalled();
+      expect(drivers.setStatus).not.toHaveBeenCalled();
     });
 
     it('takes no decider from the body', async () => {

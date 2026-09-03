@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
@@ -9,6 +19,7 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { DriverAccountService, type ProvisionedDriver } from '../application/driver-account.service';
+import type { DriverAccount } from '../domain/driver-account';
 import type {
   DriverAccountRequest,
   DriverAccountRequestWithUsers,
@@ -38,7 +49,18 @@ const rejectSchema = z.object({
   reason: z.string().trim().min(1).max(1000),
 });
 
+/**
+ * Both directions, on a DRIVER. The employee route (`PATCH /users/:id/status`)
+ * still accepts `disabled` only, because re-enabling an employee asks "into
+ * which department" and that is undecided; a driver has no department, so
+ * for them the way back is one status flip and this schema says so.
+ */
+const setDriverStatusSchema = z.object({
+  status: z.enum(['active', 'disabled']),
+});
+
 type CreateDriverInput = z.infer<typeof createDriverSchema>;
+type SetDriverStatusInput = z.infer<typeof setDriverStatusSchema>;
 type RequestDriverInput = z.infer<typeof requestDriverSchema>;
 type RejectInput = z.infer<typeof rejectSchema>;
 
@@ -49,6 +71,9 @@ type RejectInput = z.infer<typeof rejectSchema>;
  * key by design:
  *
  *   POST   /driver-accounts                    user.write             'global'
+ *   GET    /driver-accounts                    user.write             'global'
+ *   GET    /driver-accounts/:userId            user.write             'global'
+ *   PATCH  /driver-accounts/:userId/status     user.write             'global'
  *   POST   /driver-account-requests            driver.account.request 'head-anywhere'
  *   GET    /driver-account-requests            user.write             'global'
  *   GET    /driver-account-requests/mine       driver.account.request 'head-anywhere'
@@ -72,6 +97,46 @@ export class DriverAccountController {
     @Body(new ZodValidationPipe(createDriverSchema)) body: CreateDriverInput,
   ): Promise<ProvisionedDriver> {
     return this.drivers.createDirectly(body);
+  }
+
+  /**
+   * Driver Management's list: every driver account, with its status.
+   *
+   * ★ `user.write` FOR A READ, ON PURPOSE. This is account administration —
+   * the same screen that creates and disables — and the list of who can sign
+   * in as a driver is administration data, not dispatch data. Dispatch has its
+   * own list (`GET /trip-drivers`, `trip.write`) of ACTIVE drivers by id and
+   * name, and that one stays the source of assignment eligibility.
+   */
+  @Get('driver-accounts')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('user.write')
+  async list(): Promise<DriverAccount[]> {
+    return this.drivers.list();
+  }
+
+  /** One driver. An employee's id — or a made-up one — is 404 here. */
+  @Get('driver-accounts/:userId')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('user.write')
+  async get(@Param('userId', UuidParam) userId: string): Promise<DriverAccount> {
+    return this.drivers.get(userId);
+  }
+
+  /**
+   * Disable or re-enable a driver. Account status only; see the service for
+   * what it deliberately leaves alone.
+   */
+  @Patch('driver-accounts/:userId/status')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('user.write')
+  async setStatus(
+    @Param('userId', UuidParam) userId: string,
+    @Body(new ZodValidationPipe(setDriverStatusSchema)) body: SetDriverStatusInput,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<{ id: string; status: string }> {
+    const user = await this.drivers.setStatus({ userId, status: body.status, actingUserId: actor.id });
+    return { id: user.id, status: user.status };
   }
 
   /** A department head proposes one. Nothing is created. */

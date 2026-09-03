@@ -1,9 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConflictError, ValidationError } from '../../../common/errors/domain.error';
+import { ConflictError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database } from '../../../common/types/database.port';
 import { AppConfig } from '../../../config/app.config';
 import { IdentityRepository } from '../../../core/identity/persistence/identity.repository';
+import { AccountLifecycleService } from '../../../core/users/application/account-lifecycle.service';
 import { AccountProvisioningService } from '../../../core/users/application/account-provisioning.service';
+import type { User } from '../../../core/users/domain/user.entity';
 import { assertProvisionableEmail } from '../../../core/users/domain/email';
 import { LOCAL_PROVIDER } from '../../../core/users/domain/user.entity';
 import {
@@ -11,6 +13,8 @@ import {
   type DriverAccountRequest,
   type DriverAccountRequestWithUsers,
 } from '../domain/driver-account-request';
+import type { DriverAccount } from '../domain/driver-account';
+import { DriverAccountRepository } from '../persistence/driver-account.repository';
 import { DriverAccountRequestRepository } from '../persistence/driver-account-request.repository';
 
 /** What a newly provisioned driver hands back, once. */
@@ -51,7 +55,61 @@ export class DriverAccountService {
     private readonly provisioning: AccountProvisioningService,
     private readonly identities: IdentityRepository,
     private readonly config: AppConfig,
+    private readonly accounts: DriverAccountRepository,
+    private readonly lifecycle: AccountLifecycleService,
   ) {}
+
+  // ------------------------------------------------------ driver management --
+
+  /** Every driver account, retired ones included, for the administrator's list. */
+  list(): Promise<DriverAccount[]> {
+    return this.accounts.listDrivers();
+  }
+
+  /**
+   * One driver.
+   *
+   * ★ AN EMPLOYEE'S ID IS "NOT FOUND", NOT "FORBIDDEN". The repository's
+   * predicate answers nothing for a non-driver, and this route says the same
+   * for a wrong id and for a right one of the wrong kind: an administrator
+   * holding an arbitrary user id learns nothing about it from this door.
+   */
+  async get(userId: string): Promise<DriverAccount> {
+    const driver = await this.accounts.findDriver(userId);
+    if (!driver) throw new NotFoundError('Driver not found.');
+    return driver;
+  }
+
+  /**
+   * Disable or re-enable a driver account. ACCOUNT STATUS ONLY.
+   *
+   * ★ THE TARGET IS CHECKED HERE, BEFORE THE LIFECYCLE RUNS. The core lifecycle
+   * disables any user; this door is Driver Management's and must not be a way
+   * to disable an employee, so a non-driver target is refused as "not found"
+   * — the same answer the read gives, for the same reason.
+   *
+   * ★ WHAT NEITHER DIRECTION DOES. Disabling revokes sessions and roles the
+   * way the existing lifecycle already does, and leaves every trip assignment
+   * exactly as it stands — active ones included. A trip that still needs a
+   * driver is Operations' to re-assign through the assignment flow; nothing
+   * here ends, replaces or "helpfully" tidies one. Re-enabling flips the
+   * status back and creates nothing.
+   */
+  async setStatus(input: {
+    userId: string;
+    status: 'active' | 'disabled';
+    actingUserId: string;
+  }): Promise<User> {
+    if (!(await this.accounts.findDriver(input.userId))) {
+      throw new NotFoundError('Driver not found.');
+    }
+    const change = { userId: input.userId, actingUserId: input.actingUserId };
+    return input.status === 'disabled'
+      ? this.lifecycle.disable(change)
+      : this.lifecycle.enable(change);
+  }
+
+  // -------------------------------------------------------------- creation --
 
   /**
    * A global administrator creates a driver, active immediately.

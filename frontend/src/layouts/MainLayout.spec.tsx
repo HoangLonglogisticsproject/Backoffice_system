@@ -227,6 +227,23 @@ describe('MainLayout', () => {
       expect(hrefOf('Tổng quan')).toBe('/organization/dashboard');
     });
 
+    it('★ gives a SUPERADMIN driver management and the request queue, under SYSTEM', () => {
+      useSession.mockReturnValue(ready('boss', 'SUPERADMIN'));
+      renderLayout();
+
+      expect(hrefOf('Quản lý tài xế')).toBe('/system/drivers');
+      expect(hrefOf('Đề xuất tài khoản tài xế')).toBe('/organization/driver-requests');
+    });
+
+    it('★ offers a DEPARTMENT_HEAD no driver management — proposing is done from the roster', () => {
+      useSession.mockReturnValue(headSession());
+      useMyDepartments.mockReturnValue({ departments: [], loading: false });
+      renderLayout();
+
+      expect(screen.queryByText('Quản lý tài xế')).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /quản lý tài xế/i })).not.toBeInTheDocument();
+    });
+
     it('gives a DEPARTMENT_HEAD a personnel area instead of the approvals queue', () => {
       useSession.mockReturnValue(headSession());
       useMyDepartments.mockReturnValue({
