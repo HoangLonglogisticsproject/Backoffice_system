@@ -2,9 +2,7 @@ import { useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ClipboardList, Plus } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import {
   Table,
@@ -17,16 +15,19 @@ import {
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import {
-  createDriver,
   fetchDriver,
   fetchDrivers,
   setDriverStatus,
   type DriverAccount,
   type DriverAccountStatus,
-  type ProvisionedDriver,
 } from '@/api/driverAccounts';
 import { formatDateTime } from '@/utils/format/datetime';
 import { isApiError } from '@/utils/errors';
+import { AddEmployeeModal } from '@/pages/organization/components/AddEmployeeModal';
+import { PageHeader } from '@/components/common/PageHeader';
+import { SuccessNotice } from '@/components/common/SuccessNotice';
+import { StatusPill } from '@/components/common/StatusPill';
+import { QueueStates, ROW_ACTION } from '@/components/common/DecisionQueue';
 
 /**
  * Driver Management — the accounts, not the trips.
@@ -37,21 +38,24 @@ import { isApiError } from '@/utils/errors';
  * board by the people who dispatch. Disabling here changes ONE thing — whether
  * the person can sign in — and the confirmation says so in as many words.
  *
+ * ★ THE SAME SCREEN THE REST OF THE BACKOFFICE IS MADE OF. The header card,
+ * the white table card, the status pill, the row actions and the "created"
+ * notice are the approvals screen's; the create dialog is the one the
+ * approvals screen opens, started on "driver". Nothing here is drawn twice.
+ *
  * ★ GLOBAL ONLY. Every route behind this page is `user.write`, the
  * deployment-wide key, and the sidebar draws the entry for that key alone.
- * A head proposes a driver through the request queue; they do not manage one.
- *
- * ★ WHAT IS SHOWN IS ALL THERE IS. Six fields come from the server and six are
- * shown. No password ever reaches this screen after creation, and the one the
- * administrator typed is not echoed back.
  */
 export const DRIVERS_QUERY_KEY = ['driver-accounts'] as const;
 
-const STATUS_VARIANT: Record<DriverAccountStatus, 'default' | 'destructive'> = {
-  active: 'default',
-  disabled: 'destructive',
-};
-const STATUS_LABEL = { active: 'driverStatusActive', disabled: 'driverStatusDisabled' } as const;
+function DriverStatusPill({ status }: Readonly<{ status: DriverAccountStatus }>) {
+  const { t } = useLanguage();
+  return status === 'active' ? (
+    <StatusPill tone="green">{t('driverStatusActive')}</StatusPill>
+  ) : (
+    <StatusPill tone="gray">{t('driverStatusDisabled')}</StatusPill>
+  );
+}
 
 export default function DriverManagementPage() {
   const { t, language } = useLanguage();
@@ -64,6 +68,7 @@ export default function DriverManagementPage() {
   const drivers = useQuery({ queryKey: DRIVERS_QUERY_KEY, queryFn: fetchDrivers, enabled: allowed });
 
   const [creating, setCreating] = useState(false);
+  const [createdEmail, setCreatedEmail] = useState<string | null>(null);
   const [detailOf, setDetailOf] = useState<string | null>(null);
   /** The status change awaiting confirmation. */
   const [changing, setChanging] = useState<{ driver: DriverAccount; to: DriverAccountStatus } | null>(null);
@@ -71,49 +76,37 @@ export default function DriverManagementPage() {
   if (!allowed) return <Navigate to="/403" replace />;
 
   const reload = () => queryClient.invalidateQueries({ queryKey: DRIVERS_QUERY_KEY });
+  const rows = drivers.data ?? [];
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">{t('driverManagement')}</h1>
-          <p className="mt-1 text-sm text-gray-600">{t('driverManagementIntro')}</p>
-        </div>
-        <div className="flex gap-2">
-          <Link to="/organization/driver-requests">
-            <Button variant="outline" type="button" className="gap-1">
-              <ClipboardList className="size-4" />
-              {t('driverRequestQueue')}
-            </Button>
-          </Link>
-          <Button type="button" className="gap-1 bg-blue-600 hover:bg-blue-700" onClick={() => setCreating(true)}>
-            <Plus className="size-4" />
-            {t('addDriver')}
-          </Button>
-        </div>
-      </div>
-
-      <section className="rounded-xl border border-gray-100 bg-white shadow-sm">
-        {drivers.isPending ? (
-          <p className="py-10 text-center text-sm text-gray-500">{t('loading')}</p>
-        ) : null}
-
-        {drivers.isError ? (
-          <div className="space-y-2 py-10 text-center">
-            <p role="alert" className="text-sm text-red-600">
-              {t('driverListFailed')}
-            </p>
-            <Button variant="outline" type="button" onClick={() => void drivers.refetch()}>
-              {t('retry')}
+      <PageHeader
+        title={t('driverManagement')}
+        subtitle={t('driverManagementIntro')}
+        actions={
+          <div className="flex gap-2">
+            <Link to="/organization/driver-requests">
+              <Button variant="outline" className="gap-2">
+                <ClipboardList className="h-4 w-4" />
+                {t('driverRequestQueue')}
+              </Button>
+            </Link>
+            <Button onClick={() => setCreating(true)} className="bg-blue-600 hover:bg-blue-700 text-white gap-2">
+              <Plus className="h-4 w-4" />
+              {t('addDriver')}
             </Button>
           </div>
-        ) : null}
+        }
+      />
 
-        {drivers.isSuccess && drivers.data.length === 0 ? (
-          <p className="py-10 text-center text-sm text-gray-500">{t('driverListEmpty')}</p>
-        ) : null}
+      {createdEmail && (
+        <SuccessNotice onDismiss={() => setCreatedEmail(null)}>
+          {t('driverCreated')} <code className="font-mono">{createdEmail}</code>
+        </SuccessNotice>
+      )}
 
-        {drivers.isSuccess && drivers.data.length > 0 ? (
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
           <Table>
             <TableHeader className="bg-gray-50/50">
               <TableRow>
@@ -122,22 +115,22 @@ export default function DriverManagementPage() {
                 <TableHead className="font-semibold text-gray-600">{t('colUsername')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCreatedAt')}</TableHead>
-                <TableHead className="text-right font-semibold text-gray-600">{t('colActions')}</TableHead>
+                <TableHead className="text-right font-semibold text-gray-600 pr-6">{t('colActions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {drivers.data.map((driver, index) => (
-                <TableRow key={driver.id} className="transition-colors hover:bg-blue-50/30">
-                  <TableCell className="text-center font-medium text-gray-500">{index + 1}</TableCell>
+              {rows.map((driver, index) => (
+                <TableRow key={driver.id} className="hover:bg-blue-50/30">
+                  <TableCell className="text-center text-gray-500 font-medium">{index + 1}</TableCell>
                   <TableCell className="font-medium text-gray-900">{driver.displayName}</TableCell>
                   <TableCell className="text-gray-600">{driver.username ?? '—'}</TableCell>
                   <TableCell>
-                    <Badge variant={STATUS_VARIANT[driver.status]}>{t(STATUS_LABEL[driver.status])}</Badge>
+                    <DriverStatusPill status={driver.status} />
                   </TableCell>
                   <TableCell className="text-gray-600">{formatDateTime(driver.createdAt, language)}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="outline" size="sm" type="button" onClick={() => setDetailOf(driver.id)}>
+                  <TableCell className="text-right pr-4">
+                    <div className="flex items-center justify-end gap-2">
+                      <Button size="sm" variant="outline" className={ROW_ACTION.neutral} onClick={() => setDetailOf(driver.id)}>
                         {t('viewDetail')}
                       </Button>
                       <StatusButton driver={driver} onChoose={(to) => setChanging({ driver, to })} />
@@ -147,17 +140,34 @@ export default function DriverManagementPage() {
               ))}
             </TableBody>
           </Table>
-        ) : null}
-      </section>
 
-      {creating ? (
-        <CreateDriverModal
-          onClose={() => setCreating(false)}
-          onCreated={async () => {
-            await reload();
-          }}
-        />
-      ) : null}
+          <QueueStates
+            loading={drivers.isPending}
+            showLoading
+            forbidden={false}
+            error={drivers.isError}
+            empty={rows.length === 0}
+            emptyKey="driverListEmpty"
+            onRetry={() => void drivers.refetch()}
+          />
+        </div>
+      </div>
+
+      {/* ★ THE SAME DIALOG THE APPROVALS SCREEN OPENS, locked to "driver". It
+          already knows that a driver has no department and calls the existing
+          create endpoint; this screen creates drivers and nothing else, so the
+          employee kind is not offered here. The notice above is the approvals
+          screen's too. */}
+      <AddEmployeeModal
+        isOpen={creating}
+        initialAccountType="driver"
+        lockAccountType
+        onClose={() => setCreating(false)}
+        onCreated={(_outcome, email) => {
+          setCreatedEmail(email);
+          void reload();
+        }}
+      />
 
       {detailOf ? (
         <DriverDetailModal
@@ -182,146 +192,20 @@ export default function DriverManagementPage() {
   );
 }
 
-/** "Vô hiệu hóa" on an active account, "Kích hoạt lại" on a disabled one. */
+/** "Vô hiệu hóa" on an active account, "Kích hoạt lại" on a disabled one — the queue's two row actions. */
 function StatusButton({
   driver,
   onChoose,
 }: Readonly<{ driver: DriverAccount; onChoose: (to: DriverAccountStatus) => void }>) {
   const { t } = useLanguage();
   return driver.status === 'active' ? (
-    <Button variant="outline" size="sm" type="button" className="text-red-700" onClick={() => onChoose('disabled')}>
+    <Button size="sm" variant="outline" className={ROW_ACTION.danger} onClick={() => onChoose('disabled')}>
       {t('disableDriver')}
     </Button>
   ) : (
-    <Button variant="outline" size="sm" type="button" className="text-green-700" onClick={() => onChoose('active')}>
+    <Button size="sm" className={ROW_ACTION.primary} onClick={() => onChoose('active')}>
       {t('enableDriver')}
     </Button>
-  );
-}
-
-/**
- * A new driver, created outright — the same three fields the API has always
- * taken. On success the server's answer (the derived sign-in name) is shown;
- * the password the administrator typed is not repeated back.
- */
-function CreateDriverModal({
-  onClose,
-  onCreated,
-}: Readonly<{ onClose: () => void; onCreated: () => Promise<void> }>) {
-  const { t } = useLanguage();
-  const [displayName, setDisplayName] = useState('');
-  const [email, setEmail] = useState('');
-  const [initialPassword, setInitialPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<ProvisionedDriver | null>(null);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const driver = await createDriver({ displayName: displayName.trim(), email: email.trim(), initialPassword });
-      setCreated(driver);
-      // The typed secret has done its job; nothing keeps it.
-      setInitialPassword('');
-      await onCreated();
-    } catch (error_) {
-      setError(isApiError(error_) ? error_.message : t('createFailed'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const formId = 'create-driver-form';
-
-  return (
-    <Modal
-      isOpen
-      onClose={onClose}
-      title={t('addDriver')}
-      footer={
-        created ? (
-          <Button type="button" onClick={onClose}>
-            {t('close')}
-          </Button>
-        ) : (
-          <>
-            <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
-              {t('cancel')}
-            </Button>
-            <Button type="submit" form={formId} disabled={busy} className="bg-blue-600 hover:bg-blue-700">
-              {busy ? t('saving') : t('createDriverSubmit')}
-            </Button>
-          </>
-        )
-      }
-    >
-      {created ? (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm">
-          <p className="font-medium text-green-900">{t('driverCreated')}</p>
-          <p className="mt-1 text-green-800">
-            {created.displayName} — <span className="font-mono">{created.username}</span>
-          </p>
-          <p className="mt-2 text-xs text-green-800">{t('driverCreatedNote')}</p>
-        </div>
-      ) : (
-        <form id={formId} onSubmit={submit} className="space-y-4">
-          <p className="text-xs text-gray-500">{t('driverNoDepartmentNote')}</p>
-          <Field id="driver-name" label={t('fullNameLabel')} value={displayName} onChange={setDisplayName} required />
-          <Field id="driver-email" label={t('emailLabel')} value={email} onChange={setEmail} type="email" required />
-          <Field
-            id="driver-password"
-            label={t('initialPasswordLabel')}
-            value={initialPassword}
-            onChange={setInitialPassword}
-            type="password"
-            required
-            hint={t('initialPasswordHint')}
-          />
-          {error ? (
-            <p role="alert" className="text-sm text-red-600">
-              {error}
-            </p>
-          ) : null}
-        </form>
-      )}
-    </Modal>
-  );
-}
-
-function Field({
-  id,
-  label,
-  value,
-  onChange,
-  type = 'text',
-  required = false,
-  hint,
-}: Readonly<{
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  required?: boolean;
-  hint?: string;
-}>) {
-  return (
-    <div className="space-y-2">
-      <label htmlFor={id} className="text-sm font-medium text-gray-700">
-        {label}
-      </label>
-      <Input
-        id={id}
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        required={required}
-        autoComplete="off"
-      />
-      {hint ? <p className="text-xs text-gray-500">{hint}</p> : null}
-    </div>
   );
 }
 
@@ -363,7 +247,7 @@ function DriverDetailModal({
       {driver.isPending ? <p className="text-sm text-gray-500">{t('loading')}</p> : null}
       {driver.isError ? (
         <p role="alert" className="text-sm text-red-600">
-          {t('driverListFailed')}
+          {t('loadFailed')}
         </p>
       ) : null}
       {driver.data ? (
@@ -376,7 +260,7 @@ function DriverDetailModal({
           <dd className="text-gray-900">{t('accountTypeDriver')}</dd>
           <dt className="text-gray-500">{t('colStatus')}</dt>
           <dd>
-            <Badge variant={STATUS_VARIANT[driver.data.status]}>{t(STATUS_LABEL[driver.data.status])}</Badge>
+            <DriverStatusPill status={driver.data.status} />
           </dd>
           <dt className="text-gray-500">{t('colCreatedAt')}</dt>
           <dd className="text-gray-900">{formatDateTime(driver.data.createdAt, language)}</dd>
@@ -387,7 +271,8 @@ function DriverDetailModal({
 }
 
 /**
- * The explicit second act, in both directions.
+ * The explicit second act, in both directions — the employee detail screen's
+ * disable dialog, with the driver's own sentences.
  *
  * ★ THE DISABLE WARNING IS THE POINT OF THIS DIALOG. It says what happens
  * (no sign-in) and — louder — what does NOT happen: the driver's current and
@@ -439,7 +324,7 @@ function StatusConfirmModal({
             type="button"
             onClick={() => void confirm()}
             disabled={busy}
-            className={disabling ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-green-600 text-white hover:bg-green-700'}
+            className={disabling ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}
           >
             {busy ? t('saving') : confirmLabel}
           </Button>

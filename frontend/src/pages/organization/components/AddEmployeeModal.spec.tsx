@@ -78,6 +78,91 @@ const renderModalWithoutDepartment = () =>
     </LanguageProvider>,
   );
 
+/**
+ * ★ THE DIALOG IS FRESH ON EVERY OPEN. `Modal` renders nothing when closed,
+ * but a component that stayed mounted kept its state: a kind switched in one
+ * visit was still switched on the next, so a screen that opened the dialog
+ * on "driver" could, one visit later, quietly create an employee. The dialog
+ * is now created on open and discarded on close, and a screen that creates
+ * only drivers can lock the kind so the employee path is not even drawn.
+ */
+describe('opened on "driver" by Driver Management', () => {
+  const Host = ({ open, locked = false }: { open: boolean; locked?: boolean }) => (
+    <LanguageProvider>
+      <AddEmployeeModal
+        isOpen={open}
+        initialAccountType="driver"
+        lockAccountType={locked}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />
+    </LanguageProvider>
+  );
+
+  beforeEach(() => {
+    can.mockReturnValue(true);
+    createUser.mockReset().mockResolvedValue({ id: 'created-user-id' });
+    createDriver.mockReset().mockResolvedValue({ userId: 'new-driver', username: 'taixe' });
+    requestAccountInvitation.mockReset();
+    fetchDepartments.mockReset().mockResolvedValue([]);
+    useMyDepartments.mockReset().mockReturnValue({ departments: [], loading: false });
+  });
+
+  it('opens on the driver kind, with no department asked', () => {
+    render(<Host open />);
+
+    expect(screen.getByRole('button', { name: 'Tài xế', pressed: true })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/phòng ban/i)).not.toBeInTheDocument();
+  });
+
+  it('★ switch to employee, close, reopen: it is a driver again', () => {
+    const view = render(<Host open />);
+    fireEvent.click(screen.getByRole('button', { name: 'Nhân viên' }));
+    expect(screen.getByRole('button', { name: 'Nhân viên', pressed: true })).toBeInTheDocument();
+
+    view.rerender(<Host open={false} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    view.rerender(<Host open />);
+
+    expect(screen.getByRole('button', { name: 'Tài xế', pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nhân viên', pressed: false })).toBeInTheDocument();
+  });
+
+  it('forgets everything typed in the previous visit, not only the kind', () => {
+    const view = render(<Host open />);
+    fireEvent.change(screen.getByLabelText('Họ và tên *'), { target: { value: 'Nửa chừng' } });
+
+    view.rerender(<Host open={false} />);
+    view.rerender(<Host open />);
+
+    expect(screen.getByLabelText('Họ và tên *')).toHaveValue('');
+  });
+
+  it('★ locked: offers no kind to switch to, and can only reach the driver endpoint', async () => {
+    render(<Host open locked />);
+
+    expect(screen.queryByRole('button', { name: 'Nhân viên' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Tài xế' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/phòng ban/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Họ và tên *'), { target: { value: 'Tài Xế Mới' } });
+    fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'taixemoi' } });
+    fireEvent.change(screen.getByLabelText('Mật khẩu tạm *'), { target: { value: 'Tam-2026!' } });
+    fireEvent.click(screen.getByRole('button', { name: /^lưu nhân viên$/i }));
+
+    await waitFor(() =>
+      expect(createDriver).toHaveBeenCalledWith({
+        displayName: 'Tài Xế Mới',
+        email: 'taixemoi@hoanglonglti.com',
+        initialPassword: 'Tam-2026!',
+      }),
+    );
+    expect(createUser).not.toHaveBeenCalled();
+    expect(requestAccountInvitation).not.toHaveBeenCalled();
+    expect(fetchDepartments).not.toHaveBeenCalled();
+  });
+});
+
 describe('AddEmployeeModal', () => {
   beforeEach(() => {
     createUser.mockReset().mockResolvedValue({ id: 'created-user-id' });
