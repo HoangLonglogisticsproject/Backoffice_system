@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
@@ -174,9 +174,17 @@ export function AppShell({
     if (isDesktop()) setIsSidebarOpen((open) => !open);
     else setIsDrawerOpen((open) => !open);
   };
-  const closeDrawer = () => setIsDrawerOpen(false);
+  // Stable across renders: the setter never changes, so neither does this.
+  const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
 
-  const sidebar: SidebarState = { expanded: isDrawerOpen || isSidebarOpen, closeDrawer };
+  // ★ ONE OBJECT PER STATE, NOT PER RENDER. A fresh literal here would
+  // re-render every NavItem and SidebarSection on every keystroke in the page
+  // beneath, for a value that had not changed. It depends on exactly what it
+  // reads: the two open flags, and the (stable) close function.
+  const sidebar = useMemo<SidebarState>(
+    () => ({ expanded: isDrawerOpen || isSidebarOpen, closeDrawer }),
+    [isDrawerOpen, isSidebarOpen, closeDrawer],
+  );
 
   return (
     <SidebarContext.Provider value={sidebar}>
