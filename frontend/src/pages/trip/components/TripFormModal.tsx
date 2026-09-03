@@ -608,7 +608,7 @@ function LocationEnd({
   // An archived place is absent from the active list but is still the trip's
   // choice: it is shown from the trip's own copy, read-only like any other.
   const chosen: ChosenPlace | null =
-    locations.find((location) => location.id === value) ?? (current && current.id === value ? current : null);
+    locations.find((location) => location.id === value) ?? (current?.id === value ? current : null);
   const options: { id: string; name: string }[] =
     locations.some((location) => location.id === current?.id) || !current
       ? locations
