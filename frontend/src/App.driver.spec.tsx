@@ -80,6 +80,7 @@ const renderAt = (path: string) => {
 /** The Backoffice rows the driver was shown, none of which may appear. */
 const BACKOFFICE_ROWS = [
   /phòng ban/i,
+  /quản lý tài xế/i,
   /lịch xe/i,
   /danh mục xe & khách/i,
   /báo cáo/i,
@@ -96,7 +97,7 @@ beforeEach(() => {
 });
 
 describe('★ a driver is given the Driver Portal, and only that', () => {
-  it.each(['/', '/dispatch/master-data', '/dispatch/trip-schedule', '/organization/departments', '/system/approvals'])(
+  it.each(['/', '/dispatch/master-data', '/dispatch/trip-schedule', '/organization/departments', '/system/approvals', '/system/drivers'])(
     'lands in the portal from %s, with no Backoffice navigation drawn',
     async (path) => {
       renderAt(path);

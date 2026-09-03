@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import type { AppConfig } from '@config/app.config';
-import { ConflictError, ValidationError } from '@common/errors/domain.error';
+import { ConflictError, NotFoundError, ValidationError } from '@common/errors/domain.error';
 import {
   TEST_URL,
   applyAllMigrations,
@@ -11,6 +11,12 @@ import {
   poolAsDatabase,
 } from '../helpers/integration-database';
 import { IdentityRepository } from '@core/identity/persistence/identity.repository';
+import { SessionRepository } from '@core/identity/persistence/session.repository';
+import { SessionService } from '@core/identity/application/session.service';
+import { AuthenticationService } from '@core/identity/application/authentication.service';
+import { LoginThrottleService } from '@core/identity/application/login-throttle.service';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
+import { AccountLifecycleService } from '@core/users/application/account-lifecycle.service';
 import { DepartmentRepository } from '@core/organization/persistence/department.repository';
 import { MembershipRepository } from '@core/organization/persistence/membership.repository';
 import { DepartmentService } from '@core/organization/application/department.service';
@@ -18,6 +24,7 @@ import { MembershipService } from '@core/organization/application/membership.ser
 import { AccountProvisioningService } from '@core/users/application/account-provisioning.service';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { DriverAccountRequestRepository } from '../../src/capabilities/driver-account/persistence/driver-account-request.repository';
+import { DriverAccountRepository } from '../../src/capabilities/driver-account/persistence/driver-account.repository';
 import { DriverAccountService } from '../../src/capabilities/driver-account/application/driver-account.service';
 
 /**
@@ -43,6 +50,9 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
   let drivers: DriverAccountService;
   let provisioning: AccountProvisioningService;
   let departments: DepartmentService;
+  let lifecycle: AccountLifecycleService;
+  let sessions: SessionService;
+  let authentication: AuthenticationService;
 
   /** The two people who act in these cases. */
   let boss: string;
@@ -70,6 +80,15 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
 
     const users = new UserRepository(database);
     const identities = new IdentityRepository(database);
+    const sessionRepository = new SessionRepository(database);
+    sessions = new SessionService(sessionRepository);
+    authentication = new AuthenticationService(
+      database,
+      identities,
+      sessions,
+      new LoginThrottleService(),
+      fakeHasher,
+    );
     const departmentRepository = new DepartmentRepository(database);
     const membershipRepository = new MembershipRepository(database);
     const memberships = new MembershipService(database, departmentRepository, membershipRepository);
@@ -83,12 +102,21 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       memberships,
       config,
     );
+    lifecycle = new AccountLifecycleService(
+      database,
+      users,
+      new AuthorizationRepository(database),
+      sessionRepository,
+      membershipRepository,
+    );
     drivers = new DriverAccountService(
       database,
       new DriverAccountRequestRepository(database),
       provisioning,
       identities,
       config,
+      new DriverAccountRepository(database),
+      lifecycle,
     );
   });
 
@@ -138,6 +166,170 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       `SELECT account_type, status FROM users WHERE id = $1`,
       [userId],
     );
+
+  const newDriver = (email: string, displayName = 'Tài Xế A') =>
+    drivers.createDirectly({ displayName, email, initialPassword: 'Tam-2026!' });
+
+  /**
+   * A trip with this driver on it, written straight to the tables. The
+   * assignment flow's own rules are proven elsewhere; here the row only has to
+   * EXIST so the account lifecycle can be shown to leave it alone.
+   */
+  const assigned = async (driverId: string) => {
+    const [trip] = await sql<{ id: string }>(
+      `INSERT INTO trip_schedules (scheduled_on, created_by) VALUES ('2026-09-10', $1) RETURNING id`,
+      [boss],
+    );
+    const [assignment] = await sql<{ id: string }>(
+      `INSERT INTO trip_driver_assignments (trip_id, driver_user_id, assigned_by)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [trip!.id, driverId, boss],
+    );
+    return assignment!.id;
+  };
+
+  const assignmentRow = async (id: string) =>
+    (
+      await sql<{ state: string; ended_at: Date | null; driver_user_id: string }>(
+        `SELECT state, ended_at, driver_user_id FROM trip_driver_assignments WHERE id = $1`,
+        [id],
+      )
+    )[0];
+
+  // ================================================== driver management ==
+
+  /**
+   * ★ ACCOUNT ADMINISTRATION, AND NOTHING ELSE. These cases pin the two
+   * decisions the feature rests on: a driver can be disabled and re-enabled,
+   * and neither direction touches a trip assignment. The assignment is a
+   * dispatch fact; the account is an identity fact; the lifecycle here reads
+   * one table and writes one column.
+   */
+  describe('★ driver management', () => {
+    it('lists every driver account — disabled ones included — and never an employee', async () => {
+      const a = await newDriver('taixea@hoanglonglti.com', 'Tài Xế A');
+      const b = await newDriver('taixeb@hoanglonglti.com', 'Tài Xế B');
+      await drivers.setStatus({ userId: b.userId, status: 'disabled', actingUserId: boss });
+
+      const list = await drivers.list();
+
+      expect(list.map((d) => [d.id, d.status])).toEqual([
+        [a.userId, 'active'],
+        [b.userId, 'disabled'],
+      ]);
+      // The boss and the head are employees; neither is here.
+      expect(list.some((d) => d.id === boss || d.id === head)).toBe(false);
+      // The projection: six fields, the sign-in name derived, no secret anywhere.
+      expect(list[0]).toEqual({
+        id: a.userId,
+        displayName: 'Tài Xế A',
+        username: 'taixea',
+        accountType: 'driver',
+        status: 'active',
+        createdAt: expect.any(Date),
+      });
+    });
+
+    it('reads one driver by id, and answers "not found" for an employee or an unknown id', async () => {
+      const a = await newDriver('taixea@hoanglonglti.com');
+
+      expect((await drivers.get(a.userId)).username).toBe('taixea');
+      await expect(drivers.get(boss)).rejects.toThrow(NotFoundError);
+      await expect(drivers.get('00000000-0000-0000-0000-000000000000')).rejects.toThrow(NotFoundError);
+    });
+
+    it('★ disable: the driver cannot sign in and their sessions are gone; enable: they can again', async () => {
+      const a = await newDriver('taixea@hoanglonglti.com');
+      const before = await sessions.issue(a.userId);
+
+      await drivers.setStatus({ userId: a.userId, status: 'disabled', actingUserId: boss });
+
+      expect((await accountOf(a.userId))[0]?.status).toBe('disabled');
+      expect(await sessions.resolve(before.token)).toBeNull();
+      await expect(authentication.login('taixea@hoanglonglti.com', 'Tam-2026!')).rejects.toThrow();
+
+      await drivers.setStatus({ userId: a.userId, status: 'active', actingUserId: boss });
+
+      expect((await accountOf(a.userId))[0]?.status).toBe('active');
+      // The old session stays revoked — re-enabling issues nothing.
+      expect(await sessions.resolve(before.token)).toBeNull();
+      const login = await authentication.login('taixea@hoanglonglti.com', 'Tam-2026!');
+      expect(login.user.id).toBe(a.userId);
+    });
+
+    it('★ disable and re-enable leave an ACTIVE assignment exactly as it was', async () => {
+      const a = await newDriver('taixea@hoanglonglti.com');
+      const assignment = await assigned(a.userId);
+
+      await drivers.setStatus({ userId: a.userId, status: 'disabled', actingUserId: boss });
+      expect(await assignmentRow(assignment)).toEqual({ state: 'active', ended_at: null, driver_user_id: a.userId });
+
+      await drivers.setStatus({ userId: a.userId, status: 'active', actingUserId: boss });
+      expect(await assignmentRow(assignment)).toEqual({ state: 'active', ended_at: null, driver_user_id: a.userId });
+      // The same single row: nothing was ended, replaced or created.
+      expect(await assignmentsOf(a.userId)).toHaveLength(1);
+    });
+
+    it('re-enabling a driver who was never assigned creates no assignment', async () => {
+      const a = await newDriver('taixea@hoanglonglti.com');
+      await drivers.setStatus({ userId: a.userId, status: 'disabled', actingUserId: boss });
+
+      await drivers.setStatus({ userId: a.userId, status: 'active', actingUserId: boss });
+
+      expect(await assignmentsOf(a.userId)).toHaveLength(0);
+      expect(await membershipsOf(a.userId)).toHaveLength(0);
+    });
+
+    it('★ refuses an employee through the driver door, in both directions', async () => {
+      await expect(
+        drivers.setStatus({ userId: head, status: 'disabled', actingUserId: boss }),
+      ).rejects.toThrow(NotFoundError);
+      await expect(
+        drivers.setStatus({ userId: head, status: 'active', actingUserId: boss }),
+      ).rejects.toThrow(NotFoundError);
+      expect((await accountOf(head))[0]?.status).toBe('active');
+    });
+
+    it('★ the core lifecycle refuses to re-enable an employee even when asked directly', async () => {
+      await lifecycle.disable({ userId: head, actingUserId: boss });
+
+      await expect(lifecycle.enable({ userId: head, actingUserId: boss })).rejects.toThrow(ConflictError);
+      expect((await accountOf(head))[0]?.status).toBe('disabled');
+    });
+
+    it('refuses a no-op transition with a sentence', async () => {
+      const a = await newDriver('taixea@hoanglonglti.com');
+
+      await expect(
+        drivers.setStatus({ userId: a.userId, status: 'active', actingUserId: boss }),
+      ).rejects.toThrow(ConflictError);
+      await drivers.setStatus({ userId: a.userId, status: 'disabled', actingUserId: boss });
+      await expect(
+        drivers.setStatus({ userId: a.userId, status: 'disabled', actingUserId: boss }),
+      ).rejects.toThrow(ConflictError);
+    });
+
+    it('★ two simultaneous enables: exactly one wins', async () => {
+      const a = await newDriver('taixea@hoanglonglti.com');
+      await drivers.setStatus({ userId: a.userId, status: 'disabled', actingUserId: boss });
+
+      const outcomes = await Promise.allSettled([
+        drivers.setStatus({ userId: a.userId, status: 'active', actingUserId: boss }),
+        drivers.setStatus({ userId: a.userId, status: 'active', actingUserId: boss }),
+      ]);
+
+      expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+      expect(outcomes.filter((o) => o.status === 'rejected')).toHaveLength(1);
+      expect((await accountOf(a.userId))[0]?.status).toBe('active');
+    });
+
+    it('a second driver on the same address is refused the way any duplicate identity is', async () => {
+      await newDriver('taixea@hoanglonglti.com');
+
+      await expect(newDriver('taixea@hoanglonglti.com', 'Người Khác')).rejects.toThrow(ConflictError);
+      expect(await drivers.list()).toHaveLength(1);
+    });
+  });
 
   // ============================================ 1, 2 · direct creation ==
 

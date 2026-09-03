@@ -5,6 +5,7 @@ import {
   Briefcase,
   Building,
   CheckSquare,
+  ClipboardList,
   FileText,
   Inbox,
   LayoutDashboard,
@@ -13,6 +14,7 @@ import {
   Settings,
   Sparkles,
   Truck,
+  UserCog,
   Users,
   Warehouse,
 } from 'lucide-react';
@@ -370,6 +372,29 @@ export default function MainLayout() {
                   label={t('approvals')}
                   isSidebarOpen={isSidebarOpen}
                 />
+              )}
+              {/*
+                ★ DRIVER ACCOUNTS LIVE HERE, NOT UNDER A DEPARTMENT. A driver
+                belongs to no unit, and creating or disabling one is global
+                administration — the same key as the approvals queue. The
+                request queue sits beside it: a head proposes there, and the
+                administrator who manages drivers decides there.
+              */}
+              {isGlobal && (
+                <>
+                  <NavItem
+                    to="/system/drivers"
+                    icon={UserCog}
+                    label={t('driverManagement')}
+                    isSidebarOpen={isSidebarOpen}
+                  />
+                  <NavItem
+                    to="/organization/driver-requests"
+                    icon={ClipboardList}
+                    label={t('driverRequestQueue')}
+                    isSidebarOpen={isSidebarOpen}
+                  />
+                </>
               )}
               <NavItem
                 to="/system/requests"

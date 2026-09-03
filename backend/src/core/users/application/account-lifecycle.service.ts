@@ -104,4 +104,48 @@ export class AccountLifecycleService {
     // request and disabling the account are one commit.
     return tx ? run(tx) : this.db.transaction(run);
   }
+
+  /**
+   * EnableUser — the way back, for a DRIVER account only.
+   *
+   * ★ ONE WRITE, AND THAT IS THE WHOLE DEFINITION. `status` goes back to
+   * `active`; nothing else is touched. No session is issued (they sign in
+   * again), no role is restored (a driver never held one), no membership is
+   * created (a driver has none), and nothing in dispatch — assignments,
+   * trips, expenses, completions — is read or written. The account lifecycle
+   * and the assignment lifecycle are separate concerns, and re-enabling is
+   * where that separation is easiest to break by "helpfully" doing more.
+   *
+   * ⚠ AN EMPLOYEE IS REFUSED, NOT BECAUSE IT IS HARD BUT BECAUSE IT IS
+   * UNDECIDED. Disabling ended their membership, and "an active user holds
+   * exactly one" means re-enabling one asks "into which department" — a
+   * question this deployment has not answered. A driver has no membership to
+   * restore, so for them the flip is complete on its own.
+   */
+  async enable(
+    input: { userId: string; actingUserId: string; now?: Date },
+    tx?: DatabaseQuery,
+  ): Promise<User> {
+    const run = async (tx: DatabaseQuery): Promise<User> => {
+      const user = await this.users.findById(input.userId, tx);
+      if (!user) throw new NotFoundError('User not found.');
+      if (user.accountType !== 'driver') {
+        throw new ConflictError(
+          'Only a driver account can be re-enabled. Re-enabling an employee is not available.',
+        );
+      }
+
+      // `expectedCurrent` makes two simultaneous enables — or an enable racing
+      // a disable — resolve to one winner and one sentence.
+      const enabled = await this.users.setStatus(
+        { userId: input.userId, status: 'active', expectedCurrent: 'disabled' },
+        tx,
+      );
+      if (!enabled) throw new ConflictError('That user is already active.');
+
+      return enabled;
+    };
+
+    return tx ? run(tx) : this.db.transaction(run);
+  }
 }

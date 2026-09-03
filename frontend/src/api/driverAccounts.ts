@@ -73,6 +73,59 @@ export interface DriverAccountRequestWithUsers extends DriverAccountRequest {
   decider: { id: string; displayName: string } | null;
 }
 
+// ------------------------------------------------------ driver management --
+
+export type DriverAccountStatus = 'active' | 'disabled';
+
+/**
+ * A driver account as the administrator's screen may know it.
+ *
+ * ★ SIX FIELDS, AND NO ROOM FOR A SEVENTH. This is what `GET /driver-accounts`
+ * returns — a projection of `users` with the sign-in name derived. There is
+ * no password, no hash, no session and no temporary credential on it, and a
+ * screen that shows "everything about the driver" shows exactly this.
+ */
+export interface DriverAccount {
+  id: string;
+  displayName: string;
+  /** Local part of the sign-in address; `null` when there is no local identity. */
+  username: string | null;
+  accountType: 'driver';
+  status: DriverAccountStatus;
+  createdAt: string;
+}
+
+/** `GET /driver-accounts` — every driver account, retired ones included. Global only. */
+export async function fetchDrivers(): Promise<DriverAccount[]> {
+  const { data } = await httpClient.get<DriverAccount[]>('/driver-accounts');
+  return data;
+}
+
+/** `GET /driver-accounts/:id`. An employee's id is 404 here, by design. */
+export async function fetchDriver(userId: string): Promise<DriverAccount> {
+  const { data } = await httpClient.get<DriverAccount>(
+    `/driver-accounts/${encodeURIComponent(userId)}`,
+  );
+  return data;
+}
+
+/**
+ * `PATCH /driver-accounts/:id/status` — disable or re-enable. ACCOUNT STATUS
+ * ONLY: the server revokes sessions on disable, and touches no trip
+ * assignment in either direction. Whether a trip still needs a driver is
+ * Operations' question, answered through the assignment flow.
+ */
+export async function setDriverStatus(
+  userId: string,
+  status: DriverAccountStatus,
+): Promise<{ id: string; status: DriverAccountStatus }> {
+  const { data } = await httpClient.patch<{ id: string; status: DriverAccountStatus }>(
+    `/driver-accounts/${encodeURIComponent(userId)}/status`,
+    { status },
+  );
+  return data;
+}
+
 /** `POST /driver-accounts` → 201. Global administrators only. */
 export async function createDriver(input: CreateDriverInput): Promise<ProvisionedDriver> {
   const { data } = await httpClient.post<ProvisionedDriver>('/driver-accounts', input);
