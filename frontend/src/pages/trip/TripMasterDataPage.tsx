@@ -188,7 +188,9 @@ export default function TripMasterDataPage() {
       {locationsFor && (
         <CustomerLocationsModal
           customer={{ id: locationsFor.id, name: locationsFor.label }}
-          canAdd={canAdd}
+          // A retired customer takes no new places; the server refuses them
+          // too. Its existing places stay readable.
+          canAdd={canAdd && locationsFor.status === 'active'}
           canManage={canManage}
           onClose={() => setLocationsFor(null)}
         />

@@ -306,6 +306,44 @@ describe('TripMasterDataPage', () => {
       await waitFor(() => expect(archiveTripLocation).toHaveBeenCalledWith('c1', 'l1'));
     });
 
+
+    it('★ sends ONE archive request for a double click, holding both controls while it is in flight', async () => {
+      fetchTripLocations.mockResolvedValue([location()]);
+      let release!: () => void;
+      archiveTripLocation.mockImplementation(() => new Promise((resolve) => { release = () => resolve(location({ status: 'archived' })); }));
+      await openPlaces();
+      await screen.findByText('Kho OSC');
+
+      const archives = screen.getAllByRole('button', { name: 'Lưu trữ' });
+      fireEvent.click(archives[archives.length - 1]!);
+      const confirms = screen.getAllByRole('button', { name: 'Lưu trữ' });
+      const confirm = confirms[confirms.length - 1]!;
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+
+      await waitFor(() => expect(archiveTripLocation).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole('button', { name: 'Đang lưu…' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Hủy bỏ' })).toBeDisabled();
+
+      release();
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Đang lưu…' })).toBeNull());
+      expect(archiveTripLocation).toHaveBeenCalledTimes(1);
+    });
+
+    it('★ offers no "add" under a retired customer, while its places stay readable', async () => {
+      fetchTripLocations.mockResolvedValue([location()]);
+      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+      fetchTripCustomers.mockResolvedValue([customer({ status: 'archived' })]);
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Khách hàng' }));
+      await screen.findByText('VIỄN ĐẠT');
+      fireEvent.click(screen.getByRole('button', { name: 'Địa điểm' }));
+
+      expect(await screen.findByText('Kho OSC')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Thêm địa điểm' })).toBeNull();
+    });
+
     it('★ shows a reader the places but no way to change them', async () => {
       fetchTripLocations.mockResolvedValue([location()]);
       await openPlaces(['trip.read']);

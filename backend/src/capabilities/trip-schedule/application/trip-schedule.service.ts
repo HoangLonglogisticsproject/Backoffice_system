@@ -235,9 +235,18 @@ export class TripScheduleService {
       // Naming a place (or clearing it) means "copy that place now"; a patch
       // that touches only the note leaves last week's snapshot exactly as it
       // was, which is what makes a trip a record and the master a template.
+      // ★ AND A CHANGE OF CUSTOMER RE-EXAMINES EVERY PLACE STILL NAMED. A place
+      // belongs to one customer, so a trip moved from customer A to customer
+      // B cannot keep A's warehouse on it — silently or otherwise. Each end
+      // that still names a place is looked up afresh against the NEW customer
+      // and refused if it is not theirs; the caller clears or replaces the
+      // places in the same patch. An end with no place (typed by hand) is not
+      // touched by the customer change.
+      const customerChanged = merged.customerId !== current.customerId;
       const resnapshot = {
-        pickup: 'pickupLocationId' in patch,
-        delivery: 'deliveryLocationId' in patch,
+        pickup: 'pickupLocationId' in patch || (customerChanged && merged.pickupLocationId !== null),
+        delivery:
+          'deliveryLocationId' in patch || (customerChanged && merged.deliveryLocationId !== null),
       };
       // The row's stored pair is last time's snapshot, not something the
       // caller sent. When the place is named afresh it is copied from the
@@ -561,9 +570,10 @@ export class TripScheduleService {
     const location = await this.locations.findById(input.locationId, tx);
     if (!location) throw new NotFoundError(`${capitalise(end)} location not found.`);
     if (customerId === null || location.customerId !== customerId) {
-      throw new ValidationError(`The ${end} location does not belong to this trip's customer.`, {
-        [`${end}LocationId`]: 'Not one of this customer’s places.',
-      });
+      throw new ValidationError(
+        `The ${end} location does not belong to this trip's customer. Clear or replace it when changing the customer.`,
+        { [`${end}LocationId`]: 'Not one of this customer’s places.' },
+      );
     }
     if (location.status !== 'active') {
       throw new ConflictError(`The ${end} location has been archived.`);

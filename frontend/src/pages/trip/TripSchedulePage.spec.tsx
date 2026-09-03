@@ -569,6 +569,89 @@ describe('TripSchedulePage', () => {
       expect(body).toMatchObject({ deliveryLocationId: null, deliveryAddress: 'Bãi tạm Q9' });
     });
 
+
+    it('★ editing a trip: switching customer clears the old customer’s places and submits none of them', async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripSchedules.mockResolvedValue({
+        items: [
+          trip({
+            customerId: 'c1',
+            customer: { id: 'c1', name: 'WWL' },
+            pickupLocationId: 'la',
+            pickupLocation: { id: 'la', name: 'Kho A' },
+            deliveryLocationId: 'lb',
+            deliveryLocation: { id: 'lb', name: 'Nhà máy A' },
+          }),
+        ],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      fetchTripCustomers.mockResolvedValue([
+        { id: 'c1', name: 'WWL', note: null, status: 'active' },
+        { id: 'c9', name: 'VIỄN ĐẠT', note: null, status: 'active' },
+      ]);
+      fetchTripLocations.mockImplementation(async (customerId: string) =>
+        customerId === 'c1' ? [place({ id: 'la', customerId: 'c1', name: 'Kho A' }), place({ id: 'lb', customerId: 'c1', name: 'Nhà máy A' })] : [],
+      );
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await screen.findByLabelText('Khách hàng');
+      await waitFor(() => expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('la'));
+
+      await chooseCustomer('c9');
+
+      await waitFor(() => expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe(''));
+      expect((screen.getByLabelText('Điểm giao hàng') as HTMLSelectElement).value).toBe('');
+      expect(screen.queryAllByRole('option', { name: 'Kho A' })).toHaveLength(0);
+
+      const saves = screen.getAllByRole('button', { name: 'Lưu' });
+      fireEvent.click(saves[saves.length - 1]!);
+
+      await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+      const [, body] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+      expect(body).toMatchObject({ customerId: 'c9', pickupLocationId: null, deliveryLocationId: null });
+      expect(body.pickupLocationId).not.toBe('la');
+    });
+
+    it('★ keeps the new place selected when the list re-read is slow — the id is set only after the list holds it', async () => {
+      await openAddForm();
+      await chooseCustomer('c9');
+      await within(screen.getByLabelText('Điểm lấy hàng')).findByRole('option', { name: 'Kho OSC' });
+      createTripLocation.mockResolvedValue(place({ id: 'l3', name: 'Kho mới', address: 'Thủ Dầu Một' }));
+
+      // The re-read after creating is held until the test releases it.
+      let releaseRefetch!: () => void;
+      fetchTripLocations.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseRefetch = () => resolve([place(), place({ id: 'l3', name: 'Kho mới', address: 'Thủ Dầu Một' })]);
+          }),
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Thêm địa điểm' })[0]!);
+      fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho mới' } });
+      fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'Thủ Dầu Một' } });
+      const placeSave = screen
+        .getAllByRole('button', { name: 'Lưu' })
+        .find((button) => button.getAttribute('form') === 'location-form');
+      fireEvent.click(placeSave!);
+
+      await waitFor(() => expect(createTripLocation).toHaveBeenCalled());
+      // Created, list not yet re-read: nothing selected, nothing cleared, and
+      // the new place is not offered from a list that does not have it.
+      expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('');
+      expect(screen.queryAllByRole('option', { name: 'Kho mới' })).toHaveLength(0);
+
+      releaseRefetch();
+
+      await waitFor(() =>
+        expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('l3'),
+      );
+      // And it stays: no later effect run takes it away.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('l3');
+    });
+
     it('★ creates a new place under the chosen customer and selects it', async () => {
       await openAddForm();
       await chooseCustomer('c9');

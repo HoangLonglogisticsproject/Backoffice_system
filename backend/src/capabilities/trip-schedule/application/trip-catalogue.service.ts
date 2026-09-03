@@ -197,8 +197,10 @@ export class TripCatalogueService {
     // A patch: an absent key keeps the row's value, a present one replaces it
     // — including `null` to clear a contact, a note, or the coordinates.
     const values = locationValues({
-      name: input.name === undefined ? current.name : input.name,
-      address: input.address === undefined ? current.address : input.address,
+      // `??` is exact here: both fields are `string | undefined` on a patch,
+      // never null, so "absent" is the only case that falls through.
+      name: input.name ?? current.name,
+      address: input.address ?? current.address,
       contact: 'contact' in input ? input.contact : current.contact,
       note: 'note' in input ? input.note : current.note,
       latitude: 'latitude' in input ? input.latitude : current.latitude,
@@ -231,9 +233,9 @@ export class TripCatalogueService {
   /** The location, only if it is this customer's. Otherwise: not found. */
   private async requireLocation(customerId: string, id: string): Promise<TripLocation> {
     const location = await this.locations.findById(id);
-    if (!location || location.customerId !== customerId) {
-      throw new NotFoundError('Location not found.');
-    }
+    // Two refusals with one sentence: missing, and somebody else's.
+    if (!location) throw new NotFoundError('Location not found.');
+    if (location.customerId !== customerId) throw new NotFoundError('Location not found.');
     return location;
   }
 

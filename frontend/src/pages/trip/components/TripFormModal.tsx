@@ -201,9 +201,13 @@ export function TripFormModal({
     if (locations.data === null) return;
     const known = new Set(locations.data.map((location) => location.id));
     // The row's own current places may be archived and absent from the active
-    // list; they stay selectable on that trip exactly as a retired vehicle does.
-    if (trip?.pickupLocation) known.add(trip.pickupLocation.id);
-    if (trip?.deliveryLocation) known.add(trip.deliveryLocation.id);
+    // list; they stay selectable on that trip exactly as a retired vehicle does
+    // — but ONLY while the form still names the trip's own customer. Once the
+    // customer changes they are another customer's places and are not known.
+    if (trip && form.customerId === trip.customerId) {
+      if (trip.pickupLocation) known.add(trip.pickupLocation.id);
+      if (trip.deliveryLocation) known.add(trip.deliveryLocation.id);
+    }
     setForm((current) => {
       const pickup = current.pickupLocationId && known.has(current.pickupLocationId) ? current.pickupLocationId : null;
       const delivery = current.deliveryLocationId && known.has(current.deliveryLocationId) ? current.deliveryLocationId : null;
@@ -212,6 +216,19 @@ export function TripFormModal({
         : { ...current, pickupLocationId: pickup, deliveryLocationId: delivery };
     });
   }, [form.customerId, form.pickupLocationId, form.deliveryLocationId, locations.data, trip]);
+
+  /**
+   * ★ A NEW CUSTOMER MEANS NO PLACE, YET. The places on the form were the old
+   * customer's; both are cleared in the same state change as the customer, so
+   * no render — and no submit — can pair customer B with customer A's place.
+   * The server refuses that pairing anyway; this keeps the form honest.
+   */
+  const chooseCustomer = (id: string | null) =>
+    setForm((current) =>
+      current.customerId === id
+        ? current
+        : { ...current, customerId: id, pickupLocationId: null, deliveryLocationId: null },
+    );
 
   /** Which end a "new place" dialog was opened for; the new place is selected there on save. */
   const [addingFor, setAddingFor] = useState<'pickup' | 'delivery' | null>(null);
@@ -388,7 +405,7 @@ export function TripFormModal({
               t('statusArchived'),
             )}
             value={form.customerId}
-            onChange={(id) => set('customerId', id)}
+            onChange={chooseCustomer}
             onCreate={async (name) => {
               const created = await createTripCustomer({ name });
               onCatalogueChanged();
@@ -490,11 +507,14 @@ export function TripFormModal({
           customerId={form.customerId}
           editing={null}
           onClose={() => setAddingFor(null)}
-          onSaved={(location) => {
+          onSaved={async (location) => {
             // The new place is the customer's and is selected where it was
-            // asked for. The list re-reads through the catalogue prefix.
-            locations.reload();
-            set(addingFor === 'pickup' ? 'pickupLocationId' : 'deliveryLocationId', location.id);
+            // asked for — AFTER the list has been re-read, so the effect that
+            // drops unknown places never sees the new id before the list
+            // that contains it.
+            const end = addingFor;
+            await locations.reload();
+            set(end === 'pickup' ? 'pickupLocationId' : 'deliveryLocationId', location.id);
           }}
         />
       ) : null}
@@ -591,9 +611,9 @@ function LocationEnd({
           {chosen.latitude !== null ? (
             <p className="text-xs text-green-700">{t('locationLocated')}</p>
           ) : (
-            <p role="status" className="text-xs font-medium text-amber-700">
+            <output className="block text-xs font-medium text-amber-700">
               {t('locationUnlocatedWarning')}
-            </p>
+            </output>
           )}
         </div>
       ) : (

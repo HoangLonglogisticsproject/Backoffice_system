@@ -48,9 +48,17 @@ describe('0022 — a customer’s places', () => {
     expect(body).toContain('DROP TRIGGER IF EXISTS trip_locations_deny_delete');
   });
 
-  it('★ adds only PROVENANCE to the trip, nullable, and touches no 0019 column', () => {
-    expect(body).toContain('ADD COLUMN IF NOT EXISTS pickup_location_id UUID REFERENCES trip_locations(id)');
-    expect(body).toContain('ADD COLUMN IF NOT EXISTS delivery_location_id UUID REFERENCES trip_locations(id)');
+  it('★ adds only PROVENANCE to the trip, nullable, with NAMED foreign keys, and touches no 0019 column', () => {
+    expect(body).toContain(
+      'ADD COLUMN IF NOT EXISTS pickup_location_id UUID CONSTRAINT trip_schedules_pickup_location_fk REFERENCES trip_locations(id)',
+    );
+    expect(body).toContain(
+      'ADD COLUMN IF NOT EXISTS delivery_location_id UUID CONSTRAINT trip_schedules_delivery_location_fk REFERENCES trip_locations(id)',
+    );
+    // The runner wraps each file in one transaction: neither of these can
+    // work here, and neither is needed for a column that is born NULL.
+    expect(body).not.toMatch(/CONCURRENTLY/i);
+    expect(body).not.toMatch(/NOT VALID/i);
     expect(body).not.toMatch(/pickup_latitude|pickup_longitude|delivery_latitude|delivery_longitude/);
     expect(body).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
   });
@@ -61,8 +69,10 @@ describe('0022 — a customer’s places', () => {
   });
 
   it('is guarded so a re-run cannot break a deploy', () => {
-    const creates = [...source.matchAll(/CREATE (TABLE|INDEX|UNIQUE INDEX)\b/g)].length;
-    const guarded = [...source.matchAll(/CREATE (?:TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS/g)].length;
+    // Counted on the comment-stripped body: the prose explains why
+    // `CREATE INDEX CONCURRENTLY` is not used, and must not count as a CREATE.
+    const creates = [...body.matchAll(/CREATE (TABLE|INDEX|UNIQUE INDEX)\b/g)].length;
+    const guarded = [...body.matchAll(/CREATE (?:TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS/g)].length;
     expect(guarded).toBe(creates);
     const created = [...source.matchAll(/CREATE TRIGGER (\w+)/g)].map((m) => m[1]);
     const dropped = new Set([...source.matchAll(/DROP TRIGGER IF EXISTS (\w+)/g)].map((m) => m[1]));

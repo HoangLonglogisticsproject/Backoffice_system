@@ -1,8 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Pool } from 'pg';
-import { TEST_URL, openTestSchema } from '../helpers/integration-database';
-import type { Database, DatabaseQuery } from '@common/types/database.port';
+import { TEST_URL, applyAllMigrations, openTestSchema, poolAsDatabase } from '../helpers/integration-database';
+import type { Database } from '@common/types/database.port';
 import { ConflictError, NotFoundError, ValidationError } from '@common/errors/domain.error';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripCatalogueService } from '../../src/capabilities/trip-schedule/application/trip-catalogue.service';
@@ -60,47 +58,11 @@ describeIfDatabase('Customer locations against real PostgreSQL', () => {
   beforeAll(async () => {
     pool = await openTestSchema(TEST_URL as string, SCHEMA);
 
-    const migrations = join(__dirname, '..', '..', 'migrations');
-    for (const file of [
-      '0001_identity.sql',
-      '0002_users_updated_at.sql',
-      '0011_trip_schedule.sql',
-      '0012_trip_cost.sql',
-      '0013_trip_carrier_and_vehicle_ownership.sql',
-      '0014_trip_driver_assignment.sql',
-      '0015_trip_execution_event.sql',
-      '0016_trip_cost_lifecycle.sql',
-      '0017_trip_completion_and_history.sql',
-      '0018_driver_account.sql',
-      '0019_trip_location.sql',
-      '0020_notifications.sql',
-      '0021_void_reason_optional.sql',
-      '0022_trip_locations.sql',
-    ]) {
-      await pool.query(await readFile(join(migrations, file), 'utf8'));
-    }
+    // Every migration, in order: this spec spans the customer catalogue, the
+    // trip, the driver's view and the new places, so nothing can be left out.
+    await applyAllMigrations(pool);
 
-    database = {
-      query: async <T>(text: string, params?: readonly unknown[]): Promise<T[]> =>
-        (await pool.query(text, params as unknown[])).rows as T[],
-      transaction: async <T>(work: (tx: DatabaseQuery) => Promise<T>): Promise<T> => {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-          const result = await work({
-            query: async <R>(text: string, params?: readonly unknown[]): Promise<R[]> =>
-              (await client.query(text, params as unknown[])).rows as R[],
-          });
-          await client.query('COMMIT');
-          return result;
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
-      },
-    };
+    database = poolAsDatabase(pool);
 
     const vehicles = new TripVehicleRepository(database);
     const customers = new TripCustomerRepository(database);
@@ -372,6 +334,110 @@ describeIfDatabase('Customer locations against real PostgreSQL', () => {
       });
       expect(trip).toMatchObject({ pickupLocationId: null, pickupAddress: 'Gõ tay', pickupLatitude: OSC.latitude });
       expect((await board.findById(trip.id)).pickupLocation).toBeNull();
+    });
+  });
+
+  // ======================================================= customer change ==
+
+  /**
+   * ★ A TRIP MOVED TO ANOTHER CUSTOMER CANNOT KEEP THE FIRST CUSTOMER'S
+   * PLACES. Every end that still names a place is re-examined against the new
+   * customer; the caller clears or replaces them in the same patch. Nothing
+   * is dropped silently, and nothing of customer A's is ever left on a trip
+   * that now says customer B.
+   */
+  describe('★ changing the customer of a trip that names places', () => {
+    const arranged = async () => {
+      const khoA = await place(customerA, 'Kho A', OSC);
+      const nhaMayA = await place(customerA, 'Nhà máy A', { latitude: 10.9, longitude: 106.7 });
+      const khoB = await place(customerB, 'Kho B', { latitude: 11.0, longitude: 106.65 });
+      const trip = await board.create({
+        scheduledOn: '2026-09-01',
+        customerId: customerA,
+        pickupLocationId: khoA.id,
+        deliveryLocationId: nhaMayA.id,
+        createdBy: operator,
+      });
+      return { khoA, nhaMayA, khoB, trip };
+    };
+
+    it('★ refuses A → B while the pickup still names A’s place', async () => {
+      const { trip } = await arranged();
+      await expect(board.update(trip.id, { customerId: customerB, deliveryLocationId: null }, operator)).rejects.toThrow(ValidationError);
+      // Nothing moved: still A, still A's places.
+      expect(await board.findById(trip.id)).toMatchObject({ customerId: customerA });
+    });
+
+    it('★ refuses A → B while the delivery still names A’s place', async () => {
+      const { trip } = await arranged();
+      await expect(board.update(trip.id, { customerId: customerB, pickupLocationId: null }, operator)).rejects.toThrow(ValidationError);
+      expect(await board.findById(trip.id)).toMatchObject({ customerId: customerA });
+    });
+
+    it('refuses A → B with no place named at all in the patch — both are re-examined', async () => {
+      const { trip } = await arranged();
+      await expect(board.update(trip.id, { customerId: customerB }, operator)).rejects.toThrow(ValidationError);
+      expect(
+        (await sql(`SELECT customer_id::text AS c, pickup_location_id::text AS p FROM trip_schedules WHERE id = $1`, [trip.id]))[0],
+      ).toMatchObject({ c: customerA });
+    });
+
+    it('moves A → B when both places are cleared, dropping their coordinates with them', async () => {
+      const { trip } = await arranged();
+      const moved = await board.update(
+        trip.id,
+        { customerId: customerB, pickupLocationId: null, deliveryLocationId: null, pickupAddress: 'Bãi tạm' },
+        operator,
+      );
+      expect(moved).toMatchObject({
+        customerId: customerB,
+        pickupLocationId: null,
+        deliveryLocationId: null,
+        pickupLatitude: null,
+        deliveryLatitude: null,
+        pickupAddress: 'Bãi tạm',
+      });
+    });
+
+    it('moves A → B when both places are replaced with B’s', async () => {
+      const { khoB, trip } = await arranged();
+      const moved = await board.update(
+        trip.id,
+        { customerId: customerB, pickupLocationId: khoB.id, deliveryLocationId: khoB.id },
+        operator,
+      );
+      expect(moved).toMatchObject({
+        customerId: customerB,
+        pickupLocationId: khoB.id,
+        deliveryLocationId: khoB.id,
+        pickupLatitude: 11.0,
+        deliveryAddress: 'Kho B, Bình Dương',
+      });
+    });
+
+    it('leaves the same customer with unchanged places exactly as it was', async () => {
+      const { khoA, nhaMayA, trip } = await arranged();
+      await catalogue.updateLocation(customerA, khoA.id, { latitude: 10.0, longitude: 106.0 });
+
+      const same = await board.update(trip.id, { customerId: customerA, note: 'không đổi' }, operator);
+
+      expect(same).toMatchObject({
+        customerId: customerA,
+        pickupLocationId: khoA.id,
+        deliveryLocationId: nhaMayA.id,
+        pickupLatitude: OSC.latitude,
+        note: 'không đổi',
+      });
+    });
+
+    it('★ still refuses B’s place on an A trip, and A’s place on a B trip, however it is sent', async () => {
+      const { khoA, khoB, trip } = await arranged();
+      await expect(board.update(trip.id, { pickupLocationId: khoB.id }, operator)).rejects.toThrow(ValidationError);
+      await expect(
+        board.update(trip.id, { customerId: customerB, pickupLocationId: khoA.id, deliveryLocationId: khoB.id }, operator),
+      ).rejects.toThrow(ValidationError);
+      const rows = (await sql(`SELECT customer_id::text AS c FROM trip_schedules WHERE id = $1`, [trip.id])) as { c: string }[];
+      expect(rows[0]!.c).toBe(customerA);
     });
   });
 });

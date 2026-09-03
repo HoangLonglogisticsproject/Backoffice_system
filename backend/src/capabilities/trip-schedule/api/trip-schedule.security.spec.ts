@@ -744,8 +744,12 @@ describe('trip-schedule HTTP security', () => {
         );
       });
 
-      it('accepts the edges of both axes', async () => {
+      it('accepts the edges of both axes, and forwards them untouched', async () => {
         await authed(...CREATE).send({ ...body, latitude: -90, longitude: 180 }).expect(201);
+        expect(catalogue.createLocation).toHaveBeenCalledWith(
+          CUSTOMER,
+          expect.objectContaining({ latitude: -90, longitude: 180 }),
+        );
       });
     });
 

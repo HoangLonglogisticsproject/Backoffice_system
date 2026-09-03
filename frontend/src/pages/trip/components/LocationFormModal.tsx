@@ -25,7 +25,7 @@ interface Props {
   /** `null` to add; a row to correct. */
   editing: TripLocation | null;
   onClose: () => void;
-  onSaved: (location: TripLocation) => void;
+  onSaved: (location: TripLocation) => void | Promise<void>;
 }
 
 const numberField = (value: number | null): string => (value === null ? '' : String(value));
@@ -64,7 +64,7 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
       const saved = editing
         ? await updateTripLocation(customerId, editing.id, body)
         : await createTripLocation(customerId, body);
-      onSaved(saved);
+      await onSaved(saved);
       onClose();
     } catch (error_) {
       // The server refuses half a point, a duplicate name and a retired

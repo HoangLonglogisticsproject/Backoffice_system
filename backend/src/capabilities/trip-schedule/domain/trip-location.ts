@@ -37,18 +37,17 @@ export const isCoordinates = (value: Coordinates | null | undefined): value is C
  * message rather than a constraint name.
  */
 export const optionalPoint = (
-  latitude: number | null | undefined,
-  longitude: number | null | undefined,
+  // Absent means "no point", exactly as `null` does — a default says so.
+  latitude: number | null = null,
+  longitude: number | null = null,
 ):
   | { ok: true; latitude: number | null; longitude: number | null }
   | { ok: false; reason: 'HALF_A_POINT' | 'OFF_THE_PLANET' } => {
-  const lat = latitude ?? null;
-  const lng = longitude ?? null;
-  if ((lat === null) !== (lng === null)) return { ok: false, reason: 'HALF_A_POINT' };
-  if (lat !== null && (!isLatitude(lat) || !isLongitude(lng))) {
+  if ((latitude === null) !== (longitude === null)) return { ok: false, reason: 'HALF_A_POINT' };
+  if (latitude !== null && (!isLatitude(latitude) || !isLongitude(longitude))) {
     return { ok: false, reason: 'OFF_THE_PLANET' };
   }
-  return { ok: true, latitude: lat, longitude: lng };
+  return { ok: true, latitude, longitude };
 };
 
 /** Mean Earth radius, metres. The figure the haversine formula is quoted for. */

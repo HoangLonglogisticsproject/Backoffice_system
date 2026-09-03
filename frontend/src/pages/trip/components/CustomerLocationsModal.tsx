@@ -18,6 +18,19 @@ import { LocationFormModal } from './LocationFormModal';
  * the only door to it. Archive rather than delete — a trip that went there
  * keeps its snapshot and its reference.
  */
+/** What the badge says about a place, and how it is coloured. One decision, not a nested one. */
+const statusOf = (
+  location: TripLocation,
+): { label: 'statusArchived' | 'locationLocated' | 'locationUnlocated'; tone: string } => {
+  if (location.status !== 'active') {
+    return { label: 'statusArchived', tone: 'bg-gray-50 text-gray-600 ring-gray-500/10' };
+  }
+  if (location.latitude !== null) {
+    return { label: 'locationLocated', tone: 'bg-green-50 text-green-700 ring-green-600/20' };
+  }
+  return { label: 'locationUnlocated', tone: 'bg-amber-50 text-amber-700 ring-amber-600/20' };
+};
+
 interface Props {
   customer: { id: string; name: string };
   canAdd: boolean;
@@ -31,17 +44,22 @@ export function CustomerLocationsModal({ customer, canAdd, canManage, onClose }:
   const locations = useTripLocations(customer.id, includeArchived);
   const [form, setForm] = useState<{ editing: TripLocation | null } | null>(null);
   const [archiving, setArchiving] = useState<TripLocation | null>(null);
+  /** An archive request in flight. Both confirmation controls are held while it is. */
+  const [archiveBusy, setArchiveBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const archive = async () => {
-    if (!archiving) return;
+    if (!archiving || archiveBusy) return;
+    setArchiveBusy(true);
     setError(null);
     try {
       await archiveTripLocation(customer.id, archiving.id);
       setArchiving(null);
-      locations.reload();
+      await locations.reload();
     } catch (error_) {
       setError(isApiError(error_) ? error_.message : t('saveFailed'));
+    } finally {
+      setArchiveBusy(false);
     }
   };
 
@@ -84,7 +102,7 @@ export function CustomerLocationsModal({ customer, canAdd, canManage, onClose }:
           <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100">
             {locations.items.map((location) => {
               const archived = location.status !== 'active';
-              const located = location.latitude !== null;
+              const status = statusOf(location);
               return (
                 <li
                   key={location.id}
@@ -101,14 +119,10 @@ export function CustomerLocationsModal({ customer, canAdd, canManage, onClose }:
                   <span
                     className={cn(
                       'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
-                      archived
-                        ? 'bg-gray-50 text-gray-600 ring-gray-500/10'
-                        : located
-                          ? 'bg-green-50 text-green-700 ring-green-600/20'
-                          : 'bg-amber-50 text-amber-700 ring-amber-600/20',
+                      status.tone,
                     )}
                   >
-                    {t(archived ? 'statusArchived' : located ? 'locationLocated' : 'locationUnlocated')}
+                    {t(status.label)}
                   </span>
                   {canManage && !archived ? (
                     <div className="flex shrink-0 items-center gap-1">
@@ -161,11 +175,11 @@ export function CustomerLocationsModal({ customer, canAdd, canManage, onClose }:
               {t('archiveLocationConfirm')} <strong>{archiving.name}</strong>?
             </span>
             <span className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setArchiving(null)}>
+              <Button variant="outline" size="sm" disabled={archiveBusy} onClick={() => setArchiving(null)}>
                 {t('cancel')}
               </Button>
-              <Button size="sm" onClick={() => void archive()}>
-                {t('archive')}
+              <Button size="sm" disabled={archiveBusy} onClick={() => void archive()}>
+                {archiveBusy ? t('saving') : t('archive')}
               </Button>
             </span>
           </div>

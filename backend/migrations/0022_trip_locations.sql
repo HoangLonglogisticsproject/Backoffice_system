@@ -86,10 +86,23 @@ CREATE TRIGGER trip_locations_deny_delete
 -- existing trip: those were typed by hand, their snapshot stands, and nothing
 -- is backfilled or guessed. The snapshot columns from 0011 and 0019 are what
 -- every reader — the board, the driver, the geofence — keeps reading.
+--
+-- ★ INLINE FOREIGN KEYS, NAMED, AND WHY THAT IS THE SAFE SHAPE HERE. The
+-- usual advice — add the column, then `ADD CONSTRAINT … NOT VALID`, then
+-- `VALIDATE` — exists to keep the referencing table writable while its
+-- EXISTING rows are scanned. These columns have no existing values: they are
+-- born NULL on every row, so the validation scan has nothing to check and the
+-- lock `ADD COLUMN` already takes is the whole cost. The runner also wraps
+-- the file in ONE transaction (see migration-runner.ts), which means a
+-- `VALIDATE` in the same file would run under the same lock anyway and
+-- `CREATE INDEX CONCURRENTLY` cannot run at all. New writes are FK-checked
+-- from the first statement after COMMIT, and nothing is left unvalidated.
 
 ALTER TABLE trip_schedules
-  ADD COLUMN IF NOT EXISTS pickup_location_id   UUID REFERENCES trip_locations(id),
-  ADD COLUMN IF NOT EXISTS delivery_location_id UUID REFERENCES trip_locations(id);
+  ADD COLUMN IF NOT EXISTS pickup_location_id   UUID
+    CONSTRAINT trip_schedules_pickup_location_fk   REFERENCES trip_locations(id),
+  ADD COLUMN IF NOT EXISTS delivery_location_id UUID
+    CONSTRAINT trip_schedules_delivery_location_fk REFERENCES trip_locations(id);
 
 -- Serve the foreign-key checks when a location row is updated.
 CREATE INDEX IF NOT EXISTS idx_trip_schedule_pickup_location

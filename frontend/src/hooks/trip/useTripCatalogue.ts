@@ -115,7 +115,7 @@ export function useTripCatalogue(includeArchived = false): TripCatalogue {
 export function useTripLocations(
   customerId: string | null,
   includeArchived = false,
-): CatalogueList<TripLocation> & { reload: () => void } {
+): CatalogueList<TripLocation> & { reload: () => Promise<void> } {
   const queryClient = useQueryClient();
   const { state, loading: sessionLoading } = useSession();
   const enabled = state?.status === 'ready' && customerId !== null;
@@ -127,9 +127,12 @@ export function useTripLocations(
     staleTime: CATALOGUE_STALE_MS,
   });
 
-  const reload = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: tripKeys.catalogues() });
-  }, [queryClient]);
+  // Returns the invalidation, which resolves once the active list has been
+  // re-read — so a caller that must act on the NEW list can wait for it.
+  const reload = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: tripKeys.catalogues() }),
+    [queryClient],
+  );
 
   const list = useCatalogueList(query, sessionLoading);
   // No customer: an empty, settled list — not a loading one.
