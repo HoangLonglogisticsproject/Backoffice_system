@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
@@ -189,10 +189,11 @@ describe('★ the trip list', () => {
     expect(new Set(hrefs).size).toBe(2);
 
     // Opening the second card loads the SECOND trip, by its id.
-    cards[1]!.closest('a')!.click();
-    expect(await screen.findByText('Kho Bình Dương')).toBeInTheDocument();
-    expect(fetchMyTrip).toHaveBeenCalledWith('t2');
+    fireEvent.click(cards[1]!.closest('a')!);
+    await waitFor(() => expect(fetchMyTrip).toHaveBeenCalledWith('t2'));
     expect(fetchMyTrip).not.toHaveBeenCalledWith('t1');
+    expect(await screen.findByText('Thông tin chuyến')).toBeInTheDocument();
+    expect(screen.getByText('Kho Bình Dương')).toBeInTheDocument();
   });
 
   it('says so when nothing is assigned', async () => {
