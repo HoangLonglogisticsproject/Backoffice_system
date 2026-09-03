@@ -33,6 +33,8 @@ describe('fetchAuthorization — the body has to actually be a session', () => {
     permissions: ['user.write'],
   };
 
+  beforeEach(() => get.mockReset());
+
   describe('the account type, which picks the shell', () => {
     it.each([
       ['a missing account type', { accountType: undefined }],
@@ -51,8 +53,6 @@ describe('fetchAuthorization — the body has to actually be a session', () => {
       expect(me.accountType).toBe('driver');
     });
   });
-
-  beforeEach(() => get.mockReset());
 
   it('returns the session when the body is one', async () => {
     get.mockResolvedValue({ data: VALID });

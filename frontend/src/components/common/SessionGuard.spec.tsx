@@ -97,25 +97,15 @@ describe('portalOf / homeOf', () => {
 });
 
 describe('RequireSession', () => {
-  it('★ sends a driver holding a Backoffice URL to their own home', () => {
+  it.each([
+    ['★ sends a driver holding a Backoffice URL to their own home', '/dispatch/master-data', 'driver @ /driver'],
+    ['★ sends a driver holding an old bookmark anywhere in the Backoffice home too', '/organization/departments', 'driver @ /driver'],
+    ['keeps a driver inside the portal', '/driver/trips/t1', 'driver @ /driver/trips/t1'],
+  ])('%s', (_label, path, lands) => {
     useSession.mockReturnValue(ready({ accountType: 'driver' }));
-    renderAt('/dispatch/master-data');
+    renderAt(path);
 
-    expect(screen.getByText('driver @ /driver')).toBeInTheDocument();
-  });
-
-  it('★ sends a driver holding an old bookmark anywhere in the Backoffice home too', () => {
-    useSession.mockReturnValue(ready({ accountType: 'driver' }));
-    renderAt('/organization/departments');
-
-    expect(screen.getByText('driver @ /driver')).toBeInTheDocument();
-  });
-
-  it('keeps a driver inside the portal', () => {
-    useSession.mockReturnValue(ready({ accountType: 'driver' }));
-    renderAt('/driver/trips/t1');
-
-    expect(screen.getByText('driver @ /driver/trips/t1')).toBeInTheDocument();
+    expect(screen.getByText(lands)).toBeInTheDocument();
   });
 
   it('★ sends an employee who lands on /driver back to the Backoffice', () => {
