@@ -235,11 +235,11 @@ describe('0012_trip_cost.sql', () => {
  * and when, and a live row still cannot carry an explanation for a withdrawal
  * that never happened.
  */
-describe('0020_void_reason_optional.sql', () => {
+describe('0021_void_reason_optional.sql', () => {
   let sql: string;
 
   beforeAll(async () => {
-    sql = await readFile(join(MIGRATIONS_DIR, '0020_void_reason_optional.sql'), 'utf8');
+    sql = await readFile(join(MIGRATIONS_DIR, '0021_void_reason_optional.sql'), 'utf8');
   });
 
   const code = (): string => sql.replace(/--[^\n]*/g, '').replace(/\s+/g, ' ');

@@ -1073,7 +1073,7 @@ describe('withdrawing an immutable figure', () => {
   });
 
   it('★ withdraws with no reason at all, and stores none', async () => {
-    // 0020 made the reason optional: a record is withdrawn through a plain
+    // 0021 made the reason optional: a record is withdrawn through a plain
     // confirmation, so nothing is typed. Null, never a manufactured sentence
     // — a reader cannot tell an invented reason from one a person wrote.
     const { service, costs } = build();

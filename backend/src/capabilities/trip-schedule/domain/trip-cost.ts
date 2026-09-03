@@ -87,7 +87,7 @@ export type TripCostCategory = (typeof TRIP_COST_CATEGORIES)[number];
  * `voidedAt` and `voidedBy` move together or not at all, which the database
  * enforces as well (`*_void_state`): a withdrawal naming nobody and no moment
  * is the record somebody comes back to and cannot explain. The reason beside
- * them is optional since 0020 — withdrawing is a plain confirmation in the
+ * them is optional since 0021 — withdrawing is a plain confirmation in the
  * interface, and a sentence nobody typed would be worse than none.
  */
 interface FinancialRecord {

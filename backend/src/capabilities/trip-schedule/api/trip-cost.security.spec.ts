@@ -344,7 +344,7 @@ describe('trip-cost HTTP security', () => {
     );
 
     it('★ accepts a void with no reason — the body may be empty', async () => {
-      // 0020: withdrawing is a confirmation, not a form. An empty body is the
+      // 0021: withdrawing is a confirmation, not a form. An empty body is the
       // ordinary case, not a malformed request.
       await authed('post', `/trip-schedules/${TRIP}/costs/${COST}/void`).send({}).expect(200);
       expect(money.voidCost).toHaveBeenCalledWith(TRIP, COST, { by: ACTOR, reason: undefined });

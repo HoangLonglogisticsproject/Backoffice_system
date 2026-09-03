@@ -265,7 +265,7 @@ export class TripCostRepository {
    * turns into a refusal, rather than a silent rewrite of who withdrew it and
    * why. Both stamp columns are set in the one statement, so the database's
    * `trip_costs_void_state` constraint can never see a half-set row. The reason
-   * rides along and may be null: 0020 made it optional.
+   * rides along and may be null: 0021 made it optional.
    */
   async void(
     id: string,

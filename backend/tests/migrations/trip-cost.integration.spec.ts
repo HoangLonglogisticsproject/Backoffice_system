@@ -121,6 +121,9 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
       // 0018 adds `users.account_type`, which provisioning now writes on every
       // insert — so every spec that creates a user needs it.
       '0018_driver_account.sql',
+      // 0021 relaxes the void constraint this file is largely about: a
+      // withdrawal names who and when, and no longer has to say why.
+      '0021_void_reason_optional.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -224,7 +227,7 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
       )).toBe(CHECK_VIOLATION);
     });
 
-    // ★ 0020 TOOK THE REASON OUT OF THE TRIO, AND ONLY THE REASON. A record is
+    // ★ 0021 TOOK THE REASON OUT OF THE TRIO, AND ONLY THE REASON. A record is
     // withdrawn through a plain confirmation now, so there is nothing to type;
     // who withdrew it and when are still inseparable, which is what the rows
     // above prove.

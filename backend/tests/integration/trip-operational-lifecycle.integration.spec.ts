@@ -118,6 +118,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // insert — so every spec that creates a user needs it.
       '0018_driver_account.sql',
       '0019_trip_location.sql',
+      // 0021 relaxes 0012's void constraint so a withdrawal needs no reason.
+      // Without it this list tests a schema the running code no longer targets.
+      '0021_void_reason_optional.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
