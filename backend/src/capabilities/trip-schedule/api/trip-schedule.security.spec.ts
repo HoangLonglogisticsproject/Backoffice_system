@@ -74,7 +74,16 @@ describe('trip-schedule HTTP security', () => {
   let trips: TripServiceMock;
   let catalogue: CatalogueServiceMock;
   let operations: { list: jest.Mock; listUnresolvedCompletions: jest.Mock };
-  let execution: { listEvents: jest.Mock };
+  let execution: {
+    listEvents: jest.Mock;
+    listAssignments: jest.Mock;
+    listEligibleDrivers: jest.Mock;
+    assign: jest.Mock;
+    replaceDriver: jest.Mock;
+    endAssignment: jest.Mock;
+  };
+  /** Somebody with a driver account, to be assigned. */
+  const DRIVER_USER = '99999999-9999-4999-8999-999999999999';
   let context: AuthorizationContext;
   /** What KIND of account is calling. Drivers are refused the Backoffice. */
   let accountType: AccountType;
@@ -131,7 +140,14 @@ describe('trip-schedule HTTP security', () => {
       list: jest.fn().mockResolvedValue([]),
       listUnresolvedCompletions: jest.fn().mockResolvedValue([]),
     };
-    execution = { listEvents: jest.fn().mockResolvedValue([]) };
+    execution = {
+      listEvents: jest.fn().mockResolvedValue([]),
+      listAssignments: jest.fn().mockResolvedValue([]),
+      listEligibleDrivers: jest.fn().mockResolvedValue([{ id: DRIVER_USER, displayName: 'Tài Xế' }]),
+      assign: jest.fn().mockResolvedValue({ id: 'assignment-1', driverUserId: DRIVER_USER }),
+      replaceDriver: jest.fn().mockResolvedValue({ id: 'assignment-2', driverUserId: DRIVER_USER }),
+      endAssignment: jest.fn().mockResolvedValue({ id: 'assignment-1', state: 'ended' }),
+    };
 
     catalogue = {
       listVehicles: jest.fn().mockResolvedValue([]),
@@ -617,6 +633,141 @@ describe('trip-schedule HTTP security', () => {
       await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(201);
 
       expect(trips.create).toHaveBeenCalled();
+    });
+  });
+
+  // ===================================================== driver assignment ==
+
+  /**
+   * ★ WHO MAY PUT A DRIVER ON A TRIP, AND WHO MAY NOT.
+   *
+   * `trip.write`: a global administrator or the head of any department. An
+   * ordinary member is refused, and a DRIVER account is refused before the
+   * permission is even consulted — so a driver cannot assign themselves,
+   * assign a colleague, or end anybody's turn, whatever id they hold.
+   */
+  describe('★ driver assignment', () => {
+    const ASSIGN = ['post', `/trip-schedules/${TRIP}/driver-assignments`] as const;
+    const REPLACE = ['post', `/trip-schedules/${TRIP}/driver-assignments/replace`] as const;
+    const END = ['post', `/trip-schedules/${TRIP}/driver-assignments/end`] as const;
+    const body = { driverUserId: DRIVER_USER, reason: 'đổi ca' };
+
+    const noAssignmentWrite = () => {
+      expect(execution.assign).not.toHaveBeenCalled();
+      expect(execution.replaceDriver).not.toHaveBeenCalled();
+      expect(execution.endAssignment).not.toHaveBeenCalled();
+    };
+
+    describe('a driver account', () => {
+      beforeEach(() => {
+        accountType = 'driver';
+        context = asContext();
+      });
+
+      it.each([ASSIGN, REPLACE, END])('is refused %s %s — cannot assign, swap or remove anybody', async (method, path) => {
+        const response = await authed(method, path).send(body);
+        expect(response.status).toBe(403);
+        noAssignmentWrite();
+      });
+
+      it('cannot list the drivers either', async () => {
+        await authed('get', '/trip-drivers').expect(403);
+        expect(execution.listEligibleDrivers).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('an ordinary employee', () => {
+      beforeEach(() => {
+        context = asContext({ memberOf: [DEPT] });
+      });
+
+      it.each([ASSIGN, REPLACE, END])('is refused %s %s — `trip.write` is not `any`', async (method, path) => {
+        const response = await authed(method, path).send(body);
+        expect(response.status).toBe(403);
+        noAssignmentWrite();
+      });
+
+      it('cannot list the drivers', async () => {
+        await authed('get', '/trip-drivers').expect(403);
+      });
+
+      it('may still read the assignment history — it is `trip.read`', async () => {
+        await authed('get', `/trip-schedules/${TRIP}/driver-assignments`).expect(200);
+        expect(execution.listAssignments).toHaveBeenCalledWith(TRIP);
+      });
+    });
+
+    describe('a department head', () => {
+      beforeEach(() => {
+        context = asContext({ headOf: [DEPT], memberOf: [DEPT] });
+      });
+
+      it('assigns, against the session user', async () => {
+        await authed(...ASSIGN).send({ driverUserId: DRIVER_USER }).expect(201);
+        expect(execution.assign).toHaveBeenCalledWith(TRIP, DRIVER_USER, ACTOR);
+      });
+
+      it('replaces, with a reason', async () => {
+        await authed(...REPLACE).send(body).expect(200);
+        expect(execution.replaceDriver).toHaveBeenCalledWith(TRIP, DRIVER_USER, {
+          by: ACTOR,
+          reason: 'đổi ca',
+        });
+      });
+
+      it('ends, with a reason', async () => {
+        await authed(...END).send({ reason: 'đổi ca' }).expect(200);
+        expect(execution.endAssignment).toHaveBeenCalledWith(TRIP, { by: ACTOR, reason: 'đổi ca' });
+      });
+
+      it('lists the drivers to choose from', async () => {
+        const response = await authed('get', '/trip-drivers').expect(200);
+        expect(response.body).toEqual([{ id: DRIVER_USER, displayName: 'Tài Xế' }]);
+      });
+    });
+
+    describe('a global administrator', () => {
+      beforeEach(() => {
+        context = asContext({ global: true });
+      });
+
+      it.each([ASSIGN, REPLACE, END])('is allowed %s %s', async (method, path) => {
+        const response = await authed(method, path).send(body);
+        expect([200, 201]).toContain(response.status);
+      });
+    });
+
+    describe('the body', () => {
+      beforeEach(() => {
+        context = asContext({ global: true });
+      });
+
+      it('refuses a driver id that is not a UUID', async () => {
+        await authed(...ASSIGN).send({ driverUserId: 'tai-xe-a' }).expect(422);
+        noAssignmentWrite();
+      });
+
+      it('refuses a replacement with no reason', async () => {
+        await authed(...REPLACE).send({ driverUserId: DRIVER_USER }).expect(422);
+        noAssignmentWrite();
+      });
+
+      it('★ ignores an assignedBy in the body — the actor is the session', async () => {
+        await authed(...ASSIGN).send({ driverUserId: DRIVER_USER, assignedBy: DRIVER_USER }).expect(201);
+        expect(execution.assign).toHaveBeenCalledWith(TRIP, DRIVER_USER, ACTOR);
+      });
+    });
+
+    it('refuses every assignment route without a CSRF header', async () => {
+      context = asContext({ global: true });
+      for (const [method, path] of [ASSIGN, REPLACE, END]) {
+        const response = await request(app.getHttpServer())
+          [method](path)
+          .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
+          .send(body);
+        expect(response.status).toBe(403);
+      }
+      noAssignmentWrite();
     });
   });
 });

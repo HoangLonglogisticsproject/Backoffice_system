@@ -11,6 +11,7 @@ import { UsersModule } from './core/users/users.module';
 import { AccountInvitationModule } from './capabilities/account-invitation/account-invitation.module';
 import { DriverAccountModule } from './capabilities/driver-account/driver-account.module';
 import { MembershipApprovalModule } from './capabilities/membership-approval/membership-approval.module';
+import { NotificationModule } from './capabilities/notification/notification.module';
 import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.module';
 
 /**
@@ -52,6 +53,7 @@ import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.m
     MembershipApprovalModule,
     AccountInvitationModule,
     DriverAccountModule,
+    NotificationModule,
     TripScheduleModule,
   ],
 })

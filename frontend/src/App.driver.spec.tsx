@@ -26,6 +26,12 @@ vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
   SessionProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
+const fetchNotifications = vi.fn();
+vi.mock('@/api/notifications', () => ({
+  fetchNotifications: (...a: unknown[]) => fetchNotifications(...a),
+  markNotificationRead: vi.fn(),
+  notificationStreamUrl: () => '/notifications/stream',
+}));
 vi.mock('@/api/driverPortal', () => ({
   fetchMyTrips: (...a: unknown[]) => fetchMyTrips(...a),
   fetchMyTrip: vi.fn(),
@@ -86,6 +92,7 @@ const BACKOFFICE_ROWS = [
 beforeEach(() => {
   useSession.mockReset().mockReturnValue(driverSession());
   fetchMyTrips.mockReset().mockResolvedValue([]);
+  fetchNotifications.mockReset().mockResolvedValue({ items: [], unreadCount: 2 });
 });
 
 describe('★ a driver is given the Driver Portal, and only that', () => {
@@ -110,6 +117,20 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
 
     expect(await screen.findByText(/chưa được phân công/i)).toBeInTheDocument();
     expect(screen.queryByText(/không có quyền/i)).not.toBeInTheDocument();
+  });
+
+  it('★ shows the unread count from the API on the bell, linking to the list', async () => {
+    renderAt('/driver');
+
+    expect(await screen.findByTestId('unread-badge')).toHaveTextContent('2');
+    expect(screen.getByRole('link', { name: /thông báo/i })).toHaveAttribute('href', '/driver/notifications');
+  });
+
+  it('renders the notification list inside the portal', async () => {
+    renderAt('/driver/notifications');
+
+    expect(await screen.findByText(/chưa có thông báo nào/i)).toBeInTheDocument();
+    for (const row of BACKOFFICE_ROWS) expect(screen.queryByText(row)).not.toBeInTheDocument();
   });
 
   it('offers the one account function a driver has — their password — inside the portal', async () => {

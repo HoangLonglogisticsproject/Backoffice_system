@@ -36,6 +36,9 @@ export const tripKeys = {
     [...tripKeys.money(tripId), 'hires', { includeVoided }] as const,
   costSummary: (tripId: string) => [...tripKeys.money(tripId), 'summary'] as const,
 
+  /** The drivers a dispatcher may assign. One list, company-wide. */
+  drivers: () => [...tripKeys.all, 'drivers'] as const,
+
   catalogues: () => [...tripKeys.all, 'catalogue'] as const,
   vehicles: (includeArchived: boolean) =>
     [...tripKeys.catalogues(), 'vehicles', { includeArchived }] as const,

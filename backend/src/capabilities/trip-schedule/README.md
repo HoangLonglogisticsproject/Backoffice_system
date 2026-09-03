@@ -125,7 +125,7 @@ browser gửi      latitude · longitude · accuracyM · capturedAt      (chỉ 
 server quyết     distance · geofence_passed · actual_at             (không nhận từ client)
 ```
 
-Luật nằm ở **một chỗ**: `domain/trip-location.ts`, hằng `PICKUP_LOCATION_POLICY`.
+Luật nằm ở **một chỗ**: `domain/trip-location.ts`, hằng `MILESTONE_LOCATION_POLICY`.
 
 | Ngưỡng | Mặc định | Ý nghĩa |
 |---|---|---|
