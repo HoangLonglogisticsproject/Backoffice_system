@@ -14,6 +14,7 @@ import { buildDateRangePageQuerySchema } from '@common/pagination/date-range-pag
 import { UserRepository } from '@core/users/persistence/user.repository';
 import {
   TripCustomerRepository,
+  TripLocationRepository,
   TripVehicleRepository,
 } from '../../src/capabilities/trip-schedule/persistence/trip-catalogue.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
@@ -93,6 +94,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       // 0021 relaxes 0012's void constraint so a withdrawal needs no reason.
       // Without it this list tests a schema the running code no longer targets.
       '0021_void_reason_optional.sql',
+      '0022_trip_locations.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -108,8 +110,9 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       vehicles,
       customers,
       new TripStatusHistoryRepository(database),
+      new TripLocationRepository(database),
     );
-    catalogue = new TripCatalogueService(vehicles, customers);
+    catalogue = new TripCatalogueService(vehicles, customers, new TripLocationRepository(database));
 
     author = (await new UserRepository(database).insertUser({ displayName: 'Điều Độ' })).id;
   });
@@ -128,7 +131,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     // CASCADE because `trip_status_history` and the execution tables now carry
     // foreign keys back to `trip_schedules`.
     await pool.query(
-      `TRUNCATE trip_status_history, trip_completion_requests, trip_execution_events,
+      `TRUNCATE trip_locations, trip_status_history, trip_completion_requests, trip_execution_events,
                 trip_cost_edits, trip_costs, trip_outsource_hires,
                 trip_driver_assignments, trip_schedules, trip_vehicles, trip_customers
        RESTART IDENTITY CASCADE`,

@@ -325,6 +325,8 @@ describe('the one write path to DONE', () => {
       catalogue as never,
       catalogue as never,
       history as never,
+      // No places on these trips: every case here types its ends by hand.
+      { findById: jest.fn().mockResolvedValue(null) } as never,
     );
 
     return { service, trips, history };

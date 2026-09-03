@@ -3,7 +3,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../../../common/e
 import { toOffsetPage, type OffsetPage } from '../../../common/pagination/offset-page';
 import type { DateRangePageQuery } from '../../../common/pagination/date-range-page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import { isLatitude, isLongitude } from '../domain/trip-location';
+import { optionalPoint } from '../domain/trip-location';
 import type { TripSchedule, TripScheduleWithRefs, TripStatus } from '../domain/trip-schedule';
 import {
   canTransition,
@@ -12,6 +12,7 @@ import {
 } from '../domain/trip-status-history';
 import {
   TripCustomerRepository,
+  TripLocationRepository,
   TripVehicleRepository,
 } from '../persistence/trip-catalogue.repository';
 import {
@@ -36,7 +37,22 @@ export interface CreateTripInput {
   deliveryContact?: string | null;
   pickupAt?: Date | null;
   deliveryAt?: Date | null;
-  /** Each pair both-or-neither: half a point is refused, not stored. */
+  /**
+   * ★ THE MASTER PLACE FOR EACH END. When present, the service COPIES that
+   * place's address, contact and coordinates onto the trip inside the same
+   * transaction — the row keeps its own snapshot, and editing the place
+   * later never touches it. Must belong to `customerId`; anything else is
+   * refused whatever the client sent.
+   */
+  pickupLocationId?: string | null;
+  deliveryLocationId?: string | null;
+  /**
+   * ⚠ LEGACY, INTERNAL ONLY. No HTTP route accepts these any more — the DTO
+   * has no field for them — so a dispatcher never types a coordinate. They
+   * remain for callers inside the process (fixtures, scripts) that place a
+   * trip without a master row, and they are REFUSED beside a location id for
+   * the same end: the place is the authority, not the caller.
+   */
   pickupLatitude?: number | null;
   pickupLongitude?: number | null;
   deliveryLatitude?: number | null;
@@ -94,6 +110,7 @@ export class TripScheduleService {
     private readonly vehicles: TripVehicleRepository,
     private readonly customers: TripCustomerRepository,
     private readonly history: TripStatusHistoryRepository,
+    private readonly locations: TripLocationRepository,
   ) {}
 
   /**
@@ -137,8 +154,12 @@ export class TripScheduleService {
   async create(input: CreateTripInput & { createdBy: string }): Promise<TripSchedule> {
     return this.db.transaction(async (tx) => {
       // No previous row, so every reference here is newly assigned and every
-      // one of them is checked against the catalogue.
-      const values = await this.resolve(input, 'awaiting_production', tx, null);
+      // one of them is checked against the catalogue — and both ends are
+      // snapshotted from their places, when places were named.
+      const values = await this.resolve(input, 'awaiting_production', tx, null, {
+        pickup: true,
+        delivery: true,
+      });
 
       // ★ A TRIP CANNOT BE BORN CLOSED. `status` is an optional field of the
       // create body, so without this a single POST produces a trip that is
@@ -204,18 +225,43 @@ export class TripScheduleService {
         pickupLongitude: sent('pickupLongitude'),
         deliveryLatitude: sent('deliveryLatitude'),
         deliveryLongitude: sent('deliveryLongitude'),
+        pickupLocationId: sent('pickupLocationId'),
+        deliveryLocationId: sent('deliveryLocationId'),
         note: sent('note'),
         status: patch.status ?? current.status,
       };
+
+      // ★ A SNAPSHOT IS RETAKEN ONLY WHEN THE PLACE IS NAMED IN THE PATCH.
+      // Naming a place (or clearing it) means "copy that place now"; a patch
+      // that touches only the note leaves last week's snapshot exactly as it
+      // was, which is what makes a trip a record and the master a template.
+      const resnapshot = {
+        pickup: 'pickupLocationId' in patch,
+        delivery: 'deliveryLocationId' in patch,
+      };
+      // The row's stored pair is last time's snapshot, not something the
+      // caller sent. When the place is named afresh it is copied from the
+      // place — or cleared, when the place is cleared — never carried over.
+      if (resnapshot.pickup) {
+        merged.pickupLatitude = null;
+        merged.pickupLongitude = null;
+      }
+      if (resnapshot.delivery) {
+        merged.deliveryLatitude = null;
+        merged.deliveryLongitude = null;
+      }
 
       // ★ THE ROW'S EXISTING REFERENCES GO WITH IT. `resolve` checks a
       // reference against the catalogue only where it CHANGES, so retiring a
       // truck does not freeze every trip that ever used it — see the comment
       // on `resolve`.
-      const values = await this.resolve(merged, current.status, tx, {
-        vehicleId: current.vehicleId,
-        customerId: current.customerId,
-      });
+      const values = await this.resolve(
+        merged,
+        current.status,
+        tx,
+        { vehicleId: current.vehicleId, customerId: current.customerId },
+        resnapshot,
+      );
 
       // ★ THE PATCH ROUTE CAN MOVE THE STATUS TOO, AND IT IS THE EASIER PATH
       // TO FORGET. `status` is a field of the create schema, so a general edit
@@ -388,6 +434,8 @@ export class TripScheduleService {
     fallbackStatus: TripStatus,
     tx: DatabaseQuery,
     previous: { vehicleId: string | null; customerId: string | null } | null,
+    /** Which ends are copied afresh from their master place on this write. */
+    resnapshot: { pickup: boolean; delivery: boolean },
   ): Promise<TripScheduleValues> {
     const vehicleId = input.vehicleId ?? null;
     // `previous` is null on create, so `previous?.vehicleId` is `undefined` and
@@ -409,23 +457,135 @@ export class TripScheduleService {
       }
     }
 
+    const pickup = await this.snapshotEnd(
+      'pickup',
+      {
+        locationId: input.pickupLocationId ?? null,
+        address: input.pickupAddress,
+        contact: input.pickupContact,
+        latitude: input.pickupLatitude,
+        longitude: input.pickupLongitude,
+      },
+      customerId,
+      resnapshot.pickup,
+      tx,
+    );
+    const delivery = await this.snapshotEnd(
+      'delivery',
+      {
+        locationId: input.deliveryLocationId ?? null,
+        address: input.deliveryAddress,
+        contact: input.deliveryContact,
+        latitude: input.deliveryLatitude,
+        longitude: input.deliveryLongitude,
+      },
+      customerId,
+      resnapshot.delivery,
+      tx,
+    );
+
     return {
       scheduledOn: input.scheduledOn,
       vehicleId,
       customerId,
       cargoInfo: blankToNull(input.cargoInfo),
-      pickupAddress: blankToNull(input.pickupAddress),
-      deliveryAddress: blankToNull(input.deliveryAddress),
-      pickupContact: blankToNull(input.pickupContact),
-      deliveryContact: blankToNull(input.deliveryContact),
+      pickupAddress: pickup.address,
+      deliveryAddress: delivery.address,
+      pickupContact: pickup.contact,
+      deliveryContact: delivery.contact,
       pickupAt: input.pickupAt ?? null,
       deliveryAt: input.deliveryAt ?? null,
-      ...coordinatePair('pickup', input.pickupLatitude, input.pickupLongitude),
-      ...coordinatePair('delivery', input.deliveryLatitude, input.deliveryLongitude),
+      pickupLatitude: pickup.latitude,
+      pickupLongitude: pickup.longitude,
+      deliveryLatitude: delivery.latitude,
+      deliveryLongitude: delivery.longitude,
+      pickupLocationId: pickup.locationId,
+      deliveryLocationId: delivery.locationId,
       note: blankToNull(input.note),
       status: input.status ?? fallbackStatus,
     };
   }
+
+  /**
+   * One end of the trip, as it will be stored.
+   *
+   * ★ THE PLACE IS THE AUTHORITY. When a location is named, its address,
+   * contact and coordinates are COPIED here, inside the caller's transaction,
+   * and any coordinates the caller sent for the same end are refused — a body
+   * carrying place A's id and place B's numbers is a body contradicting
+   * itself. The place must be this customer's and still in use.
+   *
+   * When no place is named, the end is what the caller typed (the path every
+   * trip before 0022 took), and any coordinates come from the legacy input
+   * only — never from a place. When `retake` is false, nothing is copied at
+   * all: the merged row already carries last time's snapshot, and only a
+   * patch that names the place asks for a fresh one.
+   */
+  private async snapshotEnd(
+    end: 'pickup' | 'delivery',
+    input: {
+      locationId: string | null;
+      address?: string | null;
+      contact?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    },
+    customerId: string | null,
+    retake: boolean,
+    tx: DatabaseQuery,
+  ): Promise<EndSnapshot> {
+    const typed = {
+      address: blankToNull(input.address),
+      contact: blankToNull(input.contact),
+      ...coordinatePair(end, input.latitude, input.longitude),
+    };
+
+    if (!input.locationId) {
+      return { ...typed, locationId: null };
+    }
+
+    if (!retake) {
+      // Unchanged reference: the snapshot on the row — coordinates included —
+      // stands, exactly as an unchanged vehicle is not re-checked against the
+      // catalogue. Only a patch that names the place asks for a fresh copy.
+      return { ...typed, locationId: input.locationId };
+    }
+
+    if (typed.latitude !== null || typed.longitude !== null) {
+      throw new ValidationError(
+        `The ${end} end names a location and also carries coordinates. The location is the source; send one or the other.`,
+        { [`${end}LocationId`]: 'Conflicting coordinates.' },
+      );
+    }
+
+    const location = await this.locations.findById(input.locationId, tx);
+    if (!location) throw new NotFoundError(`${capitalise(end)} location not found.`);
+    if (customerId === null || location.customerId !== customerId) {
+      throw new ValidationError(`The ${end} location does not belong to this trip's customer.`, {
+        [`${end}LocationId`]: 'Not one of this customer’s places.',
+      });
+    }
+    if (location.status !== 'active') {
+      throw new ConflictError(`The ${end} location has been archived.`);
+    }
+
+    return {
+      locationId: location.id,
+      address: location.address,
+      contact: location.contact,
+      latitude: location.latitude,
+      longitude: location.longitude,
+    };
+  }
+}
+
+/** One end of a trip as it will be stored: the snapshot, and where it came from. */
+interface EndSnapshot {
+  locationId: string | null;
+  address: string | null;
+  contact: string | null;
+  latitude: number | null;
+  longitude: number | null;
 }
 
 /**
@@ -436,26 +596,21 @@ export class TripScheduleService {
  * invent the other half of. The range is checked too, so a caller gets a
  * sentence rather than a constraint name.
  */
-const coordinatePair = <End extends 'pickup' | 'delivery'>(
-  end: End,
-  // Absent means "no point", exactly as `null` does — a default parameter says
-  // so without a second name for the same value.
-  latitude: number | null = null,
-  longitude: number | null = null,
-): Record<`${End}Latitude` | `${End}Longitude`, number | null> => {
-  if ((latitude === null) !== (longitude === null)) {
-    throw new ValidationError(`The ${end} location needs both a latitude and a longitude, or neither.`, {
-      [`${end}Latitude`]: 'Both halves of a location are required together.',
-    });
+const coordinatePair = (
+  end: 'pickup' | 'delivery',
+  latitude: number | null | undefined,
+  longitude: number | null | undefined,
+): { latitude: number | null; longitude: number | null } => {
+  const point = optionalPoint(latitude, longitude);
+  if (!point.ok) {
+    throw new ValidationError(
+      point.reason === 'HALF_A_POINT'
+        ? `The ${end} location needs both a latitude and a longitude, or neither.`
+        : `The ${end} location is not a place on Earth.`,
+      { [`${end}Latitude`]: point.reason },
+    );
   }
-  if (latitude !== null && (!isLatitude(latitude) || !isLongitude(longitude))) {
-    throw new ValidationError(`The ${end} location is not a place on Earth.`, {
-      [`${end}Latitude`]: 'Latitude must be within [-90, 90] and longitude within [-180, 180].',
-    });
-  }
-
-  return {
-    [`${end}Latitude`]: latitude,
-    [`${end}Longitude`]: longitude,
-  } as Record<`${End}Latitude` | `${End}Longitude`, number | null>;
+  return { latitude: point.latitude, longitude: point.longitude };
 };
+
+const capitalise = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);

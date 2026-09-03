@@ -149,6 +149,22 @@ tín hiệu, không phải bằng chứng tuyệt đối (contract §11). Không
 không có device attestation, không lưu vết GPS liên tục — chỉ một reading tại
 mốc.
 
+## Địa điểm của khách — Location Master (0022)
+
+`trip_locations` là **địa điểm thuộc một khách hàng** (tên · địa chỉ · liên hệ ·
+toạ độ *tuỳ chọn*), quản lý ngay trong danh mục Khách. Không có danh sách địa
+điểm toàn công ty và không có route nào không mang `customerId`; tài xế không
+đọc được danh mục này.
+
+Điều độ **không nhập toạ độ trên chuyến**. Form chuyến chọn Khách → Điểm lấy →
+Điểm giao; service **chụp** address/contact/lat-lng của địa điểm vào chính row
+chuyến trong cùng transaction (`pickup_location_id` chỉ để truy vết). Sửa
+địa điểm sau đó **không** đổi chuyến cũ; chuyến mới mới lấy giá trị mới.
+Geofence vẫn đọc snapshot trên chuyến như trước — không đọc master. Địa điểm
+chưa có toạ độ vẫn dùng được; tài xế bị từ chối `DESTINATION_MISSING` như cũ.
+Địa điểm phải **cùng khách với chuyến**, kiểm ở server; gửi kèm toạ độ bên
+cạnh một địa điểm bị từ chối (địa điểm là nguồn).
+
 ## Những gì cố ý KHÔNG có
 
 **Khối CHI PHÍ.** Bảng tính có nhóm cột thứ hai (DẦU · CẦU TRẠM · PHÍ KHO · BỐC

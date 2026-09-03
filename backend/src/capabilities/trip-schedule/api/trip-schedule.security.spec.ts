@@ -43,6 +43,7 @@ describe('trip-schedule HTTP security', () => {
   const TRIP = '55555555-5555-5555-5555-555555555555';
   const VEHICLE = '66666666-6666-6666-6666-666666666666';
   const CUSTOMER = '77777777-7777-7777-7777-777777777777';
+  const LOCATION = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
 
   /**
    * Named rather than `Record<string, jest.Mock>`: this project compiles with
@@ -68,6 +69,10 @@ describe('trip-schedule HTTP security', () => {
     createCustomer: jest.Mock;
     updateCustomer: jest.Mock;
     archiveCustomer: jest.Mock;
+    listLocations: jest.Mock;
+    createLocation: jest.Mock;
+    updateLocation: jest.Mock;
+    archiveLocation: jest.Mock;
   }
 
   let app: INestApplication;
@@ -158,6 +163,10 @@ describe('trip-schedule HTTP security', () => {
       createCustomer: jest.fn().mockResolvedValue({ id: CUSTOMER, name: 'WWL' }),
       updateCustomer: jest.fn().mockResolvedValue({ id: CUSTOMER, name: 'WWL' }),
       archiveCustomer: jest.fn().mockResolvedValue({ id: CUSTOMER, name: 'WWL' }),
+      listLocations: jest.fn().mockResolvedValue([]),
+      createLocation: jest.fn().mockResolvedValue({ id: LOCATION, customerId: CUSTOMER }),
+      updateLocation: jest.fn().mockResolvedValue({ id: LOCATION, customerId: CUSTOMER }),
+      archiveLocation: jest.fn().mockResolvedValue({ id: LOCATION, customerId: CUSTOMER, status: 'archived' }),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -633,6 +642,158 @@ describe('trip-schedule HTTP security', () => {
       await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(201);
 
       expect(trips.create).toHaveBeenCalled();
+    });
+  });
+
+  // ==================================================== customer locations ==
+
+  /**
+   * ★ A CUSTOMER'S PLACES, AND WHO MAY TOUCH THEM. Same three tiers as the
+   * customer catalogue — read `trip.read`, add `trip.create`, change
+   * `trip.write` — and a DRIVER account is refused every one before the
+   * permission is consulted, so a driver never sees the list of anybody's
+   * warehouses. There is no route without a customer in the path.
+   */
+  describe('★ customer locations', () => {
+    const LIST = ['get', `/trip-customers/${CUSTOMER}/locations`] as const;
+    const CREATE = ['post', `/trip-customers/${CUSTOMER}/locations`] as const;
+    const UPDATE = ['patch', `/trip-customers/${CUSTOMER}/locations/${LOCATION}`] as const;
+    const ARCHIVE = ['post', `/trip-customers/${CUSTOMER}/locations/${LOCATION}/archive`] as const;
+    const body = { name: 'Kho OSC', address: 'KCN Sóng Thần', latitude: 10.8, longitude: 106.6 };
+
+    const nothingTouched = () => {
+      for (const mock of [catalogue.listLocations, catalogue.createLocation, catalogue.updateLocation, catalogue.archiveLocation]) {
+        expect(mock).not.toHaveBeenCalled();
+      }
+    };
+
+    describe('a driver account', () => {
+      beforeEach(() => {
+        accountType = 'driver';
+        context = asContext();
+      });
+
+      it.each([LIST, CREATE, UPDATE, ARCHIVE])('is refused %s %s — never the list, never a write', async (method, path) => {
+        const response = await authed(method, path).send(body);
+        expect(response.status).toBe(403);
+        nothingTouched();
+      });
+    });
+
+    describe('an ordinary member', () => {
+      beforeEach(() => {
+        context = asContext({ memberOf: [DEPT] });
+      });
+
+      it('reads a customer’s places — `trip.read` is `any`, as for the customer list', async () => {
+        await authed(...LIST).expect(200);
+        expect(catalogue.listLocations).toHaveBeenCalledWith(CUSTOMER, false);
+      });
+
+      it('adds one — `trip.create` is `any`, as for a customer', async () => {
+        await authed(...CREATE).send(body).expect(201);
+        expect(catalogue.createLocation).toHaveBeenCalledWith(CUSTOMER, expect.objectContaining({ ...body, createdBy: ACTOR }));
+      });
+
+      it.each([UPDATE, ARCHIVE])('is refused %s %s — changing a place is `trip.write`', async (method, path) => {
+        const response = await authed(method, path).send(body);
+        expect(response.status).toBe(403);
+        expect(catalogue.updateLocation).not.toHaveBeenCalled();
+        expect(catalogue.archiveLocation).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('a department head', () => {
+      beforeEach(() => {
+        context = asContext({ headOf: [DEPT], memberOf: [DEPT] });
+      });
+
+      it('★ changes a place under ITS customer only — both ids come from the route', async () => {
+        await authed(...UPDATE).send({ name: 'Kho OSC 2', customerId: 'somebody-else' }).expect(200);
+        expect(catalogue.updateLocation).toHaveBeenCalledWith(CUSTOMER, LOCATION, { name: 'Kho OSC 2' });
+      });
+
+      it('archives one', async () => {
+        await authed(...ARCHIVE).expect(200);
+        expect(catalogue.archiveLocation).toHaveBeenCalledWith(CUSTOMER, LOCATION);
+      });
+    });
+
+    describe('the body', () => {
+      beforeEach(() => {
+        context = asContext({ global: true });
+      });
+
+      it.each([
+        ['latitude off the planet', { ...body, latitude: 91 }],
+        ['longitude off the planet', { ...body, longitude: -180.5 }],
+        ['a latitude that is not a number', { ...body, latitude: 'ten' }],
+        ['no name', { ...body, name: '  ' }],
+        ['no address', { ...body, address: '' }],
+      ])('refuses %s with 422 before the service runs', async (_label, invalid) => {
+        const response = await authed(...CREATE).send(invalid);
+        expect(response.status).toBe(422);
+        expect(catalogue.createLocation).not.toHaveBeenCalled();
+      });
+
+      it('accepts a place with no coordinates at all', async () => {
+        await authed(...CREATE).send({ name: 'Nhà máy', address: 'Bình Dương' }).expect(201);
+        expect(catalogue.createLocation).toHaveBeenCalledWith(
+          CUSTOMER,
+          expect.objectContaining({ name: 'Nhà máy', address: 'Bình Dương' }),
+        );
+      });
+
+      it('accepts the edges of both axes', async () => {
+        await authed(...CREATE).send({ ...body, latitude: -90, longitude: 180 }).expect(201);
+      });
+    });
+
+    it('refuses every write without a CSRF header', async () => {
+      context = asContext({ global: true });
+      for (const [method, path] of [CREATE, UPDATE, ARCHIVE]) {
+        const response = await request(app.getHttpServer())
+          [method](path)
+          .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
+          .send(body);
+        expect(response.status).toBe(403);
+      }
+      nothingTouched();
+    });
+  });
+
+  // ============================================ the trip names a place ==
+
+  describe('★ a trip names a place, never a coordinate', () => {
+    beforeEach(() => {
+      context = asContext({ global: true });
+    });
+
+    it('forwards the place ids and strips any coordinate a client typed', async () => {
+      await authed('post', '/trip-schedules')
+        .send({
+          scheduledOn: '2026-09-01',
+          customerId: CUSTOMER,
+          pickupLocationId: LOCATION,
+          pickupLatitude: 1,
+          pickupLongitude: 2,
+          deliveryLatitude: 3,
+          deliveryLongitude: 4,
+        })
+        .expect(201);
+
+      const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+      expect(input['pickupLocationId']).toBe(LOCATION);
+      for (const key of ['pickupLatitude', 'pickupLongitude', 'deliveryLatitude', 'deliveryLongitude']) {
+        expect(input).not.toHaveProperty(key);
+      }
+    });
+
+    it('refuses a place id that is not a UUID', async () => {
+      await authed('post', '/trip-schedules')
+        .send({ scheduledOn: '2026-09-01', pickupLocationId: 'kho-osc' })
+        .expect(422);
+      expect(trips.create).not.toHaveBeenCalled();
     });
   });
 

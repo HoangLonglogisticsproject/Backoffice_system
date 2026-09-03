@@ -96,6 +96,16 @@ export interface TripSchedule {
   note: string | null;
   status: TripStatus;
 
+  /**
+   * Which master place each snapshot was copied from — provenance, not a
+   * live reference. `null` on every trip typed before 0022 and on any end
+   * entered as free text. Nothing reads the master row through these; the
+   * snapshot columns above are what the board, the driver and the geofence
+   * use.
+   */
+  pickupLocationId: string | null;
+  deliveryLocationId: string | null;
+
   /** The one thing the workbook could never answer. */
   createdBy: string;
   createdAt: Date;
@@ -124,6 +134,15 @@ export interface TripScheduleWithRefs extends TripSchedule {
    * the board needs on every row.
    */
   driver: UserSummary | null;
+  /** The master places the two snapshots came from, by name. `null` exactly when the id is. */
+  pickupLocation: TripLocationRef | null;
+  deliveryLocation: TripLocationRef | null;
+}
+
+/** The smallest useful projection of a place: enough to print, nothing more. */
+export interface TripLocationRef {
+  id: string;
+  name: string;
 }
 
 /** The smallest useful projection of a vehicle: enough to print, nothing more. */
@@ -170,6 +189,32 @@ export interface TripVehicle {
   /** The carrier a hired lorry belongs to. Set exactly when `ownership` is `outsourced`. */
   carrierId: string | null;
 
+  createdBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * A customer's place — a warehouse, a yard, a factory gate.
+ *
+ * ★ OWNED BY ONE CUSTOMER, AND THAT IS THE MODEL. A location is listed, chosen
+ * and edited only under its customer; there is no company-wide pool of
+ * places, and a trip for one customer cannot name another's. Coordinates are
+ * OPTIONAL: a place is real before anybody has located it, and a trip may use
+ * it — the driver's confirmation there is then refused as DESTINATION_MISSING
+ * exactly as for a trip typed by hand.
+ */
+export interface TripLocation {
+  id: string;
+  customerId: string;
+  name: string;
+  address: string;
+  contact: string | null;
+  note: string | null;
+  /** Both or neither. `null` means "not located yet", never "at 0,0". */
+  latitude: number | null;
+  longitude: number | null;
+  status: CatalogueStatus;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
