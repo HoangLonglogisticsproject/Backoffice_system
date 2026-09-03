@@ -72,7 +72,7 @@ export default function DriverNotificationsPage() {
         </p>
       ) : null}
 
-      {data && data.items.length === 0 ? (
+      {data?.items.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">{t('driverNoNotifications')}</p>
       ) : null}
 
@@ -80,12 +80,14 @@ export default function DriverNotificationsPage() {
         <ul className="space-y-2">
           {data.items.map((notification) => {
             const unread = notification.readAt === null;
+            const title = t(TITLE[notification.type]);
+            const label = unread ? `${title} — ${t('driverUnread')}` : title;
             return (
               <li key={notification.id}>
                 <button
                   type="button"
                   onClick={() => open(notification)}
-                  aria-label={`${t(TITLE[notification.type])}${unread ? ` — ${t('driverUnread')}` : ''}`}
+                  aria-label={label}
                   className={cn(
                     'flex w-full gap-3 rounded-xl border px-4 py-3 text-left transition-colors',
                     unread ? 'border-primary/40 bg-primary/5' : 'border-border bg-background',

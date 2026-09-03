@@ -129,7 +129,12 @@ describe('notification HTTP security', () => {
     });
 
     it('refuses an id that is not a UUID', async () => {
-      await authed('post', '/notifications/stream/read').expect(422);
+      const response = await authed('post', '/notifications/stream/read');
+
+      expect(response.status).toBe(422);
+      expect(response.body.error.code).toBe('VALIDATION_FAILED');
+      // Refused by the pipe: nothing reaches the repository, so nothing is stamped.
+      expect(rows.markRead).not.toHaveBeenCalled();
     });
   });
 

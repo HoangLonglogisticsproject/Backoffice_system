@@ -69,6 +69,9 @@ export function DriverAssignModal({ trip, onClose }: Readonly<Props>) {
 
   const formId = 'driver-assign-form';
 
+  let submitLabel = replacing ? t('changeDriver') : t('assignDriver');
+  if (change.isPending) submitLabel = t('saving');
+
   return (
     <Modal
       isOpen={open}
@@ -85,7 +88,7 @@ export function DriverAssignModal({ trip, onClose }: Readonly<Props>) {
             disabled={change.isPending || driverUserId === '' || (replacing && reason.trim() === '')}
             className="bg-blue-600 hover:bg-blue-700"
           >
-            {change.isPending ? t('saving') : replacing ? t('changeDriver') : t('assignDriver')}
+            {submitLabel}
           </Button>
         </>
       }

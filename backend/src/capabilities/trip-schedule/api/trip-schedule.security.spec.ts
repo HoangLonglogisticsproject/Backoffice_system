@@ -688,7 +688,12 @@ describe('trip-schedule HTTP security', () => {
       });
 
       it('cannot list the drivers', async () => {
-        await authed('get', '/trip-drivers').expect(403);
+        const response = await authed('get', '/trip-drivers');
+
+        expect(response.status).toBe(403);
+        expect(response.body.error.code).toBe('FORBIDDEN');
+        // Refused at the guard: the list of the company's drivers is never built.
+        expect(execution.listEligibleDrivers).not.toHaveBeenCalled();
       });
 
       it('may still read the assignment history — it is `trip.read`', async () => {

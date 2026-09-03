@@ -78,7 +78,7 @@ describe('DriverNotificationsPage', () => {
     expect(await screen.findByText(/bạn được phân công chuyến/i)).toBeInTheDocument();
     expect(screen.getByText(/bị trả lại/i)).toBeInTheDocument();
     expect(screen.getByText(/lý do: thiếu hoá đơn dầu/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/chuyến ngày/i).length).toBe(2);
+    expect(screen.getAllByText(/chuyến ngày/i)).toHaveLength(2);
     // Exactly one is marked unread.
     expect(screen.getAllByRole('button', { name: /chưa đọc/i })).toHaveLength(1);
   });
