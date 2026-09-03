@@ -1,5 +1,5 @@
-import { Outlet, useNavigate } from 'react-router-dom';
-import { LogOut, Truck } from 'lucide-react';
+import { Link, Outlet, useNavigate } from 'react-router-dom';
+import { KeyRound, LogOut, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
@@ -49,6 +49,16 @@ export default function DriverLayout() {
             {/* The name, never the id. */}
             <p className="truncate text-xs text-muted-foreground">{username ?? ''}</p>
           </div>
+          {/* The one account function a driver has. Everything else on the
+              Backoffice's security screen is unbuilt there too. */}
+          <Button
+            variant="ghost"
+            size="icon-lg"
+            aria-label={t('changePassword')}
+            render={<Link to="/driver/account/security" />}
+          >
+            <KeyRound />
+          </Button>
           <Button variant="ghost" size="icon-lg" onClick={leave} aria-label={t('logout')}>
             <LogOut />
           </Button>

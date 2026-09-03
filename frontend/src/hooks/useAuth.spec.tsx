@@ -47,6 +47,7 @@ const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => {
 const READY = {
   userId: 'u1',
   username: 'newcomer',
+  accountType: 'employee',
   role: 'MEMBER',
   departmentIds: ['d1'],
   permissions: ['unit.read'],
@@ -113,7 +114,7 @@ describe('SessionGuard', () => {
           <Route
             path={path}
             element={
-              <SessionGuard>
+              <SessionGuard portal="backoffice">
                 <p>the app</p>
               </SessionGuard>
             }

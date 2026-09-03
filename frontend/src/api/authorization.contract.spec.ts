@@ -27,10 +27,30 @@ describe('fetchAuthorization — the body has to actually be a session', () => {
   const VALID = {
     userId: 'fab71f53-0000-4000-8000-000000000000',
     username: 'boss',
+    accountType: 'employee',
     role: 'SUPERADMIN',
     departmentIds: [],
     permissions: ['user.write'],
   };
+
+  describe('the account type, which picks the shell', () => {
+    it.each([
+      ['a missing account type', { accountType: undefined }],
+      ['an account type this build cannot route', { accountType: 'contractor' }],
+      ['a numeric account type', { accountType: 1 }],
+    ])('refuses %s', async (_label, override) => {
+      // Closed like `role`: an unknown kind of account has no shell to be
+      // sent to, so it is not a session this client can render.
+      get.mockResolvedValue({ data: { ...VALID, ...override } });
+      await expect(fetchAuthorization()).rejects.toBeTruthy();
+    });
+
+    it('accepts a driver', async () => {
+      get.mockResolvedValue({ data: { ...VALID, accountType: 'driver', role: 'MEMBER' } });
+      const me = await fetchAuthorization();
+      expect(me.accountType).toBe('driver');
+    });
+  });
 
   beforeEach(() => get.mockReset());
 

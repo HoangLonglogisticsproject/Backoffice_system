@@ -579,6 +579,20 @@ describe('trip-schedule HTTP security', () => {
       expect(response.status).toBe(403);
       expect(trips.create).not.toHaveBeenCalled();
     });
+
+    it.each([...WRITES])(
+      '★ cannot touch the vehicle or customer catalogue: %s %s is 403',
+      async (method, path) => {
+        // The contract draws the line at the CATALOGUE, not at the vehicle: a
+        // driver sees the plate on their own trip through `/driver`, and never
+        // the list it was picked from.
+        const response = await authed(method, path).send({});
+
+        expect(response.status).toBe(403);
+        expect(response.body.error.code).toBe('FORBIDDEN');
+        for (const mock of Object.values(catalogue)) expect(mock).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('★ an employee reading the same routes is unaffected', () => {

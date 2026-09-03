@@ -6,12 +6,23 @@ import type { SessionUser } from '../../identity/application/session.service';
 import { AuthorizationService } from '../application/authorization.service';
 import { grantedPermissions, roleOf } from '../domain/authorization.context';
 import { localPartOf } from '../domain/username';
+import type { AccountType } from '../../users/domain/user.entity';
 import type { PermissionKey, RoleKey } from '../domain/permission';
 
 export interface AuthorizationMeResponse {
   userId: string;
   /** Local part of the login email. Display only — never an authorization input. */
   username: string | null;
+  /**
+   * ★ WHICH APPLICATION THIS ACCOUNT BELONGS IN. `driver` accounts are refused
+   * every Backoffice route by `BackofficeOnlyGuard` regardless of what
+   * `permissions` lists — `trip.read` is `'any'` and appears for them too — so
+   * a client that drew a menu from `permissions` alone drew one the server
+   * would 403 row by row. This is the field the client routes SHELLS on:
+   * `/driver` for a driver, the Backoffice for everybody else. Like `role`, a
+   * rendering aid; the guard decides.
+   */
+  accountType: AccountType;
   role: RoleKey;
   /** At most one, by invariant; empty for a SuperAdmin, who sits above units. */
   departmentIds: string[];
@@ -51,6 +62,8 @@ export class AuthorizationController {
     return {
       userId: context.userId,
       username: subject ? localPartOf(subject) : null,
+      // From the session row, the same value `BackofficeOnlyGuard` reads.
+      accountType: user.accountType,
       role: roleOf(context),
       departmentIds: [...context.memberOf],
       permissions: grantedPermissions(context),
