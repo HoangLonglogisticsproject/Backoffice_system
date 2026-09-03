@@ -83,6 +83,12 @@ interface AddEmployeeModalProps {
    * whichever endpoint the caller is actually allowed to read.
    */
   departmentId?: string;
+  /**
+   * Which kind of account the dialog opens on. The approvals screen opens on
+   * an employee; Driver Management opens on a driver. The choice itself is
+   * unchanged and still offered — this only sets where it starts.
+   */
+  initialAccountType?: AccountType;
   onClose: () => void;
   /**
    * What happened, and to which ADDRESS.
@@ -141,6 +147,7 @@ interface AddEmployeeModalProps {
 export function AddEmployeeModal({
   isOpen,
   departmentId,
+  initialAccountType = 'employee',
   onClose,
   onCreated,
 }: Readonly<AddEmployeeModalProps>) {
@@ -158,7 +165,7 @@ export function AddEmployeeModal({
    * and then ignoring it, or offering a department called "Tài xế", would put
    * that difference somewhere a reader has to infer it.
    */
-  const [accountType, setAccountType] = useState<AccountType>('employee');
+  const [accountType, setAccountType] = useState<AccountType>(initialAccountType);
   const creatingDriver = accountType === 'driver';
 
   // ★ A DRIVER HAS NO UNIT, so the picker is not merely hidden — it is not part

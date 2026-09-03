@@ -24,6 +24,17 @@ vi.mock('@/api/driverAccounts', () => ({
   fetchDriver: (...a: unknown[]) => fetchDriver(...a),
   createDriver: (...a: unknown[]) => createDriver(...a),
   setDriverStatus: (...a: unknown[]) => setDriverStatus(...a),
+  requestDriver: vi.fn(),
+}));
+
+// ★ THE CREATE DIALOG IS THE APPROVALS SCREEN'S. It reaches for the employee
+// endpoints too; they are mocked so the dialog can mount, and none is called.
+vi.mock('@/api/users', () => ({ createUser: vi.fn() }));
+vi.mock('@/api/department', () => ({ fetchDepartments: vi.fn().mockResolvedValue([]) }));
+vi.mock('@/api/department-head', () => ({ assignDepartmentHead: vi.fn() }));
+vi.mock('@/api/account-invitation', () => ({ requestAccountInvitation: vi.fn() }));
+vi.mock('@/hooks/useMyDepartments', () => ({
+  useMyDepartments: () => ({ departments: [], loading: false }),
 }));
 
 vi.mock('@/contexts/SessionProvider', () => ({
@@ -120,7 +131,7 @@ describe('DriverManagementPage', () => {
       fetchDrivers.mockRejectedValueOnce(new Error('down')).mockResolvedValueOnce([driver()]);
       renderPage();
 
-      expect(await screen.findByRole('alert')).toHaveTextContent('Không tải được danh sách tài xế.');
+      expect(await screen.findByRole('alert')).toHaveTextContent('Không tải được dữ liệu.');
       fireEvent.click(screen.getByRole('button', { name: 'Thử lại' }));
 
       expect(await screen.findByText('Nguyễn Văn Tài')).toBeInTheDocument();
@@ -138,17 +149,20 @@ describe('DriverManagementPage', () => {
   });
 
   describe('creating a driver', () => {
-    it('★ sends the three fields, refreshes the list, shows the username and never the password', async () => {
+    it('★ opens the shared account dialog on "driver", sends the three fields, refreshes the list and never shows the password', async () => {
       createDriver.mockResolvedValue({ userId: 'd9', displayName: 'Lê Văn Mới', username: 'levanmoi' });
       renderPage();
       await screen.findByText('Nguyễn Văn Tài');
       fetchDrivers.mockResolvedValue([driver(), driver({ id: 'd9', displayName: 'Lê Văn Mới', username: 'levanmoi' })]);
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm tài xế' }));
+      // The approvals screen's dialog, already on the driver kind: no department asked.
+      expect(dialog().getByRole('button', { name: 'Tài xế', pressed: true })).toBeInTheDocument();
+      expect(dialog().queryByLabelText('Phòng ban *')).toBeNull();
       fireEvent.change(dialog().getByLabelText('Họ và tên *'), { target: { value: 'Lê Văn Mới' } });
-      fireEvent.change(dialog().getByLabelText('Email *'), { target: { value: 'levanmoi@hoanglonglti.com' } });
+      fireEvent.change(dialog().getByLabelText('Email *'), { target: { value: 'levanmoi' } });
       fireEvent.change(dialog().getByLabelText('Mật khẩu tạm *'), { target: { value: 'Tam-2026!' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Tạo tài khoản' }));
+      fireEvent.click(dialog().getByRole('button', { name: 'Lưu nhân viên' }));
 
       await waitFor(() =>
         expect(createDriver).toHaveBeenCalledWith({
@@ -157,11 +171,13 @@ describe('DriverManagementPage', () => {
           initialPassword: 'Tam-2026!',
         }),
       );
-      expect(await dialog().findByText('Đã tạo tài khoản tài xế.')).toBeInTheDocument();
-      expect(dialog().getByText('levanmoi')).toBeInTheDocument();
+      // The notice the approvals screen shows, with the address they sign in with.
+      const notice = await screen.findByRole('status');
+      expect(notice).toHaveTextContent('Đã tạo tài khoản tài xế.');
+      expect(notice).toHaveTextContent('levanmoi@hoanglonglti.com');
       // ★ The typed secret is not on screen anywhere once the account exists.
       expect(document.body.textContent).not.toContain('Tam-2026!');
-      expect(screen.queryByLabelText('Mật khẩu tạm *')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
       // The list was re-read, and holds the new driver.
       await waitFor(() => expect(fetchDrivers).toHaveBeenCalledTimes(2));
       expect(await screen.findByText('Lê Văn Mới', { selector: 'td' })).toBeInTheDocument();
@@ -175,11 +191,11 @@ describe('DriverManagementPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm tài xế' }));
       fireEvent.change(dialog().getByLabelText('Họ và tên *'), { target: { value: 'X' } });
-      fireEvent.change(dialog().getByLabelText('Email *'), { target: { value: 'x@hoanglonglti.com' } });
+      fireEvent.change(dialog().getByLabelText('Email *'), { target: { value: 'x' } });
       fireEvent.change(dialog().getByLabelText('Mật khẩu tạm *'), { target: { value: 'Tam-2026!' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Tạo tài khoản' }));
+      fireEvent.click(dialog().getByRole('button', { name: 'Lưu nhân viên' }));
 
-      expect(await dialog().findByRole('alert')).toHaveTextContent('That identity is already registered.');
+      expect(await dialog().findByText('That identity is already registered.')).toBeInTheDocument();
     });
   });
 
