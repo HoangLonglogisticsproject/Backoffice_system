@@ -174,6 +174,27 @@ describe('★ the trip list', () => {
     expect(screen.getByText('VIỄN ĐẠT').closest('a')).toHaveAttribute('href', '/driver/trips/t2');
   });
 
+  it('★ two trips for the same customer on the same day stay two trips — the id is the identity', async () => {
+    // Nothing forbids this on the server: the trip schedule has no uniqueness
+    // on customer + day. The card shows customer and day, but it is BOUND to
+    // the trip's canonical id and nothing else.
+    fetchMyTrips.mockResolvedValue([trip(), trip({ tripId: 't2', pickupAddress: 'Kho Bình Dương' })]);
+    fetchMyTrip.mockImplementation(async (id: string) => trip({ tripId: id, pickupAddress: id === 't2' ? 'Kho Bình Dương' : 'Kho HCM' }));
+    renderAt('/driver');
+
+    const cards = await screen.findAllByText('BLUEWATER');
+    expect(cards).toHaveLength(2);
+    const hrefs = cards.map((card) => card.closest('a')?.getAttribute('href'));
+    expect(hrefs).toEqual(['/driver/trips/t1', '/driver/trips/t2']);
+    expect(new Set(hrefs).size).toBe(2);
+
+    // Opening the second card loads the SECOND trip, by its id.
+    cards[1]!.closest('a')!.click();
+    expect(await screen.findByText('Kho Bình Dương')).toBeInTheDocument();
+    expect(fetchMyTrip).toHaveBeenCalledWith('t2');
+    expect(fetchMyTrip).not.toHaveBeenCalledWith('t1');
+  });
+
   it('says so when nothing is assigned', async () => {
     renderAt('/driver');
 
