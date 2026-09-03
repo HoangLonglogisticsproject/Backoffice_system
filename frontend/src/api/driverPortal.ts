@@ -6,6 +6,7 @@ import type {
   ExecutionEvent,
   ExecutionEventType,
   ExpenseDeclaration,
+  LocationEvidence,
 } from '@/types/driver';
 import type { TripCost, TripCostCategory } from '@/types/tripCost';
 
@@ -62,6 +63,14 @@ export interface RecordEventInput {
    * or a KPI from it.
    */
   deviceReportedAt?: string;
+  /**
+   * ★ A READING, NEVER A VERDICT. Where the handset says it is, how sure it
+   * is, and when it took the fix. The server measures the distance to the
+   * trip's own pickup point and decides; there is no `geofencePassed` and no
+   * `distance` in this body, and the server's schema strips one if sent.
+   * Required by the server for PICKUP_CONFIRMED.
+   */
+  location?: LocationEvidence;
   /**
    * ★ IDEMPOTENCY, AND IT IS NOT OPTIONAL.
    *

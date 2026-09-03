@@ -1,4 +1,5 @@
 import type { UserSummary } from '../../../common/types/user-summary';
+import type { LocationEvidence } from './trip-location';
 
 /**
  * The operational half of a trip: who drove it, what happened, and how it ended.
@@ -138,6 +139,20 @@ export interface ExecutionEvent {
   actualAt: Date;
   recordedAt: Date;
   deviceReportedAt: Date | null;
+
+  /**
+   * Where the handset said it was, if it said. EVIDENCE, not proof — see
+   * `trip-location.ts`. Absent on every event written before 0019 and on any
+   * milestone reported without a reading.
+   */
+  location: LocationEvidence | null;
+  /**
+   * The SERVER's verdict and the figure behind it, on milestones that are
+   * geofenced. Both `null` where no check applied. Never accepted from a
+   * client: the route's DTO has no field for either.
+   */
+  geofencePassed: boolean | null;
+  distanceM: number | null;
 
   recordedBy: string;
   recordedByUser: UserSummary;

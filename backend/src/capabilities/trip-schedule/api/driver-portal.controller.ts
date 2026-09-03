@@ -75,10 +75,33 @@ const note = z.string().trim().max(2000).nullable().optional();
  * It is DIAGNOSTIC — kept so a disagreement can be investigated, never read by
  * anything that computes a delay, an order or a KPI.
  */
+/**
+ * ★ A READING, AND NOTHING THAT LOOKS LIKE A VERDICT.
+ *
+ * Four fields: where, how sure, and when the handset says it took the fix.
+ * There is no `geofencePassed`, no `distance`, no `isInside` — a client that
+ * sends any of those has them stripped by this schema before the service sees
+ * the body, and the service computes the distance itself from the trip's own
+ * coordinates. The browser is a sensor here, not a judge.
+ *
+ * `z.number()` refuses `NaN` and a string; the bounds refuse the rest of what
+ * is not a place. `capturedAt` is the handset's clock and is DIAGNOSTIC like
+ * `deviceReportedAt`: it decides whether the fix is fresh, never when the
+ * pickup happened.
+ */
+const locationSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  accuracyM: z.number().min(0),
+  capturedAt: z.coerce.date(),
+});
+
 const recordEventSchema = z.object({
   type: z.enum(EXECUTION_EVENT_TYPES),
   /** What the handset's own clock said. Diagnostic only; never operational truth. */
   deviceReportedAt: z.coerce.date().nullable().optional(),
+  /** Where the handset was. Required for PICKUP_CONFIRMED — the service says so. */
+  location: locationSchema.nullable().optional(),
   /** Idempotency. A retry on a bad connection must collide with its first attempt. */
   clientEventId: z.string().trim().min(1).max(200),
 });

@@ -78,6 +78,21 @@ export interface TripSchedule {
   pickupAt: Date | null;
   deliveryAt: Date | null;
 
+  /**
+   * Where the two ends ARE, as opposed to how they are described.
+   *
+   * ★ NULL ON EVERY TRIP UNTIL OPERATIONS ENTERS THEM — GAP-14 was always a
+   * data-collection job, not a code one. Each pair moves together (0019 says
+   * so with a CHECK): a latitude without a longitude is nowhere. The pickup
+   * pair is what the driver's PICKUP_CONFIRMED is measured against; a trip
+   * without it cannot confirm a pickup, and the driver is told whose problem
+   * that is.
+   */
+  pickupLatitude: number | null;
+  pickupLongitude: number | null;
+  deliveryLatitude: number | null;
+  deliveryLongitude: number | null;
+
   note: string | null;
   status: TripStatus;
 

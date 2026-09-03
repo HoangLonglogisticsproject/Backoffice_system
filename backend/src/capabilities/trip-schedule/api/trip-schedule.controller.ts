@@ -78,6 +78,14 @@ const instant = z.coerce.date().nullable();
 
 const tripStatus = z.enum(TRIP_STATUSES);
 
+/**
+ * One axis of a point. A JSON number is fine here — this is a measurement, not
+ * money — and `z.number()` already refuses `NaN`. The service refuses a
+ * latitude sent without its longitude; 0019 refuses both again.
+ */
+const latitude = z.number().min(-90).max(90).nullable();
+const longitude = z.number().min(-180).max(180).nullable();
+
 const createTripSchema = z.object({
   // The only required field. A trip with no day is not on the board at all.
   scheduledOn: boardDay,
@@ -93,6 +101,11 @@ const createTripSchema = z.object({
 
   pickupAt: instant.optional(),
   deliveryAt: instant.optional(),
+
+  pickupLatitude: latitude.optional(),
+  pickupLongitude: longitude.optional(),
+  deliveryLatitude: latitude.optional(),
+  deliveryLongitude: longitude.optional(),
 
   note: text.optional(),
   status: tripStatus.optional(),

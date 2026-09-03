@@ -5,8 +5,9 @@ import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useDriverActions, useMyTrip } from '@/hooks/driver';
 import { driverErrorKey, shouldReloadAfter } from '@/utils/driverErrors';
+import { captureLocation } from '@/utils/driverLocation';
 import { formatCalendarDay } from '@/utils/format/datetime';
-import type { ExecutionEventType, ExpenseDeclaration } from '@/types/driver';
+import type { ExecutionEventType, ExpenseDeclaration, LocationEvidence } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
 import { CompletionPanel } from './components/CompletionPanel';
 import { ExecutionTimeline } from './components/ExecutionTimeline';
@@ -35,6 +36,8 @@ export default function DriverTripPage() {
   const { report, declare, correct, complete } = useDriverActions(tripId ?? '');
 
   const [actionError, setActionError] = useState<unknown>(null);
+  /** The handset is being asked where it is. Separate from the request in flight. */
+  const [locating, setLocating] = useState(false);
   /**
    * ★ THE COMPLETION CHECKPOINT CAN OPEN THE EXPENSE FORM.
    *
@@ -103,8 +106,23 @@ export default function DriverTripPage() {
   }
 
   const reportEvent = (type: ExecutionEventType) =>
-    void run(() =>
-      report.mutateAsync({
+    void run(async () => {
+      // ★ CONFIRMING A PICKUP ASKS THE PHONE WHERE IT IS, AND SENDS THAT — A
+      // READING, NOT A VERDICT. The server holds the trip's coordinates and
+      // the radius, measures the distance itself, and refuses with a reason
+      // the screen can name. If the phone cannot produce a reading, no
+      // request is made at all: there is no pickup without a position.
+      let location: LocationEvidence | undefined;
+      if (type === 'PICKUP_CONFIRMED') {
+        setLocating(true);
+        try {
+          location = await captureLocation();
+        } finally {
+          setLocating(false);
+        }
+      }
+
+      await report.mutateAsync({
         type,
         // ★ NO TIME IS SENT, AND THAT IS THE RULE RATHER THAN AN OMISSION.
         //
@@ -115,13 +133,15 @@ export default function DriverTripPage() {
         //
         // The handset's own reading goes in `deviceReportedAt`, which is
         // DIAGNOSTIC: kept so a disagreement can be investigated, never read by
-        // anything that computes a delay or an order.
+        // anything that computes a delay or an order. Stamped AFTER the fix so
+        // the server can age the fix against the same clock that took it.
         deviceReportedAt: new Date().toISOString(),
+        ...(location ? { location } : {}),
         // ★ ONE ID PER INTENT, NOT PER ATTEMPT. A retried request must collide
         // with its own first attempt so an arrival is never recorded twice.
         clientEventId: `${trip.assignment.id}:${type}`,
-      }),
-    );
+      });
+    });
 
   /**
    * ★ RETURNS WHETHER THE SERVER ACCEPTED, so the form knows whether to keep
@@ -195,6 +215,7 @@ export default function DriverTripPage() {
         now={new Date()}
         onReport={reportEvent}
         reporting={report.isPending}
+        locating={locating}
       />
 
       <ExpensePanel

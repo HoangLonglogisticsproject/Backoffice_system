@@ -15,6 +15,12 @@ import {
   type ExecutionEventType,
   type VehicleOwnership,
 } from '../domain/trip-execution';
+import {
+  checkPickupLocation,
+  type Coordinates,
+  type LocationEvidence,
+  type LocationRejection,
+} from '../domain/trip-location';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
 import {
   DriverAssignmentRepository,
@@ -170,6 +176,14 @@ export class TripExecutionService {
     actualAt?: Date;
     /** The handset's own clock. Diagnostic only. */
     deviceReportedAt?: Date | null;
+    /**
+     * Where the handset said it was. REQUIRED for PICKUP_CONFIRMED, where the
+     * server measures it against the trip's pickup point; kept as evidence on
+     * any other milestone that carries one. Never a verdict — the route's DTO
+     * has no field for `geofencePassed` or a distance, so a client cannot send
+     * one, and this input type has none either.
+     */
+    location?: LocationEvidence | null;
     clientEventId: string;
     recordedBy: string;
   }): Promise<ExecutionEvent> {
@@ -250,6 +264,33 @@ export class TripExecutionService {
         );
       }
 
+      // ★ THE GEOFENCE IS DECIDED HERE, UNDER THE LOCK, FROM THE TRIP'S OWN
+      // COORDINATES. The browser sent a reading; it did not send a verdict, and
+      // could not have — see the DTO. What the trip says its pickup point is
+      // was read a moment ago under `FOR UPDATE`, so Operations correcting the
+      // point mid-request cannot make this measure against a stale one.
+      //
+      // Freshness is measured against the HANDSET's send time when it gave
+      // one: `capturedAt` and `deviceReportedAt` come off the same clock, so
+      // a phone that is an hour wrong is wrong on both and the age is right.
+      // Neither stamp touches `actual_at`, which stays the server's.
+      const location = input.location ?? null;
+      let geofencePassed: boolean | null = null;
+      let distanceM: number | null = null;
+
+      if (input.type === 'PICKUP_CONFIRMED') {
+        const verdict = checkPickupLocation(
+          pickupPointOf(trip),
+          location,
+          input.deviceReportedAt ?? new Date(),
+        );
+        if (!verdict.passed) {
+          throw new ValidationError(LOCATION_REFUSALS[verdict.reason], { location: verdict.reason });
+        }
+        geofencePassed = true;
+        distanceM = verdict.distanceM;
+      }
+
       return this.events.record(
         {
           tripId: input.tripId,
@@ -264,6 +305,9 @@ export class TripExecutionService {
           // ★ THE SERVER'S CLOCK, unless a caller inside the process pinned one.
           actualAt: input.actualAt ?? new Date(),
           deviceReportedAt: input.deviceReportedAt ?? null,
+          location,
+          geofencePassed,
+          distanceM,
           clientEventId,
           recordedBy: input.recordedBy,
         },
@@ -349,4 +393,26 @@ const requireReason = (value: string): string => {
   const trimmed = value.trim();
   if (trimmed === '') throw new ValidationError('That change needs a reason.');
   return trimmed;
+};
+
+/** The trip's pickup point, or `null` while Operations has not entered one. */
+const pickupPointOf = (trip: TripSchedule): Coordinates | null =>
+  trip.pickupLatitude !== null && trip.pickupLongitude !== null
+    ? { latitude: trip.pickupLatitude, longitude: trip.pickupLongitude }
+    : null;
+
+/**
+ * One sentence per refusal, for whoever reads the API directly. The portal
+ * switches on the CODE in `details.location`, never on these words, so they
+ * can be edited without breaking a screen.
+ */
+const LOCATION_REFUSALS: Record<LocationRejection, string> = {
+  DESTINATION_MISSING:
+    'This trip has no pickup coordinates yet, so a pickup cannot be confirmed against them. Ask Operations to enter the pickup location.',
+  LOCATION_REQUIRED: 'Confirming a pickup needs the handset’s current position.',
+  INVALID_COORDINATES: 'The position sent is not a place on Earth.',
+  ACCURACY_INSUFFICIENT:
+    'The handset is not sure enough where it is. Move to open sky and try again.',
+  LOCATION_STALE: 'That position is too old. Capture a fresh one and try again.',
+  OUTSIDE_GEOFENCE: 'That position is not at the pickup point.',
 };

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { DriverTrip } from '../domain/driver-read-model';
+import type { Coordinates } from '../domain/trip-location';
 
 /**
  * The driver's view of the board, as SQL.
@@ -42,6 +43,10 @@ const DRIVER_TRIP_COLUMNS = `
          t.cargo_info,
          t.pickup_at,
          t.delivery_at,
+         t.pickup_latitude,
+         t.pickup_longitude,
+         t.delivery_latitude,
+         t.delivery_longitude,
          t.driver_instructions,
          v.id                  AS vehicle_id,
          v.plate               AS vehicle_plate,
@@ -77,6 +82,10 @@ interface DriverTripRow {
   cargo_info: string | null;
   pickup_at: Date | null;
   delivery_at: Date | null;
+  pickup_latitude: number | null;
+  pickup_longitude: number | null;
+  delivery_latitude: number | null;
+  delivery_longitude: number | null;
   driver_instructions: string | null;
   vehicle_id: string | null;
   vehicle_plate: string | null;
@@ -85,6 +94,10 @@ interface DriverTripRow {
   assignment_id: string;
   assigned_at: Date;
 }
+
+/** Both halves or nothing — 0019's CHECK makes any other row impossible. */
+const point = (latitude: number | null, longitude: number | null): Coordinates | null =>
+  latitude !== null && longitude !== null ? { latitude, longitude } : null;
 
 const toDriverTrip = (row: DriverTripRow): DriverTrip => ({
   tripId: row.trip_id,
@@ -99,6 +112,8 @@ const toDriverTrip = (row: DriverTripRow): DriverTrip => ({
   deliveryAddress: row.delivery_address,
   deliveryContact: row.delivery_contact,
   cargoInfo: row.cargo_info,
+  pickupLocation: point(row.pickup_latitude, row.pickup_longitude),
+  deliveryLocation: point(row.delivery_latitude, row.delivery_longitude),
   scheduledPickupAt: row.pickup_at,
   scheduledDeliveryAt: row.delivery_at,
   driverInstructions: row.driver_instructions,

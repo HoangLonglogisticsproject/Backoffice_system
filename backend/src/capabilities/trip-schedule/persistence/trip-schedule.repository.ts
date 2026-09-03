@@ -24,6 +24,11 @@ export interface TripScheduleValues {
   deliveryAt: Date | null;
   note: string | null;
   status: TripStatus;
+  /** Each pair both-or-neither; the service has already checked. */
+  pickupLatitude: number | null;
+  pickupLongitude: number | null;
+  deliveryLatitude: number | null;
+  deliveryLongitude: number | null;
 }
 
 /** An inclusive range of board days, as `YYYY-MM-DD`. */
@@ -55,6 +60,11 @@ interface TripRow {
   delivery_at: Date | null;
   note: string | null;
   status: TripStatus;
+  /** `DOUBLE PRECISION`, which `pg` hands back as a number — unlike NUMERIC. */
+  pickup_latitude: number | null;
+  pickup_longitude: number | null;
+  delivery_latitude: number | null;
+  delivery_longitude: number | null;
   created_by: string;
   created_at: Date;
   updated_at: Date;
@@ -95,6 +105,10 @@ const TRIP_COLUMN_NAMES = [
   'delivery_at',
   'note',
   'status',
+  'pickup_latitude',
+  'pickup_longitude',
+  'delivery_latitude',
+  'delivery_longitude',
   'created_by',
   'created_at',
   'updated_at',
@@ -146,6 +160,10 @@ const toTrip = (row: TripRow): TripSchedule => ({
   deliveryAt: row.delivery_at,
   note: row.note,
   status: row.status,
+  pickupLatitude: row.pickup_latitude,
+  pickupLongitude: row.pickup_longitude,
+  deliveryLatitude: row.delivery_latitude,
+  deliveryLongitude: row.delivery_longitude,
   createdBy: row.created_by,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -176,6 +194,10 @@ const valueParams = (values: TripScheduleValues): unknown[] => [
   values.deliveryAt,
   values.note,
   values.status,
+  values.pickupLatitude,
+  values.pickupLongitude,
+  values.deliveryLatitude,
+  values.deliveryLongitude,
 ];
 
 @Injectable()
@@ -292,8 +314,11 @@ export class TripScheduleRepository {
       `INSERT INTO trip_schedules
          (scheduled_on, vehicle_id, customer_id, cargo_info,
           pickup_address, delivery_address, pickup_contact, delivery_contact,
-          pickup_at, delivery_at, note, status, created_by)
-       VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          pickup_at, delivery_at, note, status,
+          pickup_latitude, pickup_longitude, delivery_latitude, delivery_longitude,
+          created_by)
+       VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+               $13, $14, $15, $16, $17)
        ${RETURNING_TRIP}`,
       [...valueParams(input), input.createdBy],
     );
@@ -323,7 +348,9 @@ export class TripScheduleRepository {
           SET scheduled_on = $2::date, vehicle_id = $3, customer_id = $4, cargo_info = $5,
               pickup_address = $6, delivery_address = $7,
               pickup_contact = $8, delivery_contact = $9,
-              pickup_at = $10, delivery_at = $11, note = $12, status = $13
+              pickup_at = $10, delivery_at = $11, note = $12, status = $13,
+              pickup_latitude = $14, pickup_longitude = $15,
+              delivery_latitude = $16, delivery_longitude = $17
         WHERE id = $1 AND archived_at IS NULL
         ${RETURNING_TRIP}`,
       [id, ...valueParams(values)],

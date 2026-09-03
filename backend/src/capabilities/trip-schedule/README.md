@@ -113,6 +113,42 @@ không theo đồng hồ server. 23:00 UTC ngày 31/08 đã là 06:00 ngày 01/0
 phòng; một server UTC sẽ trả về tháng 8 cho người đang nhập những chuyến đầu tiên
 của tháng 9.
 
+## Vị trí lấy hàng — GAP-14 và geofence phía server
+
+`0019` thêm toạ độ cho hai đầu chuyến (`pickup_latitude/longitude`,
+`delivery_latitude/longitude`, nullable, đủ đôi hoặc không có gì) và bằng chứng
+vị trí trên `trip_execution_events`. Tài xế `PICKUP_CONFIRMED` phải gửi kèm một
+**reading** của điện thoại; server tự đo và tự quyết.
+
+```
+browser gửi      latitude · longitude · accuracyM · capturedAt      (chỉ là số đo)
+server quyết     distance · geofence_passed · actual_at             (không nhận từ client)
+```
+
+Luật nằm ở **một chỗ**: `domain/trip-location.ts`, hằng `PICKUP_LOCATION_POLICY`.
+
+| Ngưỡng | Mặc định | Ý nghĩa |
+|---|---|---|
+| `geofenceRadiusM` | **300 m** | khoảng cách tới điểm lấy hàng, bao gồm biên |
+| `maxAccuracyM` | **100 m** | `accuracy` điện thoại tự khai; lớn hơn là "đâu đó trong quận" |
+| `maxAgeMs` | **2 phút** | tuổi của fix, đo theo `deviceReportedAt` — cùng đồng hồ với `capturedAt`, nên đồng hồ sai vẫn ra tuổi đúng |
+
+Ba con số này **chưa được nghiệp vụ chốt** — chúng là mặc định làm việc, và cố
+ý là một hằng chứ không phải biến môi trường hay bảng cấu hình: nâng lên
+cấu hình khi có deployment thứ hai hoặc yêu cầu bán kính theo khách hàng.
+
+Thứ tự kiểm tra: lock chuyến → quyền (đúng tài xế) → thứ tự mốc → toạ độ đích
+có chưa → reading có chưa → hợp lệ → accuracy → tươi → khoảng cách. Từ chối là
+`ValidationError` 422 với `details.location` mang mã (`DESTINATION_MISSING` ·
+`LOCATION_REQUIRED` · `INVALID_COORDINATES` · `ACCURACY_INSUFFICIENT` ·
+`LOCATION_STALE` · `OUTSIDE_GEOFENCE`); portal đổi mã thành câu, không bao giờ
+hiện khoảng cách hay bán kính.
+
+Đây là **location assurance**, không phải chống gian lận: GPS trình duyệt là
+tín hiệu, không phải bằng chứng tuyệt đối (contract §11). Không có offline,
+không có device attestation, không lưu vết GPS liên tục — chỉ một reading tại
+mốc.
+
 ## Những gì cố ý KHÔNG có
 
 **Khối CHI PHÍ.** Bảng tính có nhóm cột thứ hai (DẦU · CẦU TRẠM · PHÍ KHO · BỐC

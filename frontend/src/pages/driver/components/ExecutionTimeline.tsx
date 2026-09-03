@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Circle, Loader2 } from 'lucide-react';
+import { AlertTriangle, Check, Circle, Loader2, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
@@ -43,9 +43,17 @@ interface Props {
   now: Date;
   onReport: (type: ExecutionEventType) => void;
   reporting: boolean;
+  /** The phone is being asked where it is. The button says so instead of spinning mutely. */
+  locating?: boolean;
 }
 
-export function ExecutionTimeline({ trip, now, onReport, reporting }: Readonly<Props>) {
+export function ExecutionTimeline({
+  trip,
+  now,
+  onReport,
+  reporting,
+  locating = false,
+}: Readonly<Props>) {
   const { t, language } = useLanguage();
 
   const steps = executionSteps(trip);
@@ -118,22 +126,76 @@ export function ExecutionTimeline({ trip, now, onReport, reporting }: Readonly<P
       </ol>
 
       {next ? (
-        <Button
-          size="lg"
-          // Full width and tall: this is the primary action of the whole
-          // screen and it is pressed with a thumb, outdoors.
-          className="mt-5 h-12 w-full text-base"
-          disabled={reporting}
-          onClick={() => onReport(next)}
-        >
-          {reporting ? <Loader2 className="animate-spin" aria-hidden /> : null}
-          {t(ACTION_LABEL[next])}
-        </Button>
+        <NextAction
+          next={next}
+          pickupLocated={trip.pickupLocation !== null}
+          reporting={reporting}
+          locating={locating}
+          onReport={onReport}
+        />
       ) : (
         <p className="mt-5 rounded-lg bg-muted/60 px-3 py-2 text-center text-sm text-muted-foreground">
           {t('driverAllStepsDone')}
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The one button, and what is said above it.
+ *
+ * ★ THE PICKUP CHECK IS ANNOUNCED BEFORE THE TAP. A permission prompt that
+ * appears with no warning gets refused; and a pickup point the office has not
+ * located yet is the office's problem — said here, and the button is DISABLED
+ * for it, because the server refuses that confirmation without exception and
+ * a driver retrying a button that cannot succeed learns nothing.
+ */
+function NextAction({
+  next,
+  pickupLocated,
+  reporting,
+  locating,
+  onReport,
+}: Readonly<{
+  next: ExecutionEventType;
+  pickupLocated: boolean;
+  reporting: boolean;
+  locating: boolean;
+  onReport: (type: ExecutionEventType) => void;
+}>) {
+  const { t } = useLanguage();
+
+  const pickupIsNext = next === 'PICKUP_CONFIRMED';
+  const pickupUnlocated = pickupIsNext && !pickupLocated;
+  const busy = reporting || locating;
+
+  return (
+    <>
+      {pickupIsNext ? (
+        <p
+          className={cn(
+            'mt-5 flex items-start gap-1.5 rounded-lg px-3 py-2 text-xs',
+            pickupUnlocated
+              ? 'bg-destructive/5 font-medium text-destructive'
+              : 'bg-muted/60 text-muted-foreground',
+          )}
+        >
+          <MapPin className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          {t(pickupUnlocated ? 'driverPickupNoCoordinates' : 'driverPickupNeedsLocation')}
+        </p>
+      ) : null}
+      <Button
+        size="lg"
+        // Full width and tall: this is the primary action of the whole
+        // screen and it is pressed with a thumb, outdoors.
+        className={cn('h-12 w-full text-base', pickupIsNext ? 'mt-3' : 'mt-5')}
+        disabled={busy || pickupUnlocated}
+        onClick={() => onReport(next)}
+      >
+        {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
+        {locating ? t('driverLocating') : t(ACTION_LABEL[next])}
+      </Button>
+    </>
   );
 }

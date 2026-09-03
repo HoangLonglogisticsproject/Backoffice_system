@@ -158,6 +158,60 @@ const PHRASES = {
   driverMinutes: { vi: 'phút', en: 'min' },
   driverAllStepsDone: { vi: 'Đã hoàn tất các bước vận chuyển', en: 'All journey steps reported' },
 
+  // ------------------------------------------------ pickup location check --
+  driverLocating: { vi: 'Đang xác định vị trí…', en: 'Finding your location…' },
+  // Said BEFORE the tap, so the permission prompt is not a surprise.
+  driverPickupNeedsLocation: {
+    vi: 'Xác nhận lấy hàng dùng vị trí GPS của điện thoại. Hãy đứng gần điểm lấy hàng.',
+    en: 'Confirming pickup uses your phone’s location. Stand near the pickup point.',
+  },
+  // ★ NOT THE DRIVER'S TO FIX. The office has not entered the point yet.
+  driverPickupNoCoordinates: {
+    vi: 'Điểm lấy hàng chưa có toạ độ. Liên hệ điều độ để bổ sung trước khi xác nhận.',
+    en: 'The pickup point has no coordinates yet. Ask the office to add them before confirming.',
+  },
+  driverErrLocationUnsupported: {
+    vi: 'Điện thoại này không hỗ trợ định vị. Dùng điện thoại khác hoặc báo văn phòng.',
+    en: 'This phone cannot provide a location. Use another phone or tell the office.',
+  },
+  driverErrLocationDenied: {
+    vi: 'Chưa cho phép truy cập vị trí. Bật quyền vị trí cho trình duyệt rồi thử lại.',
+    en: 'Location access was denied. Allow location for this browser and try again.',
+  },
+  driverErrLocationUnavailable: {
+    vi: 'Không lấy được vị trí. Ra chỗ thoáng, bật GPS rồi thử lại.',
+    en: 'Could not get a location. Move to open sky, turn GPS on and try again.',
+  },
+  driverErrLocationTimeout: {
+    vi: 'Lấy vị trí quá lâu. Thử lại; nếu vẫn không được hãy báo văn phòng.',
+    en: 'Getting a location took too long. Try again, and tell the office if it keeps failing.',
+  },
+  driverErrLocationRequired: {
+    vi: 'Cần vị trí để xác nhận lấy hàng. Thử lại.',
+    en: 'A location is needed to confirm pickup. Try again.',
+  },
+  driverErrDestinationMissing: {
+    vi: 'Điểm lấy hàng chưa có toạ độ nên chưa xác nhận được. Liên hệ điều độ.',
+    en: 'The pickup point has no coordinates yet, so pickup cannot be confirmed. Contact the office.',
+  },
+  driverErrLocationInvalid: {
+    vi: 'Vị trí nhận được không hợp lệ. Thử lại.',
+    en: 'The location received is not valid. Try again.',
+  },
+  driverErrLocationAccuracy: {
+    vi: 'Tín hiệu GPS chưa đủ chính xác. Ra chỗ thoáng rồi thử lại.',
+    en: 'The GPS signal is not precise enough. Move to open sky and try again.',
+  },
+  driverErrLocationStale: {
+    vi: 'Vị trí đã cũ. Thử lại để lấy vị trí mới.',
+    en: 'That location is too old. Try again to get a fresh one.',
+  },
+  // ⚠ No distance and no radius: what to do, not what the rule is.
+  driverErrOutsideGeofence: {
+    vi: 'Bạn chưa ở tại điểm lấy hàng. Đến đúng điểm rồi thử lại; nếu đã đúng chỗ, báo văn phòng.',
+    en: 'You are not at the pickup point. Go to it and try again; if you are there, tell the office.',
+  },
+
   driverExpenses: { vi: 'Chi phí tôi đã khai', en: 'Expenses I declared' },
   driverAddExpense: { vi: 'Thêm khoản chi', en: 'Add an expense' },
   driverNoExpenseYet: { vi: 'Chưa khai khoản chi nào', en: 'No expenses declared yet' },
@@ -706,6 +760,15 @@ const PHRASES = {
   fieldPickupContact: { vi: 'Liên hệ lấy hàng', en: 'Pickup contact' },
   fieldDeliveryContact: { vi: 'Liên hệ giao hàng', en: 'Delivery contact' },
   fieldPickupAt: { vi: 'Giờ lấy hàng', en: 'Pickup time' },
+  fieldPickupLocation: { vi: 'Toạ độ điểm lấy hàng', en: 'Pickup coordinates' },
+  fieldDeliveryLocation: { vi: 'Toạ độ điểm giao hàng', en: 'Delivery coordinates' },
+  fieldLatitude: { vi: 'Vĩ độ', en: 'Latitude' },
+  fieldLongitude: { vi: 'Kinh độ', en: 'Longitude' },
+  // Why the office is asked for numbers next to a prose address.
+  coordinatesHint: {
+    vi: 'Toạ độ lấy hàng dùng để kiểm tra vị trí GPS khi tài xế xác nhận lấy hàng. Nhập cả hai hoặc để trống cả hai.',
+    en: 'Pickup coordinates are what the driver’s GPS is checked against on pickup. Enter both or leave both empty.',
+  },
   fieldDeliveryAt: { vi: 'Giờ giao hàng', en: 'Delivery time' },
   fieldNote: { vi: 'Ghi chú', en: 'Note' },
   // Why the delivery control asks for a date as well as a time.

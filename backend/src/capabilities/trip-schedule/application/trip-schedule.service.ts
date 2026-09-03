@@ -1,8 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConflictError, NotFoundError } from '../../../common/errors/domain.error';
+import { ConflictError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
 import { toOffsetPage, type OffsetPage } from '../../../common/pagination/offset-page';
 import type { DateRangePageQuery } from '../../../common/pagination/date-range-page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
+import { isLatitude, isLongitude } from '../domain/trip-location';
 import type { TripSchedule, TripScheduleWithRefs, TripStatus } from '../domain/trip-schedule';
 import {
   canTransition,
@@ -35,6 +36,11 @@ export interface CreateTripInput {
   deliveryContact?: string | null;
   pickupAt?: Date | null;
   deliveryAt?: Date | null;
+  /** Each pair both-or-neither: half a point is refused, not stored. */
+  pickupLatitude?: number | null;
+  pickupLongitude?: number | null;
+  deliveryLatitude?: number | null;
+  deliveryLongitude?: number | null;
   note?: string | null;
   status?: TripStatus;
 }
@@ -53,6 +59,9 @@ export type UpdateTripInput = Partial<CreateTripInput> & {
   scheduledOn?: string;
   status?: TripStatus;
 };
+
+/** The fields a patch may CLEAR with `null` — everything but the day and the status. */
+type NullableTripField = Exclude<keyof CreateTripInput, 'scheduledOn' | 'status'>;
 
 /**
  * Trims a text field, and treats a field that is only whitespace as empty.
@@ -165,26 +174,37 @@ export class TripScheduleService {
       const current = await this.trips.lockActive(id, tx);
       if (!current) throw new NotFoundError('Trip not found.');
 
-      // ★ `key in patch` RATHER THAN `patch.key !== undefined`, for the eight
+      // ★ `key in patch` RATHER THAN `patch.key !== undefined`, for the twelve
       // nullable fields. The two differ for a key sent explicitly as `null`,
       // which is exactly how a client CLEARS a field — collapsing them would
       // make "remove the delivery address" indistinguishable from "leave it
-      // alone", so the address could never be removed.
+      // alone", so the address could never be removed. `sent` is that rule,
+      // written once.
       //
       // The two non-nullable fields use `??`, because for them there is no
       // difference to preserve: `null` is not a value either column accepts.
+      // The cast only tells the checker what `in` already guarantees: a key
+      // that is present is typed as the patch has it, and an absent one comes
+      // from the stored row.
+      const sent = <K extends NullableTripField>(key: K): CreateTripInput[K] =>
+        (key in patch ? patch[key] : current[key]) as CreateTripInput[K];
+
       const merged: CreateTripInput = {
         scheduledOn: patch.scheduledOn ?? current.scheduledOn,
-        vehicleId: 'vehicleId' in patch ? patch.vehicleId : current.vehicleId,
-        customerId: 'customerId' in patch ? patch.customerId : current.customerId,
-        cargoInfo: 'cargoInfo' in patch ? patch.cargoInfo : current.cargoInfo,
-        pickupAddress: 'pickupAddress' in patch ? patch.pickupAddress : current.pickupAddress,
-        deliveryAddress: 'deliveryAddress' in patch ? patch.deliveryAddress : current.deliveryAddress,
-        pickupContact: 'pickupContact' in patch ? patch.pickupContact : current.pickupContact,
-        deliveryContact: 'deliveryContact' in patch ? patch.deliveryContact : current.deliveryContact,
-        pickupAt: 'pickupAt' in patch ? patch.pickupAt : current.pickupAt,
-        deliveryAt: 'deliveryAt' in patch ? patch.deliveryAt : current.deliveryAt,
-        note: 'note' in patch ? patch.note : current.note,
+        vehicleId: sent('vehicleId'),
+        customerId: sent('customerId'),
+        cargoInfo: sent('cargoInfo'),
+        pickupAddress: sent('pickupAddress'),
+        deliveryAddress: sent('deliveryAddress'),
+        pickupContact: sent('pickupContact'),
+        deliveryContact: sent('deliveryContact'),
+        pickupAt: sent('pickupAt'),
+        deliveryAt: sent('deliveryAt'),
+        pickupLatitude: sent('pickupLatitude'),
+        pickupLongitude: sent('pickupLongitude'),
+        deliveryLatitude: sent('deliveryLatitude'),
+        deliveryLongitude: sent('deliveryLongitude'),
+        note: sent('note'),
         status: patch.status ?? current.status,
       };
 
@@ -400,8 +420,42 @@ export class TripScheduleService {
       deliveryContact: blankToNull(input.deliveryContact),
       pickupAt: input.pickupAt ?? null,
       deliveryAt: input.deliveryAt ?? null,
+      ...coordinatePair('pickup', input.pickupLatitude, input.pickupLongitude),
+      ...coordinatePair('delivery', input.deliveryLatitude, input.deliveryLongitude),
       note: blankToNull(input.note),
       status: input.status ?? fallbackStatus,
     };
   }
 }
+
+/**
+ * A point, or no point. Never half of one.
+ *
+ * ★ REFUSED HERE AND AGAIN BY 0019's CHECK. A latitude with no longitude is not
+ * a location that is partly known; it is a value a geofence check would have to
+ * invent the other half of. The range is checked too, so a caller gets a
+ * sentence rather than a constraint name.
+ */
+const coordinatePair = <End extends 'pickup' | 'delivery'>(
+  end: End,
+  // Absent means "no point", exactly as `null` does — a default parameter says
+  // so without a second name for the same value.
+  latitude: number | null = null,
+  longitude: number | null = null,
+): Record<`${End}Latitude` | `${End}Longitude`, number | null> => {
+  if ((latitude === null) !== (longitude === null)) {
+    throw new ValidationError(`The ${end} location needs both a latitude and a longitude, or neither.`, {
+      [`${end}Latitude`]: 'Both halves of a location are required together.',
+    });
+  }
+  if (latitude !== null && (!isLatitude(latitude) || !isLongitude(longitude))) {
+    throw new ValidationError(`The ${end} location is not a place on Earth.`, {
+      [`${end}Latitude`]: 'Latitude must be within [-90, 90] and longitude within [-180, 180].',
+    });
+  }
+
+  return {
+    [`${end}Latitude`]: latitude,
+    [`${end}Longitude`]: longitude,
+  } as Record<`${End}Latitude` | `${End}Longitude`, number | null>;
+};

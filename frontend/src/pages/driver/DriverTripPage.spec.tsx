@@ -48,6 +48,9 @@ const event = (type: string, over: Record<string, unknown> = {}) => ({
   actualAt: EARLIER,
   recordedAt: EARLIER,
   deviceReportedAt: null,
+  location: null,
+  geofencePassed: null,
+  distanceM: null,
   recordedBy: 'd1',
   recordedByUser: { id: 'd1', displayName: 'Tài Xế A' },
   voidedAt: null,
@@ -95,6 +98,8 @@ const trip = (over: Record<string, unknown> = {}) => ({
   deliveryAddress: 'TCS',
   deliveryContact: null,
   cargoInfo: '17CTN / 1.22CBM',
+  pickupLocation: { latitude: 10.8188, longitude: 106.6564 },
+  deliveryLocation: null,
   scheduledPickupAt: EARLIER,
   scheduledDeliveryAt: '2026-08-30T09:00:00.000Z',
   driverInstructions: 'Gọi kho trước 30 phút.',
@@ -869,5 +874,265 @@ describe('the expense panel tells the driver where they stand', () => {
         expect.objectContaining({ category: 'loading' }),
       ),
     );
+  });
+});
+
+/**
+ * ★ CONFIRMING A PICKUP ASKS THE PHONE, SENDS THE READING, AND LETS THE
+ * SERVER DECIDE. Every case below pins one side of that: what the screen sends
+ * (a reading, never a verdict), what it does when the phone cannot answer
+ * (nothing — no request), and how it words each refusal the server can give.
+ */
+describe('★ confirming a pickup with the phone’s location', () => {
+  const FIX = {
+    coords: { latitude: 10.8188, longitude: 106.6564, accuracy: 12 },
+    timestamp: new Date('2026-08-30T02:30:55.000Z').getTime(),
+  };
+
+  const geolocation = { getCurrentPosition: vi.fn() };
+
+  const phoneSays = (position: typeof FIX) =>
+    geolocation.getCurrentPosition.mockImplementation((ok: PositionCallback) =>
+      ok(position as unknown as GeolocationPosition),
+    );
+
+  const phoneFails = (code: number) =>
+    geolocation.getCurrentPosition.mockImplementation(
+      (_ok: PositionCallback, fail?: PositionErrorCallback) =>
+        fail?.({ code } as GeolocationPositionError),
+    );
+
+  const arrived = () => fetchMyTrip.mockResolvedValue(trip({ events: [event('ARRIVED_PICKUP')] }));
+
+  const confirm = async () =>
+    fireEvent.click(await screen.findByRole('button', { name: /đã lấy hàng xong/i }));
+
+  beforeEach(() => {
+    geolocation.getCurrentPosition.mockReset();
+    Object.defineProperty(globalThis.navigator, 'geolocation', {
+      value: geolocation,
+      configurable: true,
+    });
+    recordExecutionEvent.mockResolvedValue(event('PICKUP_CONFIRMED'));
+  });
+
+  it('says the check is coming before the tap', async () => {
+    arrived();
+    renderDetail();
+
+    expect(await screen.findByText(/dùng vị trí GPS/i)).toBeInTheDocument();
+  });
+
+  it('★ sends the reading as the phone gave it — and no verdict of its own', async () => {
+    arrived();
+    phoneSays(FIX);
+    renderDetail();
+
+    await confirm();
+    await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalled());
+
+    const [tripId, body] = recordExecutionEvent.mock.calls[0] as [string, Record<string, unknown>];
+    expect(tripId).toBe('t1');
+    expect(body.type).toBe('PICKUP_CONFIRMED');
+    expect(body.location).toEqual({
+      latitude: 10.8188,
+      longitude: 106.6564,
+      accuracyM: 12,
+      capturedAt: '2026-08-30T02:30:55.000Z',
+    });
+    // The browser is a sensor. It does not say whether it is inside.
+    expect(body).not.toHaveProperty('geofencePassed');
+    expect(body).not.toHaveProperty('distanceM');
+    expect(body).not.toHaveProperty('actualAt');
+    expect(Object.keys(body.location as object)).not.toContain('isInside');
+  });
+
+  it('★ asks for a FRESH fix, never a cached one', async () => {
+    arrived();
+    phoneSays(FIX);
+    renderDetail();
+
+    await confirm();
+    await waitFor(() => expect(geolocation.getCurrentPosition).toHaveBeenCalled());
+
+    const [, , options] = geolocation.getCurrentPosition.mock.calls[0] as [
+      unknown,
+      unknown,
+      PositionOptions,
+    ];
+    expect(options.maximumAge).toBe(0);
+    expect(options.enableHighAccuracy).toBe(true);
+  });
+
+  it('shows that it is locating while the phone thinks', async () => {
+    arrived();
+    // Never answers: the button stays in its locating state.
+    geolocation.getCurrentPosition.mockImplementation(() => undefined);
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('button', { name: /đang xác định vị trí/i })).toBeDisabled();
+    expect(recordExecutionEvent).not.toHaveBeenCalled();
+  });
+
+  it('★ makes NO request when permission is denied, and says what to enable', async () => {
+    arrived();
+    phoneFails(1);
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/bật quyền vị trí/i);
+    expect(recordExecutionEvent).not.toHaveBeenCalled();
+    // The button is back, so the driver can retry once they have.
+    expect(screen.getByRole('button', { name: /đã lấy hàng xong/i })).toBeEnabled();
+  });
+
+  it('names a phone that cannot get a fix', async () => {
+    arrived();
+    phoneFails(2);
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/không lấy được vị trí/i);
+    expect(recordExecutionEvent).not.toHaveBeenCalled();
+  });
+
+  it('names a fix that took too long', async () => {
+    arrived();
+    phoneFails(3);
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/quá lâu/i);
+  });
+
+  it('names a browser with no geolocation at all', async () => {
+    arrived();
+    Object.defineProperty(globalThis.navigator, 'geolocation', { value: undefined, configurable: true });
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/không hỗ trợ định vị/i);
+    expect(recordExecutionEvent).not.toHaveBeenCalled();
+  });
+
+  it('★ words "outside the geofence" as where to go, with no distance and no radius', async () => {
+    arrived();
+    phoneSays(FIX);
+    recordExecutionEvent.mockRejectedValue(
+      new ApiError(422, 'VALIDATION_FAILED', 'That position is not at the pickup point.', {
+        location: 'OUTSIDE_GEOFENCE',
+      }),
+    );
+    renderDetail();
+
+    await confirm();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/chưa ở tại điểm lấy hàng/i);
+    expect(alert.textContent).not.toMatch(/\d+\s*m\b|mét|radius|bán kính/i);
+  });
+
+  it('tells the driver to move to open sky on a poor reading', async () => {
+    arrived();
+    phoneSays(FIX);
+    recordExecutionEvent.mockRejectedValue(
+      new ApiError(422, 'VALIDATION_FAILED', 'Not sure enough.', { location: 'ACCURACY_INSUFFICIENT' }),
+    );
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/chưa đủ chính xác/i);
+  });
+
+  it('tells the driver to retry on a stale fix', async () => {
+    arrived();
+    phoneSays(FIX);
+    recordExecutionEvent.mockRejectedValue(
+      new ApiError(422, 'VALIDATION_FAILED', 'Too old.', { location: 'LOCATION_STALE' }),
+    );
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/vị trí đã cũ/i);
+  });
+
+  it('★ says it is the office’s problem when the pickup point has no coordinates, and offers no tap', async () => {
+    fetchMyTrip.mockResolvedValue(
+      trip({ events: [event('ARRIVED_PICKUP')], pickupLocation: null }),
+    );
+    phoneSays(FIX);
+    renderDetail();
+
+    // Said before any tap…
+    expect(await screen.findByText(/chưa có toạ độ/i)).toBeInTheDocument();
+
+    // …and the button cannot be tapped: the server refuses this without
+    // exception, so asking the phone and sending a request would only teach
+    // the driver to retry something that cannot succeed.
+    const button = screen.getByRole('button', { name: /đã lấy hàng xong/i });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+
+    expect(geolocation.getCurrentPosition).not.toHaveBeenCalled();
+    expect(recordExecutionEvent).not.toHaveBeenCalled();
+  });
+
+  it('words the server’s "no coordinates" refusal the same way — the office cleared them after the screen loaded', async () => {
+    arrived();
+    phoneSays(FIX);
+    recordExecutionEvent.mockRejectedValue(
+      new ApiError(422, 'VALIDATION_FAILED', 'No coordinates.', { location: 'DESTINATION_MISSING' }),
+    );
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/liên hệ điều độ/i);
+  });
+
+  it('keeps a plain validation failure worded generically', async () => {
+    arrived();
+    phoneSays(FIX);
+    recordExecutionEvent.mockRejectedValue(
+      new ApiError(422, 'VALIDATION_FAILED', 'Request failed validation.', { clientEventId: 'x' }),
+    );
+    renderDetail();
+
+    await confirm();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/chưa hợp lệ/i);
+  });
+
+  it('falls back to the generic message on a server fault, with no internals', async () => {
+    arrived();
+    phoneSays(FIX);
+    recordExecutionEvent.mockRejectedValue(new ApiError(500, undefined, 'boom'));
+    renderDetail();
+
+    await confirm();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/có lỗi xảy ra/i);
+    expect(alert.textContent).not.toMatch(/boom/);
+  });
+
+  it('does not ask the phone for an ARRIVAL — only the confirmation is geofenced', async () => {
+    phoneSays(FIX);
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /đã đến điểm lấy hàng/i }));
+    await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalled());
+
+    expect(geolocation.getCurrentPosition).not.toHaveBeenCalled();
+    const [, body] = recordExecutionEvent.mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).not.toHaveProperty('location');
   });
 });
