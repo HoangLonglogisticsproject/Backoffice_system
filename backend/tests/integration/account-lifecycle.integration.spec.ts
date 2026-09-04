@@ -657,7 +657,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
       expect(await statusOf(driver.user.id)).toBe('disabled');
 
-      await lifecycle.enableDriver(driver.user.id);
+      await lifecycle.enable({ userId: driver.user.id, actingUserId: driver.user.id });
 
       expect(await statusOf(driver.user.id)).toBe('active');
       // ★ AND STILL NO MEMBERSHIP. A re-enabled driver belongs to no unit, which
@@ -671,7 +671,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       await sessions.issue(driver.user.id);
       await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
 
-      await lifecycle.enableDriver(driver.user.id);
+      await lifecycle.enable({ userId: driver.user.id, actingUserId: driver.user.id });
 
       const live = await pool.query<{ count: string }>(
         'SELECT count(*) AS count FROM sessions WHERE user_id = $1 AND revoked_at IS NULL',
@@ -693,7 +693,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       });
       await lifecycle.disable({ userId: person.user.id, actingUserId: person.user.id });
 
-      await expect(lifecycle.enableDriver(person.user.id)).rejects.toThrow(/driver account/i);
+      await expect(lifecycle.enable({ userId: person.user.id, actingUserId: person.user.id })).rejects.toThrow(/driver account/i);
 
       // ⚠ AND IT CHANGED NOTHING. A refusal that had already flipped the status
       // would leave an active employee with no department — the exact state the
@@ -716,18 +716,18 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       await lifecycle.disable({ userId: person.user.id, actingUserId: person.user.id });
 
       expect(await memberships.findActive(person.user.id)).toBeNull();
-      await expect(lifecycle.enableDriver(person.user.id)).rejects.toThrow(/driver account/i);
+      await expect(lifecycle.enable({ userId: person.user.id, actingUserId: person.user.id })).rejects.toThrow(/driver account/i);
     });
 
     it('reports an already active driver as a conflict', async () => {
       const driver = await provisionDriver('taixe@example.com');
 
-      await expect(lifecycle.enableDriver(driver.user.id)).rejects.toThrow(/already active/i);
+      await expect(lifecycle.enable({ userId: driver.user.id, actingUserId: driver.user.id })).rejects.toThrow(/already active/i);
     });
 
     it('answers an id that names nobody with a not-found', async () => {
       await expect(
-        lifecycle.enableDriver('00000000-0000-4000-8000-000000000000'),
+        lifecycle.enable({ userId: '00000000-0000-4000-8000-000000000000', actingUserId: '00000000-0000-4000-8000-000000000000' }),
       ).rejects.toThrow(/not found/i);
     });
 
@@ -736,8 +736,8 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
 
       const results = await Promise.allSettled([
-        lifecycle.enableDriver(driver.user.id),
-        lifecycle.enableDriver(driver.user.id),
+        lifecycle.enable({ userId: driver.user.id, actingUserId: driver.user.id }),
+        lifecycle.enable({ userId: driver.user.id, actingUserId: driver.user.id }),
       ]);
 
       // `expectedCurrent = 'disabled'` is what makes the loser hear a conflict
@@ -752,7 +752,7 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
       // assigned — and this is what puts them back in the dropdown.
       const driver = await provisionDriver('taixe@example.com');
       await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
-      await lifecycle.enableDriver(driver.user.id);
+      await lifecycle.enable({ userId: driver.user.id, actingUserId: driver.user.id });
 
       const rows = await pool.query<{ count: string }>(
         `SELECT count(*) AS count FROM users

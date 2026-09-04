@@ -210,7 +210,10 @@ export class TripExecutionService {
     page: PageQuery,
   ): Promise<Page<DriverTripHistoryRow>> {
     const user = await this.users.findById(driverUserId);
-    if (!user || user.accountType !== 'driver') throw new NotFoundError('Driver not found.');
+    // `undefined?.accountType` is `undefined`, which is not `'driver'` — so one
+    // test answers both "no such user" and "that user is not a driver", which is
+    // deliberate: naming which would tell a caller an id they guessed exists.
+    if (user?.accountType !== 'driver') throw new NotFoundError('Driver not found.');
 
     const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
     const rows = await this.assignments.listHistoryForDriver(driverUserId, page.limit, cursor);

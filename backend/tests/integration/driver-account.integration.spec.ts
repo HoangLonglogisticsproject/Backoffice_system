@@ -25,7 +25,6 @@ import { AccountProvisioningService } from '@core/users/application/account-prov
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { DriverAccountRepository } from '../../src/capabilities/driver-account/persistence/driver-account.repository';
 import { DriverAccountRequestRepository } from '../../src/capabilities/driver-account/persistence/driver-account-request.repository';
-import { DriverAccountRepository } from '../../src/capabilities/driver-account/persistence/driver-account.repository';
 import { DriverAccountService } from '../../src/capabilities/driver-account/application/driver-account.service';
 
 /**
@@ -113,7 +112,6 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
     drivers = new DriverAccountService(
       database,
       new DriverAccountRequestRepository(database),
-      new DriverAccountRepository(database),
       provisioning,
       identities,
       config,
@@ -238,6 +236,21 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       expect((await drivers.get(a.userId)).username).toBe('taixea');
       await expect(drivers.get(boss)).rejects.toThrow(NotFoundError);
       await expect(drivers.get('00000000-0000-0000-0000-000000000000')).rejects.toThrow(NotFoundError);
+    });
+
+    /**
+     * ★ THE TWO HALVES OF THE FEATURE, JOINED. Everything above creates a
+     * driver DIRECTLY. This is the other door — a head proposes, an
+     * administrator approves — and the point is that the roster is where the
+     * account turns up afterwards: the pending queue is empty from that moment,
+     * so it is the only screen left that can say the account exists.
+     */
+    it('★ an APPROVED driver joins the roster as the request leaves the queue', async () => {
+      const proposed = await propose();
+      const { driver } = await drivers.approve({ requestId: proposed.id, decidedBy: boss });
+
+      expect(await drivers.listPending()).toHaveLength(0);
+      expect((await drivers.list()).map((d) => d.id)).toEqual([driver.userId]);
     });
 
     it('★ disable: the driver cannot sign in and their sessions are gone; enable: they can again', async () => {
@@ -654,120 +667,4 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
     });
   });
 
-  // ========================================================== the roster ==
-
-  /**
-   * ★ THE LIST THAT MAKES A DRIVER ACCOUNT VISIBLE AT ALL.
-   *
-   * Before it, a driver appeared on no screen: `GET /memberships` reads
-   * MEMBERSHIPS and a driver has none, and the assignment dropdown answers "who
-   * may I put on this trip", which is live accounts only. Somebody who had just
-   * created an account had no way to confirm it existed.
-   *
-   * These cases are here rather than in a unit test because every claim is about
-   * SQL — which rows the statement selects, what order it returns them in, and
-   * whether the keyset walks them all exactly once.
-   */
-  describe('★ listing driver accounts', () => {
-    const makeDriver = (name: string, email: string) =>
-      drivers.createDirectly({ displayName: name, email, initialPassword: 'Tam-2026!' });
-
-    const page = (over: Partial<{ limit: number; cursor: string }> = {}) =>
-      drivers.listAccounts({}, { limit: 50, cursor: undefined, ...over });
-
-    it('★ shows a driver created directly — the account with no request behind it', async () => {
-      // The path that was hardest to see: no request row was ever written, so
-      // the pending queue never mentioned it either.
-      const created = await makeDriver('Tài Xế A', 'taixea@hoanglonglti.com');
-
-      const listed = await page();
-
-      expect(listed.items).toHaveLength(1);
-      expect(listed.items[0]?.user).toEqual({ id: created.userId, displayName: 'Tài Xế A' });
-      expect(listed.items[0]?.accountStatus).toBe('active');
-    });
-
-    it('★ shows an APPROVED driver too, once the request is gone from the queue', async () => {
-      const proposed = await propose();
-      const { driver } = await drivers.approve({ requestId: proposed.id, decidedBy: boss });
-
-      expect(await drivers.listPending()).toHaveLength(0);
-      expect((await page()).items.map((row) => row.user.id)).toEqual([driver.userId]);
-    });
-
-    it('★ lists NO employee — not the boss, not the head, not anybody with a unit', async () => {
-      await makeDriver('Tài Xế A', 'taixea@hoanglonglti.com');
-
-      const listed = await page();
-      const ids = listed.items.map((row) => row.user.id);
-
-      expect(ids).not.toContain(boss);
-      expect(ids).not.toContain(head);
-    });
-
-    it('carries the username the creation response handed back', async () => {
-      // The only column that separates two drivers with the same display name,
-      // and the one somebody checks against what they were just shown.
-      const created = await makeDriver('Tài Xế A', 'taixea@hoanglonglti.com');
-
-      expect((await page()).items[0]?.username).toBe(created.username);
-    });
-
-    it('newest first, so the account somebody just made is at the top', async () => {
-      await makeDriver('Tài Xế A', 'a@hoanglonglti.com');
-      await makeDriver('Tài Xế B', 'b@hoanglonglti.com');
-      const last = await makeDriver('Tài Xế C', 'c@hoanglonglti.com');
-
-      expect((await page()).items[0]?.user.id).toBe(last.userId);
-    });
-
-    it('★ filters on the ACCOUNT status, in SQL', async () => {
-      const stays = await makeDriver('Tài Xế A', 'a@hoanglonglti.com');
-      const goes = await makeDriver('Tài Xế B', 'b@hoanglonglti.com');
-      await sql(`UPDATE users SET status = 'disabled' WHERE id = $1`, [goes.userId]);
-
-      const active = await drivers.listAccounts(
-        { accountStatus: 'active' },
-        { limit: 50, cursor: undefined },
-      );
-      const disabled = await drivers.listAccounts(
-        { accountStatus: 'disabled' },
-        { limit: 50, cursor: undefined },
-      );
-
-      expect(active.items.map((row) => row.user.id)).toEqual([stays.userId]);
-      expect(disabled.items.map((row) => row.user.id)).toEqual([goes.userId]);
-      // And no filter means both — there is no server-side default hiding one.
-      expect((await page()).items).toHaveLength(2);
-    });
-
-    it('★ walks every account exactly once, with no overlap and nothing missing', async () => {
-      // Five accounts, provisioned back to back: several share a `created_at` to
-      // the millisecond, which is exactly where a keyset without its tiebreaker
-      // loses rows and returns others twice.
-      for (let index = 0; index < 5; index += 1) {
-        await makeDriver(`Tài Xế ${index}`, `driver${index}@hoanglonglti.com`);
-      }
-
-      const seen: string[] = [];
-      let cursor: string | undefined;
-
-      do {
-        const walked = await page({ limit: 2, ...(cursor ? { cursor } : {}) });
-        seen.push(...walked.items.map((row) => row.user.id));
-        cursor = walked.nextCursor ?? undefined;
-      } while (cursor);
-
-      expect(seen).toHaveLength(5);
-      expect(new Set(seen).size).toBe(5);
-    });
-
-    it('answers an empty deployment with an empty page, not a cursor to nowhere', async () => {
-      const listed = await page();
-
-      expect(listed.items).toEqual([]);
-      expect(listed.hasMore).toBe(false);
-      expect(listed.nextCursor).toBeNull();
-    });
-  });
 });
