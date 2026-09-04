@@ -1,4 +1,5 @@
 import type { UserSummary } from './organization';
+import type { TranslationKey } from './translate';
 
 /**
  * The dispatch board (contract §21).
@@ -31,6 +32,23 @@ export const TRIP_STATUSES: readonly TripStatus[] = [
   'external_booking',
   'done',
 ];
+
+/**
+ * What each status is CALLED, once — the legend, as translation keys.
+ *
+ * ★ HERE RATHER THAN BESIDE THE COLOURS, because two things now need the name
+ * without needing the palette: the badge that renders it and the mutation that
+ * says "Chờ xe → Đang giao" in its receipt. `TRIP_STATUS_STYLES` reads this map
+ * instead of restating it — the labels drifting into a second copy is a mistake
+ * this file has already made once, in the trip form.
+ */
+export const TRIP_STATUS_LABELS: Record<TripStatus, TranslationKey> = {
+  awaiting_production: 'tripAwaitingProduction',
+  awaiting_vehicle: 'tripAwaitingVehicle',
+  needs_confirmation: 'tripNeedsConfirmation',
+  external_booking: 'tripExternalBooking',
+  done: 'tripDone',
+};
 
 /**
  * The statuses a dispatcher may CHOOSE. Everything above is what a trip may BE.

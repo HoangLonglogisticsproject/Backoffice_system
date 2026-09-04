@@ -12,6 +12,7 @@ import {
 import type { DriverTrip, DriverTripDetail, ExpenseDeclaration } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
 import { ApiError, isApiError } from '@/utils/errors';
+import { notifySuccess } from '@/utils/toast';
 
 /**
  * Every cache key and every mutation the Driver Portal uses.
@@ -119,14 +120,25 @@ export function useDriverActions(tripId: string) {
     ]);
   };
 
+  // ★ EVERY TAP GETS AN ANSWER, AND THAT MATTERS MORE HERE THAN ANYWHERE.
+  // A driver taps "đã đến" on one bar of signal and cannot tell a slow request
+  // from a lost one; `isPending` says the tap landed, this says the server kept
+  // it. Raised before `refresh` so the confirmation does not wait on two
+  // refetches over the same connection that just struggled with the write.
   const report = useMutation({
     mutationFn: (input: RecordEventInput) => recordExecutionEvent(tripId, input),
-    onSuccess: refresh,
+    onSuccess: () => {
+      notifySuccess('toastEventReported');
+      return refresh();
+    },
   });
 
   const declare = useMutation({
     mutationFn: (input: DeclareExpenseInput) => declareExpense(tripId, input),
-    onSuccess: refresh,
+    onSuccess: () => {
+      notifySuccess('toastExpenseDeclared');
+      return refresh();
+    },
   });
 
   const correct = useMutation({
@@ -139,12 +151,20 @@ export function useDriverActions(tripId: string) {
       const { costId, ...patch } = input;
       return editExpense(tripId, costId, patch);
     },
-    onSuccess: refresh,
+    onSuccess: () => {
+      notifySuccess('toastExpenseCorrected');
+      return refresh();
+    },
   });
 
   const complete = useMutation({
     mutationFn: (declaration: ExpenseDeclaration) => submitCompletion(tripId, declaration),
-    onSuccess: refresh,
+    // Names what happens next: the trip is not finished, it is waiting for the
+    // office — and the figures the driver just sent are frozen until it decides.
+    onSuccess: () => {
+      notifySuccess('toastCompletionSubmitted');
+      return refresh();
+    },
   });
 
   return { report, declare, correct, complete };

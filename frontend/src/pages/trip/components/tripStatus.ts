@@ -1,4 +1,4 @@
-import type { TripStatus } from '@/types/trip';
+import { TRIP_STATUS_LABELS, type TripStatus } from '@/types/trip';
 import type { TranslationKey } from '@/types/translate';
 
 /**
@@ -20,6 +20,10 @@ import type { TranslationKey } from '@/types/translate';
  * also renders the label, so the meaning survives greyscale printing and colour
  * blindness — which the spreadsheet's bare row fill did not.
  *
+ * ★ THE LABELS ARE NOT DEFINED HERE. They live with the status type in
+ * `types/trip`, because the mutation that announces a change needs the name
+ * without needing the palette. This module owns the COLOURS.
+ *
  * In its own module rather than beside the badge because three things need it
  * now — the badge, the inline status control, and the trip form's dropdown —
  * and the version that lived in the form had already drifted into a second
@@ -27,23 +31,23 @@ import type { TranslationKey } from '@/types/translate';
  */
 export const TRIP_STATUS_STYLES: Record<TripStatus, { label: TranslationKey; className: string }> = {
   awaiting_production: {
-    label: 'tripAwaitingProduction',
+    label: TRIP_STATUS_LABELS.awaiting_production,
     className: 'bg-red-50 text-red-700 ring-red-600/20',
   },
   awaiting_vehicle: {
-    label: 'tripAwaitingVehicle',
+    label: TRIP_STATUS_LABELS.awaiting_vehicle,
     className: 'bg-amber-50 text-amber-800 ring-amber-600/20',
   },
   needs_confirmation: {
-    label: 'tripNeedsConfirmation',
+    label: TRIP_STATUS_LABELS.needs_confirmation,
     className: 'bg-orange-50 text-orange-700 ring-orange-600/20',
   },
   external_booking: {
-    label: 'tripExternalBooking',
+    label: TRIP_STATUS_LABELS.external_booking,
     className: 'bg-sky-50 text-sky-700 ring-sky-600/20',
   },
   done: {
-    label: 'tripDone',
+    label: TRIP_STATUS_LABELS.done,
     className: 'bg-green-50 text-green-700 ring-green-600/20',
   },
 };

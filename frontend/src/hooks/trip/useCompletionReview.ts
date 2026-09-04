@@ -12,7 +12,9 @@ import { useSession } from '@/contexts/SessionProvider';
 import type { CompletionRequest, ExecutionEvent } from '@/types/driver';
 import type { OperationalBoardRow } from '@/types/operationalBoard';
 import type { TripCost } from '@/types/tripCost';
+import { reviewErrorKey } from '@/utils/driverErrors';
 import { ApiError, isApiError } from '@/utils/errors';
+import { notifyError, notifySuccess } from '@/utils/toast';
 import { tripKeys } from './keys';
 
 /**
@@ -168,16 +170,33 @@ export function useCompletionDecision(tripId: string) {
     ]);
   };
 
+  // ★ THE RECEIPT IS RAISED BEFORE THE REFETCH, NOT AFTER IT. `refresh` waits
+  // on five queries; announcing behind that `await` would hold the confirmation
+  // back for as long as the slowest of them — on a decision the server has
+  // already committed. The screen catches up a moment later either way.
   const approve = useMutation({
     // No argument at all: there is nothing a caller could add to an approval
     // that the server would accept.
     mutationFn: () => approveCompletion(tripId),
-    onSuccess: refresh,
+    onSuccess: () => {
+      notifySuccess('toastCompletionApproved');
+      return refresh();
+    },
+    // ★ `reviewErrorKey`, NOT THE SERVER'S MESSAGE. The failure that actually
+    // happens here is the two-reviewer race, and "conflict" does not tell the
+    // loser what to do — that mapper says "somebody decided this first", which
+    // is the sentence that makes them re-read the queue instead of clicking
+    // again.
+    onError: (error) => notifyError(reviewErrorKey(error)),
   });
 
   const reject = useMutation({
     mutationFn: (reason: string) => rejectCompletion(tripId, reason),
-    onSuccess: refresh,
+    onSuccess: () => {
+      notifySuccess('toastCompletionRejected');
+      return refresh();
+    },
+    onError: (error) => notifyError(reviewErrorKey(error)),
   });
 
   return { approve, reject };

@@ -1,7 +1,5 @@
-import { useState } from 'react';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useUpdateTripStatus } from '@/hooks/trip';
-import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
 import { DISPATCH_SELECTABLE_STATUSES, type TripStatus } from '@/types/trip';
 import { TripStatusBadge } from './TripStatusBadge';
@@ -42,7 +40,6 @@ export function TripStatusSelect({
   status,
 }: Readonly<{ tripId: string; status: TripStatus }>) {
   const { t } = useLanguage();
-  const [error, setError] = useState<string | null>(null);
   const mutation = useUpdateTripStatus();
 
   const style = TRIP_STATUS_STYLES[status];
@@ -51,20 +48,14 @@ export function TripStatusSelect({
   // is yours to change, later". It is not, and it never will be.
   if (status === 'done') return <TripStatusBadge status={status} />;
 
+  // ★ NO ERROR STATE OF ITS OWN. A refusal is announced by `useUpdateTripStatus`
+  // as a toast, in the server's own words, at the same moment it rolls the badge
+  // back. This control lives in a table cell twelve rem wide — a sentence about
+  // an archived trip did not fit here and pushed the row's height around; the
+  // toast has the room and outlives a re-sort of the board.
   const change = (next: TripStatus) => {
     if (next === status) return;
-    setError(null);
-
-    mutation.mutate(
-      { tripId, status: next },
-      {
-        // The server knows about archived trips and about states this client
-        // has not heard of; its message is the honest one. The optimistic value
-        // has already been rolled back by the time this runs.
-        onError: (error_) =>
-          setError(isApiError(error_) ? error_.message : t('statusChangeFailed')),
-      },
-    );
+    mutation.mutate({ tripId, status: next });
   };
 
   return (
@@ -97,12 +88,6 @@ export function TripStatusSelect({
           </option>
         ))}
       </select>
-
-      {error && (
-        <p role="alert" className="max-w-[12rem] text-xs text-red-600">
-          {error}
-        </p>
-      )}
     </div>
   );
 }
