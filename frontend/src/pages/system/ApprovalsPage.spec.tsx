@@ -14,6 +14,9 @@ const assignDepartmentHead = vi.fn();
 const useMyDepartments = vi.fn();
 const fetchPendingMembershipRequests = vi.fn();
 const fetchEmployeeRoster = vi.fn();
+const fetchDriverAccounts = vi.fn();
+const disableUser = vi.fn();
+const enableDriverAccount = vi.fn();
 const approveMembershipRequest = vi.fn();
 const rejectMembershipRequest = vi.fn();
 const fetchPendingAccountInvitations = vi.fn();
@@ -35,6 +38,16 @@ vi.mock('@/api/account-invitation', () => ({
 }));
 vi.mock('@/api/users', () => ({
   createUser: (...a: unknown[]) => createUser(...a),
+  disableUser: (...a: unknown[]) => disableUser(...a),
+  enableDriverAccount: (...a: unknown[]) => enableDriverAccount(...a),
+}));
+vi.mock('@/api/driverAccounts', () => ({
+  fetchDriverAccounts: (...a: unknown[]) => fetchDriverAccounts(...a),
+  // The two the Add dialog reaches for. Mocked here because mocking a module
+  // replaces ALL of it — leaving these out would make the dialog's driver path
+  // throw on a spec that has nothing to do with it.
+  createDriver: vi.fn(),
+  requestDriver: vi.fn(),
 }));
 vi.mock('@/api/membership', () => ({
   fetchEmployeeRoster: (...a: unknown[]) => fetchEmployeeRoster(...a),
@@ -173,6 +186,9 @@ describe('ApprovalsPage', () => {
     assignDepartmentHead.mockReset().mockResolvedValue({});
     useMyDepartments.mockReset().mockReturnValue({ departments: [], loading: false });
     fetchEmployeeRoster.mockReset().mockResolvedValue(page([]));
+    fetchDriverAccounts.mockReset().mockResolvedValue(page([]));
+    disableUser.mockReset().mockResolvedValue(undefined);
+    enableDriverAccount.mockReset().mockResolvedValue(undefined);
     fetchPendingMembershipRequests.mockReset().mockResolvedValue(page([REQUEST]));
     fetchPendingAccountInvitations.mockReset().mockResolvedValue(page([INVITATION]));
     approveMembershipRequest.mockReset().mockResolvedValue({});
@@ -887,6 +903,220 @@ describe('ApprovalsPage', () => {
       expect(within(rows[1]!).getByText('Sales')).toBeInTheDocument();
       expect(within(rows[2]!).getByText('Đang làm việc')).toBeInTheDocument();
       expect(within(rows[2]!).getByText('Vận hành')).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * ★ THE DRIVER TAB — the screen a driver account did not have.
+   *
+   * A driver has no department membership, by design, so `GET /memberships` —
+   * a list of MEMBERSHIPS — can never show one however it is filtered. Before
+   * this tab, an administrator who had just created a driver had nowhere to
+   * confirm it existed: the assignment dropdown answers a different question
+   * (live accounts only) and the request queue empties on approval.
+   */
+  describe('the driver tab', () => {
+    const driverRow = (over: Record<string, unknown> = {}) => ({
+      user: { id: 'driver-1', displayName: 'Tài Xế A' },
+      username: 'taixea',
+      accountStatus: 'active',
+      createdAt: '2026-08-26T03:00:00.000Z',
+      ...over,
+    });
+
+    const openDrivers = async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^tài xế$/i }));
+      await screen.findByText('Tài Xế A');
+    };
+
+    beforeEach(() => {
+      useSession.mockReturnValue(SUPERADMIN());
+      fetchDriverAccounts.mockResolvedValue(
+        page([
+          driverRow(),
+          driverRow({
+            user: { id: 'driver-2', displayName: 'Tài Xế B' },
+            username: 'taixeb',
+            accountStatus: 'disabled',
+          }),
+        ]),
+      );
+    });
+
+    it('offers the tab to a SUPERADMIN', () => {
+      renderPage();
+
+      expect(screen.getByRole('button', { name: /^tài xế$/i })).toBeInTheDocument();
+    });
+
+    /**
+     * ⚠ `GET /driver-accounts` is `user.write` — the key that CREATES an
+     * account. A head may propose a driver and see what came of their own
+     * proposal; who holds a driver account deployment-wide is administration,
+     * and offering them the tab would be offering a 403.
+     */
+    it.each([
+      ['a DEPARTMENT_HEAD', HEAD],
+      ['a MEMBER', MEMBER],
+    ])('does not offer it to %s', (_label, become) => {
+      useSession.mockReturnValue(become());
+      renderPage();
+
+      expect(screen.queryByRole('button', { name: /^tài xế$/i })).not.toBeInTheDocument();
+    });
+
+    it('★ reads the driver endpoint, never the membership roster', async () => {
+      renderPage();
+      await openDrivers();
+
+      // Active is the default view, asked for explicitly.
+      expect(fetchDriverAccounts).toHaveBeenCalledWith(expect.anything(), 'active');
+      // ★ THE POINT OF THE WHOLE TAB. A driver is not a membership, so the
+      // roster query is not what answers this.
+      expect(fetchEmployeeRoster).not.toHaveBeenCalled();
+    });
+
+    it('draws the account’s own columns — no department, no position', async () => {
+      renderPage();
+      await openDrivers();
+
+      const headers = screen.getAllByRole('columnheader').map((cell) => cell.textContent);
+      expect(headers).toEqual(['#', 'Tài xế', 'Tài khoản', 'Trạng thái', 'Ngày tạo', 'Thao tác']);
+    });
+
+    it('shows the username and the ACCOUNT status, not a membership one', async () => {
+      renderPage();
+      await openDrivers();
+
+      const rows = screen.getAllByRole('row');
+      expect(within(rows[1]!).getByText('taixea')).toBeInTheDocument();
+      expect(within(rows[1]!).getByText('Đang hoạt động')).toBeInTheDocument();
+      expect(within(rows[2]!).getByText('Đã vô hiệu hóa')).toBeInTheDocument();
+      // The roster's membership words belong to a different column entirely.
+      expect(within(rows[1]!).queryByText('Đang làm việc')).not.toBeInTheDocument();
+    });
+
+    it('★ asks the SERVER for disabled accounts rather than filtering the page', async () => {
+      renderPage();
+      await openDrivers();
+
+      fireEvent.change(screen.getByLabelText(/lọc theo trạng thái tài khoản/i), {
+        target: { value: 'disabled' },
+      });
+
+      await waitFor(() =>
+        expect(fetchDriverAccounts).toHaveBeenLastCalledWith(expect.anything(), 'disabled'),
+      );
+    });
+
+    it('asks for both when the filter is cleared', async () => {
+      renderPage();
+      await openDrivers();
+
+      fireEvent.change(screen.getByLabelText(/lọc theo trạng thái tài khoản/i), {
+        target: { value: 'all' },
+      });
+
+      // `undefined`, not a magic "all" the server would have to know about.
+      await waitFor(() =>
+        expect(fetchDriverAccounts).toHaveBeenLastCalledWith(expect.anything(), undefined),
+      );
+    });
+
+    it('★ disables through the account lifecycle, then RE-READS the list', async () => {
+      renderPage();
+      await openDrivers();
+
+      fireEvent.click(screen.getByRole('button', { name: /vô hiệu hóa tài khoản/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /xác nhận vô hiệu hóa/i }));
+
+      await waitFor(() => expect(disableUser).toHaveBeenCalledWith('driver-1'));
+      // ★ NOT PATCHED ON SCREEN. Disabling also ends memberships and revokes
+      // roles; only the server knows the whole outcome.
+      await waitFor(() => expect(fetchDriverAccounts.mock.calls.length).toBeGreaterThan(1));
+    });
+
+    /**
+     * ★ ONE CONTROL PER ROW, CHOSEN BY THE STATUS. The two operations are not
+     * mirror images — disabling revokes roles and sessions, enabling restores
+     * neither — but exactly one of them is ever the sensible next step for a
+     * given row.
+     */
+    it('offers disable on a live account and re-enable on a disabled one', async () => {
+      renderPage();
+      await openDrivers();
+
+      const rows = screen.getAllByRole('row');
+      expect(
+        within(rows[1]!).getByRole('button', { name: /vô hiệu hóa tài khoản/i }),
+      ).toBeInTheDocument();
+      expect(within(rows[1]!).queryByRole('button', { name: /kích hoạt lại/i })).not
+        .toBeInTheDocument();
+
+      expect(
+        within(rows[2]!).getByRole('button', { name: /kích hoạt lại/i }),
+      ).toBeInTheDocument();
+      expect(within(rows[2]!).queryByRole('button', { name: /vô hiệu hóa/i })).not
+        .toBeInTheDocument();
+    });
+
+    /**
+     * ★ RE-ENABLING IS A DRIVER-ONLY OPERATION, which is the only reason it can
+     * be offered here. On the employee roster it could not: restoring one asks
+     * which department they return to, and nobody has decided that. A driver
+     * belongs to no unit by design, so the question has no subject.
+     */
+    it('★ re-enables through the driver route, then RE-READS the list', async () => {
+      renderPage();
+      await openDrivers();
+
+      fireEvent.click(screen.getByRole('button', { name: /kích hoạt lại/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /xác nhận kích hoạt/i }));
+
+      await waitFor(() => expect(enableDriverAccount).toHaveBeenCalledWith('driver-2'));
+      // ★ NOT PATCHED ON SCREEN, for the same reason a disable is not: only the
+      // server knows what the account looks like afterwards.
+      await waitFor(() => expect(fetchDriverAccounts.mock.calls.length).toBeGreaterThan(1));
+      expect(disableUser).not.toHaveBeenCalled();
+    });
+
+    it('★ warns that the revoked sessions do NOT come back', async () => {
+      // Somebody expecting "undo" should read this before pressing, not
+      // afterwards from a support call.
+      renderPage();
+      await openDrivers();
+
+      fireEvent.click(screen.getByRole('button', { name: /kích hoạt lại/i }));
+
+      expect(
+        await screen.findByText('Các phiên đăng nhập đã bị thu hồi không được khôi phục.'),
+      ).toBeInTheDocument();
+    });
+
+    it('shows the server’s own refusal rather than a generic failure', async () => {
+      // The server knows this is a driver-only operation and that an account can
+      // already be active; this screen knows neither.
+      const { ApiError } = await import('@/utils/errors');
+      enableDriverAccount.mockRejectedValue(
+        new ApiError(409, 'CONFLICT', 'That account is already active.'),
+      );
+      renderPage();
+      await openDrivers();
+
+      fireEvent.click(screen.getByRole('button', { name: /kích hoạt lại/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /xác nhận kích hoạt/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('That account is already active.');
+    });
+
+    it('says the list is filtered rather than that no driver exists', async () => {
+      fetchDriverAccounts.mockResolvedValue(page([]));
+      renderPage();
+      fireEvent.click(screen.getByRole('button', { name: /^tài xế$/i }));
+
+      expect(
+        await screen.findByText('Không có tài khoản tài xế nào khớp bộ lọc này.'),
+      ).toBeInTheDocument();
     });
   });
 

@@ -46,10 +46,28 @@ export async function createUser(input: CreateUserInput): Promise<CreatedUser> {
 /**
  * Disables an account (contract §4).
  *
- * `disabled` is the only status this phase accepts. Re-enabling asks "into
- * which department", because an active user belonging nowhere is the one state
- * the model forbids — so it is not a status flip and has no endpoint yet.
+ * ★ NOT A SIMPLE STATUS FLIP. The server also revokes every role, kills every
+ * session and ends the active membership, in one transaction — which is why
+ * anything that calls this must RE-READ rather than patch the row on screen.
  */
 export async function disableUser(userId: string): Promise<void> {
   await httpClient.patch(`/users/${encodeURIComponent(userId)}/status`, { status: 'disabled' });
+}
+
+/**
+ * Puts a DRIVER account back into service.
+ *
+ * ★ DRIVERS ONLY, AND THE SERVER IS WHAT MAKES IT SO. Re-enabling an employee
+ * asks "into which department", because an active employee belonging nowhere is
+ * the one state the model forbids — and that answer has still not been decided.
+ * A driver belongs to no unit BY DESIGN, so there is nothing to ask: the server
+ * checks `account_type` and answers 409 for anybody else.
+ *
+ * ⚠ IT IS NOT THE UNDO OF `disableUser`. Roles and sessions are not restored —
+ * they were deliberately taken away, and granting them again is a separate act.
+ * A driver holds neither, which is why this is a whole operation for them and
+ * only half of one for anybody else.
+ */
+export async function enableDriverAccount(userId: string): Promise<void> {
+  await httpClient.patch(`/users/${encodeURIComponent(userId)}/status`, { status: 'active' });
 }

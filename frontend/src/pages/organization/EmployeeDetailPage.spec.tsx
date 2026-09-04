@@ -6,13 +6,19 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 
 const fetchEmployeeDetail = vi.fn();
 const disableUser = vi.fn();
+const enableDriverAccount = vi.fn();
+const fetchDriverTrips = vi.fn();
 const useSession = vi.fn();
 
 vi.mock('@/api/membership', () => ({
   fetchEmployeeDetail: (...a: unknown[]) => fetchEmployeeDetail(...a),
 }));
+vi.mock('@/api/tripAssignment', () => ({
+  fetchDriverTrips: (...a: unknown[]) => fetchDriverTrips(...a),
+}));
 vi.mock('@/api/users', () => ({
   disableUser: (...a: unknown[]) => disableUser(...a),
+  enableDriverAccount: (...a: unknown[]) => enableDriverAccount(...a),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
@@ -48,7 +54,26 @@ const period = (over: Record<string, unknown> = {}) => ({
 const detail = (over: Record<string, unknown> = {}) => ({
   user: { id: USER, displayName: 'Lê Gia Minh Phú' },
   accountStatus: 'active',
+  // ★ SENT BY THE SERVER, and the page must read it rather than infer it. An
+  // empty `memberships` is also what an offboarded employee looks like.
+  accountType: 'employee',
   memberships: [period()],
+  ...over,
+});
+
+const trip = (over: Record<string, unknown> = {}) => ({
+  id: 'assignment-1',
+  state: 'active',
+  assignedAt: '2026-08-26T03:00:00.000Z',
+  endedAt: null,
+  endReason: null,
+  trip: {
+    id: 'trip-1',
+    scheduledOn: '2026-08-30',
+    status: 'awaiting_vehicle',
+    vehicle: { id: 'v1', plate: '50H-49266' },
+    customer: { id: 'c1', name: 'WWL' },
+  },
   ...over,
 });
 
@@ -75,6 +100,10 @@ describe('EmployeeDetailPage', () => {
   beforeEach(() => {
     fetchEmployeeDetail.mockReset().mockResolvedValue(detail());
     disableUser.mockReset().mockResolvedValue(undefined);
+    enableDriverAccount.mockReset().mockResolvedValue(undefined);
+    fetchDriverTrips
+      .mockReset()
+      .mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
     useSession.mockReset().mockReturnValue(session('SUPERADMIN'));
   });
 
@@ -451,6 +480,177 @@ describe('EmployeeDetailPage', () => {
 
       expect(disableUser).toHaveBeenCalledTimes(1);
       release?.();
+    });
+  });
+
+  /**
+   * ★ THE SAME PAGE, A DIFFERENT ACCOUNT — and it must say which.
+   *
+   * A driver belongs to no unit and never will, so "Phòng ban hiện tại" and
+   * "Lịch sử phòng ban" are permanently empty for one. Two blank tables with no
+   * sentence beside them read as a record that failed to load; what a driver
+   * actually has is the work they were given.
+   */
+  describe('a driver account', () => {
+    const asDriver = (over: Record<string, unknown> = {}) =>
+      fetchEmployeeDetail.mockResolvedValue(
+        detail({ accountType: 'driver', memberships: [], ...over }),
+      );
+
+    it('★ says the missing department is correct, not missing data', async () => {
+      asDriver();
+      renderPage();
+      await screen.findByText('Lê Gia Minh Phú');
+
+      expect(screen.getByText(/tài xế không thuộc phòng ban nào/i)).toBeInTheDocument();
+      // The department history section is gone entirely — not shown empty.
+      expect(screen.queryByText('Lịch sử phòng ban')).not.toBeInTheDocument();
+      expect(screen.queryByText('Chưa có lịch sử phòng ban.')).not.toBeInTheDocument();
+    });
+
+    it('★ reads the trips this driver was given', async () => {
+      asDriver();
+      fetchDriverTrips.mockResolvedValue({
+        items: [trip()],
+        nextCursor: null,
+        hasMore: false,
+      });
+      renderPage();
+
+      expect(await screen.findByText('50H-49266')).toBeInTheDocument();
+      expect(fetchDriverTrips).toHaveBeenCalledWith(USER, expect.anything());
+      expect(screen.getByText('WWL')).toBeInTheDocument();
+      expect(screen.getByText('Đang phụ trách')).toBeInTheDocument();
+    });
+
+    it('★ keeps an ENDED turn, with the reason somebody came off', async () => {
+      // The row `listActiveForDriver` hides. It is a fact about this driver, and
+      // a history that agreed with the present would not be a history.
+      asDriver();
+      fetchDriverTrips.mockResolvedValue({
+        items: [
+          trip({
+            state: 'ended',
+            endedAt: '2026-08-27T03:00:00.000Z',
+            endReason: 'A báo ốm.',
+          }),
+        ],
+        nextCursor: null,
+        hasMore: false,
+      });
+      renderPage();
+
+      expect(await screen.findByText('Đã kết thúc')).toBeInTheDocument();
+      expect(screen.getByText('A báo ốm.')).toBeInTheDocument();
+    });
+
+    it('keeps the calendar day the board shows', async () => {
+      // `2026-08-30` is a day on a wall calendar. Parsing it into a Date would
+      // render the 29th for anybody west of UTC.
+      asDriver();
+      fetchDriverTrips.mockResolvedValue({ items: [trip()], nextCursor: null, hasMore: false });
+      renderPage();
+
+      expect(await screen.findByText('30/8/2026')).toBeInTheDocument();
+    });
+
+    it('says nothing has been assigned yet, rather than showing a blank table', async () => {
+      asDriver();
+      renderPage();
+      await screen.findByText('Lê Gia Minh Phú');
+
+      expect(
+        await screen.findByText('Tài xế này chưa được phân công chuyến nào.'),
+      ).toBeInTheDocument();
+    });
+
+    it('★ asks for no trips at all on an EMPLOYEE', async () => {
+      // The read is a driver-only question, and firing it for everybody would
+      // put a guaranteed 404 in the console of every employee page.
+      renderPage();
+      await screen.findByText('Lê Gia Minh Phú');
+
+      expect(fetchDriverTrips).not.toHaveBeenCalled();
+      expect(screen.queryByText(/tài xế không thuộc phòng ban nào/i)).not.toBeInTheDocument();
+    });
+
+    it('★ does not call an employee with no visible periods a driver', async () => {
+      // A head reading somebody who moved to another unit sees no periods. That
+      // is a disclosure limit, not an account type — and guessing from the
+      // absence would put "Tài xế" on the wrong page.
+      fetchEmployeeDetail.mockResolvedValue(detail({ memberships: [] }));
+      renderPage();
+      await screen.findByText('Lê Gia Minh Phú');
+
+      expect(fetchDriverTrips).not.toHaveBeenCalled();
+      expect(screen.queryByText(/tài xế không thuộc phòng ban nào/i)).not.toBeInTheDocument();
+      // The department history is still the right section for them — empty.
+      expect(screen.getByText('Lịch sử phòng ban')).toBeInTheDocument();
+    });
+
+    /**
+     * ★ RE-ENABLING EXISTS FOR A DRIVER AND FOR NOBODY ELSE.
+     *
+     * The reason this page had no enable button at all still stands for an
+     * employee: restoring one asks which department they return to, and nobody
+     * has decided that. A driver belongs to no unit by design, so the question
+     * has no subject — which is exactly what makes the operation answerable.
+     */
+    describe('re-enabling', () => {
+      const disabledDriver = () =>
+        fetchEmployeeDetail.mockResolvedValue(
+          detail({ accountType: 'driver', accountStatus: 'disabled', memberships: [] }),
+        );
+
+      it('★ offers the button on a disabled DRIVER, and calls the driver route', async () => {
+        disabledDriver();
+        renderPage();
+
+        fireEvent.click(await screen.findByRole('button', { name: /kích hoạt lại/i }));
+        fireEvent.click(await screen.findByRole('button', { name: /xác nhận kích hoạt/i }));
+
+        await waitFor(() => expect(enableDriverAccount).toHaveBeenCalledWith(USER));
+        expect(disableUser).not.toHaveBeenCalled();
+        // ★ RE-READ. Only the server knows what the account looks like after.
+        await waitFor(() => expect(fetchEmployeeDetail).toHaveBeenCalledTimes(2));
+      });
+
+      it('★ does NOT offer it on a disabled EMPLOYEE', async () => {
+        // The department question is still unanswered, and an inert button would
+        // promise a workflow that does not exist.
+        fetchEmployeeDetail.mockResolvedValue(detail({ accountStatus: 'disabled' }));
+        renderPage();
+        await screen.findByText('Lê Gia Minh Phú');
+
+        expect(screen.queryByRole('button', { name: /kích hoạt lại/i })).not.toBeInTheDocument();
+      });
+
+      it('offers no re-enable on a driver whose account is already active', async () => {
+        fetchEmployeeDetail.mockResolvedValue(
+          detail({ accountType: 'driver', memberships: [] }),
+        );
+        renderPage();
+        await screen.findByText('Lê Gia Minh Phú');
+
+        expect(screen.queryByRole('button', { name: /kích hoạt lại/i })).not.toBeInTheDocument();
+        // The other direction is the sensible one for a live account.
+        expect(
+          screen.getByRole('button', { name: /vô hiệu hóa tài khoản/i }),
+        ).toBeInTheDocument();
+      });
+
+      it('★ says the revoked sessions are not restored', async () => {
+        disabledDriver();
+        renderPage();
+
+        fireEvent.click(await screen.findByRole('button', { name: /kích hoạt lại/i }));
+
+        expect(
+          await screen.findByText('Các phiên đăng nhập đã bị thu hồi không được khôi phục.'),
+        ).toBeInTheDocument();
+        // ⚠ And it must NOT borrow the disable dialog's promises.
+        expect(screen.queryByText('Lịch sử phòng ban vẫn được giữ lại.')).not.toBeInTheDocument();
+      });
     });
   });
 });

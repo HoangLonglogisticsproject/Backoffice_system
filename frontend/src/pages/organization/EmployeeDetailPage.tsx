@@ -11,15 +11,21 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { CursorPagination } from '@/components/ui/pagination';
 import { MembershipStatusBadge } from '@/components/common/EmployeeRosterTable';
+import { AccountStatusBadge } from '@/components/common/DriverAccountsTable';
+import { TripStatusBadge } from '@/pages/trip/components/TripStatusBadge';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
+import { useCursorPages } from '@/hooks/useCursorPages';
 import { useSessionResource } from '@/hooks/useSessionResource';
-import { formatDate } from '@/utils/format/datetime';
+import { formatCalendarDay, formatDate } from '@/utils/format/datetime';
+import { formatPlate } from '@/utils/format';
 import { fetchEmployeeDetail } from '@/api/membership';
-import { disableUser } from '@/api/users';
+import { fetchDriverTrips, type DriverTripHistoryRow } from '@/api/tripAssignment';
+import { disableUser, enableDriverAccount } from '@/api/users';
 import { isApiError } from '@/utils/errors';
-import type { EmployeeDetail, EmployeeRole } from '@/types/organization';
+import type { EmployeeRole } from '@/types/organization';
 
 /**
  * ONE EMPLOYEE — identity, account state, and employment history. READ ONLY.
@@ -67,7 +73,14 @@ export default function EmployeeDetailPage() {
   );
   const resource = useSessionResource<EmployeeDetail>(read, [userId, refresh]);
 
-  const [confirming, setConfirming] = useState(false);
+  /**
+   * Which confirmation is open, if any.
+   *
+   * ★ A DIRECTION, NOT A BOOLEAN. Exactly one of the two is ever offered — the
+   * account is live or it is not — so a pair of booleans would carry a state
+   * ("confirming both") that the screen has no way to draw.
+   */
+  const [confirming, setConfirming] = useState<'disable' | 'enable' | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -79,21 +92,27 @@ export default function EmployeeDetailPage() {
    * only shows what it answered. Re-implementing any of that would put a second
    * copy of a business rule in the browser, where it cannot be enforced.
    */
-  const disable = async () => {
+  const changeStatus = async (direction: 'disable' | 'enable') => {
     if (!userId || busy) return;
     setBusy(true);
     setFailure(null);
 
     try {
-      await disableUser(userId);
-      setConfirming(false);
-      // ★ RE-READ, never patch the object on screen. The lifecycle also ended a
-      // membership and revoked roles; only the server knows the whole outcome.
+      await (direction === 'disable' ? disableUser(userId) : enableDriverAccount(userId));
+      setConfirming(null);
+      // ★ RE-READ, never patch the object on screen. Disabling also ended a
+      // membership and revoked roles, and enabling deliberately restores
+      // neither; only the server knows what the account looks like afterwards.
       setRefresh((n) => n + 1);
     } catch (error_) {
       // The server's words when it has them — it knows about the last-SuperAdmin
-      // rule and about an account already disabled, and this screen does not.
-      setFailure(isApiError(error_) ? error_.message : t('disableFailed'));
+      // rule, about an account already in the state asked for, and about
+      // re-enabling being a driver-only operation. This screen knows none of it.
+      setFailure(
+        isApiError(error_)
+          ? error_.message
+          : t(direction === 'disable' ? 'disableFailed' : 'enableFailed'),
+      );
     } finally {
       setBusy(false);
     }
@@ -136,6 +155,14 @@ export default function EmployeeDetailPage() {
   // one active membership per person, so this finds one or none.
   const current = employee.memberships.find((row) => row.membershipStatus === 'active');
   const history = employee.memberships;
+  /**
+   * ★ READ FROM THE SERVER, NEVER INFERRED FROM AN EMPTY `memberships`.
+   *
+   * "No periods" is also what an offboarded employee looks like, and what a head
+   * sees when the person has moved to a unit they do not lead. Guessing from the
+   * absence would put "Tài xế" on the wrong page in both cases.
+   */
+  const isDriver = employee.accountType === 'driver';
 
   return (
     <div className="space-y-6">
@@ -150,7 +177,11 @@ export default function EmployeeDetailPage() {
           </Avatar>
           <div>
             <h2 className="text-xl font-bold text-gray-900">{employee.user.displayName}</h2>
-            <p className="text-sm text-gray-500">{t('sectionIdentity')}</p>
+            {/* ★ SAYS WHICH KIND OF ACCOUNT THIS IS, because the two pages below
+                differ entirely and a reader should know why before scrolling. */}
+            <p className="text-sm text-gray-500">
+              {isDriver ? t('driverAccountLabel') : t('sectionIdentity')}
+            </p>
           </div>
         </div>
       </section>
@@ -184,18 +215,30 @@ export default function EmployeeDetailPage() {
             re-decides on its own and answers 403 to anybody else, whatever was
             drawn here.
 
-            No re-enable button when the account is already disabled: restoring
-            somebody asks which department they return to, which is a business
-            workflow that does not exist yet. An inert button would promise one.
+            ★ AND RE-ENABLING IS OFFERED FOR A DRIVER ONLY. Restoring an EMPLOYEE
+            asks which department they return to — a business workflow that still
+            does not exist — so the button stays absent there rather than
+            promising one. A driver belongs to no unit by design, so the question
+            has no subject and the server accepts the operation.
           */}
           {isGlobal && employee.accountStatus === 'active' && (
             <Button
               type="button"
               variant="outline"
-              onClick={() => setConfirming(true)}
+              onClick={() => setConfirming('disable')}
               className="border-red-200 text-red-700 hover:bg-red-50"
             >
               {t('disableAccount')}
+            </Button>
+          )}
+          {isGlobal && isDriver && employee.accountStatus === 'disabled' && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirming('enable')}
+              className="border-blue-200 text-blue-700 hover:bg-blue-50"
+            >
+              {t('enableAccount')}
             </Button>
           )}
         </div>
@@ -214,37 +257,76 @@ export default function EmployeeDetailPage() {
         record. The wording deliberately never says "xóa": nothing is deleted.
       */}
       <Modal
-        isOpen={confirming}
-        onClose={() => setConfirming(false)}
-        title={t('disableAccountTitle')}
+        isOpen={confirming !== null}
+        onClose={() => setConfirming(null)}
+        title={confirming === 'enable' ? t('enableAccountTitle') : t('disableAccountTitle')}
         footer={
           <>
-            <Button variant="outline" type="button" onClick={() => setConfirming(false)} disabled={busy}>
+            <Button variant="outline" type="button" onClick={() => setConfirming(null)} disabled={busy}>
               {t('cancel')}
             </Button>
             <Button
               type="button"
-              onClick={disable}
+              onClick={() => void changeStatus(confirming ?? 'disable')}
               disabled={busy}
-              className="bg-red-600 hover:bg-red-700 text-white"
+              className={
+                confirming === 'enable'
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                  : 'bg-red-600 hover:bg-red-700 text-white'
+              }
             >
-              {busy ? t('disabling') : t('disableAccountConfirm')}
+              {busy
+                ? t(confirming === 'enable' ? 'enabling' : 'disabling')
+                : t(confirming === 'enable' ? 'enableAccountConfirm' : 'disableAccountConfirm')}
             </Button>
           </>
         }
       >
         <div className="space-y-3 text-sm text-gray-700">
           <p className="font-medium text-gray-900">{employee.user.displayName}</p>
-          <ul className="list-disc space-y-1 pl-5">
-            <li>{t('disableEffectLogin')}</li>
-            <li>{t('disableEffectKeepsData')}</li>
-            <li>{t('disableEffectKeepsHistory')}</li>
-            <li>{t('disableEffectAccess')}</li>
-          </ul>
+          {/*
+            ★ THE TWO LISTS SAY DIFFERENT THINGS, AND THE ENABLE ONE INCLUDES
+            WHAT DOES *NOT* HAPPEN. Somebody expecting "undo" needs to read that
+            the revoked sessions stay revoked before they press the button, not
+            afterwards from a support call.
+          */}
+          {confirming === 'enable' ? (
+            <ul className="list-disc space-y-1 pl-5">
+              <li>{t('enableEffectLogin')}</li>
+              <li>{t('enableEffectDispatch')}</li>
+              <li>{t('enableEffectNoSessions')}</li>
+            </ul>
+          ) : (
+            <ul className="list-disc space-y-1 pl-5">
+              <li>{t('disableEffectLogin')}</li>
+              <li>{t('disableEffectKeepsData')}</li>
+              <li>{t('disableEffectKeepsHistory')}</li>
+              <li>{t('disableEffectAccess')}</li>
+            </ul>
+          )}
         </div>
       </Modal>
 
+      {/*
+        -------------------------------- 3'. A DRIVER, instead of the two below --
+
+        ★ THE PAGE SPLITS HERE, AND IT IS NOT A COSMETIC CHOICE. "Phòng ban hiện
+        tại" and "Lịch sử phòng ban" are both permanently empty for a driver, and
+        two blank tables with nothing beside them read as a record that failed to
+        load. A sentence saying the absence is correct, and the work they HAVE
+        been given, is the honest version of the same page.
+      */}
+      {isDriver && (
+        <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-gray-900">{t('sectionCurrentDepartment')}</h2>
+          <p className="mt-3 text-sm text-gray-500">{t('driverNoDepartment')}</p>
+        </section>
+      )}
+
+      {isDriver && <DriverTrips userId={employee.user.id} />}
+
       {/* -------------------------------------- 3. Phòng ban hiện tại -- */}
+      {!isDriver && (
       <section className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
         <h2 className="text-sm font-semibold text-gray-900">{t('sectionCurrentDepartment')}</h2>
         {current ? (
@@ -266,8 +348,10 @@ export default function EmployeeDetailPage() {
           <p className="mt-3 text-sm text-gray-500">{t('noCurrentDepartment')}</p>
         )}
       </section>
+      )}
 
       {/* -------------------------------------- 4. Lịch sử phòng ban -- */}
+      {!isDriver && (
       <section className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-5 py-4">
           <h2 className="text-sm font-semibold text-gray-900">
@@ -319,6 +403,7 @@ export default function EmployeeDetailPage() {
           )}
         </div>
       </section>
+      )}
     </div>
   );
 }
@@ -345,25 +430,101 @@ function PositionLabel({ role }: Readonly<{ role: EmployeeRole }>) {
 }
 
 /**
- * `users.status` — may this account operate.
+ * ★ THE DRIVER'S OWN SECTION, RENDERED INSTEAD OF THE TWO DEPARTMENT ONES.
  *
- * ⚠ Deliberately a DIFFERENT component from the membership badge, with different
- * words. One shared badge would be one edit away from showing "Đang làm việc"
- * for an account state, which is the confusion this whole separation exists to
- * prevent.
+ * A driver belongs to no unit and never will, so "Phòng ban hiện tại" and "Lịch
+ * sử phòng ban" are permanently empty for one — and two blank tables with no
+ * sentence beside them read as a record that failed to load. What a driver
+ * actually has is work: the trips they have been given.
+ *
+ * ★ ENDED TURNS ARE HERE TOO, and the assignment column says which is which. A
+ * trip can be well under way while this driver's turn on it has already ended —
+ * that is exactly what a replacement is — so the trip's status and the
+ * assignment's are two columns rather than one.
+ *
+ * ⚠ AND IT CARRIES NO MONEY. The endpoint joins neither cost table, so there is
+ * nothing here to leak whatever this page later grows.
  */
-function AccountStatusBadge({ status }: Readonly<{ status: EmployeeDetail['accountStatus'] }>) {
-  const { t } = useLanguage();
-  const styles =
-    status === 'active'
-      ? 'bg-blue-50 text-blue-700 ring-blue-600/20'
-      : 'bg-red-50 text-red-700 ring-red-600/20';
+function DriverTrips({ userId }: Readonly<{ userId: string }>) {
+  const { t, language } = useLanguage();
+  const page = useCursorPages<DriverTripHistoryRow>(
+    (request) => fetchDriverTrips(userId, request),
+    [userId],
+  );
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset ${styles}`}
-    >
-      {status === 'active' ? t('accountActive') : t('accountDisabled')}
-    </span>
+    <section className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+      <div className="px-5 py-4">
+        <h2 className="text-sm font-semibold text-gray-900">{t('driverTripsTitle')}</h2>
+      </div>
+
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader className="bg-gray-50/50">
+            <TableRow>
+              <TableHead className="font-semibold text-gray-600">{t('colDate')}</TableHead>
+              <TableHead className="font-semibold text-gray-600">{t('colVehicle')}</TableHead>
+              <TableHead className="font-semibold text-gray-600">{t('colCustomer')}</TableHead>
+              <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
+              <TableHead className="font-semibold text-gray-600">{t('colAssignment')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {page.items.map((row) => (
+              // Keyed by the ASSIGNMENT, not the trip: a driver can be put back
+              // on a trip they were taken off, and keying by the trip would
+              // collapse two real turns into one row.
+              <TableRow key={row.id} className="hover:bg-blue-50/30">
+                <TableCell className="whitespace-nowrap font-medium text-gray-900">
+                  {formatCalendarDay(row.trip.scheduledOn, language)}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-gray-600">
+                  {formatPlate(row.trip.vehicle?.plate) || '—'}
+                </TableCell>
+                <TableCell className="text-gray-600">{row.trip.customer?.name ?? '—'}</TableCell>
+                <TableCell>
+                  <TripStatusBadge status={row.trip.status} />
+                </TableCell>
+                <TableCell className="text-gray-600">
+                  {row.state === 'active' ? (
+                    <span className="font-medium text-blue-700">{t('assignmentActive')}</span>
+                  ) : (
+                    <div className="text-sm">
+                      <span className="text-gray-500">{t('assignmentEnded')}</span>
+                      {/* The reason is required on every ended turn, and it is
+                          the only thing that says why somebody came off. */}
+                      {row.endReason && (
+                        <span className="block whitespace-pre-line text-gray-500">
+                          {row.endReason}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+
+        {!page.loading && page.items.length === 0 && !page.error && (
+          <p className="px-6 py-10 text-center text-sm text-gray-500">{t('emptyDriverTrips')}</p>
+        )}
+        {page.error && (
+          <p className="px-6 py-10 text-center text-sm text-red-600">{t('loadFailed')}</p>
+        )}
+      </div>
+
+      <CursorPagination
+        shown={page.items.length}
+        hasMore={page.hasMore}
+        canGoBack={page.canGoBack}
+        onNext={page.next}
+        onPrevious={page.previous}
+        pageSize={page.pageSize}
+        onPageSizeChange={page.setPageSize}
+        isLoading={page.loading}
+        className="border-t border-gray-100 bg-gray-50/30"
+      />
+    </section>
   );
 }

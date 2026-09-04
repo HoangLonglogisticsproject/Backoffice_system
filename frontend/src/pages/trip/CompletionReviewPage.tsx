@@ -15,6 +15,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useCompletionQueue } from '@/hooks/trip/useCompletionReview';
 import { formatCalendarDay } from '@/utils/format/datetime';
+import { formatPlate } from '@/utils/format';
 import { reviewErrorKey } from '@/utils/driverErrors';
 import type { ExpenseDeclaration } from '@/types/driver';
 import type { OperationalBoardRow, OperationalStage } from '@/types/operationalBoard';
@@ -158,7 +159,7 @@ function QueueRow({
         {formatCalendarDay(row.scheduledOn, language)}
       </TableCell>
       <TableCell>{row.customer?.name ?? '—'}</TableCell>
-      <TableCell className="whitespace-nowrap">{row.vehicle?.plate ?? '—'}</TableCell>
+      <TableCell className="whitespace-nowrap">{formatPlate(row.vehicle?.plate) || '—'}</TableCell>
       <TableCell>{row.driver?.displayName ?? '—'}</TableCell>
       <TableCell>
         <Badge variant={row.stage === 'COMPLETION_REJECTED' ? 'destructive' : 'secondary'}>

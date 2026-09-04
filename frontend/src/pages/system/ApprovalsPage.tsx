@@ -41,9 +41,13 @@ import type {
   DecisionStatus,
   MembershipChangeRequestWithUsers,
 } from '@/types/approval';
-import type { EmployeeRosterRow, MembershipStatus } from '@/types/organization';
+import type { AccountStatus, EmployeeRosterRow, MembershipStatus } from '@/types/organization';
 import { fetchEmployeeRoster } from '@/api/membership';
+import { fetchDriverAccounts, type DriverAccountRow } from '@/api/driverAccounts';
+import { disableUser, enableDriverAccount } from '@/api/users';
+import type { TranslationKey } from '@/types/translate';
 import { EmployeeRosterTable } from '@/components/common/EmployeeRosterTable';
+import { DriverAccountsTable } from '@/components/common/DriverAccountsTable';
 
 /**
  * Which "nothing here" sentence a queue shows when it comes back empty.
@@ -52,7 +56,7 @@ import { EmployeeRosterTable } from '@/components/common/EmployeeRosterTable';
  * that pass it down: three copies drift, and the one that drifts is the one
  * nobody reads.
  */
-type EmptyStateKey = 'emptyRequests' | 'emptyInvitations' | 'emptyRoster';
+type EmptyStateKey = 'emptyRequests' | 'emptyInvitations' | 'emptyRoster' | 'emptyDrivers';
 
 /**
  * The global decision queues.
@@ -72,10 +76,15 @@ type EmptyStateKey = 'emptyRequests' | 'emptyInvitations' | 'emptyRoster';
 export default function ApprovalsPage() {
   const { t } = useLanguage();
   const { state, can } = useSession();
-  // ★ THE THIRD TAB IS NOT A THIRD QUEUE. `roster` answers "who works here";
-  // the other two answer "what is waiting for a decision". They share a screen
-  // because an administrator does both, never because they are the same thing.
-  const [tab, setTab] = useState<'requests' | 'invitations' | 'roster'>('requests');
+  // ★ THE LAST TWO TABS ARE NOT QUEUES. `roster` answers "who works here" and
+  // `drivers` answers "who holds a driver account"; the first two answer "what
+  // is waiting for a decision". They share a screen because an administrator
+  // does all of it, never because they are the same kind of thing.
+  //
+  // ★ AND `drivers` IS NOT A FILTER ON `roster`. That list is one row per
+  // MEMBERSHIP; a driver has none, so no filter over it could ever produce one.
+  // They are two different questions over two different sets of rows.
+  const [tab, setTab] = useState<'requests' | 'invitations' | 'roster' | 'drivers'>('requests');
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [notice, setNotice] = useState<{ outcome: AddEmployeeOutcome; email: string } | null>(null);
   // Bumped after a create or a request so the head's own queue re-reads and the
@@ -119,6 +128,8 @@ export default function ApprovalsPage() {
   let body: ReactNode;
   if (tab === 'roster') {
     body = <EmployeeRoster refresh={refresh} />;
+  } else if (tab === 'drivers') {
+    body = <DriverAccounts refresh={refresh} />;
   } else if (isGlobal || !headDepartmentId) {
     body = <GlobalQueue tab={tab} />;
   } else {
@@ -181,7 +192,18 @@ export default function ApprovalsPage() {
               // department, which only a global caller survives — a head asking
               // for it gets 403, so offering them the tab would be a guaranteed
               // refusal. Their roster is their own department's screen.
-              ...(isGlobal ? ([['roster', t('tabEmployeeRoster')]] as const) : []),
+              //
+              // ★ AND SO IS THE DRIVER TAB, for a different reason at the same
+              // tier: `GET /driver-accounts` is `user.write`, the key that
+              // CREATES an account. A head may propose a driver and see what
+              // came of their own proposal; who holds a driver account
+              // deployment-wide is account administration.
+              ...(isGlobal
+                ? ([
+                    ['roster', t('tabEmployeeRoster')],
+                    ['drivers', t('tabDriverAccounts')],
+                  ] as const)
+                : []),
             ] as const
           ).map(([id, label]) => (
             <button
@@ -297,6 +319,246 @@ function EmployeeRoster({ refresh }: Readonly<{ refresh: number }>) {
         className="border-t border-gray-100 bg-gray-50/30"
       />
     </>
+  );
+}
+
+/**
+ * THE DRIVER ROSTER — every driver account, and the one control over it.
+ *
+ * ★ IT EXISTS BECAUSE A DRIVER ACCOUNT WAS INVISIBLE. The tab above reads
+ * `GET /memberships`, which is a list of MEMBERSHIPS; a driver has none, by
+ * design, so no filter over that list could ever produce one. The only other
+ * place a driver appeared was the assignment dropdown — live accounts only, and
+ * a different question. Somebody who had just created an account had no screen
+ * that could confirm it.
+ *
+ * ★ THE FILTER IS SERVER-SIDE, like the roster's. `status` reaches the query, so
+ * "Đã vô hiệu hóa" reads disabled accounts out of the database rather than
+ * hiding rows the server already sent — which would page wrongly and make
+ * `hasMore` describe a different list.
+ *
+ * ★ AND THE ONE ACTION RE-READS RATHER THAN PATCHING THE ROW. Disabling also
+ * ends memberships and revokes roles; a client that edited the status field on
+ * screen would be showing a half-applied truth. The whole list is fetched again,
+ * for the same reason `EmployeeDetailPage` gives.
+ */
+function DriverAccounts({ refresh }: Readonly<{ refresh: number }>) {
+  const { t } = useLanguage();
+  // Live accounts first: "who can drive for us now" is what this is usually
+  // asked. `undefined` is "Tất cả" — no filter, rather than a magic value.
+  const [status, setStatus] = useState<AccountStatus | undefined>('active');
+  // Bumped after a disable, so the row's new status comes from the server.
+  const [reread, setReread] = useState(0);
+  /**
+   * Which account is being acted on, and in which direction.
+   *
+   * ★ ONE PIECE OF STATE, NOT TWO. Two independent `useState`s could both hold a
+   * row, and the page would then be asking to disable and enable at once — a
+   * state the interface has no way to render and no reason to allow.
+   */
+  const [acting, setActing] = useState<{
+    row: DriverAccountRow;
+    action: 'disable' | 'enable';
+  } | null>(null);
+
+  const page = useCursorPages<DriverAccountRow>(
+    (request) => fetchDriverAccounts(request, status),
+    [status, refresh, reread],
+  );
+
+  return (
+    <>
+      <div className="flex items-center gap-3 border-b border-gray-100 bg-gray-50/50 px-6 py-3">
+        <label htmlFor="driver-status" className="text-sm font-medium text-gray-600">
+          {t('filterAccountStatus')}
+        </label>
+        <select
+          id="driver-status"
+          value={status ?? 'all'}
+          onChange={(event) =>
+            setStatus(
+              event.target.value === 'all' ? undefined : (event.target.value as AccountStatus),
+            )
+          }
+          className="h-8 rounded-lg border border-input bg-white px-2.5 py-1 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <option value="active">{t('accountActive')}</option>
+          <option value="disabled">{t('accountDisabled')}</option>
+          <option value="all">{t('filterAllStatuses')}</option>
+        </select>
+      </div>
+
+      <div className="overflow-x-auto">
+        <DriverAccountsTable
+          rows={page.items}
+          onDisable={(row) => setActing({ row, action: 'disable' })}
+          onEnable={(row) => setActing({ row, action: 'enable' })}
+        />
+
+        <QueueStates
+          loading={page.loading}
+          forbidden={page.forbidden}
+          error={Boolean(page.error) && !page.forbidden}
+          empty={page.items.length === 0}
+          emptyKey="emptyDrivers"
+        />
+      </div>
+
+      <CursorPagination
+        shown={page.items.length}
+        hasMore={page.hasMore}
+        canGoBack={page.canGoBack}
+        onNext={page.next}
+        onPrevious={page.previous}
+        pageSize={page.pageSize}
+        onPageSizeChange={page.setPageSize}
+        isLoading={page.loading}
+        className="border-t border-gray-100 bg-gray-50/30"
+      />
+
+      <DriverStatusDialog
+        acting={acting}
+        onClose={() => setActing(null)}
+        onChanged={() => setReread((n) => n + 1)}
+      />
+    </>
+  );
+}
+
+/**
+ * What each direction says and does. Written out once, per action.
+ *
+ * ★ ONE DIALOG FOR TWO OPERATIONS, BUT NOT ONE MESSAGE. The shell is identical —
+ * confirm, in-flight, the server's refusal, re-read — and duplicating it would
+ * be ~60 lines whose error path drifts. What must NOT be shared is the copy: a
+ * disable and an enable do different things, and a dialog that hedged between
+ * them would be the one screen where somebody cannot tell which they clicked.
+ *
+ * ★ THE `enable` LINES INCLUDE WHAT DOES *NOT* HAPPEN. Sessions revoked at
+ * disable stay revoked, and somebody expecting "undo" should read that before
+ * they press the button rather than discover it from a support call.
+ */
+const DRIVER_STATUS_ACTIONS = {
+  disable: {
+    title: 'disableAccountTitle',
+    confirm: 'disableAccountConfirm',
+    busy: 'disabling',
+    failed: 'disableFailed',
+    effects: ['disableEffectLogin', 'disableEffectKeepsData', 'disableEffectAccess'],
+    submitClass: 'bg-red-600 text-white hover:bg-red-700',
+    run: disableUser,
+  },
+  enable: {
+    title: 'enableAccountTitle',
+    confirm: 'enableAccountConfirm',
+    busy: 'enabling',
+    failed: 'enableFailed',
+    effects: ['enableEffectLogin', 'enableEffectDispatch', 'enableEffectNoSessions'],
+    submitClass: 'bg-blue-600 text-white hover:bg-blue-700',
+    run: enableDriverAccount,
+  },
+} as const satisfies Record<
+  'disable' | 'enable',
+  {
+    title: TranslationKey;
+    confirm: TranslationKey;
+    busy: TranslationKey;
+    failed: TranslationKey;
+    effects: readonly TranslationKey[];
+    submitClass: string;
+    run: (userId: string) => Promise<void>;
+  }
+>;
+
+/**
+ * Confirming a change of account status, in either direction.
+ *
+ * ⚠ THE SERVER'S OWN SENTENCE WINS ON A REFUSAL. Enabling is refused for an
+ * account that is not a driver and for one that is already active, and both
+ * messages say something this screen does not know — replacing them with a
+ * generic "could not" would throw away the only useful part.
+ */
+function DriverStatusDialog({
+  acting,
+  onClose,
+  onChanged,
+}: Readonly<{
+  acting: { row: DriverAccountRow; action: 'disable' | 'enable' } | null;
+  onClose: () => void;
+  onChanged: () => void;
+}>) {
+  const { t } = useLanguage();
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  // Reset per row AND per direction: reopening must not carry the last error.
+  const openFor = acting && `${acting.action}:${acting.row.user.id}`;
+  const [shownFor, setShownFor] = useState(openFor);
+  if (shownFor !== openFor) {
+    setShownFor(openFor);
+    setFailure(null);
+  }
+
+  // Closed: nothing to draw, and no action to look up. Safe to unmount rather
+  // than render a closed `Modal` — its focus trap and body-scroll lock are
+  // undone by an effect CLEANUP, which React runs on unmount just the same.
+  if (!acting) return null;
+
+  const { row, action } = acting;
+  const spec = DRIVER_STATUS_ACTIONS[action];
+
+  const confirm = async () => {
+    setBusy(true);
+    setFailure(null);
+
+    try {
+      await spec.run(row.user.id);
+      onChanged();
+      onClose();
+    } catch (error) {
+      setFailure(isApiError(error) ? error.message : t(spec.failed));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={t(spec.title)}
+      footer={
+        <>
+          <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
+            {t('cancel')}
+          </Button>
+          <Button
+            type="button"
+            onClick={() => void confirm()}
+            disabled={busy}
+            className={spec.submitClass}
+          >
+            {busy ? t(spec.busy) : t(spec.confirm)}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-sm text-gray-600">
+        <p className="font-medium text-gray-900">
+          {row.username ? `${row.user.displayName} · ${row.username}` : row.user.displayName}
+        </p>
+        <ul className="list-inside list-disc space-y-1">
+          {spec.effects.map((effect) => (
+            <li key={effect}>{t(effect)}</li>
+          ))}
+        </ul>
+        {failure && (
+          <p role="alert" className="text-sm text-red-600">
+            {failure}
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 

@@ -8,6 +8,7 @@ import { cn } from '@/utils/cn';
 import { reviewErrorKey } from '@/utils/driverErrors';
 import { formatDateTime } from '@/utils/format/datetime';
 import { formatMoney } from '@/utils/format/money';
+import { formatPlate } from '@/utils/format';
 import { useCompletionDecision, useCompletionEvidence } from '@/hooks/trip/useCompletionReview';
 import { EXECUTION_EVENT_TYPES } from '@/types/driver';
 import type {
@@ -271,7 +272,7 @@ function TripSummary({
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
       <Field label={t('driverCustomer')} value={row.customer?.name ?? '—'} />
-      <Field label={t('driverVehicle')} value={row.vehicle?.plate ?? '—'} />
+      <Field label={t('driverVehicle')} value={formatPlate(row.vehicle?.plate) || '—'} />
       <Field label={t('reviewDriver')} value={row.driver?.displayName ?? '—'} />
       <Field
         label={`${t('driverScheduled')} — ${t('driverPickup')}`}

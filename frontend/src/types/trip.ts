@@ -69,6 +69,28 @@ export const DISPATCH_SELECTABLE_STATUSES: readonly TripStatus[] = TRIP_STATUSES
   (status) => status !== 'done',
 );
 
+/**
+ * ★ WHO IS DRIVING, AS A FILTER — `?assignment=` on `GET /trip-schedules`.
+ *
+ * NOT a sixth status, and the board's tabs depend on the difference. The five
+ * statuses describe the CARGO ("đang đợi SX", "đợi xe"); this describes the
+ * CREW, and the two move independently — a trip can be `awaiting_vehicle` with
+ * a driver already named, or `needs_confirmation` with nobody on it.
+ *
+ * ★ AND IT IS THE SERVER'S FILTER, NOT THE BROWSER'S. A page is not the result
+ * set: dropping the crewed rows from a fetched page would hide trips without
+ * saying so and leave `total` describing a different list from the one on
+ * screen. Every value here is sent as a query parameter.
+ */
+export type TripAssignmentFilter = 'all' | 'unassigned' | 'assigned';
+
+/** In the order the tabs show them: the whole board, then the two halves. */
+export const TRIP_ASSIGNMENT_FILTERS: readonly TripAssignmentFilter[] = [
+  'all',
+  'unassigned',
+  'assigned',
+];
+
 export type CatalogueStatus = 'active' | 'archived';
 
 /** A trip as the WRITE paths return it: ids, no joined names. */

@@ -11,6 +11,7 @@ import {
   type UpdateTripInput,
 } from '@/api/tripSchedule';
 import { isApiError } from '@/utils/errors';
+import { stripPlate } from '@/utils/format';
 import {
   fromDateTimeLocalValue,
   todayAsCalendarDay,
@@ -339,8 +340,13 @@ export function TripFormModal({
             )}
             value={form.vehicleId}
             onChange={(id) => set('vehicleId', id)}
-            onCreate={async (plate) => {
-              const created = await createTripVehicle({ plate });
+            onCreate={async (typed) => {
+              // ★ THE PLAIN PLATE TRAVELS FROM HERE TOO. This is the second door
+              // into the vehicle catalogue — a dispatcher adding a lorry without
+              // leaving the trip form — and a plate created through it must land
+              // in the same shape as one created on the master-data screen, or
+              // the catalogue starts holding two spellings again.
+              const created = await createTripVehicle({ plate: stripPlate(typed) });
               onCatalogueChanged();
               return { id: created.id, label: created.plate };
             }}

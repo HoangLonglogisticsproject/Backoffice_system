@@ -1,4 +1,6 @@
 import { httpClient } from './client';
+import type { Page, PageRequest } from '@/types/pagination';
+import type { AccountStatus } from '@/types/organization';
 
 /**
  * Driver accounts — created outright, or proposed and then decided.
@@ -71,6 +73,50 @@ export interface DriverAccountRequest {
 export interface DriverAccountRequestWithUsers extends DriverAccountRequest {
   requester: { id: string; displayName: string };
   decider: { id: string; displayName: string } | null;
+}
+
+/**
+ * One line of the driver roster (`GET /driver-accounts`).
+ *
+ * ★ NOT AN `EmployeeRosterRow`, AND THE MISSING COLUMNS ARE THE REASON. That
+ * shape carries a department, a role and a membership status because its rows
+ * ARE memberships. A driver has none of the three, and a type that offered them
+ * as empty strings would invite a screen to print them.
+ */
+export interface DriverAccountRow {
+  user: { id: string; displayName: string };
+  /**
+   * What they sign in with — the local part of their email, derived by the
+   * server. The one column that tells two drivers with the same name apart, and
+   * the one somebody checks against what they were shown at creation.
+   */
+  username: string | null;
+  /** `users.status`. There is no membership status here to confuse it with. */
+  accountStatus: AccountStatus;
+  createdAt: string;
+}
+
+/**
+ * `GET /driver-accounts` — every driver account, newest first.
+ *
+ * ★ THE ONLY LIST THAT PROVES A DRIVER ACCOUNT EXISTS. `GET /memberships` reads
+ * MEMBERSHIPS and a driver has none, so it can never show one; `GET /trip-drivers`
+ * answers "who may I put on this trip" — live accounts only, and a different
+ * question.
+ *
+ * ★ `status` GOES TO THE SERVER. Dropping disabled rows from a fetched page here
+ * would hand back a short page whose `hasMore` described a different list.
+ */
+export async function fetchDriverAccounts(
+  page: PageRequest = {},
+  status?: AccountStatus,
+): Promise<Page<DriverAccountRow>> {
+  const { data } = await httpClient.get<Page<DriverAccountRow>>('/driver-accounts', {
+    // `undefined` is dropped by the client, which is how "Tất cả" asks for both
+    // without a magic value meaning "do not filter".
+    params: { limit: page.limit, cursor: page.cursor, status },
+  });
+  return data;
 }
 
 /** `POST /driver-accounts` → 201. Global administrators only. */

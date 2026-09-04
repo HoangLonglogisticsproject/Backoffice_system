@@ -7,6 +7,7 @@ import { useDriverActions, useMyTrip } from '@/hooks/driver';
 import { driverErrorKey, shouldReloadAfter } from '@/utils/driverErrors';
 import { captureLocation } from '@/utils/driverLocation';
 import { formatCalendarDay } from '@/utils/format/datetime';
+import { formatPlate } from '@/utils/format';
 import type { ExecutionEventType, ExpenseDeclaration, LocationEvidence } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
 import { CompletionPanel } from './components/CompletionPanel';
@@ -256,7 +257,7 @@ function TripFacts({ trip }: Readonly<{ trip: ReturnType<typeof useMyTrip>['trip
 
   return (
     <section className="space-y-3 rounded-xl border border-border bg-background p-4">
-      <Fact icon={<Truck />} label={t('driverVehicle')} value={trip.vehicle?.plate ?? null} />
+      <Fact icon={<Truck />} label={t('driverVehicle')} value={formatPlate(trip.vehicle?.plate) || null} />
       <Fact icon={<User />} label={t('driverCustomer')} value={trip.customer?.name ?? null} />
 
       <Fact icon={<MapPin />} label={t('driverPickup')} value={trip.pickupAddress} />
