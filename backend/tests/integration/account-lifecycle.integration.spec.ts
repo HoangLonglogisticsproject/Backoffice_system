@@ -168,8 +168,16 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
   /** The two states the whole model exists to prevent, asked of the database. */
   const forbiddenStates = async (): Promise<{ activeNoDept: number; disabledWithDept: number }> => {
     const active = await pool.query<{ count: string }>(
+      // ★ THREE LEGITIMATE SHAPES NOW, NOT TWO. This check was written when
+      // "active with no department" had exactly one exception, the SuperAdmin.
+      // 0018 added a second: a DRIVER is an active account with no membership by
+      // construction — that is what `account_type` records, and it is a correct
+      // permanent state rather than the broken one this counts. Without the
+      // exclusion below, every driver in the deployment reads as a violation and
+      // the check stops meaning anything.
       `SELECT count(*) AS count FROM users u
         WHERE u.status = 'active'
+          AND u.account_type <> 'driver'
           AND NOT EXISTS (SELECT 1 FROM role_assignments ra
                            WHERE ra.user_id = u.id AND ra.role_key = 'SUPERADMIN'
                              AND ra.status = 'active')
@@ -614,6 +622,144 @@ describeIntegration('Account lifecycle against real PostgreSQL', () => {
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
       expect(await forbiddenStates()).toEqual({ activeNoDept: 0, disabledWithDept: 0 });
+    });
+  });
+
+  // ---------------------------------------------------------------- enable --
+
+  /**
+   * ★ PUTTING A DRIVER BACK INTO SERVICE — and why this is not "undo disable".
+   *
+   * The reason there was no `enable()` at all is written into the service: it
+   * asks "into which department", because an active EMPLOYEE with none is
+   * forbidden. That question has no subject for a driver — 0018 made "belongs to
+   * no unit" a correct permanent state — so the operation is answerable for a
+   * driver and still not answerable for anybody else.
+   *
+   * Against a real server because both halves are claims about stored data: that
+   * the account really flips, and that the roles and sessions taken away at
+   * disable really do NOT come back.
+   */
+  describe('enable — drivers only', () => {
+    const provisionDriver = async (email: string) =>
+      provisioning.provision({ displayName: email, email, accountType: 'driver' });
+
+    const statusOf = async (userId: string): Promise<string> => {
+      const rows = await pool.query<{ status: string }>(
+        'SELECT status FROM users WHERE id = $1',
+        [userId],
+      );
+      return rows.rows[0]!.status;
+    };
+
+    it('★ puts a disabled driver back to active, leaving no forbidden state', async () => {
+      const driver = await provisionDriver('taixe@example.com');
+      await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
+      expect(await statusOf(driver.user.id)).toBe('disabled');
+
+      await lifecycle.enableDriver(driver.user.id);
+
+      expect(await statusOf(driver.user.id)).toBe('active');
+      // ★ AND STILL NO MEMBERSHIP. A re-enabled driver belongs to no unit, which
+      // is the state — not something enable was supposed to repair.
+      expect(await memberships.findActive(driver.user.id)).toBeNull();
+      expect(await forbiddenStates()).toEqual({ activeNoDept: 0, disabledWithDept: 0 });
+    });
+
+    it('★ does NOT bring the revoked sessions back', async () => {
+      const driver = await provisionDriver('taixe@example.com');
+      await sessions.issue(driver.user.id);
+      await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
+
+      await lifecycle.enableDriver(driver.user.id);
+
+      const live = await pool.query<{ count: string }>(
+        'SELECT count(*) AS count FROM sessions WHERE user_id = $1 AND revoked_at IS NULL',
+        [driver.user.id],
+      );
+      // They sign in again with the credential they already have. A revoked
+      // session is gone, and resurrecting one would hand back a live cookie
+      // somebody deliberately killed.
+      expect(Number(live.rows[0]!.count)).toBe(0);
+    });
+
+    it('★ refuses an EMPLOYEE — the department question is still unanswered', async () => {
+      const dept = await departments.create({ slug: 'a', name: 'A' });
+      const person = await provisioning.provision({
+        displayName: 'person@example.com',
+        email: 'person@example.com',
+        departmentId: dept.id,
+        initialPassword: 'a valid passphrase',
+      });
+      await lifecycle.disable({ userId: person.user.id, actingUserId: person.user.id });
+
+      await expect(lifecycle.enableDriver(person.user.id)).rejects.toThrow(/driver account/i);
+
+      // ⚠ AND IT CHANGED NOTHING. A refusal that had already flipped the status
+      // would leave an active employee with no department — the exact state the
+      // whole rule exists to prevent.
+      expect(await statusOf(person.user.id)).toBe('disabled');
+      expect(await forbiddenStates()).toEqual({ activeNoDept: 0, disabledWithDept: 0 });
+    });
+
+    it('★ is decided by account_type, not by "has no membership"', async () => {
+      // An offboarded EMPLOYEE also has no active membership. Reading the
+      // absence instead of the column would reactivate them into a deployment
+      // where an active employee with no department is forbidden.
+      const dept = await departments.create({ slug: 'a', name: 'A' });
+      const person = await provisioning.provision({
+        displayName: 'person@example.com',
+        email: 'person@example.com',
+        departmentId: dept.id,
+        initialPassword: 'a valid passphrase',
+      });
+      await lifecycle.disable({ userId: person.user.id, actingUserId: person.user.id });
+
+      expect(await memberships.findActive(person.user.id)).toBeNull();
+      await expect(lifecycle.enableDriver(person.user.id)).rejects.toThrow(/driver account/i);
+    });
+
+    it('reports an already active driver as a conflict', async () => {
+      const driver = await provisionDriver('taixe@example.com');
+
+      await expect(lifecycle.enableDriver(driver.user.id)).rejects.toThrow(/already active/i);
+    });
+
+    it('answers an id that names nobody with a not-found', async () => {
+      await expect(
+        lifecycle.enableDriver('00000000-0000-4000-8000-000000000000'),
+      ).rejects.toThrow(/not found/i);
+    });
+
+    it('lets exactly one of two concurrent enables win', async () => {
+      const driver = await provisionDriver('taixe@example.com');
+      await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
+
+      const results = await Promise.allSettled([
+        lifecycle.enableDriver(driver.user.id),
+        lifecycle.enableDriver(driver.user.id),
+      ]);
+
+      // `expectedCurrent = 'disabled'` is what makes the loser hear a conflict
+      // rather than report a success it did not cause.
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(await statusOf(driver.user.id)).toBe('active');
+    });
+
+    it('★ a re-enabled driver can be put on a trip again', async () => {
+      // The operational point of the whole thing: `requireEligibleDriver`
+      // refuses an account that is not `active`, so a disabled driver cannot be
+      // assigned — and this is what puts them back in the dropdown.
+      const driver = await provisionDriver('taixe@example.com');
+      await lifecycle.disable({ userId: driver.user.id, actingUserId: driver.user.id });
+      await lifecycle.enableDriver(driver.user.id);
+
+      const rows = await pool.query<{ count: string }>(
+        `SELECT count(*) AS count FROM users
+          WHERE id = $1 AND account_type = 'driver' AND status = 'active'`,
+        [driver.user.id],
+      );
+      expect(Number(rows.rows[0]!.count)).toBe(1);
     });
   });
 });

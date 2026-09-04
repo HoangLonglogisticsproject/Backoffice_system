@@ -24,9 +24,23 @@ import { UserRepository } from '../persistence/user.repository';
  * Revoke first and the generated column goes NULL, the foreign key stops
  * applying, and the membership can close.
  *
- * There is deliberately NO enable() here. Re-enabling asks "into which
- * department", because an active user with none is forbidden, and that answer
- * has not been decided. Inventing one would be inventing business rules.
+ * ★ `enable()` EXISTS NOW, AND ONLY FOR DRIVERS. The reason this file gave for
+ * having no enable at all was: "re-enabling asks INTO WHICH DEPARTMENT, because
+ * an active user with none is forbidden, and that answer has not been decided."
+ * That objection is real and still stands — for an employee.
+ *
+ * It does not apply to a driver, and 0018 is what made that true. A driver
+ * account is an active user with NO membership by construction: the whole point
+ * of `account_type` is that "belongs to no unit" is a correct, permanent state
+ * rather than a broken one. So there is no department to ask about, nothing to
+ * decide, and nothing to invent. The invariant 0003 carries reads, accurately,
+ * "an active EMPLOYEE holds exactly one active membership".
+ *
+ * ⚠ ENABLING IS NOT THE UNDO OF DISABLING, and must never become it. Disabling
+ * revokes roles and kills sessions; enabling restores NEITHER. Roles come back
+ * only by being granted again, with a new audit row — silently returning
+ * authority somebody deliberately took away is the exact failure the table above
+ * calls "re-enabling silently restores authority".
  */
 @Injectable()
 export class AccountLifecycleService {
@@ -102,6 +116,55 @@ export class AccountLifecycleService {
 
     // The offboarding approval passes its own transaction, so closing the
     // request and disabling the account are one commit.
+    return tx ? run(tx) : this.db.transaction(run);
+  }
+
+  /**
+   * EnableDriver — putting a driver account back into service.
+   *
+   * ★ ONE WRITE, WHERE DISABLING IS FIVE, and the asymmetry is the design rather
+   * than an unfinished job:
+   *
+   *   roles       NOT restored. They were revoked with an audit row; granting
+   *               them again is a separate, deliberate act by somebody who
+   *               decides to. Restoring them here would hand back authority
+   *               nobody chose to hand back.
+   *   sessions    NOT restored. A revoked session is gone; the person signs in
+   *               again with the credential they already have.
+   *   membership  NOTHING TO RESTORE. A driver has none — that is the state, not
+   *               a gap — so the question that blocked `enable()` for years
+   *               ("into which department") has no subject here.
+   *
+   * ★ DRIVERS ONLY, CHECKED AGAINST `account_type` AND NOT AGAINST THE ABSENCE
+   * OF A MEMBERSHIP. An offboarded employee also has no active membership, so
+   * "has no unit" would let this path quietly reactivate one into a deployment
+   * where an active employee with no department is forbidden. The stored column
+   * is the only thing that tells the two apart — which is exactly why 0018
+   * stores it.
+   */
+  async enableDriver(userId: string, tx?: DatabaseQuery): Promise<User> {
+    const run = async (tx: DatabaseQuery): Promise<User> => {
+      const existing = await this.users.findById(userId, tx);
+      if (!existing) throw new NotFoundError('User not found.');
+
+      if (existing.accountType !== 'driver') {
+        throw new ConflictError(
+          'Only a driver account can be re-enabled. Re-enabling an employee has to say which department they return to, and that is not decided here.',
+        );
+      }
+
+      // `expectedCurrent` makes a second concurrent enable affect no row, so the
+      // caller hears "already active" instead of a success it did not cause —
+      // the same shape `disable` uses, for the same reason.
+      const enabled = await this.users.setStatus(
+        { userId, status: 'active', expectedCurrent: 'disabled' },
+        tx,
+      );
+      if (!enabled) throw new ConflictError('That account is already active.');
+
+      return enabled;
+    };
+
     return tx ? run(tx) : this.db.transaction(run);
   }
 }

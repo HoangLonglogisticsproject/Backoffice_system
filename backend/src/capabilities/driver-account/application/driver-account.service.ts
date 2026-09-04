@@ -1,16 +1,21 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError, ValidationError } from '../../../common/errors/domain.error';
+import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
+import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import { DATABASE, type Database } from '../../../common/types/database.port';
+import type { AccountStatus } from '../../../common/types/user-summary';
 import { AppConfig } from '../../../config/app.config';
 import { IdentityRepository } from '../../../core/identity/persistence/identity.repository';
 import { AccountProvisioningService } from '../../../core/users/application/account-provisioning.service';
 import { assertProvisionableEmail } from '../../../core/users/domain/email';
 import { LOCAL_PROVIDER } from '../../../core/users/domain/user.entity';
+import type { DriverAccountRow } from '../domain/driver-account';
 import {
   isUsableRejectionReason,
   type DriverAccountRequest,
   type DriverAccountRequestWithUsers,
 } from '../domain/driver-account-request';
+import { DriverAccountRepository } from '../persistence/driver-account.repository';
 import { DriverAccountRequestRepository } from '../persistence/driver-account-request.repository';
 
 /** What a newly provisioned driver hands back, once. */
@@ -48,6 +53,7 @@ export class DriverAccountService {
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly requests: DriverAccountRequestRepository,
+    private readonly accounts: DriverAccountRepository,
     private readonly provisioning: AccountProvisioningService,
     private readonly identities: IdentityRepository,
     private readonly config: AppConfig,
@@ -226,5 +232,28 @@ export class DriverAccountService {
   /** What this head proposed, and what came of it. */
   listMine(requestedBy: string): Promise<DriverAccountRequestWithUsers[]> {
     return this.requests.listByRequester(requestedBy);
+  }
+
+  /**
+   * One page of the driver roster.
+   *
+   * ★ THE ACCOUNTS, NOT THE REQUESTS. Everything else on this service is about
+   * the proposal — who asked, who decided, what the reason was — and a request
+   * stops being interesting the moment it is approved. This answers the question
+   * that survives it: which driver accounts exist. A driver created DIRECTLY by
+   * an administrator never had a request at all, and was therefore listed
+   * nowhere.
+   *
+   * The keyset and the filter both reach SQL. Filtering a fetched page here
+   * would hand back a short page whose `hasMore` describes a different list.
+   */
+  async listAccounts(
+    filter: { accountStatus?: AccountStatus },
+    page: PageQuery,
+  ): Promise<Page<DriverAccountRow>> {
+    const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
+    const rows = await this.accounts.listPage(filter, page.limit, cursor);
+
+    return toPage(rows, page.limit);
   }
 }

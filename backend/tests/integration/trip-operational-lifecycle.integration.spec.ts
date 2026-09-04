@@ -727,6 +727,118 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
   });
 
+  // ================================================= one driver's history ==
+
+  /**
+   * ★ WHAT THIS DRIVER HAS BEEN GIVEN — the backoffice question, which is not
+   * the one the handset asks.
+   *
+   * `listActiveForDriver` answers "what is this driver on now" and is right to
+   * hide everything else. This answers "what has this driver been on", and the
+   * whole value of it is the rows the other one drops: the trip somebody was
+   * taken off is a fact about them, and a history that agreed with the present
+   * would not be a history.
+   *
+   * Against a real server because every claim is about SQL — which rows the
+   * statement returns, in what order, and whether the keyset walks them all.
+   */
+  describe('★ a driver’s assignment history', () => {
+    const historyOf = (driver: string, over: Partial<{ limit: number; cursor: string }> = {}) =>
+      execution.listDriverHistory(driver, { limit: 50, cursor: undefined, ...over });
+
+    it('★ keeps a turn the driver was TAKEN OFF — the row the live read hides', async () => {
+      const { trip } = await runningTrip();
+      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'A báo ốm.' });
+
+      const live = await assignments.listActiveForDriver(driverA);
+      const history = await historyOf(driverA);
+
+      expect(live).toHaveLength(0);
+      expect(history.items).toHaveLength(1);
+      expect(history.items[0]).toMatchObject({
+        state: 'ended',
+        endReason: 'A báo ốm.',
+        trip: { id: trip },
+      });
+      expect(history.items[0]?.endedAt).toBeInstanceOf(Date);
+    });
+
+    it('spells out the lorry and the customer, and the trip’s own status', async () => {
+      const { trip } = await runningTrip();
+
+      const [row] = (await historyOf(driverA)).items;
+
+      expect(row?.trip.vehicle?.plate).toMatch(/^51D-/);
+      expect(row?.trip.status).toBe('awaiting_production');
+      // No customer was set on the helper's trip, and that is a real state
+      // rather than a row to drop: a LEFT JOIN keeps it.
+      expect(row?.trip.customer).toBeNull();
+    });
+
+    it('★ keeps the calendar day the board shows, not one before it', async () => {
+      // The connection runs in America/New_York. A `DATE` parsed into a `Date`
+      // would come back as the 29th here, on every row.
+      await runningTrip();
+
+      expect((await historyOf(driverA)).items[0]?.trip.scheduledOn).toBe('2026-08-30');
+    });
+
+    it('★ carries no money at all, on a trip that HAS some', async () => {
+      const { trip } = await runningTrip();
+      await declare(trip);
+
+      const serialised = JSON.stringify((await historyOf(driverA)).items);
+
+      expect(serialised).not.toContain('1500000');
+      expect(serialised).not.toMatch(/amount|cost|price|hire|carrier/i);
+    });
+
+    it('shows only this driver’s turns, never the other driver’s', async () => {
+      const { trip: mine } = await runningTrip();
+      const { trip: theirs } = await runningTrip();
+      await execution.replaceDriver(theirs, driverB, { by: operator, reason: 'Đổi ca.' });
+
+      const trips = (await historyOf(driverB)).items.map((row) => row.trip.id);
+
+      expect(trips).toEqual([theirs]);
+      expect(trips).not.toContain(mine);
+    });
+
+    it('★ drops an ARCHIVED trip, like every other read of the board', async () => {
+      const { trip: kept } = await runningTrip();
+      const { trip: gone } = await runningTrip();
+      await archive(gone);
+
+      expect((await historyOf(driverA)).items.map((row) => row.trip.id)).toEqual([kept]);
+    });
+
+    it('★ walks every turn exactly once, with no overlap and nothing missing', async () => {
+      // Five turns on five trips, assigned back to back: several share an
+      // `assigned_at` to the millisecond, which is where a keyset without its
+      // tiebreaker duplicates rows and loses others.
+      for (let index = 0; index < 5; index += 1) await runningTrip();
+
+      const seen: string[] = [];
+      let cursor: string | undefined;
+
+      do {
+        const walked = await historyOf(driverA, { limit: 2, ...(cursor ? { cursor } : {}) });
+        seen.push(...walked.items.map((row) => row.id));
+        cursor = walked.nextCursor ?? undefined;
+      } while (cursor);
+
+      expect(seen).toHaveLength(5);
+      expect(new Set(seen).size).toBe(5);
+    });
+
+    it('★ refuses an account that is not a driver, rather than answering "none"', async () => {
+      // An employee has no assignments and never will, so an empty page would
+      // answer a question that was never sensible — and would make a mistyped id
+      // look like a driver who has simply not worked yet.
+      await expect(historyOf(operator)).rejects.toThrow(/not found/i);
+    });
+  });
+
   // ================================================================ triggers ==
 
   describe('T1 — a completed trip cannot be reopened', () => {

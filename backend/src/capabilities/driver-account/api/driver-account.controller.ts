@@ -1,7 +1,18 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
+import type { Page } from '../../../common/pagination/cursor';
 import { PermissionGuard, RequirePermission } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
@@ -9,10 +20,15 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { DriverAccountService, type ProvisionedDriver } from '../application/driver-account.service';
+import type { DriverAccountRow } from '../domain/driver-account';
 import type {
   DriverAccountRequest,
   DriverAccountRequestWithUsers,
 } from '../domain/driver-account-request';
+import {
+  driverAccountQuerySchema,
+  type DriverAccountQuery,
+} from './driver-account-query.dto';
 
 /**
  * ★ THE DTOs SAY WHO MAY SUPPLY WHAT, AND THEY DIFFER ON PURPOSE.
@@ -49,6 +65,7 @@ type RejectInput = z.infer<typeof rejectSchema>;
  * key by design:
  *
  *   POST   /driver-accounts                    user.write             'global'
+ *   GET    /driver-accounts                    user.write             'global'
  *   POST   /driver-account-requests            driver.account.request 'head-anywhere'
  *   GET    /driver-account-requests            user.write             'global'
  *   GET    /driver-account-requests/mine       driver.account.request 'head-anywhere'
@@ -72,6 +89,33 @@ export class DriverAccountController {
     @Body(new ZodValidationPipe(createDriverSchema)) body: CreateDriverInput,
   ): Promise<ProvisionedDriver> {
     return this.drivers.createDirectly(body);
+  }
+
+  /**
+   * Every driver account, newest first.
+   *
+   * ★ THE ONLY SCREEN THAT CAN CONFIRM A DRIVER EXISTS. A driver has no
+   * department membership by design, so `GET /memberships` — a list of
+   * MEMBERSHIPS — can never show one; and `GET /trip-drivers` answers "who may I
+   * put on this trip", which is live accounts only and a different question. An
+   * administrator who created an account had nowhere to see it.
+   *
+   * ★ `user.write`, THE SAME KEY THAT CREATES ONE. There is no `user.read` in
+   * the permission set, and `unit.member.read` is a question about a department
+   * — the one thing a driver does not have. The honest reading is that whoever
+   * administers accounts may list them, which is exactly what this key means.
+   *
+   * ⚠ IT DECIDES NOTHING. Disabling is `PATCH /users/:userId/status`, which
+   * already exists and already ends the memberships and revokes the roles that a
+   * driver happens not to have. A second route here would be a second lifecycle.
+   */
+  @Get('driver-accounts')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('user.write')
+  async listAccounts(
+    @Query(new ZodValidationPipe(driverAccountQuerySchema)) query: DriverAccountQuery,
+  ): Promise<Page<DriverAccountRow>> {
+    return this.drivers.listAccounts({ accountStatus: query.status }, query);
   }
 
   /** A department head proposes one. Nothing is created. */

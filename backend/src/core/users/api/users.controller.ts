@@ -19,6 +19,7 @@ import { UserService } from '../application/user.service';
 import { MembershipService } from '../../organization/application/membership.service';
 import type { EmployeeRosterRow } from '../../organization/domain/department.entity';
 import type { AccountStatus } from '../../../common/types/user-summary';
+import type { AccountType } from '../domain/user.entity';
 
 /**
  * Account administration. GLOBAL only, on every route.
@@ -43,6 +44,20 @@ import type { AccountStatus } from '../../../common/types/user-summary';
 export interface EmployeeDetailResponse {
   user: { id: string; displayName: string };
   accountStatus: AccountStatus;
+  /**
+   * ★ WHAT KIND OF ACCOUNT THIS IS, AND WHY IT HAD TO BE SAID OUT LOUD.
+   *
+   * `memberships: []` has two entirely different meanings. For an employee it
+   * says "no employment period this caller may see" — a head reading somebody
+   * from another unit, or a record still being set up. For a DRIVER it is the
+   * permanent, correct answer: a driver belongs to no unit and never will, which
+   * is exactly why 0018 stores this column rather than deriving it from "has no
+   * active membership" (every offboarded employee looks the same by that test).
+   *
+   * Without this field a screen has to guess which of the two it is looking at,
+   * and an empty table with no explanation reads as a fault.
+   */
+  accountType: AccountType;
   memberships: EmployeeRosterRow[];
 }
 
@@ -56,14 +71,20 @@ const createUserSchema = z.object({
 });
 
 /**
- * Only `disabled` is accepted in this phase.
+ * Both directions, and they are NOT symmetric.
  *
- * Re-enabling asks "into which department", because an active user with none is
- * forbidden — and that answer has not been decided. A schema that accepted
- * `active` would promise behaviour nobody specified.
+ * `disabled` applies to anybody. `active` applies to a DRIVER and is refused
+ * with 409 for anybody else — re-enabling an employee asks "into which
+ * department", because an active employee with none is forbidden, and that
+ * answer has still not been decided.
+ *
+ * ★ THE SCHEMA ADMITS BOTH AND THE SERVICE DECIDES WHICH, rather than the DTO
+ * trying to. Whether this account is a driver is a fact in the database, not
+ * something a request body can be validated against — a schema that tried would
+ * be checking a claim the caller made about somebody else.
  */
 const setStatusSchema = z.object({
-  status: z.literal('disabled'),
+  status: z.enum(['active', 'disabled']),
 });
 
 type CreateUserInput = z.infer<typeof createUserSchema>;
@@ -127,6 +148,7 @@ export class UsersController {
     return {
       user: { id: user.id, displayName: user.displayName },
       accountStatus: user.status,
+      accountType: user.accountType,
       memberships: await this.employment.listEmployeeHistory(userId, visible),
     };
   }
@@ -161,20 +183,36 @@ export class UsersController {
   }
 
   /**
-   * DisableUser — remove somebody from the deployment.
+   * SetStatus — take somebody out of the deployment, or put a driver back in.
    *
-   * Five writes in one transaction; see `AccountLifecycleService` for why the
-   * order is forced rather than chosen. Refuses for the last SuperAdmin.
+   * ★ ONE ROUTE, TWO OPERATIONS THAT ARE NOT MIRROR IMAGES. Disabling is five
+   * writes in one transaction — status, roles, sessions, membership — and the
+   * order is forced by the database rather than chosen. Enabling is ONE write,
+   * and restores none of the other four: roles and sessions were deliberately
+   * taken away and come back only by being granted again. `AccountLifecycleService`
+   * carries the argument in full.
+   *
+   * ★ AND `active` IS A DRIVER-ONLY ANSWER. The service refuses it for an
+   * employee with 409, because re-enabling one asks which department they return
+   * to and nobody has decided that. It is checked there, against the stored
+   * `account_type`, rather than here — the guard authorized the CALLER, and what
+   * kind of account the TARGET is is a fact in the database.
+   *
+   * Disabling still refuses for the last SuperAdmin.
    */
   @Patch(':userId/status')
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('user.write')
   async setStatus(
     @Param('userId', UuidParam) userId: string,
-    @Body(new ZodValidationPipe(setStatusSchema)) _body: SetStatusInput,
+    @Body(new ZodValidationPipe(setStatusSchema)) body: SetStatusInput,
     @CurrentUser() actor: SessionUser,
   ): Promise<{ id: string; status: string }> {
-    const disabled = await this.lifecycle.disable({ userId, actingUserId: actor.id });
-    return { id: disabled.id, status: disabled.status };
+    const changed =
+      body.status === 'active'
+        ? await this.lifecycle.enableDriver(userId)
+        : await this.lifecycle.disable({ userId, actingUserId: actor.id });
+
+    return { id: changed.id, status: changed.status };
   }
 }

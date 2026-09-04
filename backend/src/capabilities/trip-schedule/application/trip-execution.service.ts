@@ -5,12 +5,15 @@ import {
   NotFoundError,
   ValidationError,
 } from '../../../common/errors/domain.error';
+import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
+import type { PageQuery } from '../../../common/pagination/page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { TripSchedule } from '../domain/trip-schedule';
 import {
   isPickupEvent,
   missingPrerequisite,
   type DriverAssignment,
+  type DriverTripHistoryRow,
   type ExecutionEvent,
   type ExecutionEventType,
   type VehicleOwnership,
@@ -189,6 +192,30 @@ export class TripExecutionService {
   async listEligibleDrivers(): Promise<UserSummary[]> {
     const drivers = await this.users.listActiveByAccountType('driver');
     return drivers.map((user) => ({ id: user.id, displayName: user.displayName }));
+  }
+
+  /**
+   * One page of what a driver has been given, newest first.
+   *
+   * ★ 404 FOR SOMEBODY WHO IS NOT A DRIVER, rather than an empty page. An
+   * employee has no assignments and never will, so an empty list would answer a
+   * question that was never sensible — and would make a mistyped id look like a
+   * driver who has simply not worked yet.
+   *
+   * ⚠ THE ACCOUNT'S STATUS IS NOT CHECKED, deliberately. A disabled driver's
+   * history is exactly what somebody investigating a disabled driver came for.
+   */
+  async listDriverHistory(
+    driverUserId: string,
+    page: PageQuery,
+  ): Promise<Page<DriverTripHistoryRow>> {
+    const user = await this.users.findById(driverUserId);
+    if (!user || user.accountType !== 'driver') throw new NotFoundError('Driver not found.');
+
+    const cursor = page.cursor ? decodeCursor(page.cursor) : undefined;
+    const rows = await this.assignments.listHistoryForDriver(driverUserId, page.limit, cursor);
+
+    return toPage(rows, page.limit);
   }
 
   /**

@@ -51,6 +51,7 @@ describe('driver-account HTTP security', () => {
     reject: jest.Mock;
     listPending: jest.Mock;
     listMine: jest.Mock;
+    listAccounts: jest.Mock;
   };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
@@ -111,6 +112,9 @@ describe('driver-account HTTP security', () => {
       reject: jest.fn().mockResolvedValue({ id: REQUEST, status: 'rejected' }),
       listPending: jest.fn().mockResolvedValue([]),
       listMine: jest.fn().mockResolvedValue([]),
+      listAccounts: jest
+        .fn()
+        .mockResolvedValue({ items: [], nextCursor: null, hasMore: false }),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -190,6 +194,29 @@ describe('driver-account HTTP security', () => {
       await authed('get', REQUESTS).expect(200);
       expect(drivers.listPending).toHaveBeenCalled();
     });
+
+    it('★ reads the driver roster — the one list that shows an account exists', async () => {
+      await authed('get', CREATE).expect(200);
+
+      expect(drivers.listAccounts).toHaveBeenCalledWith(
+        { accountStatus: undefined },
+        expect.objectContaining({ limit: expect.any(Number) }),
+      );
+    });
+
+    it('passes the status filter through to the server, unfiltered by default', async () => {
+      await authed('get', `${CREATE}?status=disabled`).expect(200);
+
+      const [filter] = drivers.listAccounts.mock.calls[0] as [{ accountStatus?: string }];
+      expect(filter.accountStatus).toBe('disabled');
+    });
+
+    it('refuses a status that is not one of the two, and reaches no service', async () => {
+      const response = await authed('get', `${CREATE}?status=retired`);
+
+      expect(response.status).toBe(422);
+      expect(drivers.listAccounts).not.toHaveBeenCalled();
+    });
   });
 
   // ============================================================== 3,4 · request ==
@@ -246,6 +273,16 @@ describe('driver-account HTTP security', () => {
       expect(response.status).toBe(403);
       expect(drivers.listPending).not.toHaveBeenCalled();
     });
+
+    it('★ may not read the driver roster either — it is account administration', async () => {
+      // A head can propose a driver and see what came of their own proposal.
+      // Who holds a driver account deployment-wide is a different question, and
+      // it is the administrator's.
+      const response = await authed('get', CREATE);
+
+      expect(response.status).toBe(403);
+      expect(drivers.listAccounts).not.toHaveBeenCalled();
+    });
   });
 
   // ================================================================= 5 · member ==
@@ -266,6 +303,13 @@ describe('driver-account HTTP security', () => {
       expect(response.status).toBe(403);
       expect(drivers.createDirectly).not.toHaveBeenCalled();
     });
+
+    it('may not list who holds a driver account', async () => {
+      const response = await authed('get', CREATE);
+
+      expect(response.status).toBe(403);
+      expect(drivers.listAccounts).not.toHaveBeenCalled();
+    });
   });
 
   // ================================================================= 14 · driver ==
@@ -275,6 +319,7 @@ describe('driver-account HTTP security', () => {
 
     it.each([
       ['post', CREATE],
+      ['get', CREATE],
       ['post', REQUESTS],
       ['get', REQUESTS],
       ['get', `${REQUESTS}/mine`],
@@ -293,6 +338,7 @@ describe('driver-account HTTP security', () => {
   describe('without authentication', () => {
     it.each([
       ['post', CREATE],
+      ['get', CREATE],
       ['post', REQUESTS],
       ['get', REQUESTS],
       ['post', APPROVE],

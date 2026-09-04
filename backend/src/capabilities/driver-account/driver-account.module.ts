@@ -4,6 +4,7 @@ import { IdentityModule } from '../../core/identity/identity.module';
 import { UsersModule } from '../../core/users/users.module';
 import { DriverAccountController } from './api/driver-account.controller';
 import { DriverAccountService } from './application/driver-account.service';
+import { DriverAccountRepository } from './persistence/driver-account.repository';
 import { DriverAccountRequestRepository } from './persistence/driver-account-request.repository';
 
 /**
@@ -26,7 +27,7 @@ import { DriverAccountRequestRepository } from './persistence/driver-account-req
 @Module({
   imports: [AuthorizationModule, UsersModule, IdentityModule],
   controllers: [DriverAccountController],
-  providers: [DriverAccountService, DriverAccountRequestRepository],
+  providers: [DriverAccountService, DriverAccountRequestRepository, DriverAccountRepository],
   exports: [DriverAccountService],
 })
 export class DriverAccountModule {}
