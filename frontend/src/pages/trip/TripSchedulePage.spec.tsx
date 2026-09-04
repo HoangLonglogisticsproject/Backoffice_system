@@ -164,6 +164,20 @@ describe('TripSchedulePage', () => {
   /** The dialog's submit shares its label with the row button; the dialog renders last. */
   const last = (elements: HTMLElement[]): HTMLElement => elements[elements.length - 1]!;
 
+  /**
+   * The reads that fetch the LIST, not the badge.
+   *
+   * ★ THE BOARD MAKES TWO READS PER SETTLED FILTER NOW. One is the page the
+   * table shows; the other asks for a single row with `assignment: 'unassigned'`
+   * purely to read `total` for the count on the tab. Counting raw calls would
+   * make every assertion below about the debounce and the re-read pass — or
+   * fail — for a reason that has nothing to do with what it is testing.
+   */
+  const listCalls = () =>
+    fetchTripSchedules.mock.calls.filter(
+      ([request]) => (request as { limit?: number }).limit !== 1,
+    );
+
   describe('driver assignment', () => {
     it('shows "not assigned" and no control to a reader', async () => {
       renderPage();
@@ -195,7 +209,7 @@ describe('TripSchedulePage', () => {
 
       await waitFor(() => expect(assignDriver).toHaveBeenCalledWith('t1', 'd2'));
       // The board is re-read; the server's row is what the screen shows next.
-      await waitFor(() => expect(fetchTripSchedules.mock.calls.length).toBeGreaterThan(1));
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(1));
     });
 
     it('★ replaces with a reason, and offers only the OTHER drivers', async () => {
@@ -230,7 +244,7 @@ describe('TripSchedulePage', () => {
       fireEvent.click(last(screen.getAllByRole('button', { name: /^phân công$/i })));
 
       expect(await screen.findByRole('alert')).toHaveTextContent(/vừa thay đổi/i);
-      await waitFor(() => expect(fetchTripSchedules.mock.calls.length).toBeGreaterThan(1));
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(1));
     });
 
     it('offers no assignment control on a finished trip', async () => {
@@ -252,9 +266,9 @@ describe('TripSchedulePage', () => {
     // list unbounded would break that premise on page load.
     renderPage();
 
-    await waitFor(() => expect(fetchTripSchedules).toHaveBeenCalled());
+    await waitFor(() => expect(listCalls().length).toBeGreaterThan(0));
 
-    const [request] = fetchTripSchedules.mock.calls[0] as [{ from: string; to: string }];
+    const [request] = listCalls()[0] as [{ from: string; to: string }];
     expect(request.from).toMatch(/^\d{4}-\d{2}-01$/);
     expect(request.to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -884,7 +898,10 @@ describe('TripSchedulePage', () => {
       ]);
 
       renderPage();
-      await screen.findByText('51D.65233');
+      // ★ THE BOARD SHOWS `51D-65233` FOR A PLATE STORED AS `51D.65233`, and
+      // the OPTION below still shows the stored spelling. That is the split on
+      // purpose: the table formats for reading, the editor shows the record.
+      await screen.findByText('51D-65233');
       fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
       await screen.findByLabelText('Xe');
     };
@@ -955,7 +972,8 @@ describe('TripSchedulePage', () => {
       fetchTripCustomers.mockReturnValue(new Promise(() => {}));
 
       renderPage();
-      await screen.findByText('51D.65233');
+      // Formatted in the table; the option below keeps the stored spelling.
+      await screen.findByText('51D-65233');
       fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
       await screen.findByLabelText('Xe');
 
@@ -1036,15 +1054,17 @@ describe('TripSchedulePage', () => {
       // four requests, and `from: 0002-…` is the widest scan this endpoint can
       // be handed — the exact query ADR-0003's bounded range exists to prevent.
       renderPage();
-      await waitFor(() => expect(fetchTripSchedules).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(listCalls()).toHaveLength(1));
 
       const from = screen.getByLabelText('Từ ngày');
       fireEvent.change(from, { target: { value: '0002-08-01' } });
       fireEvent.change(from, { target: { value: '0020-08-01' } });
       fireEvent.change(from, { target: { value: '2026-01-01' } });
 
-      await waitFor(() => expect(fetchTripSchedules).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(listCalls()).toHaveLength(2));
 
+      // Every read, badge included — the count is keyed on the debounced range
+      // too, so a keystroke that must not reach the list must not reach it either.
       const ranges = fetchTripSchedules.mock.calls.map(
         ([request]) => (request as { from: string }).from,
       );
@@ -1052,6 +1072,115 @@ describe('TripSchedulePage', () => {
       expect(ranges[ranges.length - 1]).toBe('2026-01-01');
       expect(ranges).not.toContain('0002-08-01');
       expect(ranges).not.toContain('0020-08-01');
+    });
+  });
+
+  /**
+   * ★ THE CREW LINE, AS TABS — and the point of it is that the SERVER draws it.
+   *
+   * Dispatch works the uncrewed trips as a queue: a trip joins it when it is
+   * entered and leaves it the moment somebody is put on the row. These assert
+   * the two things that make that trustworthy — that the filter is sent rather
+   * than applied to a fetched page, and that an empty result under a filter says
+   * so instead of claiming the month is empty.
+   */
+  describe('the crew tabs', () => {
+    /** The list, and the one-row read behind the badge, answered separately. */
+    const board = (options: { total: number; unassigned: number; items?: unknown[] }) => {
+      fetchTripSchedules.mockImplementation((request: { limit?: number }) =>
+        Promise.resolve(
+          request.limit === 1
+            ? { items: [], page: 1, limit: 1, total: options.unassigned, totalPages: 1 }
+            : {
+                items: options.items ?? [trip()],
+                page: 1,
+                limit: 20,
+                total: options.total,
+                totalPages: Math.max(1, Math.ceil(options.total / 20)),
+              },
+        ),
+      );
+    };
+
+    it('opens on the whole board, not on one of its halves', async () => {
+      renderPage();
+
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(0));
+      expect(listCalls()[0]?.[0]).toMatchObject({ assignment: 'all' });
+      expect(screen.getByRole('tab', { name: /tất cả/i })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+    });
+
+    it('★ asks the SERVER for the uncrewed trips rather than filtering the page', async () => {
+      board({ total: 1, unassigned: 1 });
+      renderPage();
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(0));
+
+      fireEvent.click(screen.getByRole('tab', { name: /chờ phân công/i }));
+
+      await waitFor(() =>
+        expect(listCalls().some(([r]) => (r as { assignment?: string }).assignment === 'unassigned')).toBe(
+          true,
+        ),
+      );
+    });
+
+    it('counts the queue on the tab, from a read of its own', async () => {
+      // Three waiting out of forty on the board — a number the list on screen
+      // cannot supply, because the list on screen is a different filter.
+      board({ total: 40, unassigned: 3 });
+      renderPage();
+
+      const tab = await screen.findByRole('tab', { name: /chờ phân công/i });
+      await waitFor(() => expect(tab).toHaveTextContent('3'));
+    });
+
+    it('★ says every trip has a driver, rather than that the month is empty', async () => {
+      board({ total: 5, unassigned: 0 });
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      fetchTripSchedules.mockResolvedValue({
+        items: [],
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      });
+      fireEvent.click(screen.getByRole('tab', { name: /chờ phân công/i }));
+
+      expect(
+        await screen.findByText('Mọi chuyến trong khoảng ngày này đều đã có tài xế.'),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText('Không có chuyến nào trong khoảng ngày này.'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('★ goes back to page one, so a switch cannot land past the end', async () => {
+      // The uncrewed half is always smaller than the board. Carrying "page 3"
+      // into a one-page list would show an empty table and read as "there is
+      // nothing waiting" — the opposite of what the tab is for.
+      board({ total: 45, unassigned: 2 });
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      fireEvent.click(screen.getByRole('button', { name: /sau/i }));
+      await waitFor(() =>
+        expect(listCalls().some(([r]) => (r as { page?: number }).page === 2)).toBe(true),
+      );
+
+      fireEvent.click(screen.getByRole('tab', { name: /chờ phân công/i }));
+
+      await waitFor(() => {
+        const crewed = listCalls().filter(
+          ([r]) => (r as { assignment?: string }).assignment === 'unassigned',
+        );
+        expect(crewed.length).toBeGreaterThan(0);
+        expect(crewed.every(([r]) => (r as { page?: number }).page === 1)).toBe(true);
+      });
     });
   });
 

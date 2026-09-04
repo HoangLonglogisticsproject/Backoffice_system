@@ -1,14 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
+import type { Cursor, CursorAnchored } from '../../../common/pagination/cursor';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type {
   CompletionRequest,
   DriverAssignment,
+  DriverTripHistoryRow,
   ExecutionEvent,
   ExecutionEventType,
   ExpenseDeclaration,
   VehicleOwnership,
 } from '../domain/trip-execution';
 import type { LocationEvidence } from '../domain/trip-location';
+import type { TripStatus } from '../domain/trip-schedule';
 
 /**
  * SQL for the operational half of a trip. Opens no transaction; decides nothing.
@@ -60,6 +63,79 @@ const ASSIGNMENT_SELECT = `
          u.display_name AS driver_display_name
     FROM trip_driver_assignments a
     JOIN users u ON u.id = a.driver_user_id`;
+
+interface DriverHistoryRow {
+  id: string;
+  state: 'active' | 'ended';
+  assigned_at: Date;
+  ended_at: Date | null;
+  end_reason: string | null;
+  /** Full precision as text — `toPage` truncates a `Date` and loses rows in a tie. */
+  cursor_at: string;
+  trip_id: string;
+  /** `::text`. A `DATE` parsed into a `Date` renders one day early in Hồ Chí Minh. */
+  scheduled_on: string;
+  trip_status: TripStatus;
+  vehicle_id: string | null;
+  vehicle_plate: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+}
+
+/**
+ * One driver's history: the turn, and the trip it was a turn on.
+ *
+ * ★ DRIVEN FROM `trip_driver_assignments`, not from `trip_schedules`. Starting
+ * at the assignment makes this driver's rows the only possible starting point;
+ * starting at the trip and filtering afterwards gives the same answer today and
+ * is one mistaken `OR` away from giving a different one — the same reasoning
+ * `FROM_ASSIGNMENT` states in the driver read model.
+ *
+ * ★ AND NO MONEY IS JOINED, so there is no amount here to leak into a response.
+ *
+ * LEFT JOIN on both catalogues: a trip legitimately has no lorry and no customer
+ * yet, and an INNER JOIN would drop exactly those rows from a driver's history.
+ */
+const DRIVER_HISTORY_SELECT = `
+  SELECT a.id, a.state, a.assigned_at, a.ended_at, a.end_reason,
+         a.assigned_at::text   AS cursor_at,
+         t.id                  AS trip_id,
+         t.scheduled_on::text  AS scheduled_on,
+         t.status              AS trip_status,
+         v.id                  AS vehicle_id,
+         v.plate               AS vehicle_plate,
+         c.id                  AS customer_id,
+         c.name                AS customer_name
+    FROM trip_driver_assignments a
+    JOIN trip_schedules  t ON t.id = a.trip_id
+    LEFT JOIN trip_vehicles  v ON v.id = t.vehicle_id
+    LEFT JOIN trip_customers c ON c.id = t.customer_id`;
+
+const toDriverHistoryRow = (
+  row: DriverHistoryRow,
+): DriverTripHistoryRow & CursorAnchored => ({
+  id: row.id,
+  cursorAt: row.cursor_at,
+  state: row.state,
+  assignedAt: row.assigned_at,
+  endedAt: row.ended_at,
+  endReason: row.end_reason,
+  trip: {
+    id: row.trip_id,
+    scheduledOn: row.scheduled_on,
+    status: row.trip_status,
+    // The pairing is written out rather than asserted, so a future outer join
+    // cannot quietly produce `{ id: null }`.
+    vehicle:
+      row.vehicle_id && row.vehicle_plate
+        ? { id: row.vehicle_id, plate: row.vehicle_plate }
+        : null,
+    customer:
+      row.customer_id && row.customer_name
+        ? { id: row.customer_id, name: row.customer_name }
+        : null,
+  },
+});
 
 @Injectable()
 export class DriverAssignmentRepository {
@@ -175,6 +251,57 @@ export class DriverAssignmentRepository {
       [driverUserId],
     );
     return rows.map(toAssignment);
+  }
+
+  /**
+   * One page of everything a driver has been given, newest first.
+   *
+   * ★ ENDED TURNS INCLUDED, WHICH IS THE WHOLE DIFFERENCE FROM
+   * `listActiveForDriver`. That method answers "what is this driver on now" and
+   * is right to hide the rest. This answers "what has this driver been on", and
+   * a trip somebody was taken off is a fact about them — hiding it would make
+   * the history agree with the present, which is the one thing a history must
+   * not do.
+   *
+   * ★ AND IT IS PAGINATED, WHERE THE SIBLING IS NOT. A live list is bounded by
+   * how many lorries one person can be in; a career is not, and ADR-0002 §4's
+   * argument for the short unpaginated lists stops applying the moment the set
+   * grows without limit.
+   *
+   * Served by `idx_trip_driver_assignment_driver_history` (0022). The partial
+   * index next to it cannot help here: it covers `state = 'active'` only.
+   *
+   * ⚠ ARCHIVED TRIPS ARE OUT, like every other read of `trip_schedules`. A row
+   * taken off the board is not work, and showing it here would be the only place
+   * in the API where an archived trip resurfaces.
+   */
+  async listHistoryForDriver(
+    driverUserId: string,
+    limit: number,
+    cursor: Cursor | undefined,
+    executor: DatabaseQuery = this.db,
+  ): Promise<(DriverTripHistoryRow & CursorAnchored)[]> {
+    const values: unknown[] = [driverUserId];
+    const conditions = [`a.driver_user_id = $1`, `t.archived_at IS NULL`];
+
+    if (cursor) {
+      values.push(cursor.t, cursor.i);
+      conditions.push(
+        `(a.assigned_at, a.id) < ($${values.length - 1}::timestamptz, $${values.length})`,
+      );
+    }
+
+    values.push(limit + 1);
+
+    const rows = await executor.query<DriverHistoryRow>(
+      `${DRIVER_HISTORY_SELECT}
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY a.assigned_at DESC, a.id DESC
+        LIMIT $${values.length}`,
+      values,
+    );
+
+    return rows.map(toDriverHistoryRow);
   }
 }
 

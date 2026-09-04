@@ -46,10 +46,11 @@ export async function createUser(input: CreateUserInput): Promise<CreatedUser> {
 /**
  * Disables an account (contract §4).
  *
- * `disabled` is the only status this phase accepts. Re-enabling asks "into
- * which department", because an active user belonging nowhere is the one state
- * the model forbids — so it is not a status flip and has no endpoint yet.
+ * ★ NOT A SIMPLE STATUS FLIP. The server also revokes every role, kills every
+ * session and ends the active membership, in one transaction — which is why
+ * anything that calls this must RE-READ rather than patch the row on screen.
  */
 export async function disableUser(userId: string): Promise<void> {
   await httpClient.patch(`/users/${encodeURIComponent(userId)}/status`, { status: 'disabled' });
 }
+

@@ -1,5 +1,6 @@
 import type { UserSummary } from '../../../common/types/user-summary';
 import type { LocationEvidence } from './trip-location';
+import type { TripStatus } from './trip-schedule';
 
 /**
  * The operational half of a trip: who drove it, what happened, and how it ended.
@@ -103,6 +104,43 @@ export interface DriverAssignment {
   endedBy: string | null;
   endedAt: Date | null;
   endReason: string | null;
+}
+
+/**
+ * One turn on one trip, read FROM THE DRIVER'S SIDE.
+ *
+ * ★ THE SAME ROWS AS `DriverAssignment`, ASKED THE OTHER WAY ROUND. That type
+ * answers "who has driven this trip" and therefore spells out the person;
+ * this one answers "what has this person driven" and therefore spells out the
+ * trip. Reusing one shape for both would leave every row carrying the name of
+ * the driver the caller already named.
+ *
+ * ★ IT IS NOT THE DRIVER'S OWN VIEW EITHER. `DriverTrip` is what a driver sees
+ * on their handset — live work only, with the addresses and instructions they
+ * need. This is a BACKOFFICE history: ended turns included, because the trip
+ * somebody was taken off is a fact about them, and no addresses, because
+ * dispatch is reading a list rather than driving to anywhere.
+ *
+ * ⚠ AND IT CARRIES NO MONEY. Nothing in the query behind it joins `trip_costs`
+ * or `trip_outsource_hires`, so there is no amount in the result set to leak —
+ * the same construction the driver read model uses, for the same reason.
+ */
+export interface DriverTripHistoryRow {
+  /** The assignment's own id, which is what makes each row unique. */
+  id: string;
+  state: 'active' | 'ended';
+  assignedAt: Date;
+  endedAt: Date | null;
+  endReason: string | null;
+
+  trip: {
+    id: string;
+    /** `YYYY-MM-DD`. A string, never a `Date` — see `TripSchedule.scheduledOn`. */
+    scheduledOn: string;
+    status: TripStatus;
+    vehicle: { id: string; plate: string } | null;
+    customer: { id: string; name: string } | null;
+  };
 }
 
 /**

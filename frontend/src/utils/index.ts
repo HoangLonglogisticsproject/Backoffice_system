@@ -12,7 +12,7 @@ export { ApiError, isApiError, toApiError, type ApiErrorCode } from './errors';
 // Format utilities
 export { formatDate, formatDateTime } from './format/datetime';
 export { formatMoney } from './format/money';
-export { formatWithCommas, stripCommas } from './format';
+export { formatWithCommas, stripCommas, formatPlate } from './format';
 
 // The receipt a completed write leaves on screen
 export { notifySuccess, setToastLanguage } from './toast';

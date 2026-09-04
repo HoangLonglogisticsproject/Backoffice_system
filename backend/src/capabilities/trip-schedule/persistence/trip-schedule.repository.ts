@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
+  TripAssignmentFilter,
   TripSchedule,
   TripScheduleWithRefs,
   TripStatus,
@@ -39,6 +40,37 @@ export interface DateRange {
   from: string;
   to: string;
 }
+
+/**
+ * What "is somebody driving this" is, in SQL — written twice, because the two
+ * readers below stand in different places.
+ *
+ * ★ NEITHER IS BUILT FROM INPUT. Both are looked up from a TOTAL map keyed by a
+ * union the DTO has already narrowed, so the only three strings that can ever
+ * reach a statement here are the three written here. A predicate assembled from
+ * a query parameter is the shape this file must never grow.
+ *
+ * The paged read already LEFT JOINs the active assignment — it has to, to name
+ * the driver — so it tests the joined column and pays for nothing extra. The
+ * count joins nothing, and adding the join there would make `COUNT(*)` depend on
+ * the join's cardinality, so it asks `EXISTS` instead — which
+ * `uq_trip_active_driver_assignment` answers from the index.
+ */
+const JOINED_ASSIGNMENT_PREDICATE: Record<TripAssignmentFilter, string> = {
+  all: '',
+  unassigned: 'AND da.driver_user_id IS NULL',
+  assigned: 'AND da.driver_user_id IS NOT NULL',
+};
+
+const ACTIVE_ASSIGNMENT_EXISTS = `SELECT 1
+              FROM trip_driver_assignments da
+             WHERE da.trip_id = t.id AND da.state = 'active'`;
+
+const COUNTED_ASSIGNMENT_PREDICATE: Record<TripAssignmentFilter, string> = {
+  all: '',
+  unassigned: `AND NOT EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
+  assigned: `AND EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
+};
 
 interface TripRow {
   id: string;
@@ -258,6 +290,7 @@ export class TripScheduleRepository {
    */
   async listPage(
     range: DateRange,
+    assignment: TripAssignmentFilter,
     limit: number,
     offset: number,
     executor: DatabaseQuery = this.db,
@@ -267,6 +300,7 @@ export class TripScheduleRepository {
          WHERE t.archived_at IS NULL
            AND t.scheduled_on >= $1::date
            AND t.scheduled_on <= $2::date
+           ${JOINED_ASSIGNMENT_PREDICATE[assignment]}
          ORDER BY t.scheduled_on DESC, t.id DESC
          LIMIT $3 OFFSET $4`,
       [range.from, range.to, limit, offset],
@@ -283,14 +317,26 @@ export class TripScheduleRepository {
     };
   }
 
-  /** How many rows the range holds, for the pages that came back empty. */
-  async countInRange(range: DateRange, executor: DatabaseQuery = this.db): Promise<number> {
+  /**
+   * How many rows the range holds, for the pages that came back empty.
+   *
+   * ⚠ TAKES THE SAME FILTER AS `listPage`, AND MUST KEEP TAKING IT. This number
+   * is what a client with a stale page number recovers from; counting the whole
+   * range while the page counted only the uncrewed rows would send a dispatcher
+   * to a "page 3 of 7" the filtered list does not have.
+   */
+  async countInRange(
+    range: DateRange,
+    assignment: TripAssignmentFilter,
+    executor: DatabaseQuery = this.db,
+  ): Promise<number> {
     const rows = await executor.query<{ total: string }>(
       `SELECT COUNT(*) AS total
-         FROM trip_schedules
-        WHERE archived_at IS NULL
-          AND scheduled_on >= $1::date
-          AND scheduled_on <= $2::date`,
+         FROM trip_schedules t
+        WHERE t.archived_at IS NULL
+          AND t.scheduled_on >= $1::date
+          AND t.scheduled_on <= $2::date
+          ${COUNTED_ASSIGNMENT_PREDICATE[assignment]}`,
       [range.from, range.to],
     );
     return Number(rows[0]?.total ?? 0);

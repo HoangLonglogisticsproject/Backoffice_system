@@ -169,5 +169,24 @@ export interface DepartmentHeadWithUser extends DepartmentHead {
 export interface EmployeeDetail {
   user: UserSummary;
   accountStatus: AccountStatus;
+  /**
+   * ★ WHAT AN EMPTY `memberships` MEANS, WHICH IT CANNOT SAY ON ITS OWN.
+   *
+   * For an employee, no periods means "none this caller may see" — a head
+   * reading somebody from another unit, or a record still being set up. For a
+   * DRIVER it is the permanent and correct answer: a driver belongs to no unit
+   * and never will. The screen has to tell those apart, and this is the only
+   * field that can.
+   */
+  accountType: AccountType;
   memberships: EmployeeRosterRow[];
 }
+
+/**
+ * `users.account_type` — an employee or a driver, and there is no third kind.
+ *
+ * ⚠ NOT DERIVABLE FROM THE DATA BESIDE IT. "Has no active membership" is also
+ * true of every offboarded employee, which is exactly why the server stores this
+ * rather than working it out.
+ */
+export type AccountType = 'employee' | 'driver';

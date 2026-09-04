@@ -19,7 +19,13 @@ import { archiveTripSchedule } from '@/api/tripSchedule';
 import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
 import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
-import type { TripScheduleWithRefs } from '@/types/trip';
+import { formatPlate } from '@/utils/format';
+import {
+  TRIP_ASSIGNMENT_FILTERS,
+  type TripAssignmentFilter,
+  type TripScheduleWithRefs,
+} from '@/types/trip';
+import type { TranslationKey } from '@/types/translate';
 import { TripFormModal } from './components/TripFormModal';
 import { TripStatusBadge } from './components/TripStatusBadge';
 import { TripStatusSelect } from './components/TripStatusSelect';
@@ -96,6 +102,18 @@ export default function TripSchedulePage() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+        {/*
+          ★ ABOVE THE DATE BAR, BECAUSE IT NARROWS WHAT THE DATE BAR RETURNS.
+          Both are one query; putting the tabs inside the filter row would read
+          as two independent controls, and the row that changes the fewest
+          things belongs closest to the table.
+        */}
+        <AssignmentTabs
+          value={trips.assignment}
+          onChange={trips.setAssignment}
+          unassignedCount={trips.unassignedCount}
+        />
+
         <div className="flex flex-wrap items-end gap-3 border-b border-gray-100 bg-gray-50/50 p-4">
           <div className="space-y-1">
             <label htmlFor="trip-from" className="text-xs font-medium text-gray-600">
@@ -179,7 +197,13 @@ export default function TripSchedulePage() {
                     {formatCalendarDay(trip.scheduledOn, language)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap font-medium text-gray-900">
-                    {trip.vehicle?.plate ?? <Unset />}
+                    {/*
+                      ★ FORMATTED FOR READING, NOT NORMALISED. The catalogue
+                      stores the plate as somebody typed it; this only decides
+                      how it is drawn, so `50H49266` and `50H-49266` stop looking
+                      like two lorries down one column.
+                    */}
+                    {trip.vehicle ? formatPlate(trip.vehicle.plate) : <Unset />}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
                     {/*
@@ -309,7 +333,16 @@ export default function TripSchedulePage() {
 
           {/* The four states, in the order EmployeeManagementPage established. */}
           {!trips.loading && trips.items.length === 0 && !trips.error && (
-            <p className="px-6 py-10 text-center text-sm text-gray-500">{t('emptyTrips')}</p>
+            <p className="px-6 py-10 text-center text-sm text-gray-500">
+              {/*
+                ★ THE SENTENCE DEPENDS ON THE TAB. "Không có chuyến nào trong
+                khoảng ngày này" under the uncrewed tab would say the month is
+                empty when what happened is that every trip in it already has a
+                driver — and a dispatcher who believes that goes looking for rows
+                that were never missing.
+              */}
+              {t(TAB_EMPTY_MESSAGES[trips.assignment])}
+            </p>
           )}
           {trips.forbidden && (
             <div className="px-6 py-10 text-center">
@@ -365,6 +398,93 @@ export default function TripSchedulePage() {
         onClose={() => setArchiving(null)}
         onArchived={trips.reload}
       />
+    </div>
+  );
+}
+
+/** What each tab is called, and what an empty list under it means. */
+const TAB_LABELS: Record<TripAssignmentFilter, TranslationKey> = {
+  all: 'tripTabAll',
+  unassigned: 'tripTabUnassigned',
+  assigned: 'tripTabAssigned',
+};
+
+const TAB_EMPTY_MESSAGES: Record<TripAssignmentFilter, TranslationKey> = {
+  all: 'emptyTrips',
+  unassigned: 'emptyUnassignedTrips',
+  assigned: 'emptyAssignedTrips',
+};
+
+/**
+ * The crew line, as three tabs over one list.
+ *
+ * ★ THE MIDDLE TAB IS A WORK QUEUE, NOT A STATUS. A trip joins it the moment it
+ * is entered and leaves it the moment somebody is put on the row — which is why
+ * the count rides on the tab itself: dispatch needs to see that there is work
+ * waiting without having to go and look for it.
+ *
+ * ★ AND EVERY ONE OF THEM IS A SERVER QUERY. Each tab is its own `?assignment=`
+ * with its own `total`, so the pagination underneath always describes the list
+ * on screen. Filtering `trips.items` here instead would break the one promise
+ * this screen's pagination makes.
+ *
+ * `role="tablist"` with real buttons rather than links: the tab is not in the
+ * URL, so there is nothing to navigate to, and a screen reader is told these
+ * three are alternatives rather than three unrelated buttons.
+ */
+function AssignmentTabs({
+  value,
+  onChange,
+  unassignedCount,
+}: Readonly<{
+  value: TripAssignmentFilter;
+  onChange: (filter: TripAssignmentFilter) => void;
+  unassignedCount: number | null;
+}>) {
+  const { t } = useLanguage();
+
+  return (
+    <div
+      role="tablist"
+      aria-label={t('tripTabsLabel')}
+      className="flex flex-wrap items-center gap-1 border-b border-gray-100 px-4 pt-3"
+    >
+      {TRIP_ASSIGNMENT_FILTERS.map((filter) => {
+        const selected = filter === value;
+        // Zero is worth showing on the tab you are standing on — "0" is the
+        // answer to "is anything waiting?" — but a badge on an unselected tab
+        // that says nothing is waiting is just noise.
+        const showCount =
+          filter === 'unassigned' && unassignedCount !== null && (selected || unassignedCount > 0);
+
+        return (
+          <button
+            key={filter}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            onClick={() => onChange(filter)}
+            className={cn(
+              'flex items-center gap-2 rounded-t-lg border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+              selected
+                ? 'border-blue-600 text-blue-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800',
+            )}
+          >
+            {t(TAB_LABELS[filter])}
+            {showCount && (
+              <span
+                className={cn(
+                  'rounded-full px-2 py-0.5 text-xs font-semibold',
+                  selected ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700',
+                )}
+              >
+                {unassignedCount}
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -470,7 +590,7 @@ function ArchiveTripDialog({
         <p className="text-sm text-gray-600">{t('confirmArchiveTripBody')}</p>
         {trip && (
           <p className="text-sm font-medium text-gray-900">
-            {`${formatCalendarDay(trip.scheduledOn, language)} · ${trip.vehicle?.plate ?? '—'} · ${trip.customer?.name ?? '—'}`}
+            {`${formatCalendarDay(trip.scheduledOn, language)} · ${formatPlate(trip.vehicle?.plate) || '—'} · ${trip.customer?.name ?? '—'}`}
           </p>
         )}
         {error && (

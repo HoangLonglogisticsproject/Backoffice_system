@@ -559,8 +559,12 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   describe('★ the general trip API exposes no money', () => {
     const MONEY_WORDS = /amount|cost|price|total|hire|carrier|vat/i;
 
-    const asQuery = (raw: Record<string, unknown>) =>
-      buildDateRangePageQuerySchema(() => new Date('2026-08-15T03:00:00Z')).parse(raw);
+    const asQuery = (raw: Record<string, unknown>) => ({
+      ...buildDateRangePageQuerySchema(() => new Date('2026-08-15T03:00:00Z')).parse(raw),
+      // The crew filter the controller's pipe defaults in. Irrelevant to money,
+      // but the board's query carries it now.
+      assignment: 'all' as const,
+    });
 
     it('returns no money-shaped field from the list, on a trip that HAS money', async () => {
       await money.createCost({ tripId: trip, category: 'fuel', amount: '1500000', createdBy: author });

@@ -7,6 +7,8 @@ import {
   type DateRangePageQuery,
 } from '../../../common/pagination/date-range-page-query.dto';
 import type { OffsetPage } from '../../../common/pagination/offset-page';
+import { pageQuerySchema, type PageQuery } from '../../../common/pagination/page-query.dto';
+import type { Page } from '../../../common/pagination/cursor';
 import { PermissionGuard, RequirePermission } from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
@@ -15,12 +17,21 @@ import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { OperationalBoardService } from '../application/operational-board.service';
 import { TripExecutionService } from '../application/trip-execution.service';
-import { TripScheduleService } from '../application/trip-schedule.service';
+import { TripScheduleService, type TripBoardQuery } from '../application/trip-schedule.service';
 import type { OperationalBoardRow } from '../domain/operational-board';
 import type { UserSummary } from '../../../common/types/user-summary';
-import type { DriverAssignment, ExecutionEvent } from '../domain/trip-execution';
+import type {
+  DriverAssignment,
+  DriverTripHistoryRow,
+  ExecutionEvent,
+} from '../domain/trip-execution';
 import type { TripStatusChange } from '../domain/trip-status-history';
-import { TRIP_STATUSES, type TripSchedule, type TripScheduleWithRefs } from '../domain/trip-schedule';
+import {
+  TRIP_ASSIGNMENT_FILTERS,
+  TRIP_STATUSES,
+  type TripSchedule,
+  type TripScheduleWithRefs,
+} from '../domain/trip-schedule';
 
 /**
  * The dispatch board.
@@ -143,6 +154,38 @@ const updateTripSchema = createTripSchema.partial();
 const includeVoidedSchema = z.object({ includeVoided: z.enum(['true', 'false']).optional() });
 
 /**
+ * `?assignment=unassigned` — the board, narrowed to the trips still missing a driver.
+ *
+ * ★ A FILTER, NOT A SIXTH STATUS, and the split matters on this screen. Dispatch
+ * works the uncrewed trips as a QUEUE: a row joins it the moment it is entered
+ * and leaves it the moment somebody is put on it, whatever the cargo's status
+ * says. Encoding that as a status would have made "đợi xe, tài xế đã có" and
+ * "đợi xe, chưa có ai" the same word.
+ *
+ * ★ AND IT IS ANSWERED IN SQL. The alternative — hand back the page and let the
+ * browser drop the crewed rows — is the mistake `TripSchedulePage` already
+ * warns about: a page is not the result set, so filtering it client-side hides
+ * rows without saying so and leaves the total describing a different list.
+ *
+ * `all` by default, so a caller that has never heard of this parameter reads
+ * exactly the board it read before.
+ */
+const boardFilterSchema = z.object({
+  assignment: z.enum(TRIP_ASSIGNMENT_FILTERS).default('all'),
+});
+
+/**
+ * The dispatch list's query: the shared range-and-page DTO, plus the crew filter.
+ *
+ * An intersection rather than an `.extend()` because `dateRangePageQuerySchema`
+ * ends in a transform and two refinements — it is no longer a `ZodObject` and
+ * has no `.extend()`. Intersecting parses the same query string with both and
+ * merges the results, which keeps every guarantee ADR-0003 rests on inside the
+ * one schema that states it.
+ */
+const boardQuerySchema = dateRangePageQuerySchema.and(boardFilterSchema);
+
+/**
  * Putting a driver on a trip, or taking one off.
  *
  * `driverUserId` is the ONLY thing a caller names; whether that account is a
@@ -241,7 +284,7 @@ export class TripScheduleController {
   @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.read')
   async list(
-    @Query(new ZodValidationPipe(dateRangePageQuerySchema)) query: DateRangePageQuery,
+    @Query(new ZodValidationPipe(boardQuerySchema)) query: TripBoardQuery,
   ): Promise<OffsetPage<TripScheduleWithRefs>> {
     return this.trips.list(query);
   }
@@ -354,6 +397,33 @@ export class TripScheduleController {
   @RequirePermission('trip.write')
   async eligibleDrivers(): Promise<UserSummary[]> {
     return this.execution.listEligibleDrivers();
+  }
+
+  /**
+   * What ONE driver has been given, newest first — ended turns included.
+   *
+   * ★ THE MIRROR OF `trip-schedules/:tripId/driver-assignments`, AND IT CARRIES
+   * THE SAME KEY. That route reads the turns of one trip; this reads the turns
+   * of one driver. They are the same rows asked from opposite ends, so guarding
+   * them differently would mean the same fact were readable or not depending on
+   * which way somebody phrased the question. History, so `trip.read` — and the
+   * board already tells every `trip.read` holder who drove which trip.
+   *
+   * ★ DECLARED AFTER `trip-drivers`, and the order is not load-bearing: the
+   * prefixes differ, so neither can swallow the other. It is next to it because
+   * that is where a reader will look for it.
+   *
+   * ⚠ NO MONEY, BY CONSTRUCTION. The query behind this joins neither cost table,
+   * so there is no amount in the result set for a future mapper to pass through.
+   */
+  @Get('trip-drivers/:driverUserId/trips')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async driverTrips(
+    @Param('driverUserId', UuidParam) driverUserId: string,
+    @Query(new ZodValidationPipe(pageQuerySchema)) query: PageQuery,
+  ): Promise<Page<DriverTripHistoryRow>> {
+    return this.execution.listDriverHistory(driverUserId, query);
   }
 
   /** Every turn on this trip, newest first. History, so `trip.read`. */

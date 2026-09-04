@@ -355,7 +355,16 @@ describe('TripMasterDataPage', () => {
   });
 
   describe('adding a row', () => {
-    it('sends the plate and the note, then reloads the list', async () => {
+    /**
+     * ★ THE PLAIN PLATE IS WHAT TRAVELS, WHATEVER WAS TYPED.
+     *
+     * 0011 generates `plate_key` as the plate with punctuation stripped and
+     * upper-cased, and matches on it. Sending that same string means the value
+     * stored and the value matched on are one string — so the four spellings the
+     * workbook accumulated (`50H44266` beside `50H-49266`) cannot come back.
+     * The dash is put in for READING, by `formatPlate`, at every display site.
+     */
+    it('★ sends the plate with no separator, however it was typed', async () => {
       renderPage();
       await screen.findByText('51D.65233');
 
@@ -367,7 +376,32 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       await waitFor(() =>
-        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H-44266', note: 'xe nhà' }),
+        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: 'xe nhà' }),
+      );
+    });
+
+    it('★ shows the dash back while it is being typed', async () => {
+      // The field reads as a plate; the state underneath is the payload.
+      renderPage();
+      await screen.findByText('51D.65233');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
+      const plate = screen.getByLabelText('Biển số *') as HTMLInputElement;
+      fireEvent.change(plate, { target: { value: '50AA123333' } });
+
+      expect(plate.value).toBe('50AA-123333');
+    });
+
+    it('upper-cases the series letter, so one lorry cannot become two', async () => {
+      renderPage();
+      await screen.findByText('51D.65233');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
+      fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '50h44266' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() =>
+        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: null }),
       );
     });
 
@@ -380,7 +414,7 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       await waitFor(() =>
-        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H-44266', note: null }),
+        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: null }),
       );
     });
 
@@ -431,7 +465,10 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(actionButton('Sửa'));
 
       expect(await screen.findByRole('heading', { name: 'Sửa xe' })).toBeTruthy();
-      expect((screen.getByLabelText('Biển số *') as HTMLInputElement).value).toBe('51D.65233');
+      // ★ SEEDED FROM THE ROW, SHOWN IN THE ONE SPELLING. The catalogue still
+      // holds `51D.65233` — the LIST above prints the record as stored — and the
+      // field shows the same plate the way every other screen draws it.
+      expect((screen.getByLabelText('Biển số *') as HTMLInputElement).value).toBe('51D-65233');
     });
 
     it('sends the correction to the row it was opened on', async () => {
@@ -439,11 +476,11 @@ describe('TripMasterDataPage', () => {
       await screen.findByText('51D.65233');
 
       fireEvent.click(actionButton('Sửa'));
-      fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '51D-65233' } });
+      fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '51D-65234' } });
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       await waitFor(() =>
-        expect(updateTripVehicle).toHaveBeenCalledWith('v1', { plate: '51D-65233', note: null }),
+        expect(updateTripVehicle).toHaveBeenCalledWith('v1', { plate: '51D65234', note: null }),
       );
     });
   });

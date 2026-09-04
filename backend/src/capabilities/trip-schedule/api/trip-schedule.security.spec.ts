@@ -83,6 +83,7 @@ describe('trip-schedule HTTP security', () => {
     listEvents: jest.Mock;
     listAssignments: jest.Mock;
     listEligibleDrivers: jest.Mock;
+    listDriverHistory: jest.Mock;
     assign: jest.Mock;
     replaceDriver: jest.Mock;
     endAssignment: jest.Mock;
@@ -149,6 +150,9 @@ describe('trip-schedule HTTP security', () => {
       listEvents: jest.fn().mockResolvedValue([]),
       listAssignments: jest.fn().mockResolvedValue([]),
       listEligibleDrivers: jest.fn().mockResolvedValue([{ id: DRIVER_USER, displayName: 'Tài Xế' }]),
+      listDriverHistory: jest
+        .fn()
+        .mockResolvedValue({ items: [], nextCursor: null, hasMore: false }),
       assign: jest.fn().mockResolvedValue({ id: 'assignment-1', driverUserId: DRIVER_USER }),
       replaceDriver: jest.fn().mockResolvedValue({ id: 'assignment-2', driverUserId: DRIVER_USER }),
       endAssignment: jest.fn().mockResolvedValue({ id: 'assignment-1', state: 'ended' }),
@@ -839,6 +843,14 @@ describe('trip-schedule HTTP security', () => {
         await authed('get', '/trip-drivers').expect(403);
         expect(execution.listEligibleDrivers).not.toHaveBeenCalled();
       });
+
+      it('★ cannot read anybody’s driving history, not even their own', async () => {
+        // `BackofficeOnlyGuard` refuses a driver account before the permission is
+        // asked. A driver's own work is the Driver Portal's to show, and it shows
+        // live trips — not a paginated audit of every turn they have had.
+        await authed('get', `/trip-drivers/${DRIVER_USER}/trips`).expect(403);
+        expect(execution.listDriverHistory).not.toHaveBeenCalled();
+      });
     });
 
     describe('an ordinary employee', () => {
@@ -864,6 +876,21 @@ describe('trip-schedule HTTP security', () => {
       it('may still read the assignment history — it is `trip.read`', async () => {
         await authed('get', `/trip-schedules/${TRIP}/driver-assignments`).expect(200);
         expect(execution.listAssignments).toHaveBeenCalledWith(TRIP);
+      });
+
+      /**
+       * ★ THE SAME ROWS AS THE LINE ABOVE, ASKED THE OTHER WAY ROUND. One trip's
+       * turns and one driver's turns are the same table read from opposite ends,
+       * so they carry the same key — guarding them differently would make a fact
+       * readable or not depending on how somebody phrased the question.
+       */
+      it('may read one DRIVER’s history too — the same rows, the same key', async () => {
+        await authed('get', `/trip-drivers/${DRIVER_USER}/trips`).expect(200);
+
+        expect(execution.listDriverHistory).toHaveBeenCalledWith(
+          DRIVER_USER,
+          expect.objectContaining({ limit: expect.any(Number) }),
+        );
       });
     });
 

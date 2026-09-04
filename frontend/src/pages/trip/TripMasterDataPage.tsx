@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Archive, MapPin, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PlateInput } from '@/components/ui/plate-input';
 import { Modal } from '@/components/ui/modal';
 import {
   Table,
@@ -23,6 +24,7 @@ import {
   updateTripVehicle,
 } from '@/api/tripCatalogue';
 import { isApiError } from '@/utils/errors';
+import { stripPlate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import type { TranslationKey } from '@/types/translate';
 import { CustomerLocationsModal } from './components/CustomerLocationsModal';
@@ -358,7 +360,11 @@ function CatalogueFormModal({
   const key = isOpen ? (editing?.id ?? 'new') : null;
   if (key !== seededFor) {
     setSeededFor(key);
-    setLabel(editing?.label ?? '');
+    // ★ THE VEHICLE FIELD'S STATE IS ALWAYS THE PLAIN PLATE, including when it
+    // is seeded from a row stored in one of the workbook's older spellings.
+    // `PlateInput` formats it for the screen; keeping the state plain is what
+    // makes "what is on screen" and "what would be sent" the same value.
+    setLabel(tab === 'vehicles' ? stripPlate(editing?.label) : (editing?.label ?? ''));
     setNote(editing?.note ?? '');
     setError(null);
   }
@@ -372,9 +378,13 @@ function CatalogueFormModal({
 
     try {
       if (tab === 'vehicles') {
+        // ★ THE PLAIN PLATE IS WHAT TRAVELS. `PlateInput` already keeps `label`
+        // in that form; stripping again here is the payload saying so at the
+        // one place a reader looks for it, and costs nothing — it is idempotent.
+        const plate = stripPlate(label);
         await (editing
-          ? updateTripVehicle(editing.id, { plate: label, note: trimmedNote })
-          : createTripVehicle({ plate: label, note: trimmedNote }));
+          ? updateTripVehicle(editing.id, { plate, note: trimmedNote })
+          : createTripVehicle({ plate, note: trimmedNote }));
       } else {
         await (editing
           ? updateTripCustomer(editing.id, { name: label, note: trimmedNote })
@@ -431,13 +441,30 @@ function CatalogueFormModal({
           <label htmlFor="catalogue-label" className="text-sm font-medium text-gray-700">
             {t(isVehicle ? 'plateLabel' : 'customerNameLabel')}
           </label>
-          <Input
-            id="catalogue-label"
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            placeholder={t(isVehicle ? 'platePlaceholder' : 'customerNamePlaceholder')}
-            required
-          />
+          {/*
+            ★ TWO CONTROLS, BECAUSE A PLATE AND A COMPANY NAME ARE NOT THE SAME
+            KIND OF TEXT. A plate has ONE correct spelling — the database says so
+            by matching on `plate_key` — so the field shows it and sends it. A
+            customer name is prose somebody chose; normalising it would be
+            inventing a rule the business never stated.
+          */}
+          {isVehicle ? (
+            <PlateInput
+              id="catalogue-label"
+              value={label}
+              onChange={setLabel}
+              placeholder={t('platePlaceholder')}
+              required
+            />
+          ) : (
+            <Input
+              id="catalogue-label"
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder={t('customerNamePlaceholder')}
+              required
+            />
+          )}
         </div>
 
         <div className="space-y-2">

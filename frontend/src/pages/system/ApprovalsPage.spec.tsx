@@ -36,6 +36,13 @@ vi.mock('@/api/account-invitation', () => ({
 vi.mock('@/api/users', () => ({
   createUser: (...a: unknown[]) => createUser(...a),
 }));
+vi.mock('@/api/driverAccounts', () => ({
+  // The two the Add dialog reaches for. Mocked here because mocking a module
+  // replaces ALL of it — leaving these out would make the dialog's driver path
+  // throw on a spec that has nothing to do with it.
+  createDriver: vi.fn(),
+  requestDriver: vi.fn(),
+}));
 vi.mock('@/api/membership', () => ({
   fetchEmployeeRoster: (...a: unknown[]) => fetchEmployeeRoster(...a),
 }));

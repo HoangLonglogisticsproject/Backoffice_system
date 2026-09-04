@@ -21,7 +21,10 @@ import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/per
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
 import { TripCatalogueService } from '../../src/capabilities/trip-schedule/application/trip-catalogue.service';
 import { TripScheduleService } from '../../src/capabilities/trip-schedule/application/trip-schedule.service';
-import type { TripStatus } from '../../src/capabilities/trip-schedule/domain/trip-schedule';
+import type {
+  TripAssignmentFilter,
+  TripStatus,
+} from '../../src/capabilities/trip-schedule/domain/trip-schedule';
 
 /**
  * The dispatch board against a REAL PostgreSQL.
@@ -50,10 +53,28 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   let trips: TripScheduleService;
   let catalogue: TripCatalogueService;
   let author: string;
+  let driver: string;
 
-  /** Parses a query string exactly as the controller's pipe would. */
-  const asQuery = (raw: Record<string, unknown>, nowIso = '2026-08-15T03:00:00Z') =>
-    buildDateRangePageQuerySchema(() => new Date(nowIso)).parse(raw);
+  /**
+   * Parses a query string exactly as the controller's pipe would.
+   *
+   * The controller intersects the shared range-and-page DTO with the crew
+   * filter, which defaults to `all` — so a caller naming neither end of the
+   * range nor an assignment reads the whole month, crewed or not.
+   */
+  const asQuery = (raw: Record<string, unknown>, nowIso = '2026-08-15T03:00:00Z') => ({
+    ...buildDateRangePageQuerySchema(() => new Date(nowIso)).parse(raw),
+    assignment: (raw['assignment'] as TripAssignmentFilter | undefined) ?? 'all',
+  });
+
+  /** Puts `driver` on a trip, the way the assignment service does. */
+  const crew = async (tripId: string): Promise<void> => {
+    await pool.query(
+      `INSERT INTO trip_driver_assignments (trip_id, driver_user_id, assigned_by)
+       VALUES ($1, $2, $3)`,
+      [tripId, driver, author],
+    );
+  };
 
   beforeAll(async () => {
     assertLooksLikeATestDatabase(TEST_URL as string);
@@ -114,7 +135,9 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     );
     catalogue = new TripCatalogueService(vehicles, customers, new TripLocationRepository(database));
 
-    author = (await new UserRepository(database).insertUser({ displayName: 'Điều Độ' })).id;
+    const users = new UserRepository(database);
+    author = (await users.insertUser({ displayName: 'Điều Độ' })).id;
+    driver = (await users.insertUser({ displayName: 'Tài Xế A', accountType: 'driver' })).id;
   });
 
   afterAll(async () => {
@@ -202,6 +225,93 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     it('orders newest first, which is how a board is read', async () => {
       const page = await trips.list(asQuery({ from: '2026-07-01', to: '2026-09-30' }));
       expect(page.items[0]?.scheduledOn).toBe('2026-09-01');
+    });
+  });
+
+  // ---------------------------------------------------------- the crew filter ----
+
+  /**
+   * ★ THE QUEUE OF UNCREWED TRIPS, AND WHAT MAKES IT A QUEUE.
+   *
+   * A trip joins it when it is entered and leaves it the moment somebody is put
+   * on the row — not when its status moves, which is a different axis entirely.
+   * These cases are here rather than in a unit test because the claim is about
+   * SQL: that the filter narrows the statement, so the page and its total
+   * describe the same set, and that an ENDED assignment puts a trip back in the
+   * queue rather than leaving it counted as crewed forever.
+   */
+  describe('★ filtering the board by whether anybody is driving', () => {
+    let crewed: string;
+    let bare: string;
+
+    beforeEach(async () => {
+      crewed = (await trips.create({ scheduledOn: '2026-08-10', createdBy: author })).id;
+      bare = (await trips.create({ scheduledOn: '2026-08-11', createdBy: author })).id;
+      await trips.create({ scheduledOn: '2026-08-12', createdBy: author });
+      await crew(crewed);
+    });
+
+    it('returns every trip in the range when no filter is named', async () => {
+      const page = await trips.list(asQuery({}));
+      expect(page.total).toBe(3);
+    });
+
+    it('★ returns only the trips with nobody on them, and counts only those', async () => {
+      const page = await trips.list(asQuery({ assignment: 'unassigned' }));
+
+      expect(page.total).toBe(2);
+      expect(page.items.map((trip) => trip.id)).not.toContain(crewed);
+      expect(page.items.every((trip) => trip.driver === null)).toBe(true);
+    });
+
+    it('returns only the crewed trips, with the driver named', async () => {
+      const page = await trips.list(asQuery({ assignment: 'assigned' }));
+
+      expect(page.total).toBe(1);
+      expect(page.items[0]?.id).toBe(crewed);
+      expect(page.items[0]?.driver).toEqual({ id: driver, displayName: 'Tài Xế A' });
+    });
+
+    it('★ moves a trip out of the queue the moment a driver is put on it', async () => {
+      await crew(bare);
+
+      const queue = await trips.list(asQuery({ assignment: 'unassigned' }));
+      expect(queue.total).toBe(1);
+      expect(queue.items.map((trip) => trip.id)).not.toContain(bare);
+    });
+
+    it('★ puts it BACK in the queue when that assignment is ended', async () => {
+      await pool.query(
+        `UPDATE trip_driver_assignments
+            SET state = 'ended', ended_at = now(), ended_by = $2, end_reason = 'nghỉ ốm'
+          WHERE trip_id = $1`,
+        [crewed, author],
+      );
+
+      const queue = await trips.list(asQuery({ assignment: 'unassigned' }));
+
+      expect(queue.total).toBe(3);
+      expect(queue.items.map((trip) => trip.id)).toContain(crewed);
+    });
+
+    it('★ counts the FILTERED set on a page past the end, not the whole range', async () => {
+      // The recovery path: an empty page carries no `COUNT(*) OVER()`, so the
+      // total is read separately — and it has to be the total of the same list,
+      // or the client is sent to a page the filtered board does not have.
+      const beyond = await trips.list(asQuery({ assignment: 'unassigned', page: '9', limit: '10' }));
+
+      expect(beyond.items).toEqual([]);
+      expect(beyond.total).toBe(2);
+      expect(beyond.totalPages).toBe(1);
+    });
+
+    it('leaves an archived trip out of the queue, like every other read', async () => {
+      await trips.archive(bare, author);
+
+      const queue = await trips.list(asQuery({ assignment: 'unassigned' }));
+
+      expect(queue.total).toBe(1);
+      expect(queue.items.map((trip) => trip.id)).not.toContain(bare);
     });
   });
 

@@ -1,10 +1,11 @@
 import { useCallback, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTripSchedules } from '@/api/tripSchedule';
+import { useSession } from '@/contexts/SessionProvider';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useOffsetPages, type OffsetPages } from '@/hooks/useOffsetPages';
 import { currentMonthRange } from '@/utils/format/datetime';
-import type { TripScheduleWithRefs } from '@/types/trip';
+import type { TripAssignmentFilter, TripScheduleWithRefs } from '@/types/trip';
 import { tripKeys } from './keys';
 
 /** The two `YYYY-MM-DD` strings the endpoint filters on. Never `Date`s — see `types/pagination.ts`. */
@@ -20,6 +21,14 @@ export interface TripSchedules extends OffsetPages<TripScheduleWithRefs> {
   setTo: (day: string) => void;
   /** Back to the month the screen opened on. */
   resetRange: () => void;
+  /** Which half of the board is on screen: all of it, or one side of the crew line. */
+  assignment: TripAssignmentFilter;
+  setAssignment: (filter: TripAssignmentFilter) => void;
+  /**
+   * How many trips in the range still have nobody on them — the number on the
+   * tab, whichever tab is open. `null` until it has been read once.
+   */
+  unassignedCount: number | null;
   /** Re-read the list — after a save or an archive. */
   reload: () => void;
 }
@@ -60,8 +69,14 @@ const FILTER_DEBOUNCE_MS = 300;
  * server, and it lags by `FILTER_DEBOUNCE_MS`. Rendering the debounced one
  * instead would make the date field drop characters as the user types.
  *
- * Changing either date resets to page one; `useOffsetPages` does that during
- * render, so narrowing the range never flashes an empty page 5 first.
+ * ★ AND THE CREW FILTER LIVES HERE FOR THE SAME REASON THE RANGE DOES — it is
+ * part of the query, not a display preference. It goes into the cache key, so
+ * the three tabs are three cached lists rather than one list being re-sorted,
+ * and the server answers each with its own `total`.
+ *
+ * Changing either date — or the tab — resets to page one; `useOffsetPages` does
+ * that during render, so narrowing the range never flashes an empty page 5
+ * first, and switching to a tab with fewer pages cannot land past the end.
  *
  * Opens on the current month on the VIEWER's calendar, matching what the server
  * defaults to, so the first render does not flicker between two ranges — and
@@ -70,17 +85,42 @@ const FILTER_DEBOUNCE_MS = 300;
  */
 export function useTripSchedules(): TripSchedules {
   const queryClient = useQueryClient();
+  const { state } = useSession();
 
   const [range, setRange] = useState<DateRange>(() => currentMonthRange());
+  const [assignment, setAssignment] = useState<TripAssignmentFilter>('all');
   const queried = useDebouncedValue(range, FILTER_DEBOUNCE_MS);
 
   const pages = useOffsetPages<TripScheduleWithRefs>(
-    tripKeys.scheduleList(queried),
+    tripKeys.scheduleList({ ...queried, assignment }),
     // Rebuilt every render, and that is fine: `useOffsetPages` keys the cache on
     // the key it was given, not on this closure's identity.
-    (request) => fetchTripSchedules({ ...request, from: queried.from, to: queried.to }),
+    (request) =>
+      fetchTripSchedules({ ...request, from: queried.from, to: queried.to, assignment }),
     { staleTime: SCHEDULE_STALE_MS },
   );
+
+  /**
+   * The number on the "chờ phân công" tab.
+   *
+   * ★ ITS OWN READ, AND `limit: 1` IS WHY IT IS AFFORDABLE. The count has to be
+   * visible from EVERY tab — that is the entire point of a queue badge, to say
+   * there is work waiting without being asked — so it cannot come from the list
+   * on screen, which is a different filter two thirds of the time. It asks for
+   * one row and reads `total`, which the server computes with `COUNT(*) OVER()`
+   * on the same statement either way.
+   *
+   * Keyed on the DEBOUNCED range, like the list, so typing a year in the date
+   * box does not fire four counts.
+   */
+  const count = useQuery({
+    queryKey: tripKeys.unassignedCount(queried),
+    queryFn: () =>
+      fetchTripSchedules({ ...queried, page: 1, limit: 1, assignment: 'unassigned' }),
+    enabled: state?.status === 'ready',
+    staleTime: SCHEDULE_STALE_MS,
+    select: (page) => page.total,
+  });
 
   const setFrom = useCallback(
     (day: string) => setRange((current) => ({ ...current, from: day })),
@@ -97,5 +137,15 @@ export function useTripSchedules(): TripSchedules {
     void queryClient.invalidateQueries({ queryKey: tripKeys.schedules() });
   }, [queryClient]);
 
-  return { ...pages, range, setFrom, setTo, resetRange, reload };
+  return {
+    ...pages,
+    range,
+    setFrom,
+    setTo,
+    resetRange,
+    assignment,
+    setAssignment,
+    unassignedCount: count.data ?? null,
+    reload,
+  };
 }

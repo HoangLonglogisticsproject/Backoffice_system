@@ -1,5 +1,10 @@
 import { httpClient } from './client';
-import type { TripSchedule, TripScheduleWithRefs, TripStatus } from '@/types/trip';
+import type {
+  TripAssignmentFilter,
+  TripSchedule,
+  TripScheduleWithRefs,
+  TripStatus,
+} from '@/types/trip';
 import type { OffsetPage, OffsetPageRequest } from '@/types/pagination';
 
 /**
@@ -55,17 +60,31 @@ export interface CreateTripInput {
  */
 export type UpdateTripInput = Partial<CreateTripInput>;
 
+/**
+ * What narrows the board, on top of the range and the page.
+ *
+ * ★ `assignment` GOES TO THE SERVER, and that is the whole point of it being
+ * here rather than in a `.filter()` on the result. A page is not the result
+ * set: dropping the crewed rows in the browser would leave `total`,
+ * `totalPages` and the `STT` column all describing a list nobody is looking at.
+ */
+export interface TripScheduleQuery extends OffsetPageRequest {
+  assignment?: TripAssignmentFilter;
+}
+
 export async function fetchTripSchedules(
-  request: OffsetPageRequest = {},
+  request: TripScheduleQuery = {},
 ): Promise<OffsetPage<TripScheduleWithRefs>> {
   const { data } = await httpClient.get<OffsetPage<TripScheduleWithRefs>>('/trip-schedules', {
     // axios drops `undefined` params, so an unset filter simply is not sent and
-    // the server applies its own default — the current month.
+    // the server applies its own default — the current month, and the whole
+    // board rather than one of its halves.
     params: {
       from: request.from,
       to: request.to,
       page: request.page,
       limit: request.limit,
+      assignment: request.assignment,
     },
   });
   return data;

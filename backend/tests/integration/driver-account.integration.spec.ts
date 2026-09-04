@@ -23,8 +23,8 @@ import { DepartmentService } from '@core/organization/application/department.ser
 import { MembershipService } from '@core/organization/application/membership.service';
 import { AccountProvisioningService } from '@core/users/application/account-provisioning.service';
 import { UserRepository } from '@core/users/persistence/user.repository';
-import { DriverAccountRequestRepository } from '../../src/capabilities/driver-account/persistence/driver-account-request.repository';
 import { DriverAccountRepository } from '../../src/capabilities/driver-account/persistence/driver-account.repository';
+import { DriverAccountRequestRepository } from '../../src/capabilities/driver-account/persistence/driver-account-request.repository';
 import { DriverAccountService } from '../../src/capabilities/driver-account/application/driver-account.service';
 
 /**
@@ -236,6 +236,21 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       expect((await drivers.get(a.userId)).username).toBe('taixea');
       await expect(drivers.get(boss)).rejects.toThrow(NotFoundError);
       await expect(drivers.get('00000000-0000-0000-0000-000000000000')).rejects.toThrow(NotFoundError);
+    });
+
+    /**
+     * ★ THE TWO HALVES OF THE FEATURE, JOINED. Everything above creates a
+     * driver DIRECTLY. This is the other door — a head proposes, an
+     * administrator approves — and the point is that the roster is where the
+     * account turns up afterwards: the pending queue is empty from that moment,
+     * so it is the only screen left that can say the account exists.
+     */
+    it('★ an APPROVED driver joins the roster as the request leaves the queue', async () => {
+      const proposed = await propose();
+      const { driver } = await drivers.approve({ requestId: proposed.id, decidedBy: boss });
+
+      expect(await drivers.listPending()).toHaveLength(0);
+      expect((await drivers.list()).map((d) => d.id)).toEqual([driver.userId]);
     });
 
     it('★ disable: the driver cannot sign in and their sessions are gone; enable: they can again', async () => {
@@ -651,4 +666,5 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       expect(pending[0]?.id).toBe(waiting.id);
     });
   });
+
 });

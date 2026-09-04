@@ -36,7 +36,7 @@ describe('users HTTP security', () => {
 
   let app: INestApplication;
   let provisioning: { provision: jest.Mock };
-  let lifecycle: { disable: jest.Mock };
+  let lifecycle: { disable: jest.Mock; enable: jest.Mock };
   let users: { requireById: jest.Mock };
   let employment: { listEmployeeHistory: jest.Mock };
   let activeMembership: { departmentId: string } | null;
@@ -61,6 +61,7 @@ describe('users HTTP security', () => {
     };
     lifecycle = {
       disable: jest.fn().mockResolvedValue({ id: TARGET, status: 'disabled' }),
+      enable: jest.fn().mockResolvedValue({ id: TARGET, status: 'active' }),
     };
     users = {
       requireById: jest
@@ -206,8 +207,25 @@ describe('users HTTP security', () => {
       expect(lifecycle.disable).toHaveBeenCalledWith({ userId: TARGET, actingUserId: ACTOR });
     });
 
-    it('refuses to re-enable — that flow is deliberately not implemented', async () => {
+    /**
+     * ★ THIS ROUTE ONLY TAKES SOMEBODY OUT.
+     *
+     * Putting an account back is `PATCH /driver-accounts/:userId/status`, on the
+     * resource that already means "a driver" — and only a driver can be
+     * re-enabled, because an employee's would have to name the department they
+     * return to. Accepting `active` here as well would be a second door onto one
+     * operation, and the two would drift.
+     */
+    it('★ refuses to re-enable — that belongs to the driver resource', async () => {
       await authed('patch', `/users/${TARGET}/status`).send({ status: 'active' }).expect(422);
+
+      expect(lifecycle.disable).not.toHaveBeenCalled();
+      expect(lifecycle.enable).not.toHaveBeenCalled();
+    });
+
+    it('refuses a status that is neither, and reaches no service', async () => {
+      await authed('patch', `/users/${TARGET}/status`).send({ status: 'archived' }).expect(422);
+
       expect(lifecycle.disable).not.toHaveBeenCalled();
     });
   });

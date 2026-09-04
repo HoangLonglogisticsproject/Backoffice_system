@@ -19,6 +19,7 @@ import { UserService } from '../application/user.service';
 import { MembershipService } from '../../organization/application/membership.service';
 import type { EmployeeRosterRow } from '../../organization/domain/department.entity';
 import type { AccountStatus } from '../../../common/types/user-summary';
+import type { AccountType } from '../domain/user.entity';
 
 /**
  * Account administration. GLOBAL only, on every route.
@@ -43,6 +44,20 @@ import type { AccountStatus } from '../../../common/types/user-summary';
 export interface EmployeeDetailResponse {
   user: { id: string; displayName: string };
   accountStatus: AccountStatus;
+  /**
+   * ★ WHAT KIND OF ACCOUNT THIS IS, AND WHY IT HAD TO BE SAID OUT LOUD.
+   *
+   * `memberships: []` has two entirely different meanings. For an employee it
+   * says "no employment period this caller may see" — a head reading somebody
+   * from another unit, or a record still being set up. For a DRIVER it is the
+   * permanent, correct answer: a driver belongs to no unit and never will, which
+   * is exactly why 0018 stores this column rather than deriving it from "has no
+   * active membership" (every offboarded employee looks the same by that test).
+   *
+   * Without this field a screen has to guess which of the two it is looking at,
+   * and an empty table with no explanation reads as a fault.
+   */
+  accountType: AccountType;
   memberships: EmployeeRosterRow[];
 }
 
@@ -56,11 +71,13 @@ const createUserSchema = z.object({
 });
 
 /**
- * Only `disabled` is accepted in this phase.
+ * Only `disabled` is accepted here.
  *
- * Re-enabling asks "into which department", because an active user with none is
- * forbidden — and that answer has not been decided. A schema that accepted
- * `active` would promise behaviour nobody specified.
+ * ★ RE-ENABLING HAS ITS OWN ROUTE, ON ITS OWN RESOURCE. It is a driver-only
+ * operation — an employee's would have to say which department they return to,
+ * and that is undecided — so it lives at `PATCH /driver-accounts/:userId/status`
+ * where the resource already means "a driver". Accepting `active` here too
+ * would be a second door onto one operation, and the two would drift.
  */
 const setStatusSchema = z.object({
   status: z.literal('disabled'),
@@ -127,6 +144,7 @@ export class UsersController {
     return {
       user: { id: user.id, displayName: user.displayName },
       accountStatus: user.status,
+      accountType: user.accountType,
       memberships: await this.employment.listEmployeeHistory(userId, visible),
     };
   }
@@ -165,6 +183,10 @@ export class UsersController {
    *
    * Five writes in one transaction; see `AccountLifecycleService` for why the
    * order is forced rather than chosen. Refuses for the last SuperAdmin.
+   *
+   * ⚠ ONE DIRECTION ONLY. Putting an account back is `PATCH
+   * /driver-accounts/:userId/status`, and only a driver can be — an employee's
+   * would have to name the department they return to.
    */
   @Patch(':userId/status')
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)

@@ -36,6 +36,31 @@ export const TRIP_STATUSES = [
 export type TripStatus = (typeof TRIP_STATUSES)[number];
 
 /**
+ * ★ WHO IS DRIVING, AS A FILTER ON THE BOARD — not a status, and never a sixth one.
+ *
+ * A trip with no driver is not at a different STAGE of work; it is at the same
+ * stage with a question still open against it. The five statuses describe the
+ * cargo ("đang đợi SX", "đợi xe"); this describes the crew, and the two move
+ * independently — a trip can be `awaiting_vehicle` with a driver already named,
+ * and `needs_confirmation` with nobody on it.
+ *
+ * DERIVED, NEVER STORED. A trip is unassigned exactly when it has no `active`
+ * row in `trip_driver_assignments`, and 0014 already makes that the single
+ * answer to "who is driving". A column repeating it here would be a second
+ * answer, wrong from the first moment the two disagree.
+ */
+export const TRIP_ASSIGNMENT_FILTERS = [
+  /** Everything in the range, crewed or not — the board as it has always read. */
+  'all',
+  /** Waiting on a dispatcher: no active assignment. */
+  'unassigned',
+  /** Somebody is on it. */
+  'assigned',
+] as const;
+
+export type TripAssignmentFilter = (typeof TRIP_ASSIGNMENT_FILTERS)[number];
+
+/**
  * One row of the dispatch board.
  *
  * The eight free-text fields are free text ON PURPOSE. They are the parts of

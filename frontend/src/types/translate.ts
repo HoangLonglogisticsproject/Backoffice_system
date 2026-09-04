@@ -529,6 +529,27 @@ const PHRASES = {
     en: 'You are not allowed to view this employee.',
   },
 
+  // ---- A DRIVER opened on the employee detail page. ----
+  // ★ AN ANSWER, NOT AN EMPTY TABLE. A driver belongs to no unit and never
+  // will, so "Lịch sử phòng ban" is permanently blank for one — and a blank
+  // table with no sentence beside it reads as a record that failed to load.
+  driverAccountLabel: { vi: 'Tài xế', en: 'Driver' },
+  driverNoDepartment: {
+    vi: 'Tài xế không thuộc phòng ban nào — đây là trạng thái đúng, không phải dữ liệu thiếu.',
+    en: 'A driver belongs to no department. This is the correct state, not missing data.',
+  },
+  driverTripsTitle: { vi: 'Chuyến đã nhận', en: 'Trips assigned' },
+  emptyDriverTrips: {
+    vi: 'Tài xế này chưa được phân công chuyến nào.',
+    en: 'This driver has not been given a trip yet.',
+  },
+  // ★ THE ASSIGNMENT's state, not the trip's. A trip can be well under way while
+  // this driver's turn on it has already ended — that is precisely what a
+  // replacement is — so the two are shown as separate columns.
+  assignmentActive: { vi: 'Đang phụ trách', en: 'Driving' },
+  assignmentEnded: { vi: 'Đã kết thúc', en: 'Ended' },
+  colAssignment: { vi: 'Phân công', en: 'Assignment' },
+
   // ---- Disabling an account. ACCESS, never deletion. ----
   // ★ THE WORD IS "vô hiệu hóa", NEVER "xóa". Nothing is deleted: the person,
   // their credential and every past period survive. Calling it a deletion would
@@ -554,6 +575,30 @@ const PHRASES = {
   },
   disabling: { vi: 'Đang vô hiệu hóa…', en: 'Disabling…' },
   disableFailed: { vi: 'Không vô hiệu hóa được tài khoản.', en: 'Could not disable the account.' },
+
+  // ---- Putting a DRIVER account back into service. ----
+  // ★ TÀI XẾ THÔI, và lý do nằm ở chỗ khác: mở lại tài khoản nhân viên phải trả
+  // lời "về phòng ban nào", câu đó chưa ai quyết. Tài xế vốn không thuộc phòng
+  // ban nào nên không có câu hỏi để trả lời.
+  enableAccount: { vi: 'Kích hoạt lại', en: 'Re-enable' },
+  enableAccountTitle: { vi: 'Kích hoạt lại tài khoản tài xế?', en: 'Re-enable this driver account?' },
+  enableAccountConfirm: { vi: 'Xác nhận kích hoạt', en: 'Confirm' },
+  enableEffectLogin: {
+    vi: 'Tài xế đăng nhập lại được bằng mật khẩu cũ.',
+    en: 'The driver can sign in again with their existing password.',
+  },
+  enableEffectDispatch: {
+    vi: 'Tài xế xuất hiện trở lại trong danh sách phân công chuyến.',
+    en: 'They appear again in the list of drivers who can be assigned a trip.',
+  },
+  // ⚠ NÓI RÕ ĐIỀU KHÔNG XẢY RA. Vô hiệu hóa có thu hồi phiên đăng nhập, và mở
+  // lại KHÔNG trả chúng về — người đọc cần biết trước khi bấm.
+  enableEffectNoSessions: {
+    vi: 'Các phiên đăng nhập đã bị thu hồi không được khôi phục.',
+    en: 'Sessions revoked at the time are not restored.',
+  },
+  enabling: { vi: 'Đang kích hoạt…', en: 'Enabling…' },
+  enableFailed: { vi: 'Không kích hoạt lại được tài khoản.', en: 'Could not re-enable the account.' },
   // ★ MANAGEMENT, NOT APPROVAL. It shares a screen with the two decision
   // queues and must not share their meaning: nothing here is approved or
   // rejected, it answers "who works here".
@@ -831,6 +876,31 @@ const PHRASES = {
   emptyTrips: {
     vi: 'Không có chuyến nào trong khoảng ngày này.',
     en: 'No trips in this date range.',
+  },
+
+  // ------------------------------------------- Trip schedule — the crew tabs --
+  // ★ THREE TABS OVER ONE LIST, AND THE MIDDLE ONE IS A QUEUE. A trip enters it
+  // when it is entered on the board and leaves it the moment a driver is put on
+  // the row — so "chưa phân công" is a job to do, not a state of the cargo.
+  tripTabAll: { vi: 'Tất cả', en: 'All' },
+  // ★ "Chờ", NOT "Chưa" — the driver cell of an uncrewed row already says "Chưa
+  // phân công", and a tab repeating it word for word would leave two different
+  // things on the same screen reading identically. The tab is the QUEUE; the
+  // cell is one row's answer.
+  tripTabUnassigned: { vi: 'Chờ phân công', en: 'Awaiting a driver' },
+  tripTabAssigned: { vi: 'Đã phân công', en: 'Has a driver' },
+  tripTabsLabel: { vi: 'Lọc theo tài xế', en: 'Filter by driver' },
+  // ★ A DIFFERENT SENTENCE PER TAB. "Không có chuyến nào" under a filter reads
+  // as "the month is empty" when what it means is "every trip here already has
+  // somebody on it" — and a dispatcher who believes the first one goes looking
+  // for rows that were never missing.
+  emptyUnassignedTrips: {
+    vi: 'Mọi chuyến trong khoảng ngày này đều đã có tài xế.',
+    en: 'Every trip in this date range already has a driver.',
+  },
+  emptyAssignedTrips: {
+    vi: 'Chưa chuyến nào trong khoảng ngày này được phân công tài xế.',
+    en: 'No trip in this date range has a driver yet.',
   },
   // ★ AN ANSWER, NOT A PROMPT. The workbook wrote `ĐIỀN SAU` in a cell it had
   // not filled yet, and the API stores that as null — so this reads as a state

@@ -4,7 +4,12 @@ import { toOffsetPage, type OffsetPage } from '../../../common/pagination/offset
 import type { DateRangePageQuery } from '../../../common/pagination/date-range-page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import { optionalPoint } from '../domain/trip-location';
-import type { TripSchedule, TripScheduleWithRefs, TripStatus } from '../domain/trip-schedule';
+import type {
+  TripAssignmentFilter,
+  TripSchedule,
+  TripScheduleWithRefs,
+  TripStatus,
+} from '../domain/trip-schedule';
 import {
   canTransition,
   isCompletionOnlyStatus,
@@ -76,6 +81,20 @@ export type UpdateTripInput = Partial<CreateTripInput> & {
   status?: TripStatus;
 };
 
+/**
+ * Reading the board: the range, the page, and who is driving.
+ *
+ * ★ ONE MORE FIELD THAN `DateRangePageQuery`, AND IT IS NOT PAGINATION. The
+ * range is what makes the offset envelope defensible (ADR-0003); `assignment`
+ * is an ordinary filter on top of it, and it is spelled out here rather than
+ * added to the shared DTO because the other list that DTO serves — the
+ * operational board — has no business gaining a driver filter it never asked
+ * for.
+ */
+export interface TripBoardQuery extends DateRangePageQuery {
+  assignment: TripAssignmentFilter;
+}
+
 /** The fields a patch may CLEAR with `null` — everything but the day and the status. */
 type NullableTripField = Exclude<keyof CreateTripInput, 'scheduledOn' | 'status'>;
 
@@ -120,19 +139,32 @@ export class TripScheduleService {
    * current month and refuses a span over a year, so there is no unbounded read
    * to guard against here — which is the condition ADR-0003 attaches to using
    * offset pagination at all.
+   *
+   * ★ AND THE CREW FILTER IS APPLIED IN SQL, NOT AFTER. `assignment` narrows the
+   * statement, so the page, the total and `totalPages` all describe the SAME
+   * set. Handing back a page and letting the caller drop the crewed rows from it
+   * would leave "20 of 137" printed over four rows — the exact lie ADR-0003 says
+   * this envelope exists to avoid.
    */
-  async list(query: DateRangePageQuery): Promise<OffsetPage<TripScheduleWithRefs>> {
+  async list(query: TripBoardQuery): Promise<OffsetPage<TripScheduleWithRefs>> {
     const range = { from: query.from, to: query.to };
     const offset = (query.page - 1) * query.limit;
 
-    const { items, total } = await this.trips.listPage(range, query.limit, offset);
+    const { items, total } = await this.trips.listPage(
+      range,
+      query.assignment,
+      query.limit,
+      offset,
+    );
 
     // A page past the end comes back with no rows, and therefore with no
     // `COUNT(*) OVER()` to read. Counting separately in that case is what lets
     // a client holding a stale page number see the real `totalPages` and
     // recover, instead of being told the range is empty.
     const resolvedTotal =
-      items.length === 0 && query.page > 1 ? await this.trips.countInRange(range) : total;
+      items.length === 0 && query.page > 1
+        ? await this.trips.countInRange(range, query.assignment)
+        : total;
 
     return toOffsetPage(items, resolvedTotal, query.page, query.limit);
   }
