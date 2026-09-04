@@ -14,5 +14,8 @@ export { formatDate, formatDateTime } from './format/datetime';
 export { formatMoney } from './format/money';
 export { formatWithCommas, stripCommas } from './format';
 
+// The receipt a completed write leaves on screen
+export { notifySuccess, setToastLanguage } from './toast';
+
 // Validation utilities
 export { toLocalPart, toCompanyEmail } from './validation/companyEmail';

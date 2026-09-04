@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { translate, type Language, type TranslationKey } from '@/types/translate';
+import { setToastLanguage } from '@/utils/toast';
 
 /**
  * Which language the interface speaks, and the lookup every screen uses.
@@ -39,6 +40,12 @@ export function LanguageProvider({ children }: Readonly<{ children: ReactNode }>
     setLanguage(next);
     safeWrite(next);
   }, []);
+
+  // Toasts are raised from mutation callbacks, where there is no render and so
+  // no context to read. The choice is pushed to them instead — see `utils/toast`.
+  useEffect(() => {
+    setToastLanguage(language);
+  }, [language]);
 
   const t = useCallback((key: TranslationKey) => translate(language, key), [language]);
 

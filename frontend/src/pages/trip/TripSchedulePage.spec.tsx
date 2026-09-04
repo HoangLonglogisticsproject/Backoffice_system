@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { Toaster } from '@/components/ui/sonner';
 import { ApiError } from '@/utils/errors';
 
 const fetchTripSchedules = vi.fn();
@@ -110,6 +111,11 @@ const renderPage = () => {
       <MemoryRouter initialEntries={['/dispatch/trip-schedule']}>
         <LanguageProvider>
           <TripSchedulePage />
+          {/* The status control has no error line of its own: a refusal is
+              announced by `useUpdateTripStatus` as a toast, the way it is in the
+              real app (`main.tsx`). Mounted here so the test still asserts what
+              a dispatcher actually reads. */}
+          <Toaster />
         </LanguageProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -395,6 +401,38 @@ describe('TripSchedulePage', () => {
       // The label the badge carries, and no control to change it.
       expect(await screen.findByText('Đã xong')).toBeInTheDocument();
       expect(screen.queryByLabelText('Đổi trạng thái')).not.toBeInTheDocument();
+    });
+
+    /**
+     * ★ THE UNDO IS A WRITE, NOT A REWIND. The button sends a fresh PATCH back to
+     * the status the row held before the click, so the server decides it the same
+     * way it decided the change — nothing here edits the cache and calls it done.
+     */
+    it('★ offers Hoàn tác on the receipt, and sends the trip back to where it was', async () => {
+      useSession.mockReturnValue(session(write));
+      renderPage();
+
+      const select = await screen.findByLabelText('Đổi trạng thái');
+      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
+
+      await waitFor(() =>
+        expect(updateTripStatus).toHaveBeenCalledWith('t1', 'needs_confirmation'),
+      );
+
+      // The move itself, on the toast: which way this row went. Waited for
+      // rather than found immediately — the receipt is raised after the server
+      // answers, and sonner mounts it a frame later still.
+      await waitFor(() =>
+        expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
+          'SX rồi, đợi xe → Thông tin cần xác nhận lại',
+        ),
+      );
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Hoàn tác' }));
+
+      await waitFor(() =>
+        expect(updateTripStatus).toHaveBeenLastCalledWith('t1', 'awaiting_vehicle'),
+      );
     });
 
     it('★ puts the old status back when the server refuses, and says why', async () => {

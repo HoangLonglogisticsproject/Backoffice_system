@@ -1008,6 +1008,44 @@ const PHRASES = {
     vi: 'Nhập số tiền, tối đa 2 số lẻ. Ví dụ: 1,500,000',
     en: 'A positive amount, at most 2 decimals. e.g. 1,500,000',
   },
+  // ------------------------------------------------- Toasts (write receipts) --
+  // ★ ONE LINE, PAST TENSE, NAMING THE THING THAT MOVED. A toast is read in the
+  // corner of the eye while the screen behind it is already redrawing, so it
+  // says what happened and nothing else — no "!", no next step, no id. Raised in
+  // the mutation hooks (`utils/toast`), never in a component.
+  // The button sonner draws on the right of a toast. One word, because that is
+  // all the room there is — and it is a key like every other string, so the
+  // button is not the one place the interface forgets which language it speaks.
+  undo: { vi: 'Hoàn tác', en: 'Undo' },
+  toastSignedIn: { vi: 'Đăng nhập thành công', en: 'Signed in' },
+  toastSignedOut: { vi: 'Đã đăng xuất', en: 'Signed out' },
+  // Says the consequence, because this one ends every session the person has.
+  toastPasswordChanged: {
+    vi: 'Đã đổi mật khẩu — vui lòng đăng nhập lại',
+    en: 'Password changed — please sign in again',
+  },
+  toastTripStatusUpdated: { vi: 'Đã cập nhật trạng thái chuyến', en: 'Trip status updated' },
+  toastDriverAssigned: { vi: 'Đã phân công tài xế', en: 'Driver assigned' },
+  toastDriverReplaced: { vi: 'Đã đổi tài xế', en: 'Driver replaced' },
+  toastAssignmentEnded: { vi: 'Đã kết thúc phân công', en: 'Assignment ended' },
+  // ★ "KHÓA SỔ", NOT "ĐÃ DUYỆT". Approving closes the trip permanently, and the
+  // receipt is the last chance to say so.
+  toastCompletionApproved: {
+    vi: 'Đã duyệt hoàn tất — chuyến đã khóa sổ',
+    en: 'Completion approved — the trip is closed',
+  },
+  toastCompletionRejected: {
+    vi: 'Đã trả lại cho tài xế khai lại',
+    en: 'Sent back to the driver',
+  },
+  // The driver portal. Read one-handed, in a cab, so they are shorter still.
+  toastEventReported: { vi: 'Đã ghi nhận', en: 'Recorded' },
+  toastExpenseDeclared: { vi: 'Đã khai chi phí', en: 'Expense declared' },
+  toastExpenseCorrected: { vi: 'Đã sửa khoản chi phí', en: 'Expense corrected' },
+  toastCompletionSubmitted: {
+    vi: 'Đã gửi hoàn tất — chờ văn phòng duyệt',
+    en: 'Completion sent — waiting for review',
+  },
 } as const satisfies Record<string, Phrase>;
 
 export type TranslationKey = keyof typeof PHRASES;
