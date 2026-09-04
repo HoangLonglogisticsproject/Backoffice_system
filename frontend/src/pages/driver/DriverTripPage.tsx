@@ -11,6 +11,7 @@ import { driverErrorKey, shouldReloadAfter } from '@/utils/driverErrors';
 import { currentStage, workflowStages, type WorkflowStage } from '@/utils/driverExecution';
 import { captureLocation } from '@/utils/driverLocation';
 import { formatCalendarDay } from '@/utils/format/datetime';
+import { formatPlate } from '@/utils/format';
 import type { TranslationKey } from '@/types/translate';
 import type { DriverTripDetail, ExecutionEventType, ExpenseDeclaration, LocationEvidence } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
@@ -274,7 +275,7 @@ function TripFacts({ trip }: Readonly<{ trip: DriverTripDetail }>) {
       </CardHeader>
       <CardContent className="space-y-3">
         <FactRow icon={<User />} label={t('driverCustomer')} value={trip.customer?.name ?? null} />
-        <FactRow icon={<Truck />} label={t('driverVehicle')} value={trip.vehicle?.plate ?? null} />
+        <FactRow icon={<Truck />} label={t('driverVehicle')} value={formatPlate(trip.vehicle?.plate) || null} />
         <FactRow icon={<Package />} label={t('driverCargo')} value={trip.cargoInfo} />
 
         {/* ★ THE ONE FIELD WRITTEN FOR THE DRIVER, so it is the one given room. */}

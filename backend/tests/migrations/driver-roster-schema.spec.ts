@@ -2,14 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
- * Asserts the SHAPE of 0022, without a database.
+ * Asserts the SHAPE of 0023, without a database.
  *
  * Same job and same limit as its neighbours: this proves the file SAYS the right
  * thing, not that PostgreSQL agrees. What it is here to catch is the one class
  * of mistake an index-only migration can still make — quietly doing something
  * other than adding an index.
  *
- * ★ 0022 REVERSES A DECISION 0018 WROTE DOWN, which is exactly the kind of
+ * ★ 0023 REVERSES A DECISION 0018 WROTE DOWN, which is exactly the kind of
  * change that gets undone by accident later. The cases below pin both halves:
  * the index on `users.account_type` now exists, and the PARTIAL index 0014 built
  * for the live read is still there beside the new full one rather than replaced
@@ -17,11 +17,11 @@ import { join } from 'node:path';
  */
 const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations');
 
-describe('0022 — the driver roster indexes', () => {
+describe('0023 — the driver roster indexes', () => {
   let sql: string;
 
   beforeAll(async () => {
-    sql = await readFile(join(MIGRATIONS_DIR, '0022_driver_roster_indexes.sql'), 'utf8');
+    sql = await readFile(join(MIGRATIONS_DIR, '0023_driver_roster_indexes.sql'), 'utf8');
   });
 
   const normalized = () => sql.replace(/\s+/g, ' ');
@@ -51,12 +51,11 @@ describe('0022 — the driver roster indexes', () => {
     expect(guarded).toBe(creates);
   });
 
-  it('★ indexes users by account type IN THE ORDER THE KEYSET READS', () => {
-    // The tiebreaker is in the index because `created_at` is not unique:
-    // provisioning several accounts in one transaction stamps them identically,
-    // and a page boundary inside such a tie loses rows without it.
+  it('★ indexes users by account type IN THE ORDER THE LIST READS', () => {
+    // `id` is in the index because a display name is not unique — two drivers
+    // can share one — and it is what makes the list's order total.
     expect(normalized()).toMatch(
-      /CREATE INDEX IF NOT EXISTS idx_users_account_type_page ON users \(account_type, created_at DESC, id DESC\)/i,
+      /CREATE INDEX IF NOT EXISTS idx_users_account_type_name ON users \(account_type, display_name, id\)/i,
     );
   });
 

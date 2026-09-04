@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/table';
 import { CursorPagination } from '@/components/ui/pagination';
 import { MembershipStatusBadge } from '@/components/common/EmployeeRosterTable';
-import { AccountStatusBadge } from '@/components/common/DriverAccountsTable';
+import { StatusPill } from '@/components/common/StatusPill';
 import { TripStatusBadge } from '@/pages/trip/components/TripStatusBadge';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
@@ -23,9 +23,10 @@ import { formatCalendarDay, formatDate } from '@/utils/format/datetime';
 import { formatPlate } from '@/utils/format';
 import { fetchEmployeeDetail } from '@/api/membership';
 import { fetchDriverTrips, type DriverTripHistoryRow } from '@/api/tripAssignment';
-import { disableUser, enableDriverAccount } from '@/api/users';
+import { disableUser } from '@/api/users';
+import { setDriverStatus } from '@/api/driverAccounts';
 import { isApiError } from '@/utils/errors';
-import type { EmployeeRole } from '@/types/organization';
+import type { AccountStatus, EmployeeRole } from '@/types/organization';
 
 /**
  * ONE EMPLOYEE — identity, account state, and employment history. READ ONLY.
@@ -98,7 +99,12 @@ export default function EmployeeDetailPage() {
     setFailure(null);
 
     try {
-      await (direction === 'disable' ? disableUser(userId) : enableDriverAccount(userId));
+      await (direction === 'disable'
+        ? disableUser(userId)
+        : // ★ THE DRIVER RESOURCE, NOT `/users/:id/status`. Re-enabling is a
+          // driver-only operation, so it lives on the route that already means
+          // "a driver"; the core route takes `disabled` and nothing else.
+          setDriverStatus(userId, 'active'));
       setConfirming(null);
       // ★ RE-READ, never patch the object on screen. Disabling also ended a
       // membership and revoked roles, and enabling deliberately restores
@@ -198,7 +204,7 @@ export default function EmployeeDetailPage() {
                   unit. */}
               <dt className="text-sm text-gray-500">{t('accountStatusLabel')}</dt>
               <dd>
-                <AccountStatusBadge status={employee.accountStatus} />
+                <AccountStatusPill status={employee.accountStatus} />
               </dd>
             </dl>
           </div>
@@ -526,5 +532,24 @@ function DriverTrips({ userId }: Readonly<{ userId: string }>) {
         className="border-t border-gray-100 bg-gray-50/30"
       />
     </section>
+  );
+}
+
+/**
+ * `users.status` — may this account operate.
+ *
+ * ⚠ DELIBERATELY NOT `MembershipStatusBadge`, and the words differ for a
+ * reason. That badge says "Đang làm việc / Đã kết thúc" about a period in a
+ * department; this says whether the ACCOUNT may sign in. One shared component
+ * would be one edit away from showing a membership's vocabulary for an account
+ * state — the confusion the two-status separation exists to prevent. The PILL
+ * is shared (`StatusPill`); only the words and the tone are decided here.
+ */
+function AccountStatusPill({ status }: Readonly<{ status: AccountStatus }>) {
+  const { t } = useLanguage();
+  return (
+    <StatusPill tone={status === 'active' ? 'green' : 'gray'}>
+      {status === 'active' ? t('accountActive') : t('accountDisabled')}
+    </StatusPill>
   );
 }

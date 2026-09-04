@@ -6,7 +6,7 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 
 const fetchEmployeeDetail = vi.fn();
 const disableUser = vi.fn();
-const enableDriverAccount = vi.fn();
+const setDriverStatus = vi.fn();
 const fetchDriverTrips = vi.fn();
 const useSession = vi.fn();
 
@@ -18,7 +18,9 @@ vi.mock('@/api/tripAssignment', () => ({
 }));
 vi.mock('@/api/users', () => ({
   disableUser: (...a: unknown[]) => disableUser(...a),
-  enableDriverAccount: (...a: unknown[]) => enableDriverAccount(...a),
+}));
+vi.mock('@/api/driverAccounts', () => ({
+  setDriverStatus: (...a: unknown[]) => setDriverStatus(...a),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
@@ -100,7 +102,7 @@ describe('EmployeeDetailPage', () => {
   beforeEach(() => {
     fetchEmployeeDetail.mockReset().mockResolvedValue(detail());
     disableUser.mockReset().mockResolvedValue(undefined);
-    enableDriverAccount.mockReset().mockResolvedValue(undefined);
+    setDriverStatus.mockReset().mockResolvedValue({ id: USER, status: 'active' });
     fetchDriverTrips
       .mockReset()
       .mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
@@ -602,14 +604,14 @@ describe('EmployeeDetailPage', () => {
           detail({ accountType: 'driver', accountStatus: 'disabled', memberships: [] }),
         );
 
-      it('★ offers the button on a disabled DRIVER, and calls the driver route', async () => {
+      it('★ offers the button on a disabled DRIVER, and calls the DRIVER route', async () => {
         disabledDriver();
         renderPage();
 
         fireEvent.click(await screen.findByRole('button', { name: /kích hoạt lại/i }));
         fireEvent.click(await screen.findByRole('button', { name: /xác nhận kích hoạt/i }));
 
-        await waitFor(() => expect(enableDriverAccount).toHaveBeenCalledWith(USER));
+        await waitFor(() => expect(setDriverStatus).toHaveBeenCalledWith(USER, 'active'));
         expect(disableUser).not.toHaveBeenCalled();
         // ★ RE-READ. Only the server knows what the account looks like after.
         await waitFor(() => expect(fetchEmployeeDetail).toHaveBeenCalledTimes(2));

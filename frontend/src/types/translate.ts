@@ -606,25 +606,6 @@ const PHRASES = {
   filterAllStatuses: { vi: 'Tất cả', en: 'All' },
   filterMembershipStatus: { vi: 'Lọc theo trạng thái', en: 'Filter by status' },
   emptyRoster: { vi: 'Không có nhân viên nào khớp bộ lọc này.', en: 'No employee matches this filter.' },
-
-  // ---- The driver roster. Its own tab, because a driver is not a membership. ----
-  // ★ A SEPARATE LIST, NOT A COLUMN ON THE ONE ABOVE. "Quản lý nhân viên" is a
-  // list of MEMBERSHIPS — one row per person per department — and a driver
-  // belongs to no department, so no row of that list could ever be one. Until
-  // this tab existed, a driver account appeared on no screen at all.
-  tabDriverAccounts: { vi: 'Tài xế', en: 'Drivers' },
-  emptyDrivers: {
-    vi: 'Không có tài khoản tài xế nào khớp bộ lọc này.',
-    en: 'No driver account matches this filter.',
-  },
-  // ★ THE ACCOUNT's status, and the two words are the ones the detail page
-  // already uses for the same column — `accountActive` / `accountDisabled`. The
-  // roster's "Đang làm việc / Đã kết thúc" belong to a membership and would be
-  // the wrong sentence about a driver, who has none.
-  filterAccountStatus: { vi: 'Lọc theo trạng thái tài khoản', en: 'Filter by account status' },
-  // What they sign in with — the local part of the email, derived by the server.
-  colUsername: { vi: 'Tài khoản', en: 'Username' },
-  colCreatedAt: { vi: 'Ngày tạo', en: 'Created' },
   colTitle: { vi: 'Chức danh', en: 'Title' },
   colEmail: { vi: 'Email', en: 'Email' },
   colPhone: { vi: 'SĐT', en: 'Phone' },

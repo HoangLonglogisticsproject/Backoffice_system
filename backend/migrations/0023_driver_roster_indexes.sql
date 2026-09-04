@@ -10,23 +10,21 @@
 -- already built. The backoffice roster asks two questions neither index can
 -- answer, and each of them scans a whole table without one.
 
--- ================================================ every driver, newest first ==
+-- ==================================================== every driver, by name ==
 --
 -- ★ THIS REVERSES A DECISION 0018 MADE EXPLICITLY, and the reversal is the
 -- point rather than an oversight. 0018 wrote: "Every 'is this caller a driver'
 -- check reads this column on the session's user, so it is worth an index only
 -- if that read ever stops being by primary key. It is not." That was true then.
--- `GET /driver-accounts` is precisely the read that stops it being true — it
--- selects BY `account_type` and orders by the keyset, so the sentence above no
--- longer describes the queries this table serves.
+-- Driver Management is precisely the read that stops it being true: it selects
+-- BY `account_type`, so the sentence above no longer describes the queries this
+-- table serves.
 --
--- `(created_at DESC, id DESC)` matches the ORDER BY of the keyset exactly,
--- tiebreaker included. `id` is in the index because `created_at` is NOT unique:
--- provisioning several people in one transaction stamps them identically, and a
--- page boundary inside such a tie loses rows when the comparison is on the
--- timestamp alone.
-CREATE INDEX IF NOT EXISTS idx_users_account_type_page
-  ON users (account_type, created_at DESC, id DESC);
+-- `(display_name, id)` matches the ORDER BY of that list exactly, tiebreaker
+-- included — `DriverAccountRepository.list` reads
+-- `WHERE account_type = 'driver' ORDER BY display_name ASC, id ASC`.
+CREATE INDEX IF NOT EXISTS idx_users_account_type_name
+  ON users (account_type, display_name, id);
 
 -- ============================================ one driver's whole history ==
 --

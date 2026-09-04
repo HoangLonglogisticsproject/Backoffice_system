@@ -8,6 +8,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useMyTrips } from '@/hooks/driver';
 import { driverErrorKey } from '@/utils/driverErrors';
 import { formatCalendarDay, formatTime } from '@/utils/format/datetime';
+import { formatPlate } from '@/utils/format';
 import type { DriverTrip } from '@/types/driver';
 
 /**
@@ -93,7 +94,7 @@ function TripCard({ trip, language }: Readonly<{ trip: DriverTrip; language: 'vi
 
             <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Truck className="size-3.5 shrink-0" aria-hidden />
-              <span className="truncate">{trip.vehicle?.plate ?? t('driverNotSet')}</span>
+              <span className="truncate">{formatPlate(trip.vehicle?.plate) || t('driverNotSet')}</span>
             </p>
 
             <div className="space-y-1 text-sm">

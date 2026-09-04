@@ -69,6 +69,7 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0020_notifications.sql` | project | notifications: một dòng cho mỗi sự kiện nghiệp vụ tới một người nhận · unique `(recipient, event_key)` · T3 deny delete |
 | `0021_void_reason_optional.sql` | project | `trip_costs`: void không bắt buộc lý do — nới hai CHECK |
 | `0022_trip_locations.sql` | project | trip_locations (địa điểm của khách: tên · địa chỉ · liên hệ · toạ độ tuỳ chọn) · unique `(customer_id, name_key)` · `pickup/delivery_location_id` truy vết trên `trip_schedules` · T3 |
+| `0023_driver_roster_indexes.sql` | project | chỉ thêm index: `users(account_type, display_name, id)` cho danh sách tài xế · `trip_driver_assignments(driver_user_id, assigned_at DESC, id DESC)` cho lịch sử chuyến của một tài xế (index 0014 là partial `state='active'` nên không phục vụ được) |
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
 gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0011`
