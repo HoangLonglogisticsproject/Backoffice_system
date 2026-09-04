@@ -60,35 +60,26 @@ const type = (text: string) => fireEvent.change(field(), { target: { value: text
  * the person typing still reads a plate rather than a run of characters.
  */
 describe('PlateInput', () => {
-  it('★ shows the dash and hands back the plain plate', () => {
+  /**
+   * ★ ONE CASE, THREE SPELLINGS OF THE SAME LORRY.
+   *
+   * What is typed differs — run together, lower case, already dashed — and what
+   * the field shows and what it sends must not. That is the whole contract:
+   * the display is a view, the state is the payload.
+   */
+  it.each([
+    ['run together', '50AA123333', '50AA-123333', '50AA123333'],
+    ['in lower case', '50h44266', '50H-44266', '50H44266'],
+    ['already dashed', '51D-65233', '51D-65233', '51D65233'],
+  ])('★ typed %s: shows the dash and hands back the plain plate', (_how, typed, shown, sent) => {
     const onPlain = vi.fn();
     render(<Host onPlain={onPlain} />);
 
-    type('50AA123333');
+    type(typed);
 
-    expect(field().value).toBe('50AA-123333');
+    expect(field().value).toBe(shown);
     // What travels: no separator, the shape `plate_key` is generated from.
-    expect(onPlain).toHaveBeenLastCalledWith('50AA123333');
-  });
-
-  it('upper-cases as it goes, so one lorry cannot become two', () => {
-    const onPlain = vi.fn();
-    render(<Host onPlain={onPlain} />);
-
-    type('50h44266');
-
-    expect(field().value).toBe('50H-44266');
-    expect(onPlain).toHaveBeenLastCalledWith('50H44266');
-  });
-
-  it('accepts a plate typed WITH its dash, and keeps the payload plain', () => {
-    const onPlain = vi.fn();
-    render(<Host onPlain={onPlain} />);
-
-    type('51D-65233');
-
-    expect(field().value).toBe('51D-65233');
-    expect(onPlain).toHaveBeenLastCalledWith('51D65233');
+    expect(onPlain).toHaveBeenLastCalledWith(sent);
   });
 
   it('leaves a half-typed plate alone rather than reshaping it mid-keystroke', () => {

@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { Input } from '@/components/ui/input';
+import { useFormattedInput } from '@/hooks/useFormattedInput';
 import { formatWithCommas, stripCommas } from '@/utils/format';
 
 /**
@@ -19,6 +20,9 @@ import { formatWithCommas, stripCommas } from '@/utils/format';
  * prevent — refuses to display a grouped value at all, and offers a spinner
  * nobody wants on a phone. `inputMode="decimal"` gives the numeric keypad and
  * leaves the text alone.
+ *
+ * The caret arithmetic that makes re-formatting on every keystroke survivable
+ * lives in `useFormattedInput`, which the plate field uses too.
  */
 export function MoneyInput({
   value,
@@ -32,104 +36,16 @@ export function MoneyInput({
     onChange: (plain: string) => void;
   }
 >) {
-  const display = formatWithCommas(value);
-
-  const inputRef = React.useRef<HTMLInputElement | null>(null);
-  /** Where the caret belongs, counted in PLAIN characters — see below. */
-  const caretRef = React.useRef<number | null>(null);
-
-  /**
-   * ★ PUTTING THE CARET BACK, MEASURED IN CHARACTERS THAT ARE REALLY THERE.
-   *
-   * Re-formatting on every keystroke rewrites the whole value, and a rewritten
-   * value sends the caret to the end — so editing the middle of an amount
-   * becomes impossible: every digit typed jumps you back to the end. Restoring
-   * a raw offset does not work either, because inserting a digit can also
-   * insert a comma and shift everything right of it.
-   *
-   * So the position is remembered as a count of NON-SEPARATOR characters, which
-   * is the one measure grouping cannot change, and translated back into display
-   * coordinates once the formatted string exists.
-   */
-  React.useLayoutEffect(() => {
-    const target = inputRef.current;
-    if (!target) return;
-
-    if (target.value !== display) target.value = display;
-
-    const plainCaret = caretRef.current;
-    if (plainCaret === null) return;
-    caretRef.current = null;
-
-    let seen = 0;
-    let position = display.length;
-    for (let index = 0; index < display.length; index += 1) {
-      if (seen === plainCaret) {
-        position = index;
-        break;
-      }
-      if (display[index] !== ',') seen += 1;
-    }
-
-    target.setSelectionRange(position, position);
+  const field = useFormattedInput({
+    value,
+    onChange,
+    format: formatWithCommas,
+    strip: stripCommas,
+    // ⚠ EVERYTHING BUT A COMMA COUNTS. A stray letter is the caller's to show
+    // back rather than this field's to swallow — `formatWithCommas` hands an
+    // unrecognised value straight through, and the caret has to agree with it.
+    isPlain: (char) => char !== ',',
   });
 
-  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const target = event.currentTarget;
-    const raw = target.value;
-    const caret = target.selectionStart ?? raw.length;
-
-    let plain = stripCommas(raw);
-    let plainCaret = countPlain(raw, caret);
-
-    /**
-     * ★ BACKSPACE ON A SEPARATOR DELETES THE DIGIT, NOT THE COMMA.
-     *
-     * A comma is not a character anybody typed, so removing one leaves the
-     * number identical and the formatter simply puts it back. Left alone that
-     * reads as a broken key: the caret sits after `1,` and Backspace does
-     * nothing, forever. Deleting what the person actually meant is both the
-     * expected behaviour and the only one that terminates.
-     */
-    if (plain === value && raw.length < display.length && plainCaret > 0) {
-      plain = plain.slice(0, plainCaret - 1) + plain.slice(plainCaret);
-      plainCaret -= 1;
-    }
-
-    caretRef.current = plainCaret;
-
-    /**
-     * An edit that leaves the plain value untouched — deleting the leading
-     * separator of all things — produces no state change, so React re-renders
-     * nothing and the stripped text would sit in the DOM unformatted. Put the
-     * display back by hand; there is no render coming to do it.
-     */
-    if (plain === value) {
-      caretRef.current = null;
-      target.value = display;
-      target.setSelectionRange(caret, caret);
-      return;
-    }
-
-    onChange(plain);
-  };
-
-  return (
-    <Input
-      ref={inputRef}
-      inputMode="decimal"
-      value={display}
-      onChange={handleChange}
-      {...props}
-    />
-  );
-}
-
-/** How many characters of `text` before `upTo` survive `stripCommas`. */
-function countPlain(text: string, upTo: number): number {
-  let count = 0;
-  for (let index = 0; index < upTo && index < text.length; index += 1) {
-    if (text[index] !== ',') count += 1;
-  }
-  return count;
+  return <Input inputMode="decimal" {...field} {...props} />;
 }

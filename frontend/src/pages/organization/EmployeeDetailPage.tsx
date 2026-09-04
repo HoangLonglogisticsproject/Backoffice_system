@@ -26,7 +26,8 @@ import { fetchDriverTrips, type DriverTripHistoryRow } from '@/api/tripAssignmen
 import { disableUser } from '@/api/users';
 import { setDriverStatus } from '@/api/driverAccounts';
 import { isApiError } from '@/utils/errors';
-import type { AccountStatus, EmployeeRole } from '@/types/organization';
+import type { AccountStatus, EmployeeDetail, EmployeeRole } from '@/types/organization';
+import type { TranslationKey } from '@/types/translate';
 
 /**
  * ONE EMPLOYEE — identity, account state, and employment history. READ ONLY.
@@ -99,12 +100,7 @@ export default function EmployeeDetailPage() {
     setFailure(null);
 
     try {
-      await (direction === 'disable'
-        ? disableUser(userId)
-        : // ★ THE DRIVER RESOURCE, NOT `/users/:id/status`. Re-enabling is a
-          // driver-only operation, so it lives on the route that already means
-          // "a driver"; the core route takes `disabled` and nothing else.
-          setDriverStatus(userId, 'active'));
+      await ACCOUNT_STATUS_ACTIONS[direction].run(userId);
       setConfirming(null);
       // ★ RE-READ, never patch the object on screen. Disabling also ended a
       // membership and revoked roles, and enabling deliberately restores
@@ -114,11 +110,8 @@ export default function EmployeeDetailPage() {
       // The server's words when it has them — it knows about the last-SuperAdmin
       // rule, about an account already in the state asked for, and about
       // re-enabling being a driver-only operation. This screen knows none of it.
-      setFailure(
-        isApiError(error_)
-          ? error_.message
-          : t(direction === 'disable' ? 'disableFailed' : 'enableFailed'),
-      );
+      const failed = ACCOUNT_STATUS_ACTIONS[direction].failed;
+      setFailure(isApiError(error_) ? error_.message : t(failed));
     } finally {
       setBusy(false);
     }
@@ -256,62 +249,13 @@ export default function EmployeeDetailPage() {
         )}
       </section>
 
-      {/*
-        ★ AN EXPLICIT SECOND ACT. The dialog states what actually happens — no
-        login, nothing deleted, history kept — because the word "disable" alone
-        does not tell somebody whether they are about to lose the employee's
-        record. The wording deliberately never says "xóa": nothing is deleted.
-      */}
-      <Modal
-        isOpen={confirming !== null}
+      <AccountStatusDialog
+        direction={confirming}
+        displayName={employee.user.displayName}
+        busy={busy}
+        onConfirm={() => void changeStatus(confirming ?? 'disable')}
         onClose={() => setConfirming(null)}
-        title={confirming === 'enable' ? t('enableAccountTitle') : t('disableAccountTitle')}
-        footer={
-          <>
-            <Button variant="outline" type="button" onClick={() => setConfirming(null)} disabled={busy}>
-              {t('cancel')}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void changeStatus(confirming ?? 'disable')}
-              disabled={busy}
-              className={
-                confirming === 'enable'
-                  ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                  : 'bg-red-600 hover:bg-red-700 text-white'
-              }
-            >
-              {busy
-                ? t(confirming === 'enable' ? 'enabling' : 'disabling')
-                : t(confirming === 'enable' ? 'enableAccountConfirm' : 'disableAccountConfirm')}
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-3 text-sm text-gray-700">
-          <p className="font-medium text-gray-900">{employee.user.displayName}</p>
-          {/*
-            ★ THE TWO LISTS SAY DIFFERENT THINGS, AND THE ENABLE ONE INCLUDES
-            WHAT DOES *NOT* HAPPEN. Somebody expecting "undo" needs to read that
-            the revoked sessions stay revoked before they press the button, not
-            afterwards from a support call.
-          */}
-          {confirming === 'enable' ? (
-            <ul className="list-disc space-y-1 pl-5">
-              <li>{t('enableEffectLogin')}</li>
-              <li>{t('enableEffectDispatch')}</li>
-              <li>{t('enableEffectNoSessions')}</li>
-            </ul>
-          ) : (
-            <ul className="list-disc space-y-1 pl-5">
-              <li>{t('disableEffectLogin')}</li>
-              <li>{t('disableEffectKeepsData')}</li>
-              <li>{t('disableEffectKeepsHistory')}</li>
-              <li>{t('disableEffectAccess')}</li>
-            </ul>
-          )}
-        </div>
-      </Modal>
+      />
 
       {/*
         -------------------------------- 3'. A DRIVER, instead of the two below --
@@ -411,6 +355,122 @@ export default function EmployeeDetailPage() {
       </section>
       )}
     </div>
+  );
+}
+
+/**
+ * What each direction of an account-status change SAYS and DOES.
+ *
+ * ★ A TABLE RATHER THAN A CHAIN OF TERNARIES, and the reason is not tidiness:
+ * the two directions differ in six places — the call, the failure sentence, the
+ * title, the confirm label, the in-flight label, and the list of what actually
+ * happens. Spelled as conditions those six drift apart one edit at a time;
+ * spelled as a row they cannot.
+ *
+ * ★ THE TWO EFFECT LISTS ARE NOT MIRROR IMAGES. Disabling promises the record
+ * survives; enabling has to say what does NOT come back — the sessions it
+ * revoked stay revoked — because somebody expecting "undo" should read that
+ * before they press the button rather than afterwards from a support call.
+ */
+const ACCOUNT_STATUS_ACTIONS = {
+  disable: {
+    run: (userId: string) => disableUser(userId),
+    failed: 'disableFailed',
+    title: 'disableAccountTitle',
+    confirm: 'disableAccountConfirm',
+    inFlight: 'disabling',
+    submitClass: 'bg-red-600 hover:bg-red-700 text-white',
+    effects: [
+      'disableEffectLogin',
+      'disableEffectKeepsData',
+      'disableEffectKeepsHistory',
+      'disableEffectAccess',
+    ],
+  },
+  enable: {
+    // ★ THE DRIVER RESOURCE, NOT `/users/:id/status`. Re-enabling is a
+    // driver-only operation, so it lives on the route that already means "a
+    // driver"; the core route takes `disabled` and nothing else.
+    run: async (userId: string) => {
+      await setDriverStatus(userId, 'active');
+    },
+    failed: 'enableFailed',
+    title: 'enableAccountTitle',
+    confirm: 'enableAccountConfirm',
+    inFlight: 'enabling',
+    submitClass: 'bg-blue-600 hover:bg-blue-700 text-white',
+    effects: ['enableEffectLogin', 'enableEffectDispatch', 'enableEffectNoSessions'],
+  },
+} as const satisfies Record<
+  'disable' | 'enable',
+  {
+    run: (userId: string) => Promise<unknown>;
+    failed: TranslationKey;
+    title: TranslationKey;
+    confirm: TranslationKey;
+    inFlight: TranslationKey;
+    submitClass: string;
+    effects: readonly TranslationKey[];
+  }
+>;
+
+/**
+ * Confirming a change of account status, in either direction.
+ *
+ * ★ AN EXPLICIT SECOND ACT. The dialog states what actually happens — no login,
+ * nothing deleted, history kept — because the word "disable" alone does not tell
+ * somebody whether they are about to lose the employee's record. The wording
+ * deliberately never says "xóa": nothing is deleted.
+ *
+ * Presentational: the page owns the request and the re-read, this owns only what
+ * is drawn. `direction` is `null` when the dialog is shut.
+ */
+function AccountStatusDialog({
+  direction,
+  displayName,
+  busy,
+  onConfirm,
+  onClose,
+}: Readonly<{
+  direction: 'disable' | 'enable' | null;
+  displayName: string;
+  busy: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}>) {
+  const { t } = useLanguage();
+  // Closed: nothing to draw, and no row to look up. Safe to unmount rather than
+  // render a closed `Modal` — its focus trap and body-scroll lock are undone by
+  // an effect CLEANUP, which React runs on unmount just the same.
+  if (direction === null) return null;
+
+  const action = ACCOUNT_STATUS_ACTIONS[direction];
+
+  return (
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={t(action.title)}
+      footer={
+        <>
+          <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
+            {t('cancel')}
+          </Button>
+          <Button type="button" onClick={onConfirm} disabled={busy} className={action.submitClass}>
+            {busy ? t(action.inFlight) : t(action.confirm)}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-sm text-gray-700">
+        <p className="font-medium text-gray-900">{displayName}</p>
+        <ul className="list-disc space-y-1 pl-5">
+          {action.effects.map((effect) => (
+            <li key={effect}>{t(effect)}</li>
+          ))}
+        </ul>
+      </div>
+    </Modal>
   );
 }
 
