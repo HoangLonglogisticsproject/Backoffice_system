@@ -71,20 +71,16 @@ const createUserSchema = z.object({
 });
 
 /**
- * Both directions, and they are NOT symmetric.
+ * Only `disabled` is accepted here.
  *
- * `disabled` applies to anybody. `active` applies to a DRIVER and is refused
- * with 409 for anybody else — re-enabling an employee asks "into which
- * department", because an active employee with none is forbidden, and that
- * answer has still not been decided.
- *
- * ★ THE SCHEMA ADMITS BOTH AND THE SERVICE DECIDES WHICH, rather than the DTO
- * trying to. Whether this account is a driver is a fact in the database, not
- * something a request body can be validated against — a schema that tried would
- * be checking a claim the caller made about somebody else.
+ * ★ RE-ENABLING HAS ITS OWN ROUTE, ON ITS OWN RESOURCE. It is a driver-only
+ * operation — an employee's would have to say which department they return to,
+ * and that is undecided — so it lives at `PATCH /driver-accounts/:userId/status`
+ * where the resource already means "a driver". Accepting `active` here too
+ * would be a second door onto one operation, and the two would drift.
  */
 const setStatusSchema = z.object({
-  status: z.enum(['active', 'disabled']),
+  status: z.literal('disabled'),
 });
 
 type CreateUserInput = z.infer<typeof createUserSchema>;
@@ -183,36 +179,24 @@ export class UsersController {
   }
 
   /**
-   * SetStatus — take somebody out of the deployment, or put a driver back in.
+   * DisableUser — remove somebody from the deployment.
    *
-   * ★ ONE ROUTE, TWO OPERATIONS THAT ARE NOT MIRROR IMAGES. Disabling is five
-   * writes in one transaction — status, roles, sessions, membership — and the
-   * order is forced by the database rather than chosen. Enabling is ONE write,
-   * and restores none of the other four: roles and sessions were deliberately
-   * taken away and come back only by being granted again. `AccountLifecycleService`
-   * carries the argument in full.
+   * Five writes in one transaction; see `AccountLifecycleService` for why the
+   * order is forced rather than chosen. Refuses for the last SuperAdmin.
    *
-   * ★ AND `active` IS A DRIVER-ONLY ANSWER. The service refuses it for an
-   * employee with 409, because re-enabling one asks which department they return
-   * to and nobody has decided that. It is checked there, against the stored
-   * `account_type`, rather than here — the guard authorized the CALLER, and what
-   * kind of account the TARGET is is a fact in the database.
-   *
-   * Disabling still refuses for the last SuperAdmin.
+   * ⚠ ONE DIRECTION ONLY. Putting an account back is `PATCH
+   * /driver-accounts/:userId/status`, and only a driver can be — an employee's
+   * would have to name the department they return to.
    */
   @Patch(':userId/status')
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('user.write')
   async setStatus(
     @Param('userId', UuidParam) userId: string,
-    @Body(new ZodValidationPipe(setStatusSchema)) body: SetStatusInput,
+    @Body(new ZodValidationPipe(setStatusSchema)) _body: SetStatusInput,
     @CurrentUser() actor: SessionUser,
   ): Promise<{ id: string; status: string }> {
-    const changed =
-      body.status === 'active'
-        ? await this.lifecycle.enableDriver(userId)
-        : await this.lifecycle.disable({ userId, actingUserId: actor.id });
-
-    return { id: changed.id, status: changed.status };
+    const disabled = await this.lifecycle.disable({ userId, actingUserId: actor.id });
+    return { id: disabled.id, status: disabled.status };
   }
 }

@@ -36,7 +36,7 @@ describe('users HTTP security', () => {
 
   let app: INestApplication;
   let provisioning: { provision: jest.Mock };
-  let lifecycle: { disable: jest.Mock; enableDriver: jest.Mock };
+  let lifecycle: { disable: jest.Mock; enable: jest.Mock };
   let users: { requireById: jest.Mock };
   let employment: { listEmployeeHistory: jest.Mock };
   let activeMembership: { departmentId: string } | null;
@@ -61,7 +61,7 @@ describe('users HTTP security', () => {
     };
     lifecycle = {
       disable: jest.fn().mockResolvedValue({ id: TARGET, status: 'disabled' }),
-      enableDriver: jest.fn().mockResolvedValue({ id: TARGET, status: 'active' }),
+      enable: jest.fn().mockResolvedValue({ id: TARGET, status: 'active' }),
     };
     users = {
       requireById: jest
@@ -208,32 +208,25 @@ describe('users HTTP security', () => {
     });
 
     /**
-     * ★ RE-ENABLING IS ITS OWN OPERATION, NOT `disable` WITH A FLAG.
+     * ★ THIS ROUTE ONLY TAKES SOMEBODY OUT.
      *
-     * Disabling revokes roles and kills sessions; enabling restores neither, so
-     * routing both through one method would eventually make one the undo of the
-     * other — which is how authority somebody deliberately removed comes back
-     * without anybody granting it.
-     *
-     * WHETHER the target may be enabled at all is the service's to answer: it is
-     * a driver-only operation, and "is this account a driver" is a fact in the
-     * database rather than a claim a request body can be validated against.
+     * Putting an account back is `PATCH /driver-accounts/:userId/status`, on the
+     * resource that already means "a driver" — and only a driver can be
+     * re-enabled, because an employee's would have to name the department they
+     * return to. Accepting `active` here as well would be a second door onto one
+     * operation, and the two would drift.
      */
-    it('★ re-enables through the driver path, never through disable', async () => {
-      const response = await authed('patch', `/users/${TARGET}/status`)
-        .send({ status: 'active' })
-        .expect(200);
+    it('★ refuses to re-enable — that belongs to the driver resource', async () => {
+      await authed('patch', `/users/${TARGET}/status`).send({ status: 'active' }).expect(422);
 
-      expect(response.body).toEqual({ id: TARGET, status: 'active' });
-      expect(lifecycle.enableDriver).toHaveBeenCalledWith(TARGET);
       expect(lifecycle.disable).not.toHaveBeenCalled();
+      expect(lifecycle.enable).not.toHaveBeenCalled();
     });
 
     it('refuses a status that is neither, and reaches no service', async () => {
       await authed('patch', `/users/${TARGET}/status`).send({ status: 'archived' }).expect(422);
 
       expect(lifecycle.disable).not.toHaveBeenCalled();
-      expect(lifecycle.enableDriver).not.toHaveBeenCalled();
     });
   });
 
