@@ -141,6 +141,18 @@ const PHRASES = {
   driverNotSet: { vi: 'Chưa có', en: 'Not set' },
 
   driverProgress: { vi: 'Tiến trình chuyến', en: 'Trip progress' },
+  // The four stages a driver walks through — the stepper and the header pill.
+  driverStagePickup: { vi: 'Lấy hàng', en: 'Pickup' },
+  driverStageDelivery: { vi: 'Giao hàng', en: 'Delivery' },
+  driverStageExpense: { vi: 'Chi phí', en: 'Expenses' },
+  driverStageCompletion: { vi: 'Hoàn thành', en: 'Completion' },
+  driverStageCurrent: { vi: 'Đang thực hiện', en: 'In progress' },
+  driverTripSummary: { vi: 'Thông tin chuyến', en: 'Trip details' },
+  driverTripUnit: { vi: 'chuyến', en: 'trips' },
+  driverAddress: { vi: 'Địa chỉ', en: 'Address' },
+  driverActualPickup: { vi: 'Lấy hàng lúc', en: 'Picked up at' },
+  driverActualDelivery: { vi: 'Giao hàng lúc', en: 'Delivered at' },
+  driverExpenseNone: { vi: 'Không có khoản chi', en: 'No expenses' },
   driverStepArrivedPickup: { vi: 'Đến điểm lấy hàng', en: 'Arrived at pickup' },
   driverStepPickupConfirmed: { vi: 'Xác nhận lấy hàng', en: 'Pickup confirmed' },
   driverStepArrivedDelivery: { vi: 'Đến điểm giao hàng', en: 'Arrived at delivery' },
@@ -215,6 +227,8 @@ const PHRASES = {
 
   // ------------------------------------------------------- notifications --
   driverNotifications: { vi: 'Thông báo', en: 'Notifications' },
+  driverProfile: { vi: 'Hồ sơ', en: 'Profile' },
+  driverNavSection: { vi: 'TÀI XẾ', en: 'DRIVER' },
   driverUnread: { vi: 'chưa đọc', en: 'unread' },
   driverNoNotifications: { vi: 'Chưa có thông báo nào.', en: 'No notifications yet.' },
   driverTripOn: { vi: 'Chuyến ngày', en: 'Trip on' },
@@ -260,6 +274,11 @@ const PHRASES = {
   driverEdit: { vi: 'Sửa', en: 'Edit' },
   driverExpenseLocked: { vi: 'Đang chờ duyệt — chưa sửa được', en: 'Under review — locked' },
   driverExpenseFinal: { vi: 'Đã duyệt — không sửa được', en: 'Approved — final' },
+  driverExpenseRejected: { vi: 'Bị từ chối — cần sửa', en: 'Sent back — needs correction' },
+  // The lifecycle in one word each, for the pill: editable → sent → sent back → approved.
+  driverExpenseSent: { vi: 'Đã gửi', en: 'Sent' },
+  driverExpenseSentBack: { vi: 'Đã từ chối', en: 'Sent back' },
+  driverExpenseApproved: { vi: 'Đã duyệt', en: 'Approved' },
   driverNeedVehicleFirst: {
     vi: 'Chuyến chưa có xe nên chưa khai chi phí được',
     en: 'This trip has no vehicle yet, so expenses cannot be declared',
@@ -384,34 +403,64 @@ const PHRASES = {
     en: 'Proposal sent. Awaiting a SuperAdmin decision.',
   },
   driverRequestQueue: { vi: 'Đề xuất tài khoản tài xế', en: 'Driver account requests' },
+
+  // ------------------------------------------------------- Driver Management --
+  driverManagement: { vi: 'Quản lý tài xế', en: 'Driver management' },
+  driverManagementIntro: {
+    vi: 'Tài khoản tài xế: tạo mới, xem chi tiết, vô hiệu hóa và kích hoạt lại. Phân công chuyến được thực hiện trên Lịch xe.',
+    en: 'Driver accounts: create, view, disable and re-enable. Trips are assigned on the schedule board.',
+  },
+  addDriver: { vi: 'Thêm tài xế', en: 'Add driver' },
+  driverListEmpty: { vi: 'Chưa có tài khoản tài xế nào.', en: 'No driver accounts yet.' },
+  colUsername: { vi: 'Tên đăng nhập', en: 'Username' },
+  colAccountType: { vi: 'Loại tài khoản', en: 'Account type' },
+  colCreatedAt: { vi: 'Ngày tạo', en: 'Created' },
+  viewDetail: { vi: 'Chi tiết', en: 'Details' },
+  driverDetail: { vi: 'Chi tiết tài xế', en: 'Driver details' },
+  driverStatusActive: { vi: 'Đang hoạt động', en: 'Active' },
+  driverStatusDisabled: { vi: 'Đã vô hiệu hóa', en: 'Disabled' },
+  driverCreated: { vi: 'Đã tạo tài khoản tài xế.', en: 'Driver account created.' },
+  disableDriver: { vi: 'Vô hiệu hóa', en: 'Disable' },
+  enableDriver: { vi: 'Kích hoạt lại', en: 'Re-enable' },
+  disableDriverTitle: { vi: 'Vô hiệu hóa tài khoản tài xế?', en: 'Disable this driver account?' },
+  enableDriverTitle: { vi: 'Kích hoạt lại tài khoản tài xế?', en: 'Re-enable this driver account?' },
+  disableDriverConfirm: { vi: 'Xác nhận vô hiệu hóa', en: 'Confirm disable' },
+  enableDriverConfirm: { vi: 'Xác nhận kích hoạt', en: 'Confirm re-enable' },
+  disableDriverWarning: {
+    vi: 'Nếu tài xế đang được phân công chuyến, các phân công hiện tại KHÔNG tự động thay đổi. Vô hiệu hóa tài khoản chỉ khiến tài xế không thể đăng nhập; Điều độ phải đổi tài xế trên chuyến nếu chuyến vẫn cần người chạy.',
+    en: 'If this driver is assigned to trips, those assignments do NOT change automatically. Disabling only stops the driver from signing in; Operations must replace the driver on the trip if it still needs one.',
+  },
+  disableDriverEffectLogin: {
+    vi: 'Tài xế không đăng nhập được nữa; các phiên đang mở bị kết thúc.',
+    en: 'The driver can no longer sign in; open sessions are ended.',
+  },
+  disableDriverEffectAssignments: {
+    vi: 'Phân công chuyến hiện tại và sắp tới giữ nguyên — không kết thúc, không thay thế.',
+    en: 'Current and upcoming trip assignments stay as they are — nothing is ended or replaced.',
+  },
+  disableDriverEffectHistory: {
+    vi: 'Lịch sử chuyến, chi phí và xác nhận hoàn thành được giữ nguyên.',
+    en: 'Trip history, expenses and completion records are kept.',
+  },
+  enableDriverEffectLogin: {
+    vi: 'Tài xế đăng nhập được trở lại bằng mật khẩu hiện có.',
+    en: 'The driver can sign in again with their existing password.',
+  },
+  enableDriverEffectNoAssignment: {
+    vi: 'Không phân công chuyến nào được tạo hay khôi phục; lịch sử không thay đổi.',
+    en: 'No trip assignment is created or restored; history is unchanged.',
+  },
   driverRequestQueueEmpty: {
     vi: 'Không có đề xuất nào đang chờ.',
     en: 'No requests are waiting.',
   },
   driverRequestMine: { vi: 'Đề xuất của tôi', en: 'My proposals' },
-  driverRequestRequester: { vi: 'Người đề xuất', en: 'Proposed by' },
-  driverRequestedAt: { vi: 'Thời điểm đề xuất', en: 'Proposed at' },
+  driverRequestMineEmpty: {
+    vi: 'Bạn chưa gửi đề xuất tài khoản tài xế nào.',
+    en: 'You have not proposed a driver account yet.',
+  },
   driverRequestDecidedBy: { vi: 'Người duyệt', en: 'Decided by' },
-  driverRequestDecidedAt: { vi: 'Thời điểm duyệt', en: 'Decided at' },
-  driverRequestStatusPending: { vi: 'Chờ duyệt', en: 'Awaiting decision' },
-  driverRequestStatusApproved: { vi: 'Đã duyệt', en: 'Approved' },
-  driverRequestStatusRejected: { vi: 'Đã từ chối', en: 'Rejected' },
-  driverRequestApprove: { vi: 'Duyệt', en: 'Approve' },
-  driverRequestReject: { vi: 'Từ chối', en: 'Reject' },
   driverRequestRejectReason: { vi: 'Lý do từ chối', en: 'Reason for rejection' },
-  driverRequestRejectReasonHint: {
-    vi: 'Bắt buộc — người đề xuất cần biết phải sửa gì.',
-    en: 'Required — the requester needs to know what to fix.',
-  },
-  driverRequestReasonRequired: {
-    vi: 'Phải nhập lý do từ chối.',
-    en: 'A reason is required.',
-  },
-  driverRequestApproveWarning: {
-    vi: 'Duyệt sẽ tạo tài khoản tài xế và kích hoạt ngay. Mật khẩu tạm chỉ hiện một lần.',
-    en: 'Approving creates the driver account and activates it. The temporary password is shown once.',
-  },
-  driverCreatedTitle: { vi: 'Đã tạo tài khoản tài xế', en: 'Driver account created' },
 
   // Employee Management Page
   employeeList: { vi: 'Danh sách nhân viên', en: 'Employee List' },
@@ -585,6 +634,7 @@ const PHRASES = {
   // Add Employee Modal
   addNewEmployee: { vi: 'Thêm nhân viên mới', en: 'Add New Employee' },
   cancel: { vi: 'Hủy bỏ', en: 'Cancel' },
+  close: { vi: 'Đóng', en: 'Close' },
   saveEmployee: { vi: 'Lưu nhân viên', en: 'Save Employee' },
   fullNameLabel: { vi: 'Họ và tên *', en: 'Full Name *' },
   fullNamePlaceholder: { vi: 'Nhập họ và tên', en: 'Enter full name' },
@@ -626,6 +676,7 @@ const PHRASES = {
   // like everything else a person can perceive.
   closeLabel: { vi: 'Đóng', en: 'Close' },
   toggleNavigation: { vi: 'Ẩn/hiện điều hướng', en: 'Toggle navigation' },
+  closeNavigation: { vi: 'Đóng điều hướng', en: 'Close navigation' },
   pageSizeLabel: { vi: 'Số dòng mỗi trang', en: 'Rows per page' },
   languageLabel: { vi: 'Ngôn ngữ', en: 'Language' },
   copyFailed: { vi: 'Không sao chép được', en: 'Copy failed' },
@@ -886,8 +937,36 @@ const PHRASES = {
   fieldPickupContact: { vi: 'Liên hệ lấy hàng', en: 'Pickup contact' },
   fieldDeliveryContact: { vi: 'Liên hệ giao hàng', en: 'Delivery contact' },
   fieldPickupAt: { vi: 'Giờ lấy hàng', en: 'Pickup time' },
-  fieldPickupLocation: { vi: 'Toạ độ điểm lấy hàng', en: 'Pickup coordinates' },
-  fieldDeliveryLocation: { vi: 'Toạ độ điểm giao hàng', en: 'Delivery coordinates' },
+  // ------------------------------------------------ customer locations --
+  locationsTitle: { vi: 'Địa điểm', en: 'Locations' },
+  manageLocations: { vi: 'Địa điểm', en: 'Locations' },
+  emptyLocations: { vi: 'Khách hàng chưa có địa điểm.', en: 'This customer has no locations yet.' },
+  addLocation: { vi: 'Thêm địa điểm', en: 'Add location' },
+  editLocation: { vi: 'Sửa địa điểm', en: 'Edit location' },
+  locationName: { vi: 'Tên địa điểm', en: 'Location name' },
+  locationAddress: { vi: 'Địa chỉ', en: 'Address' },
+  locationContact: { vi: 'Liên hệ', en: 'Contact' },
+  locationCoordinates: { vi: 'Toạ độ', en: 'Coordinates' },
+  locationLocated: { vi: 'Đã định vị', en: 'Located' },
+  locationUnlocated: { vi: 'Chưa định vị', en: 'Not located' },
+  // No map provider yet: the pair is entered here, once, as master data — and
+  // never on a trip.
+  locationCoordinatesHint: {
+    vi: 'Không bắt buộc. Nhập cả hai hoặc để trống cả hai; hệ thống chưa tự tra toạ độ từ địa chỉ.',
+    en: 'Optional. Enter both or leave both empty; the system does not look coordinates up from the address.',
+  },
+  archiveLocationConfirm: { vi: 'Lưu trữ địa điểm', en: 'Archive location' },
+  selectLocation: { vi: 'Chọn địa điểm', en: 'Choose a location' },
+  noLocationSelected: { vi: 'Chưa chọn địa điểm — nhập địa chỉ tự do', en: 'No location chosen — enter the address by hand' },
+  chooseCustomerFirst: { vi: 'Chọn khách hàng trước', en: 'Choose a customer first' },
+  // ★ Said on the trip form the moment an unlocated place is chosen: the driver
+  // will be refused the GPS confirmation there until the place is located.
+  locationUnlocatedWarning: {
+    vi: 'Địa điểm này chưa có toạ độ: tài xế sẽ không xác nhận GPS được tại đây cho tới khi địa điểm được định vị.',
+    en: 'This location has no coordinates: the driver cannot confirm by GPS here until it is located.',
+  },
+  fieldPickupLocation: { vi: 'Điểm lấy hàng', en: 'Pickup location' },
+  fieldDeliveryLocation: { vi: 'Điểm giao hàng', en: 'Delivery location' },
   fieldLatitude: { vi: 'Vĩ độ', en: 'Latitude' },
   fieldLongitude: { vi: 'Kinh độ', en: 'Longitude' },
   // Why the office is asked for numbers next to a prose address.

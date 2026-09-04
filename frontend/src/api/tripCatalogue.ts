@@ -1,5 +1,5 @@
 import { httpClient } from './client';
-import type { TripCustomer, TripVehicle } from '@/types/trip';
+import type { TripCustomer, TripLocation, TripVehicle } from '@/types/trip';
 
 /**
  * The vehicle and customer catalogues (contract §21).
@@ -28,6 +28,16 @@ export interface UpdateVehicleInput {
 export interface CreateCustomerInput {
   name: string;
   note?: string | null;
+}
+
+export interface LocationInput {
+  name: string;
+  address: string;
+  contact?: string | null;
+  note?: string | null;
+  /** Both or neither. The server refuses half a point. */
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface UpdateCustomerInput {
@@ -115,6 +125,54 @@ export async function updateTripCustomer(
 export async function archiveTripCustomer(customerId: string): Promise<TripCustomer> {
   const { data } = await httpClient.post<TripCustomer>(
     `/trip-customers/${encodeURIComponent(customerId)}/archive`,
+  );
+  return data;
+}
+
+// ------------------------------------------------------------- locations ----
+//
+// ★ ALWAYS UNDER A CUSTOMER. Every call names the customer in the path; there
+// is no `/trip-locations`, and the server holds each id to its customer.
+
+const locationsPath = (customerId: string) =>
+  `/trip-customers/${encodeURIComponent(customerId)}/locations`;
+
+export async function fetchTripLocations(
+  customerId: string,
+  includeArchived = false,
+): Promise<TripLocation[]> {
+  const { data } = await httpClient.get<TripLocation[]>(locationsPath(customerId), {
+    params: archivedParam(includeArchived),
+  });
+  return data;
+}
+
+export async function createTripLocation(
+  customerId: string,
+  input: LocationInput,
+): Promise<TripLocation> {
+  const { data } = await httpClient.post<TripLocation>(locationsPath(customerId), input);
+  return data;
+}
+
+export async function updateTripLocation(
+  customerId: string,
+  locationId: string,
+  input: Partial<LocationInput>,
+): Promise<TripLocation> {
+  const { data } = await httpClient.patch<TripLocation>(
+    `${locationsPath(customerId)}/${encodeURIComponent(locationId)}`,
+    input,
+  );
+  return data;
+}
+
+export async function archiveTripLocation(
+  customerId: string,
+  locationId: string,
+): Promise<TripLocation> {
+  const { data } = await httpClient.post<TripLocation>(
+    `${locationsPath(customerId)}/${encodeURIComponent(locationId)}/archive`,
   );
   return data;
 }

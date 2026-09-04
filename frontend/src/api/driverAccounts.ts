@@ -1,6 +1,4 @@
 import { httpClient } from './client';
-import type { Page, PageRequest } from '@/types/pagination';
-import type { AccountStatus } from '@/types/organization';
 
 /**
  * Driver accounts — created outright, or proposed and then decided.
@@ -75,47 +73,56 @@ export interface DriverAccountRequestWithUsers extends DriverAccountRequest {
   decider: { id: string; displayName: string } | null;
 }
 
+// ------------------------------------------------------ driver management --
+
+export type DriverAccountStatus = 'active' | 'disabled';
+
 /**
- * One line of the driver roster (`GET /driver-accounts`).
+ * A driver account as the administrator's screen may know it.
  *
- * ★ NOT AN `EmployeeRosterRow`, AND THE MISSING COLUMNS ARE THE REASON. That
- * shape carries a department, a role and a membership status because its rows
- * ARE memberships. A driver has none of the three, and a type that offered them
- * as empty strings would invite a screen to print them.
+ * ★ SIX FIELDS, AND NO ROOM FOR A SEVENTH. This is what `GET /driver-accounts`
+ * returns — a projection of `users` with the sign-in name derived. There is
+ * no password, no hash, no session and no temporary credential on it, and a
+ * screen that shows "everything about the driver" shows exactly this.
  */
-export interface DriverAccountRow {
-  user: { id: string; displayName: string };
-  /**
-   * What they sign in with — the local part of their email, derived by the
-   * server. The one column that tells two drivers with the same name apart, and
-   * the one somebody checks against what they were shown at creation.
-   */
+export interface DriverAccount {
+  id: string;
+  displayName: string;
+  /** Local part of the sign-in address; `null` when there is no local identity. */
   username: string | null;
-  /** `users.status`. There is no membership status here to confuse it with. */
-  accountStatus: AccountStatus;
+  accountType: 'driver';
+  status: DriverAccountStatus;
   createdAt: string;
 }
 
+/** `GET /driver-accounts` — every driver account, retired ones included. Global only. */
+export async function fetchDrivers(): Promise<DriverAccount[]> {
+  const { data } = await httpClient.get<DriverAccount[]>('/driver-accounts');
+  return data;
+}
+
+/** `GET /driver-accounts/:id`. An employee's id is 404 here, by design. */
+export async function fetchDriver(userId: string): Promise<DriverAccount> {
+  const { data } = await httpClient.get<DriverAccount>(
+    `/driver-accounts/${encodeURIComponent(userId)}`,
+  );
+  return data;
+}
+
 /**
- * `GET /driver-accounts` — every driver account, newest first.
- *
- * ★ THE ONLY LIST THAT PROVES A DRIVER ACCOUNT EXISTS. `GET /memberships` reads
- * MEMBERSHIPS and a driver has none, so it can never show one; `GET /trip-drivers`
- * answers "who may I put on this trip" — live accounts only, and a different
- * question.
- *
- * ★ `status` GOES TO THE SERVER. Dropping disabled rows from a fetched page here
- * would hand back a short page whose `hasMore` described a different list.
+ * `PATCH /driver-accounts/:id/status` — disable or re-enable. ACCOUNT STATUS
+ * ONLY: the server revokes sessions on disable, and touches no trip
+ * assignment in either direction. Whether a trip still needs a driver is
+ * Operations' question, answered through the assignment flow.
  */
-export async function fetchDriverAccounts(
-  page: PageRequest = {},
-  status?: AccountStatus,
-): Promise<Page<DriverAccountRow>> {
-  const { data } = await httpClient.get<Page<DriverAccountRow>>('/driver-accounts', {
-    // `undefined` is dropped by the client, which is how "Tất cả" asks for both
-    // without a magic value meaning "do not filter".
-    params: { limit: page.limit, cursor: page.cursor, status },
-  });
+export async function setDriverStatus(
+  userId: string,
+  status: DriverAccountStatus,
+): Promise<{ id: string; status: DriverAccountStatus }> {
+  const { data } = await httpClient.patch<{ id: string; status: DriverAccountStatus }>(
+    `/driver-accounts/${encodeURIComponent(userId)}/status`,
+    { status },
+  );
   return data;
 }
 

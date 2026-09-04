@@ -1,9 +1,9 @@
 import { useCallback, useMemo } from 'react';
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
-import { fetchTripCustomers, fetchTripVehicles } from '@/api/tripCatalogue';
+import { fetchTripCustomers, fetchTripLocations, fetchTripVehicles } from '@/api/tripCatalogue';
 import { useSession } from '@/contexts/SessionProvider';
 import { ApiError, isApiError } from '@/utils/errors';
-import type { TripCustomer, TripVehicle } from '@/types/trip';
+import type { TripCustomer, TripLocation, TripVehicle } from '@/types/trip';
 import { tripKeys } from './keys';
 
 /**
@@ -102,6 +102,43 @@ export function useTripCatalogue(includeArchived = false): TripCatalogue {
     loading: vehicleList.loading || customerList.loading,
     reload,
   };
+}
+
+/**
+ * ONE customer's places, or nothing while no customer is chosen.
+ *
+ * ★ KEYED BY THE CUSTOMER. Switching customer switches the cache entry, so a
+ * list for customer A can never be shown under customer B; the trip form
+ * additionally drops a selected place the moment it stops belonging to the
+ * customer on the form.
+ */
+export function useTripLocations(
+  customerId: string | null,
+  includeArchived = false,
+): CatalogueList<TripLocation> & { reload: () => Promise<void> } {
+  const queryClient = useQueryClient();
+  const { state, loading: sessionLoading } = useSession();
+  const enabled = state?.status === 'ready' && customerId !== null;
+
+  const query = useQuery({
+    queryKey: tripKeys.locations(customerId ?? '', includeArchived),
+    queryFn: () => fetchTripLocations(customerId as string, includeArchived),
+    enabled,
+    staleTime: CATALOGUE_STALE_MS,
+  });
+
+  // Returns the invalidation, which resolves once the active list has been
+  // re-read — so a caller that must act on the NEW list can wait for it.
+  const reload = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: tripKeys.catalogues() }),
+    [queryClient],
+  );
+
+  const list = useCatalogueList(query, sessionLoading);
+  // No customer: an empty, settled list — not a loading one.
+  return customerId === null
+    ? { data: [], items: [], error: null, loading: false, forbidden: false, notFound: false, reload }
+    : { ...list, reload };
 }
 
 /** The query's own shape, as the four states a screen actually branches on. */

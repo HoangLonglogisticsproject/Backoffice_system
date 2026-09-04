@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConflictError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
-import type { TripCustomer, TripVehicle } from '../domain/trip-schedule';
+import { optionalPoint } from '../domain/trip-location';
+import type { TripCustomer, TripLocation, TripVehicle } from '../domain/trip-schedule';
 import {
   TripCustomerRepository,
+  TripLocationRepository,
+  type TripLocationValues,
   TripVehicleRepository,
 } from '../persistence/trip-catalogue.repository';
 
@@ -25,6 +28,7 @@ export class TripCatalogueService {
   constructor(
     private readonly vehicles: TripVehicleRepository,
     private readonly customers: TripCustomerRepository,
+    private readonly locations: TripLocationRepository,
   ) {}
 
   // ------------------------------------------------------------- vehicles ----
@@ -148,6 +152,103 @@ export class TripCatalogueService {
     return archived;
   }
 
+  // ------------------------------------------------------------ locations ----
+
+  /**
+   * ★ EVERY METHOD TAKES THE CUSTOMER FROM THE ROUTE AND HOLDS THE LOCATION TO
+   * IT. A location id under the wrong customer is answered "not found" —
+   * exactly as a missing one — so a caller holding an id learns nothing
+   * about another customer's places. There is no list that spans customers.
+   */
+
+  async listLocations(customerId: string, includeArchived: boolean): Promise<TripLocation[]> {
+    await this.requireCustomer(customerId);
+    return this.locations.listByCustomer(customerId, includeArchived);
+  }
+
+  async createLocation(
+    customerId: string,
+    input: LocationInput & { createdBy: string },
+  ): Promise<TripLocation> {
+    const customer = await this.requireCustomer(customerId);
+    if (customer.status !== 'active') {
+      throw new ConflictError('That customer has been retired; add no places to it.');
+    }
+
+    const values = locationValues(input);
+    const clash = await this.findLocationByKey(customerId, values.name);
+    if (clash) {
+      throw new ConflictError(`This customer already has that place, as “${clash.name}”.`);
+    }
+
+    return this.locations.create({ ...values, customerId, createdBy: input.createdBy });
+  }
+
+  async updateLocation(
+    customerId: string,
+    id: string,
+    input: Partial<LocationInput>,
+  ): Promise<TripLocation> {
+    const current = await this.requireLocation(customerId, id);
+    if (current.status !== 'active') {
+      throw new ConflictError('That location has been archived and cannot be edited.');
+    }
+
+    // A patch: an absent key keeps the row's value, a present one replaces it
+    // — including `null` to clear a contact, a note, or the coordinates.
+    const values = locationValues({
+      // `??` is exact here: both fields are `string | undefined` on a patch,
+      // never null, so "absent" is the only case that falls through.
+      name: input.name ?? current.name,
+      address: input.address ?? current.address,
+      contact: 'contact' in input ? input.contact : current.contact,
+      note: 'note' in input ? input.note : current.note,
+      latitude: 'latitude' in input ? input.latitude : current.latitude,
+      longitude: 'longitude' in input ? input.longitude : current.longitude,
+    });
+
+    const clash = await this.findLocationByKey(customerId, values.name);
+    if (clash && clash.id !== id) {
+      throw new ConflictError(`This customer already has another place named “${clash.name}”.`);
+    }
+
+    const updated = await this.locations.update(id, customerId, values);
+    if (!updated) throw new NotFoundError('Location not found.');
+    return updated;
+  }
+
+  async archiveLocation(customerId: string, id: string): Promise<TripLocation> {
+    await this.requireLocation(customerId, id);
+    const archived = await this.locations.archive(id, customerId);
+    if (!archived) throw new ConflictError('That location has already been archived.');
+    return archived;
+  }
+
+  private async requireCustomer(customerId: string): Promise<TripCustomer> {
+    const customer = await this.customers.findById(customerId);
+    if (!customer) throw new NotFoundError('Customer not found.');
+    return customer;
+  }
+
+  /** The location, only if it is this customer's. Otherwise: not found. */
+  private async requireLocation(customerId: string, id: string): Promise<TripLocation> {
+    const location = await this.locations.findById(id);
+    // Two refusals with one sentence: missing, and somebody else's.
+    if (!location) throw new NotFoundError('Location not found.');
+    if (location.customerId !== customerId) throw new NotFoundError('Location not found.');
+    return location;
+  }
+
+  /** Same normalisation as `name_key` in 0022 — and, as for the plate, only for a better message. */
+  private async findLocationByKey(
+    customerId: string,
+    name: string,
+  ): Promise<TripLocation | undefined> {
+    const key = nameKey(name);
+    const rows = await this.locations.listByCustomer(customerId, false);
+    return rows.find((row) => nameKey(row.name) === key);
+  }
+
   // ---------------------------------------------------------------------------
 
   /**
@@ -198,3 +299,40 @@ const requireText = (value: string, message: string): string => {
   if (trimmed === '') throw new ValidationError(message);
   return trimmed;
 };
+
+/** What a caller may say about a place. */
+export interface LocationInput {
+  name: string;
+  address: string;
+  contact?: string | null;
+  note?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+/**
+ * Trims, requires the two texts, and refuses half a point or one off the
+ * planet with a sentence — the CHECK in 0022 says it again without one.
+ */
+const locationValues = (input: LocationInput): TripLocationValues => {
+  const point = optionalPoint(input.latitude, input.longitude);
+  if (!point.ok) {
+    throw new ValidationError(
+      point.reason === 'HALF_A_POINT'
+        ? 'A location needs both a latitude and a longitude, or neither.'
+        : 'Those coordinates are not a place on Earth.',
+      { latitude: point.reason },
+    );
+  }
+  return {
+    name: requireText(input.name, 'A location needs a name.'),
+    address: requireText(input.address, 'A location needs an address.'),
+    contact: trimOrNull(input.contact),
+    note: trimOrNull(input.note),
+    latitude: point.latitude,
+    longitude: point.longitude,
+  };
+};
+
+/** `upper(trim(regexp_replace(name, '\s+', ' ', 'g')))`, as 0011 and 0022 compute it. */
+const nameKey = (name: string): string => name.replace(/\s+/g, ' ').trim().toUpperCase();

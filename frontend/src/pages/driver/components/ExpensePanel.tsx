@@ -1,9 +1,12 @@
 import { useEffect, useId, useState } from 'react';
 import { Loader2, Lock, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { MoneyInput } from '@/components/ui/money-input';
+import { StatusPill, type StatusTone } from '@/components/common/StatusPill';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { cn } from '@/utils/cn';
 import {
   allowedCategories,
   canDeclareExpense,
@@ -17,6 +20,7 @@ import { TRIP_COST_CATEGORIES } from '@/types/tripCost';
 import type { TripCost, TripCostCategory } from '@/types/tripCost';
 import type { TranslationKey } from '@/types/translate';
 import type { DriverTripDetail } from '@/types/driver';
+import { RejectionNotice } from './RejectionNotice';
 
 /**
  * The five headings a driver may declare, and the figures they have declared.
@@ -72,21 +76,25 @@ const lockedReasonKey = (trip: DriverTripDetail): TranslationKey => {
 };
 
 /**
- * The chip in the panel header — where the figures stand.
+ * The pill in the panel header — where the figures stand, in the lifecycle
+ * the driver has to be able to read: editable → sent (locked) → sent back
+ * (editable again, with a reason) → approved (final).
  *
- * ★ THE SAME PRECEDENCE, AND DELIBERATELY NOT MERGED WITH `lockedReasonKey`.
- * They agree today but answer different questions: one explains an absent form,
- * the other labels a state that also exists while the form IS shown. Folding
- * them would tie a future change in one to the other.
+ * ★ THE SAME PRECEDENCE AS `lockedReasonKey`, AND DELIBERATELY NOT MERGED.
+ * They agree today but answer different questions: one explains an absent
+ * form, the other labels a state that also exists while the form IS shown.
  */
-const stateChipKey = (trip: DriverTripDetail): TranslationKey => {
-  if (trip.accountability === 'APPROVED_IMMUTABLE') return 'driverExpenseFinal';
-  if (trip.completion?.state === 'pending') return 'driverExpenseLocked';
-  return 'driverExpenseOpen';
+const expenseState = (trip: DriverTripDetail): { label: TranslationKey; tone: StatusTone } => {
+  if (trip.accountability === 'APPROVED_IMMUTABLE') return { label: 'driverExpenseApproved', tone: 'green' };
+  if (trip.completion?.state === 'pending') return { label: 'driverExpenseSent', tone: 'amber' };
+  if (trip.accountability === 'REJECTED_NEEDS_CORRECTION') return { label: 'driverExpenseSentBack', tone: 'gray' };
+  return { label: 'driverExpenseOpen', tone: 'gray' };
 };
 
 interface Props {
   trip: DriverTripDetail;
+  /** This is the stage the driver is on: the card is lit up. */
+  live: boolean;
   onDeclare: (input: {
     category: TripCostCategory;
     amount: string;
@@ -121,6 +129,7 @@ interface Props {
 
 export function ExpensePanel({
   trip,
+  live,
   onDeclare,
   onCorrect,
   saving,
@@ -148,12 +157,26 @@ export function ExpensePanel({
     onFormClosed();
   };
 
+  const state = expenseState(trip);
+  const rejected = trip.accountability === 'REJECTED_NEEDS_CORRECTION';
+
   return (
-    <section id="driver-expenses" className="rounded-xl border border-border bg-background p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">{t('driverExpenses')}</h2>
-        <StateChip trip={trip} />
-      </div>
+    <Card id="driver-expenses" className={cn(live && 'ring-primary/60')}>
+      <CardHeader>
+        <CardTitle>{t('driverExpenses')}</CardTitle>
+        <CardAction>
+          <StatusPill tone={state.tone}>{t(state.label)}</StatusPill>
+        </CardAction>
+      </CardHeader>
+
+      <CardContent className="space-y-3">
+      {/* ★ THE REASON COMES FIRST when the figures were sent back: it is the
+          one thing that says what to correct, and the lines to correct are
+          right below it. Resubmitting is the completion card's, and it is
+          never automatic. */}
+      {rejected && trip.completion ? (
+        <RejectionNotice title={t('driverExpenseRejected')} reason={trip.completion.decisionReason} />
+      ) : null}
 
       {lines.length === 0 ? (
         <p className="py-2 text-sm text-muted-foreground">{t('driverNoExpenseYet')}</p>
@@ -210,11 +233,13 @@ export function ExpensePanel({
         </>
       )}
 
+      </CardContent>
+
       {/* ★ THREE STATES, ASKED FLAT. Shut, open-and-typing, open-and-idle —
           exactly one is true. As a chain the middle case sat inside the
           negation of the first, which is not how anyone reads a panel that is
           either locked, in use, or waiting. */}
-      <div className="mt-3">
+      <CardFooter className="flex-col items-stretch">
         {!open ? (
           <p className="flex items-center gap-1.5 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
             <Lock className="size-3.5 shrink-0" aria-hidden />
@@ -242,26 +267,18 @@ export function ExpensePanel({
         ) : null}
 
         {open && !adding ? (
-          <Button variant="outline" size="lg" className="h-11 w-full" onClick={() => setAdding(true)}>
+          <Button
+            variant={live ? 'default' : 'outline'}
+            size="lg"
+            className="h-12 w-full text-base"
+            onClick={() => setAdding(true)}
+          >
             <Plus aria-hidden />
             {t('driverAddExpense')}
           </Button>
         ) : null}
-      </div>
-    </section>
-  );
-}
-
-/** Where the money stands, in business words rather than an internal state. */
-function StateChip({ trip }: Readonly<{ trip: DriverTripDetail }>) {
-  const { t } = useLanguage();
-
-  const label = stateChipKey(trip);
-
-  return (
-    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-      {t(label)}
-    </span>
+      </CardFooter>
+    </Card>
   );
 }
 
@@ -384,7 +401,7 @@ function ExpenseForm({
   const amountMissing = draft.amount.trim() === '';
 
   return (
-    <div className="space-y-3 rounded-lg border border-border p-3">
+    <div className="space-y-3 rounded-lg border border-border bg-background p-3">
       <div>
         <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('driverCategory')}</p>
         {/*

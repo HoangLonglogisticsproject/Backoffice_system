@@ -24,6 +24,7 @@ import PlaceholderPage from './pages/system/PlaceholderPage'
 import LoginPage from './pages/system/LoginPage'
 import ChangePasswordPage from './pages/system/ChangePasswordPage'
 import ApprovalsPage from './pages/system/ApprovalsPage'
+import DriverManagementPage from './pages/system/DriverManagementPage'
 import EmployeeDetailPage from '@/pages/organization/EmployeeDetailPage'
 import DriverRequestPage from '@/pages/organization/DriverRequestPage'
 import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
@@ -111,6 +112,8 @@ function App() {
 
         <Route path="/account/security" element={<AccountSecurityPage />} />
         <Route path="/system/approvals" element={<ApprovalsPage />} />
+        {/* Driver ACCOUNTS — administration, global only. Trips are dispatch's. */}
+        <Route path="/system/drivers" element={<DriverManagementPage />} />
         
         <Route path="/worklist/my-work" element={<MyWorkPage />} />
         <Route path="/worklist/all" element={<WorkListPage />} />

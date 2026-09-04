@@ -316,17 +316,36 @@ export class TripExecutionService {
     // that arrives after the trip closed still has to be able to read back the
     // event it already wrote, and `lockOpenTrip` would refuse it first.
     const already = await this.events.findByClientEventId(input.tripId, clientEventId);
-    if (already) {
-      if (already.type !== input.type) {
-        throw new ConflictError(
-          `That client event id was already used to report ${already.type}, so it cannot now report ${input.type}. Use a new id for a new milestone.`,
-        );
-      }
-      return already;
-    }
+    if (already) return sameIntent(already, input.type);
 
     return this.db.transaction(async (tx) => {
-      const trip = await this.lockOpenTrip(input.tripId, tx);
+      // ★ LOCKED WHATEVER ITS STATUS, AND THE KEY IS LOOKED UP BEFORE THE
+      // STATUS IS JUDGED. A retry can queue behind the tap it repeats AND
+      // behind the approval that then closed the trip; when it finally holds
+      // the lock the trip is DONE and its event exists. The event is what it
+      // is owed — refusing it as "closed" would tell a driver their pickup
+      // was never recorded when it was. Only a key that matches NOTHING is
+      // then measured against the status, and on a closed trip refused.
+      const trip = await this.trips.lockActive(input.tripId, tx);
+      if (!trip) throw new NotFoundError('Trip not found.');
+
+      // ★ AND CHECKED AGAIN UNDER THE LOCK — THIS IS WHAT MAKES A RETRY SAFE.
+      //
+      // Three copies of one tap arrive together. All three run the read
+      // above before any of them has committed, so all three miss. Then all
+      // three queue on the trip row's `FOR UPDATE`: the first writes and
+      // commits, and the other two resume ONLY after that commit. This read
+      // runs after the lock is granted, so under READ COMMITTED it sees the
+      // row the winner wrote, and the two retries are answered with it
+      // rather than driven into `uq_trip_execution_event_client`. The lock
+      // is what serialises them; the index stays as the last line for any
+      // writer that bypasses this service.
+      const written = await this.events.findByClientEventId(input.tripId, clientEventId, tx);
+      if (written) return sameIntent(written, input.type);
+
+      // Nothing to answer with, so this is a NEW milestone — and a closed trip
+      // takes none. Same rule `lockOpenTrip` applies everywhere else.
+      if (trip.status === 'done') throw new ConflictError('That trip is closed.');
 
       const assignment = await this.assignments.lockActive(input.tripId, tx);
       if (!assignment) {
@@ -503,6 +522,19 @@ const requireReason = (value: string): string => {
   const trimmed = value.trim();
   if (trimmed === '') throw new ValidationError('That change needs a reason.');
   return trimmed;
+};
+
+/**
+ * A stored event answers a retry of the SAME milestone; the same key carrying
+ * a DIFFERENT one is a caller contradicting itself, and is refused.
+ */
+const sameIntent = (stored: ExecutionEvent, type: ExecutionEventType): ExecutionEvent => {
+  if (stored.type !== type) {
+    throw new ConflictError(
+      `That client event id was already used to report ${stored.type}, so it cannot now report ${type}. Use a new id for a new milestone.`,
+    );
+  }
+  return stored;
 };
 
 const pointOf = (latitude: number | null, longitude: number | null): Coordinates | null =>

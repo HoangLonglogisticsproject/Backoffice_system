@@ -1,30 +1,28 @@
-import { useState } from 'react';
-import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   BarChart2,
   Briefcase,
   Building,
   CheckSquare,
+  ClipboardList,
   FileText,
   Inbox,
   LayoutDashboard,
   LogOut,
-  Menu,
   Settings,
   Sparkles,
   Truck,
+  UserCog,
   Users,
   Warehouse,
 } from 'lucide-react';
-import clsx from 'clsx';
-import type { ReactNode } from 'react';
-import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useMyDepartments } from '@/hooks/useMyDepartments';
+import { AppShell, NavItem, SidebarSection, initialsOf } from './AppShell';
 
 /**
  * The application shell.
@@ -65,90 +63,7 @@ const USFlag = () => (
   </svg>
 );
 
-interface NavItemProps {
-  to: string;
-  icon: LucideIcon;
-  label: string;
-  isSidebarOpen: boolean;
-  /** Renders the row as present but unavailable — see `PlaceholderPage`. */
-  unavailable?: boolean;
-}
-
-function NavItem({ to, icon: Icon, label, isSidebarOpen, unavailable }: Readonly<NavItemProps>) {
-  const location = useLocation();
-  const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`);
-  const { t } = useLanguage();
-
-  return (
-    <Link to={to} className="w-full block mb-1" title={!isSidebarOpen ? label : undefined}>
-      <Button
-        variant={isActive ? 'secondary' : 'ghost'}
-        className={clsx(
-          'w-full justify-start transition-all text-sm font-medium',
-          !isSidebarOpen && 'justify-center px-2',
-          isActive ? 'font-semibold text-blue-700 bg-blue-50/50' : 'text-gray-600 hover:text-gray-900',
-        )}
-      >
-        <Icon
-          className={clsx(
-            'h-5 w-5 shrink-0',
-            isSidebarOpen && 'mr-3',
-            isActive ? 'text-blue-600' : 'text-gray-500',
-          )}
-        />
-        {isSidebarOpen && (
-          <div className="flex items-center justify-between flex-1 gap-2">
-            <span className="truncate">{label}</span>
-            {unavailable && (
-              <span className="text-[10px] font-normal text-gray-400 shrink-0">
-                {t('comingSoon')}
-              </span>
-            )}
-          </div>
-        )}
-      </Button>
-    </Link>
-  );
-}
-
-function SidebarSection({
-  title,
-  isSidebarOpen,
-  children,
-}: Readonly<{ title: string; isSidebarOpen: boolean; children: ReactNode }>) {
-  return (
-    <div className="mb-6">
-      <div className={clsx('px-3 mb-2 flex items-center', !isSidebarOpen && 'justify-center')}>
-        {isSidebarOpen ? (
-          <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-            {title}
-          </span>
-        ) : (
-          <div className="h-px w-8 bg-gray-200 my-2" />
-        )}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/**
- * Initials from whatever the server calls this person.
- *
- * `null` is a real answer, not a missing one: `username` is the local part of a
- * login email, and an account with no local subject has none. `?` marks the
- * absence — it is not a stand-in identity, and nothing here invents a name.
- */
-const initialsOf = (name: string | null): string =>
-  (name ?? '')
-    .split(/[\s._-]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part.charAt(0).toUpperCase())
-    .join('') || '?';
-
 export default function MainLayout() {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const { language, setLanguage, t } = useLanguage();
   const { state, signOut, can } = useSession();
   const { departments } = useMyDepartments();
@@ -190,23 +105,10 @@ export default function MainLayout() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50 font-sans text-gray-800">
-      <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            aria-label={t('toggleNavigation')}
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-          <h1 className="text-xl font-extrabold text-blue-600 hidden sm:block">
-            {t('backofficeSystem')}
-          </h1>
-        </div>
-
-        <div className="flex items-center gap-4">
+    <AppShell
+      brand={t('backofficeSystem')}
+      headerActions={
+        <>
           <Select value={language} onValueChange={(value) => setLanguage(value as 'vi' | 'en')}>
             <SelectTrigger
               aria-label={t('languageLabel')}
@@ -258,35 +160,25 @@ export default function MainLayout() {
             <LogOut className="h-4 w-4" />
             <span className="hidden sm:inline">{t('logout')}</span>
           </Button>
-        </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        <aside
-          className={clsx(
-            'bg-white border-r border-gray-200 flex flex-col transition-all duration-300 ease-in-out',
-            isSidebarOpen ? 'w-64' : 'w-16',
-          )}
-        >
-          <nav className="flex-1 overflow-y-auto py-4 custom-scrollbar">
-            <SidebarSection title={t('common')} isSidebarOpen={isSidebarOpen}>
+        </>
+      }
+      navigation={
+        <>
+            <SidebarSection title={t('common')}>
               <NavItem
                 to="/organization/dashboard"
                 icon={LayoutDashboard}
                 label={t('overview')}
-                isSidebarOpen={isSidebarOpen}
               />
               <NavItem
                 to="/worklist/my-work"
                 icon={Briefcase}
                 label={t('myWork')}
-                isSidebarOpen={isSidebarOpen}
               />
               <NavItem
                 to="/organization/departments"
                 icon={Building}
                 label={t('departments')}
-                isSidebarOpen={isSidebarOpen}
               />
             </SidebarSection>
 
@@ -306,7 +198,6 @@ export default function MainLayout() {
             {canReadARoster && departments.length > 0 && (
               <SidebarSection
                 title={headDepartmentId ? t('hrSection') : t('departmentsSection')}
-                isSidebarOpen={isSidebarOpen}
               >
                 {departments.map((department) => (
                   <NavItem
@@ -314,7 +205,6 @@ export default function MainLayout() {
                     to={`/organization/department/${department.id}/members`}
                     icon={Users}
                     label={department.name}
-                    isSidebarOpen={isSidebarOpen}
                   />
                 ))}
               </SidebarSection>
@@ -326,18 +216,16 @@ export default function MainLayout() {
                 always true. The catalogue entry is shown for the same reason:
                 anybody may add a vehicle, and the edit controls INSIDE that
                 screen are what `trip.write` hides. */}
-            <SidebarSection title={t('dispatchSection')} isSidebarOpen={isSidebarOpen}>
+            <SidebarSection title={t('dispatchSection')}>
               <NavItem
                 to="/dispatch/trip-schedule"
                 icon={Truck}
                 label={t('tripSchedule')}
-                isSidebarOpen={isSidebarOpen}
               />
               <NavItem
                 to="/dispatch/master-data"
                 icon={Warehouse}
                 label={t('tripMasterData')}
-                isSidebarOpen={isSidebarOpen}
               />
               {/* ★ GATED, UNLIKE THE TWO ABOVE. `trip.complete.review` is not
                   held by every signed-in caller — it closes a trip permanently
@@ -349,12 +237,11 @@ export default function MainLayout() {
                   to="/dispatch/completion-review"
                   icon={CheckSquare}
                   label={t('reviewNav')}
-                  isSidebarOpen={isSidebarOpen}
                 />
               )}
             </SidebarSection>
 
-            <SidebarSection title={t('system')} isSidebarOpen={isSidebarOpen}>
+            <SidebarSection title={t('system')}>
               {/*
                 ★ GLOBAL ONLY, AND THAT IS THE INFORMATION ARCHITECTURE.
                 "Phê duyệt" is the deployment-wide decision queue: it approves
@@ -368,52 +255,62 @@ export default function MainLayout() {
                   to="/system/approvals"
                   icon={CheckSquare}
                   label={t('approvals')}
-                  isSidebarOpen={isSidebarOpen}
                 />
+              )}
+              {/*
+                ★ DRIVER ACCOUNTS LIVE HERE, NOT UNDER A DEPARTMENT. A driver
+                belongs to no unit, and creating or disabling one is global
+                administration — the same key as the approvals queue. The
+                request queue sits beside it: a head proposes there, and the
+                administrator who manages drivers decides there.
+              */}
+              {isGlobal && (
+                <>
+                  <NavItem
+                    to="/system/drivers"
+                    icon={UserCog}
+                    label={t('driverManagement')}
+                  />
+                  <NavItem
+                    to="/organization/driver-requests"
+                    icon={ClipboardList}
+                    label={t('driverRequestQueue')}
+                  />
+                </>
               )}
               <NavItem
                 to="/system/requests"
                 icon={Inbox}
                 label={t('requests')}
-                isSidebarOpen={isSidebarOpen}
                 unavailable
               />
               <NavItem
                 to="/system/documents"
                 icon={FileText}
                 label={t('documents')}
-                isSidebarOpen={isSidebarOpen}
                 unavailable
               />
               <NavItem
                 to="/system/reports"
                 icon={BarChart2}
                 label={t('reports')}
-                isSidebarOpen={isSidebarOpen}
                 unavailable
               />
               <NavItem
                 to="/system/ai-coordinator"
                 icon={Sparkles}
                 label={t('aiCoordinator')}
-                isSidebarOpen={isSidebarOpen}
                 unavailable
               />
               <NavItem
                 to="/system/settings"
                 icon={Settings}
                 label={t('settings')}
-                isSidebarOpen={isSidebarOpen}
                 unavailable
               />
             </SidebarSection>
-          </nav>
-        </aside>
-
-        <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
-          <Outlet />
-        </main>
-      </div>
-    </div>
+        </>
+      }
+    />
   );
 }

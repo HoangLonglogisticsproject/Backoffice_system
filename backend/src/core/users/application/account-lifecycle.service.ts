@@ -24,23 +24,9 @@ import { UserRepository } from '../persistence/user.repository';
  * Revoke first and the generated column goes NULL, the foreign key stops
  * applying, and the membership can close.
  *
- * ★ `enable()` EXISTS NOW, AND ONLY FOR DRIVERS. The reason this file gave for
- * having no enable at all was: "re-enabling asks INTO WHICH DEPARTMENT, because
- * an active user with none is forbidden, and that answer has not been decided."
- * That objection is real and still stands — for an employee.
- *
- * It does not apply to a driver, and 0018 is what made that true. A driver
- * account is an active user with NO membership by construction: the whole point
- * of `account_type` is that "belongs to no unit" is a correct, permanent state
- * rather than a broken one. So there is no department to ask about, nothing to
- * decide, and nothing to invent. The invariant 0003 carries reads, accurately,
- * "an active EMPLOYEE holds exactly one active membership".
- *
- * ⚠ ENABLING IS NOT THE UNDO OF DISABLING, and must never become it. Disabling
- * revokes roles and kills sessions; enabling restores NEITHER. Roles come back
- * only by being granted again, with a new audit row — silently returning
- * authority somebody deliberately took away is the exact failure the table above
- * calls "re-enabling silently restores authority".
+ * There is deliberately NO enable() here. Re-enabling asks "into which
+ * department", because an active user with none is forbidden, and that answer
+ * has not been decided. Inventing one would be inventing business rules.
  */
 @Injectable()
 export class AccountLifecycleService {
@@ -120,47 +106,42 @@ export class AccountLifecycleService {
   }
 
   /**
-   * EnableDriver — putting a driver account back into service.
+   * EnableUser — the way back, for a DRIVER account only.
    *
-   * ★ ONE WRITE, WHERE DISABLING IS FIVE, and the asymmetry is the design rather
-   * than an unfinished job:
+   * ★ ONE WRITE, AND THAT IS THE WHOLE DEFINITION. `status` goes back to
+   * `active`; nothing else is touched. No session is issued (they sign in
+   * again), no role is restored (a driver never held one), no membership is
+   * created (a driver has none), and nothing in dispatch — assignments,
+   * trips, expenses, completions — is read or written. The account lifecycle
+   * and the assignment lifecycle are separate concerns, and re-enabling is
+   * where that separation is easiest to break by "helpfully" doing more.
    *
-   *   roles       NOT restored. They were revoked with an audit row; granting
-   *               them again is a separate, deliberate act by somebody who
-   *               decides to. Restoring them here would hand back authority
-   *               nobody chose to hand back.
-   *   sessions    NOT restored. A revoked session is gone; the person signs in
-   *               again with the credential they already have.
-   *   membership  NOTHING TO RESTORE. A driver has none — that is the state, not
-   *               a gap — so the question that blocked `enable()` for years
-   *               ("into which department") has no subject here.
-   *
-   * ★ DRIVERS ONLY, CHECKED AGAINST `account_type` AND NOT AGAINST THE ABSENCE
-   * OF A MEMBERSHIP. An offboarded employee also has no active membership, so
-   * "has no unit" would let this path quietly reactivate one into a deployment
-   * where an active employee with no department is forbidden. The stored column
-   * is the only thing that tells the two apart — which is exactly why 0018
-   * stores it.
+   * ⚠ AN EMPLOYEE IS REFUSED, NOT BECAUSE IT IS HARD BUT BECAUSE IT IS
+   * UNDECIDED. Disabling ended their membership, and "an active user holds
+   * exactly one" means re-enabling one asks "into which department" — a
+   * question this deployment has not answered. A driver has no membership to
+   * restore, so for them the flip is complete on its own.
    */
-  async enableDriver(userId: string, tx?: DatabaseQuery): Promise<User> {
+  async enable(
+    input: { userId: string; actingUserId: string; now?: Date },
+    tx?: DatabaseQuery,
+  ): Promise<User> {
     const run = async (tx: DatabaseQuery): Promise<User> => {
-      const existing = await this.users.findById(userId, tx);
-      if (!existing) throw new NotFoundError('User not found.');
-
-      if (existing.accountType !== 'driver') {
+      const user = await this.users.findById(input.userId, tx);
+      if (!user) throw new NotFoundError('User not found.');
+      if (user.accountType !== 'driver') {
         throw new ConflictError(
-          'Only a driver account can be re-enabled. Re-enabling an employee has to say which department they return to, and that is not decided here.',
+          'Only a driver account can be re-enabled. Re-enabling an employee is not available.',
         );
       }
 
-      // `expectedCurrent` makes a second concurrent enable affect no row, so the
-      // caller hears "already active" instead of a success it did not cause —
-      // the same shape `disable` uses, for the same reason.
+      // `expectedCurrent` makes two simultaneous enables — or an enable racing
+      // a disable — resolve to one winner and one sentence.
       const enabled = await this.users.setStatus(
-        { userId, status: 'active', expectedCurrent: 'disabled' },
+        { userId: input.userId, status: 'active', expectedCurrent: 'disabled' },
         tx,
       );
-      if (!enabled) throw new ConflictError('That account is already active.');
+      if (!enabled) throw new ConflictError('That user is already active.');
 
       return enabled;
     };
