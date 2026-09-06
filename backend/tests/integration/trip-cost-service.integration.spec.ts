@@ -528,17 +528,31 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   });
 
   /**
-   * ★ THE BOARD MUST NOT LEAK THE MONEY.
+   * ★ THE BOARD MUST NOT LEAK WHAT A RUN COST US.
    *
    * `trip.read` is `'any'` — every finished account reads the dispatch board.
    * The whole reason cost lives in its own tables behind its own permission is
-   * that the amounts must never ride along on a trip response. This asserts it
-   * against REAL rows rather than against the type: a join added to
+   * that those amounts must never ride along on a trip response. This asserts
+   * it against REAL rows rather than against the type: a join added to
    * `tripsWithRefs` for a plausible reason would break here, loudly, on the day
    * it is written.
+   *
+   * ★ `price` IS THE ONE FIGURE ALLOWED THROUGH, and naming it here rather
+   * than loosening the pattern is the point. 0024 put `GIÁ CƯỚC` — what we
+   * CHARGE — on `trip_schedules` as a column every trip SELECT reads, and
+   * wrote down that this widens the board deliberately. What a run COSTS US is
+   * untouched by that decision, so the tripwire below still fires on every
+   * other money-shaped field: subtracting one known name keeps the next one
+   * loud.
    */
-  describe('★ the general trip API exposes no money', () => {
+  describe('★ the general trip API exposes no cost money', () => {
     const MONEY_WORDS = /amount|cost|price|total|hire|carrier|vat/i;
+
+    /** The quoted price, and nothing else, may ride on a trip payload. */
+    const ALLOWED = new Set(['price']);
+
+    const leakedMoneyKeys = (row: object) =>
+      Object.keys(row).filter((key) => MONEY_WORDS.test(key) && !ALLOWED.has(key));
 
     const asQuery = (raw: Record<string, unknown>) => ({
       ...buildDateRangePageQuerySchema(() => new Date('2026-08-15T03:00:00Z')).parse(raw),
@@ -555,8 +569,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       const row = page.items.find((item) => item.id === trip);
       expect(row).toBeDefined();
 
-      const leaked = Object.keys(row as object).filter((key) => MONEY_WORDS.test(key));
-      expect(leaked).toEqual([]);
+      expect(leakedMoneyKeys(row as object)).toEqual([]);
       // And nothing anywhere in the serialised row says the figures either.
       expect(JSON.stringify(row)).not.toContain('1500000');
       expect(JSON.stringify(row)).not.toContain('4500000');
@@ -566,7 +579,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       await money.createCost({ tripId: trip, category: 'fuel', amount: '1500000', createdBy: author });
 
       const row = await board.findById(trip);
-      expect(Object.keys(row).filter((key) => MONEY_WORDS.test(key))).toEqual([]);
+      expect(leakedMoneyKeys(row)).toEqual([]);
       expect(JSON.stringify(row)).not.toContain('1500000');
     });
   });
