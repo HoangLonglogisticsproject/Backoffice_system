@@ -46,7 +46,7 @@ export function TripStatusSelect({
 
   // Read-only, and not merely disabled: a greyed-out dropdown still says "this
   // is yours to change, later". It is not, and it never will be.
-  if (status === 'done') return <TripStatusBadge status={status} />;
+  if (status === 'finished') return <TripStatusBadge status={status} />;
 
   // ★ NO ERROR STATE OF ITS OWN. A refusal is announced by `useUpdateTripStatus`
   // as a toast, in the server's own words, at the same moment it rolls the badge
@@ -59,27 +59,33 @@ export function TripStatusSelect({
   };
 
   return (
-    <div className="space-y-1">
+    <div className="inline-flex items-center ">
       <select
         aria-label={t('changeStatus')}
         value={status}
         disabled={mutation.isPending}
         onChange={(event) => change(event.target.value as TripStatus)}
         className={cn(
-          'cursor-pointer appearance-none rounded-full py-1 pr-6 pl-2 text-xs font-medium ring-1 ring-inset',
-          'bg-[length:0.7rem] bg-[right_0.4rem_center] bg-no-repeat',
+          // ★ CENTRED BY BOX METRICS, NOT BY FLEXBOX. A `<select>` is a replaced
+          // element: the browser lays out its own selected-text box in a shadow
+          // tree, so `display:flex`/`align-items` ON THE SELECT are ignored
+          // outright, and flex on the wrapper only moves the whole pill around
+          // the cell. A fixed height with a matching line-height is what
+          // actually centres the label — and it holds when the Vietnamese label
+          // gives way to the shorter English one.
+          'h-6 cursor-pointer appearance-none rounded-full pr-6 pl-2 text-xs leading-6 font-medium ring-1 ring-inset',
+          // ★ AND THE OPEN LIST IS CENTRED IN `index.css`, NOT HERE. The tick
+          // beside the selected row lives in the browser's shadow tree; the hook
+          // this class gives is `appearance: base-select`, which is the only way
+          // to reach it without giving up the native control. See the block
+          // there for why it is behind @supports.
+          'trip-status-select',
           'focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
           'disabled:cursor-wait disabled:opacity-60',
           // An unknown sixth status from the server still renders, in grey, with
           // its raw value as the label — same rule as the read-only badge.
           style?.className ?? 'bg-gray-50 text-gray-600 ring-gray-500/10',
         )}
-        style={{
-          // The caret, inline so it inherits `currentColor` and stays legible on
-          // all five backgrounds. An <img> here would be a fixed colour.
-          backgroundImage:
-            "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none' stroke='currentColor' stroke-width='1.5'><path d='M1 1l4 4 4-4'/></svg>\")",
-        }}
       >
         {!style && <option value={status}>{status}</option>}
         {DISPATCH_SELECTABLE_STATUSES.map((option) => (

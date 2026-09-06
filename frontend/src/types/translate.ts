@@ -871,8 +871,28 @@ const PHRASES = {
   colCargo: { vi: 'Hàng hoá', en: 'Cargo' },
   colPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
   colDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },
+  colPrice: { vi: 'Giá cước', en: 'Price' },
   colNote: { vi: 'Ghi chú', en: 'Note' },
   colCreatedBy: { vi: 'Người tạo', en: 'Created by' },
+  // ----------------------------------------- Xuất lịch xe ra Excel (SheetJS) --
+  // ★ Hai cột chỉ có trong file, không có trên bảng: bảng gộp địa chỉ, liên hệ
+  // và giờ vào một ô cho dễ đọc, còn bảng tính thì tách ra mới lọc được.
+  exportColContact: { vi: 'Liên hệ', en: 'Contact' },
+  exportColTime: { vi: 'Thời gian', en: 'Time' },
+  exportExcel: { vi: 'Xuất Excel', en: 'Export to Excel' },
+  exportRunning: { vi: 'Đang xuất…', en: 'Exporting…' },
+  exportDone: { vi: 'Đã xuất file Excel', en: 'Excel file downloaded' },
+  exportRowsUnit: { vi: 'chuyến', en: 'trips' },
+  // Không có dòng nào thì không tạo file — một file chỉ có dòng tiêu đề trông
+  // y hệt một lần xuất hỏng.
+  exportEmpty: {
+    vi: 'Không có chuyến nào trong khoảng ngày này để xuất.',
+    en: 'No trips in this date range to export.',
+  },
+  exportFailed: {
+    vi: 'Không xuất được file. Vui lòng thử lại.',
+    en: 'The export failed. Please try again.',
+  },
   emptyTrips: {
     vi: 'Không có chuyến nào trong khoảng ngày này.',
     en: 'No trips in this date range.',
@@ -956,6 +976,12 @@ const PHRASES = {
     en: 'Pickup coordinates are what the driver’s GPS is checked against on pickup. Enter both or leave both empty.',
   },
   fieldDeliveryAt: { vi: 'Giờ giao hàng', en: 'Delivery time' },
+  fieldPrice: { vi: 'Giá cước (VND)', en: 'Price (VND)' },
+  // Why the field may be left empty, and why it cannot be zero.
+  priceHint: {
+    vi: 'Để trống nếu chưa chốt giá. Tối đa 2 số lẻ. Ví dụ: 4,500,000',
+    en: 'Leave empty if the price is not agreed yet. At most 2 decimals. e.g. 4,500,000',
+  },
   fieldNote: { vi: 'Ghi chú', en: 'Note' },
   // Why the delivery control asks for a date as well as a time.
   deliveryMayBeLater: {
@@ -982,11 +1008,13 @@ const PHRASES = {
   // `tripAwaitingVehicle` is the one abbreviation: the sheet writes `SX RỒI
   // ĐANG ĐỢI XE`, which does not fit a badge. The short form is what the page
   // spec pins, so it is the wording the screen is actually held to.
-  tripAwaitingProduction: { vi: 'Đang đợi SX', en: 'Awaiting production' },
-  tripAwaitingVehicle: { vi: 'SX rồi, đợi xe', en: 'Produced, awaiting vehicle' },
-  tripNeedsConfirmation: { vi: 'Thông tin cần xác nhận lại', en: 'Needs confirmation' },
-  tripExternalBooking: { vi: 'Book xe ngoài', en: 'External booking' },
-  tripDone: { vi: 'Đã xong', en: 'Done' },
+  // ★ THE FOUR LIFECYCLE STATES (0025). These replaced the workbook's five row
+  // colours; "Book xe ngoài" is gone as a status because it named a ROUTE, not
+  // a stage — whether a run is subcontracted lives on the vehicle instead.
+  tripPending: { vi: 'Chờ xử lý', en: 'Pending' },
+  tripConfirmed: { vi: 'Đã xác nhận', en: 'Confirmed' },
+  tripExecuting: { vi: 'Đang thực hiện', en: 'Executing' },
+  tripFinished: { vi: 'Hoàn thành', en: 'Finished' },
   changeStatus: { vi: 'Đổi trạng thái', en: 'Change status' },
   statusChangeFailed: {
     vi: 'Không đổi được trạng thái.',

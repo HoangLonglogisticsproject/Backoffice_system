@@ -16,8 +16,10 @@ const fetchTripCustomers = vi.fn();
 const useSession = vi.fn();
 
 const createTripSchedule = vi.fn();
+const fetchAllTripSchedules = vi.fn();
 vi.mock('@/api/tripSchedule', () => ({
   fetchTripSchedules: (...a: unknown[]) => fetchTripSchedules(...a),
+  fetchAllTripSchedules: (...a: unknown[]) => fetchAllTripSchedules(...a),
   archiveTripSchedule: (...a: unknown[]) => archiveTripSchedule(...a),
   createTripSchedule: (...a: unknown[]) => createTripSchedule(...a),
   updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),
@@ -78,8 +80,9 @@ const trip = (over: Record<string, unknown> = {}) => ({
   deliveryContact: null,
   pickupAt: null,
   deliveryAt: null,
+  price: null,
   note: null,
-  status: 'awaiting_vehicle',
+  status: 'confirmed',
   createdBy: 'u9',
   createdByUser: { id: 'u9', displayName: 'Điều Độ' },
   driver: null,
@@ -140,7 +143,7 @@ describe('TripSchedulePage', () => {
       totalPages: 1,
     });
     archiveTripSchedule.mockReset().mockResolvedValue(trip());
-    updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'done' }));
+    updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'finished' }));
     updateTripSchedule.mockReset().mockResolvedValue(trip());
     createTripSchedule.mockReset().mockResolvedValue(trip());
     fetchTripVehicles.mockReset().mockResolvedValue([]);
@@ -250,7 +253,7 @@ describe('TripSchedulePage', () => {
     it('offers no assignment control on a finished trip', async () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.write']));
       fetchTripSchedules.mockResolvedValue({
-        items: [trip({ status: 'done', driver: { id: 'd1', displayName: 'Tài Xế A' } })],
+        items: [trip({ status: 'finished', driver: { id: 'd1', displayName: 'Tài Xế A' } })],
         page: 1, limit: 20, total: 1, totalPages: 1,
       });
       renderPage();
@@ -299,8 +302,8 @@ describe('TripSchedulePage', () => {
     renderPage();
 
     await screen.findByText('50H-49266');
-    expect(screen.queryByText('awaiting_vehicle')).toBeNull();
-    expect(screen.getByText('SX rồi, đợi xe')).toBeTruthy();
+    expect(screen.queryByText('confirmed')).toBeNull();
+    expect(screen.getByText('Đã xác nhận')).toBeTruthy();
   });
 
   it('shows the total — the number a cursor list cannot produce', async () => {
@@ -354,9 +357,9 @@ describe('TripSchedulePage', () => {
       // ★ NOT `done`. The board cannot set it — a trip is finished by approving
       // its completion request — so a case that moved a row to `done` was
       // asserting an interaction the server answers with 409.
-      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
+      fireEvent.change(select, { target: { value: 'executing' } });
 
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'needs_confirmation'));
+      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'));
     });
 
     it('shows the new status immediately, before the server answers', async () => {
@@ -369,10 +372,10 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
+      fireEvent.change(select, { target: { value: 'executing' } });
 
-      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('needs_confirmation'));
-      settle(trip({ status: 'needs_confirmation' }));
+      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('executing'));
+      settle(trip({ status: 'executing' }));
     });
 
     /**
@@ -382,28 +385,21 @@ describe('TripSchedulePage', () => {
      * in, `canTransition` on the way out, and a trigger in 0017 behind them. A
      * control whose only possible outcome is a refusal is not a control.
      */
-    it('★ never offers `done` on the board — a trip is finished by approval', async () => {
+    it('★ never offers `finished` on the board — a trip is finished by approval', async () => {
       useSession.mockReturnValue(session(write));
       renderPage();
 
       const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
       const options = [...select.options].map((option) => option.value);
 
-      expect(options).not.toContain('done');
-      // The four that ARE a dispatcher's to choose are all still there.
-      expect(options).toEqual(
-        expect.arrayContaining([
-          'awaiting_production',
-          'awaiting_vehicle',
-          'needs_confirmation',
-          'external_booking',
-        ]),
-      );
+      expect(options).not.toContain('finished');
+      // The three that ARE a dispatcher's to choose are all still there.
+      expect(options).toEqual(expect.arrayContaining(['pending', 'confirmed', 'executing']));
     });
 
     it('★ shows a finished trip as a badge, not a dropdown', async () => {
       fetchTripSchedules.mockResolvedValue({
-        items: [trip({ status: 'done' })],
+        items: [trip({ status: 'finished' })],
         page: 1,
         limit: 20,
         total: 1,
@@ -413,7 +409,7 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       // The label the badge carries, and no control to change it.
-      expect(await screen.findByText('Đã xong')).toBeInTheDocument();
+      expect(await screen.findByText('Hoàn thành')).toBeInTheDocument();
       expect(screen.queryByLabelText('Đổi trạng thái')).not.toBeInTheDocument();
     });
 
@@ -427,10 +423,10 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
+      fireEvent.change(select, { target: { value: 'executing' } });
 
       await waitFor(() =>
-        expect(updateTripStatus).toHaveBeenCalledWith('t1', 'needs_confirmation'),
+        expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'),
       );
 
       // The move itself, on the toast: which way this row went. Waited for
@@ -438,14 +434,14 @@ describe('TripSchedulePage', () => {
       // answers, and sonner mounts it a frame later still.
       await waitFor(() =>
         expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
-          'SX rồi, đợi xe → Thông tin cần xác nhận lại',
+          'Đã xác nhận → Đang thực hiện',
         ),
       );
 
       fireEvent.click(await screen.findByRole('button', { name: 'Hoàn tác' }));
 
       await waitFor(() =>
-        expect(updateTripStatus).toHaveBeenLastCalledWith('t1', 'awaiting_vehicle'),
+        expect(updateTripStatus).toHaveBeenLastCalledWith('t1', 'confirmed'),
       );
     });
 
@@ -459,12 +455,12 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'needs_confirmation' } });
+      fireEvent.change(select, { target: { value: 'executing' } });
 
       expect(await screen.findByText('This trip has been archived.')).toBeTruthy();
       // The optimistic guess is gone, not left on screen as if it had worked —
       // back to the status the row actually holds.
-      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('awaiting_vehicle'));
+      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('confirmed'));
     });
 
     it('offers a reader without trip.write a label, not a control', async () => {
@@ -474,7 +470,47 @@ describe('TripSchedulePage', () => {
       await screen.findByText('50H-49266');
       expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull();
       // Still readable — the status is not hidden, only not editable.
-      expect(screen.getByText('SX rồi, đợi xe')).toBeTruthy();
+      expect(screen.getByText('Đã xác nhận')).toBeTruthy();
+    });
+  });
+
+  /**
+   * ★ THE EXPORT BELONGS TO ONE TAB, AND THAT IS THE WHOLE OF ITS CONTRACT HERE.
+   *
+   * The file is named after a date range and holds the entire board for it. On
+   * "Chờ phân công" that same file would be read as the month's record while
+   * quietly missing every crewed trip — so there is no button there rather than
+   * a button that means something different. What the button DOES once pressed
+   * is pinned in `TripScheduleExportButton.spec`.
+   */
+  describe('exporting the board', () => {
+    it('★ offers the export on “Tất cả” and nowhere else', async () => {
+      useSession.mockReturnValue(session(['trip.read']));
+      renderPage();
+
+      await screen.findByText('50H-49266');
+      expect(screen.getByRole('button', { name: 'Xuất Excel' })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('tab', { name: /Chờ phân công/ }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Xuất Excel' })).toBeNull(),
+      );
+    });
+
+    /**
+     * The tabs are a `role="tablist"`, and a tablist may contain tabs and
+     * nothing else. Moving the border out to a wrapping row is what let the
+     * button sit beside them without landing inside it.
+     */
+    it('keeps the button out of the tablist', async () => {
+      useSession.mockReturnValue(session(['trip.read']));
+      renderPage();
+
+      await screen.findByText('50H-49266');
+
+      const tablist = screen.getByRole('tablist');
+      expect(within(tablist).queryByRole('button', { name: 'Xuất Excel' })).toBeNull();
     });
   });
 
@@ -1218,6 +1254,80 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       expect(await screen.findByText('Không có quyền')).toBeTruthy();
+    });
+  });
+
+  /**
+   * ★ THE AGREED CHARGE — `GIÁ CƯỚC` — TYPED ON THE FORM AND READ ON THE BOARD.
+   *
+   * ⚠ AND IT IS NOT THE COST DIALOG. The wallet button opens what a run COST
+   * us: separate endpoints, `cost.read`, never in this list's data. The price
+   * is what the customer is CHARGED — part of the booking, so it comes down
+   * with the row. These cases pin that difference, because collapsing the two
+   * would put the company's cost base in front of every signed-in account.
+   */
+  describe('★ the price on a trip', () => {
+    const write = ['trip.read', 'trip.create', 'trip.write'];
+
+    it('shows the figure grouped, and an unpriced trip as unset rather than as zero', async () => {
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ price: '4500000.00' }), trip({ id: 't2', price: null })],
+        page: 1,
+        limit: 20,
+        total: 2,
+        totalPages: 1,
+      });
+      renderPage();
+
+      // `formatMoney` drops a fraction of zeroes — VND has no subunit in daily use.
+      expect(await screen.findByText('4,500,000')).toBeInTheDocument();
+      // The unpriced row says nothing rather than saying nought.
+      expect(screen.queryByText('0')).toBeNull();
+    });
+
+    it('★ sends the digits typed, without the separators the field shows', async () => {
+      useSession.mockReturnValue(session(write));
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+
+      const price = (await screen.findByLabelText('Giá cước (VND)')) as HTMLInputElement;
+      fireEvent.change(price, { target: { value: '4500000' } });
+      // Grouped for reading; the payload below is what actually travels.
+      expect(price.value).toBe('4,500,000');
+
+      fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      expect(body.price).toBe('4500000');
+    });
+
+    it('★ clears a price with null, not by omitting the key', async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ price: '4500000.00' })],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+
+      const price = (await screen.findByLabelText('Giá cước (VND)')) as HTMLInputElement;
+      // The stored figure is what the form opens on, decimals and all — a
+      // dialog that rewrote it on the way in would change money by being opened.
+      expect(price.value).toBe('4,500,000.00');
+      fireEvent.change(price, { target: { value: '' } });
+      fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+
+      await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+      const [, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+      // `undefined` would mean "leave it alone" on the PATCH route, so a price
+      // entered by mistake could never be removed.
+      expect(payload).toHaveProperty('price', null);
     });
   });
 });

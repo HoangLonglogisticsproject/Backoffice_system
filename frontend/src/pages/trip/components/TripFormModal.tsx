@@ -3,6 +3,7 @@ import { MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
+import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { createTripCustomer, createTripVehicle } from '@/api/tripCatalogue';
 import {
@@ -67,6 +68,11 @@ interface FormState {
   /** The customer's place for each end, or `null` for a hand-typed address. */
   pickupLocationId: string | null;
   deliveryLocationId: string | null;
+  /**
+   * The agreed charge, as the PLAIN decimal string the API takes — `MoneyInput`
+   * keeps the commas between itself and the DOM, so nothing here strips them.
+   */
+  price: string;
   note: string;
   status: TripStatus;
 }
@@ -84,8 +90,9 @@ const emptyForm = (): FormState => ({
   deliveryAt: '',
   pickupLocationId: null,
   deliveryLocationId: null,
+  price: '',
   note: '',
-  status: 'awaiting_production',
+  status: 'pending',
 });
 
 /** What a `CatalogueSelect` offers. Mirrors its own prop type. */
@@ -138,6 +145,10 @@ const formFor = (trip: TripScheduleWithRefs): FormState => ({
   deliveryAt: toDateTimeLocalValue(trip.deliveryAt),
   pickupLocationId: trip.pickupLocationId,
   deliveryLocationId: trip.deliveryLocationId,
+  // ★ THE SERVER'S `"4500000.00"` GOES IN AS IT CAME. Trimming the decimals
+  // here would make opening a trip and saving it unchanged rewrite the figure,
+  // and no reading of that is reassuring when the subject is money.
+  price: trip.price ?? '',
   note: trip.note ?? '',
   status: trip.status,
 });
@@ -300,6 +311,10 @@ export function TripFormModal({
       ...endFields('delivery'),
       pickupAt: fromDateTimeLocalValue(form.pickupAt),
       deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
+      // ★ `''` → `null`, LIKE EVERY OTHER FIELD ON THIS FORM. Clearing the
+      // price sends `null` and the trip goes back to unpriced; a form that
+      // dropped the empty key could never remove a figure typed by mistake.
+      price: blank(form.price),
       note: blank(form.note),
       status: form.status,
     };
@@ -324,20 +339,20 @@ export function TripFormModal({
   const formId = 'trip-form';
 
   /**
-   * ★ `done` IS TERMINAL, AND IT IS ALSO UNREACHABLE FROM HERE (BD-01).
+   * ★ `finished` IS TERMINAL, AND IT IS ALSO UNREACHABLE FROM HERE (BD-01).
    *
    * Two rules, not one. A finished trip's status is frozen because the server
-   * refuses every move away from it. And `done` is absent from the options on
-   * EVERY trip — new or existing — because a trip is finished by approving its
-   * completion request, never by editing a field: `requireNotCompletionOnly`
-   * refuses it on create and on update alike, and a trigger in 0017 makes the
+   * refuses every move away from it. And `finished` is absent from the options
+   * on EVERY trip — new or existing — because a trip is finished by approving
+   * its completion request, never by editing a field: `requireNotCompletionOnly`
+   * refuses it on create and on update alike, and 0025's trigger makes the
    * state permanent once it is reached.
    *
    * Every other field of a finished trip stays editable. Whether a closed trip
    * should be read-only in full is a separate decision nobody has taken, and
    * this is not the place to take it.
    */
-  const statusLocked = trip?.status === 'done';
+  const statusLocked = trip?.status === 'finished';
 
   return (
     <Modal
@@ -396,10 +411,10 @@ export function TripFormModal({
               disabled={statusLocked}
               className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {/* The current value must still render, or a frozen `done` field
-                  would show the first option instead of the truth. */}
+              {/* The current value must still render, or a frozen `finished`
+                  field would show the first option instead of the truth. */}
               {statusLocked && (
-                <option value="done">{t(TRIP_STATUS_STYLES.done.label)}</option>
+                <option value="finished">{t(TRIP_STATUS_STYLES.finished.label)}</option>
               )}
               {DISPATCH_SELECTABLE_STATUSES.map((status) => (
                 <option key={status} value={status}>
@@ -463,6 +478,32 @@ export function TripFormModal({
           value={form.cargoInfo}
           onChange={(value) => set('cargoInfo', value)}
         />
+
+        <div className="space-y-2 sm:max-w-xs">
+          <label htmlFor="trip-price" className="text-sm font-medium text-gray-700">
+            {t('fieldPrice')}
+          </label>
+          {/*
+            ★ `MoneyInput`, NOT `type="number"`. The state IS the payload — a
+            plain decimal string — and the grouping exists only between the
+            field and the DOM. A number input would hand back a value the
+            browser had already put through a float, which is exactly what
+            `NUMERIC(14,2)` on the server exists to prevent.
+
+            ★ AND NOT `required`. A trip is entered before it is priced, the
+            same way it is entered before it has a truck; the column is
+            nullable and the form says so by leaving this optional.
+          */}
+          <MoneyInput
+            id="trip-price"
+            value={form.price}
+            onChange={(plain) => set('price', plain)}
+            aria-describedby="trip-price-hint"
+          />
+          <p id="trip-price-hint" className="text-xs text-gray-500">
+            {t('priceHint')}
+          </p>
+        </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <LocationEnd
