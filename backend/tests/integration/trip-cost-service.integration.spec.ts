@@ -1,8 +1,7 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Pool } from 'pg';
 import {
   TEST_URL,
+  applyAllMigrations,
   assertLooksLikeATestDatabase,
   describeIntegration,
   fakeHasher,
@@ -77,30 +76,12 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 4, options: `-c search_path=${SCHEMA}` });
 
-    const migrations = join(__dirname, '..', '..', 'migrations');
-    for (const file of [
-      '0001_identity.sql',
-      '0002_users_updated_at.sql',
-      '0011_trip_schedule.sql',
-      '0012_trip_cost.sql',
-      // The operational lifecycle. Listed in full because 0016 and 0017 carry
-      // foreign keys back into 0013 and 0014 — a subset simply fails to apply.
-      '0013_trip_carrier_and_vehicle_ownership.sql',
-      '0014_trip_driver_assignment.sql',
-      '0015_trip_execution_event.sql',
-      '0016_trip_cost_lifecycle.sql',
-      '0017_trip_completion_and_history.sql',
-      // 0018 adds `users.account_type`, which provisioning now writes on every
-      // insert — so every spec that creates a user needs it.
-      '0018_driver_account.sql',
-      '0019_trip_location.sql',
-      // 0021 relaxes 0012's void constraint so a withdrawal needs no reason.
-      // Without it this list tests a schema the running code no longer targets.
-      '0021_void_reason_optional.sql',
-      '0022_trip_locations.sql',
-    ]) {
-      await pool.query(await readFile(join(migrations, file), 'utf8'));
-    }
+    // ★ EVERY MIGRATION ON DISK, NOT A LIST KEPT HERE. The list this replaced
+    // named its files one by one and went stale: 0024 added
+    // `trip_schedules.price`, which every trip SELECT now reads, and 0025
+    // replaced the five old status words with the four this spec already uses.
+    // A list can drift from the schema; reading the directory cannot.
+    await applyAllMigrations(pool);
 
     const database = poolAsDatabase(pool);
 

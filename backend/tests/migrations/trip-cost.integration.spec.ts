@@ -124,6 +124,11 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
       // 0021 relaxes the void constraint this file is largely about: a
       // withdrawal names who and when, and no longer has to say why.
       '0021_void_reason_optional.sql',
+      // 0025 renames the board's statuses, and this file drives a trip through
+      // `pending`, `confirmed` and `finished` to show that cost does not care
+      // which one it is. Without it those words violate 0011's CHECK, which
+      // still spells the five the board shipped with.
+      '0025_trip_status_lifecycle.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
