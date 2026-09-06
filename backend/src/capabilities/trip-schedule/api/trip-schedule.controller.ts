@@ -18,6 +18,7 @@ import type { SessionUser } from '../../../core/identity/application/session.ser
 import { OperationalBoardService } from '../application/operational-board.service';
 import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService, type TripBoardQuery } from '../application/trip-schedule.service';
+import { isRecordableAmount } from '../domain/trip-cost';
 import type { OperationalBoardRow } from '../domain/operational-board';
 import type { UserSummary } from '../../../common/types/user-summary';
 import type {
@@ -99,6 +100,32 @@ const tripStatus = z.enum(TRIP_STATUSES);
  */
 const locationId = z.string().uuid().nullable();
 
+/**
+ * ★ THE AGREED CHARGE, AS A STRING — `"4500000"` or `"4500000.00"`, never a
+ * JSON number.
+ *
+ * A JSON number is float64, so `4500000.01` would arrive as something a little
+ * else with nothing on the wire to show it had changed. `z.string()` refuses a
+ * number outright rather than coercing one, which is the same rule the cost
+ * routes already enforce on every amount — and `isRecordableAmount` is that
+ * rule, shared rather than restated: at most twelve digits before the point and
+ * two after, no sign, at least one non-zero digit.
+ *
+ * A third decimal place is REFUSED, not rounded. `NUMERIC(14,2)` would round
+ * it silently, and a caller told "stored" about a figure that is not the one it
+ * sent is the failure this whole family of types exists to prevent.
+ *
+ * `.nullable()` because clearing a price is a real thing to want — the trip
+ * goes back to unpriced. Zero is not that: it is refused here and by 0024's
+ * CHECK, because a trip charged nothing and a trip not yet priced must not
+ * render as the same row.
+ */
+const price = z
+  .string()
+  .trim()
+  .refine(isRecordableAmount, 'Expected a positive amount, e.g. "4500000.00".')
+  .nullable();
+
 const createTripSchema = z.object({
   // The only required field. A trip with no day is not on the board at all.
   scheduledOn: boardDay,
@@ -117,6 +144,8 @@ const createTripSchema = z.object({
 
   pickupLocationId: locationId.optional(),
   deliveryLocationId: locationId.optional(),
+
+  price: price.optional(),
 
   note: text.optional(),
   status: tripStatus.optional(),

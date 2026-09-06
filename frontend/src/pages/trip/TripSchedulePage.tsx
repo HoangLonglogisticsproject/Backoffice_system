@@ -20,12 +20,14 @@ import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
 import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
 import { formatPlate } from '@/utils/format';
+import { formatMoney } from '@/utils/format/money';
 import {
   TRIP_ASSIGNMENT_FILTERS,
   type TripAssignmentFilter,
   type TripScheduleWithRefs,
 } from '@/types/trip';
 import type { TranslationKey } from '@/types/translate';
+import { TripScheduleExportButton } from '@/components/trip/TripScheduleExportButton';
 import { TripFormModal } from './components/TripFormModal';
 import { TripStatusBadge } from './components/TripStatusBadge';
 import { TripStatusSelect } from './components/TripStatusSelect';
@@ -108,11 +110,25 @@ export default function TripSchedulePage() {
           as two independent controls, and the row that changes the fewest
           things belongs closest to the table.
         */}
-        <AssignmentTabs
-          value={trips.assignment}
-          onChange={trips.setAssignment}
-          unassignedCount={trips.unassignedCount}
-        />
+        {/*
+          ★ THE EXPORT SITS BESIDE THE TABS, NOT INSIDE THEM. A `role="tablist"`
+          may hold tabs and nothing else, so the border and the padding moved
+          out here and the tablist kept only its own row. `items-end` keeps the
+          selected tab's underline flush with this container's border while the
+          button — the same height — sits on the same line.
+        */}
+        <div className="flex flex-wrap items-end justify-between gap-2 border-b border-gray-100 px-4 pt-3">
+          <AssignmentTabs
+            value={trips.assignment}
+            onChange={trips.setAssignment}
+            unassignedCount={trips.unassignedCount}
+          />
+          {/*
+            Only on "tất cả", because that is the only tab whose name matches
+            what the file contains — see the component's own header.
+          */}
+          {trips.assignment === 'all' && <TripScheduleExportButton range={trips.range} />}
+        </div>
 
         <div className="flex flex-wrap items-end gap-3 border-b border-gray-100 bg-gray-50/50 p-4">
           <div className="space-y-1">
@@ -174,6 +190,9 @@ export default function TripSchedulePage() {
                 <TableHead className="font-semibold text-gray-600">{t('colPickup')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colDelivery')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
+                <TableHead className="text-right font-semibold text-gray-600">
+                  {t('colPrice')}
+                </TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colNote')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCreatedBy')}</TableHead>
                 {(canManage || canViewCost) && (
@@ -212,13 +231,13 @@ export default function TripSchedulePage() {
                       has no such button and the server refuses a driver
                       account the route. Hidden on a finished trip for the
                       same reason the status dropdown is: the server refuses
-                      every assignment write once a trip is done.
+                      every assignment write once a trip is finished.
                     */}
                     <div className="flex items-center gap-2">
                       <span className={trip.driver ? 'text-gray-900' : 'text-gray-400'}>
                         {trip.driver?.displayName ?? t('driverUnassigned')}
                       </span>
-                      {canManage && trip.status !== 'done' && (
+                      {canManage && trip.status !== 'finished' && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -255,18 +274,45 @@ export default function TripSchedulePage() {
                       that moves the trip along the board — one click, its own
                       endpoint, no form.
 
-                      ★ AND A FINISHED TRIP IS A LABEL FOR EVERYBODY. `done` is
-                      terminal (BD-01), so the server refuses every move away
+                      ★ AND A FINISHED TRIP IS A LABEL FOR EVERYBODY. `finished`
+                      is terminal (BD-01), so the server refuses every move away
                       from it — offering the dropdown here would be offering a
                       control whose only possible outcome is a 409. The server
                       still decides; this just stops asking it a settled
                       question.
                     */}
-                    {canManage && trip.status !== 'done' ? (
+                    {canManage && trip.status !== 'finished' ? (
                       <TripStatusSelect tripId={trip.id} status={trip.status} />
                     ) : (
                       <TripStatusBadge status={trip.status} />
                     )}
+                  </TableCell>
+                  {/*
+                    ★ THE AGREED CHARGE, ON THE BOARD — and it is the one amount
+                    that is. The wallet button beside it opens what the run COST
+                    us, which is fetched only for a holder of `cost.read` and is
+                    never in this list's data. This figure is part of the
+                    booking, so it comes down with the row.
+
+                    ★ FORMATTED, NEVER PARSED. `formatMoney` does string work —
+                    the value is `NUMERIC(14,2)` carried as text precisely so
+                    nothing rounds it, and `Number(trip.price)` here would undo
+                    that for the sake of a thousands separator.
+                  */}
+                  <TableCell className="whitespace-nowrap text-right font-medium tabular-nums text-gray-900">
+                    {/*
+                      An unpriced trip is a real state — the same em dash every
+                      other empty reference on this row uses, never a `0`.
+
+                      ★ TESTED FOR TRUTHINESS RATHER THAN AGAINST `null`. The
+                      column is nullable, so a strict `=== null` reads
+                      correctly against the contract and still hands `undefined`
+                      to `formatMoney`, which unmounted the board on the first
+                      fixture that predated the field. A missing price and an
+                      empty one are the same fact — unpriced — and neither is
+                      worth a crash.
+                    */}
+                    {trip.price ? formatMoney(trip.price) : <Unset />}
                   </TableCell>
                   <TableCell>
                     <Prose value={trip.note} />
@@ -443,11 +489,13 @@ function AssignmentTabs({
 }>) {
   const { t } = useLanguage();
 
+  // No border and no outer padding here: those belong to the row that wraps
+  // this tablist and the export button beside it. A tablist owns only its tabs.
   return (
     <div
       role="tablist"
       aria-label={t('tripTabsLabel')}
-      className="flex flex-wrap items-center gap-1 border-b border-gray-100 px-4 pt-3"
+      className="flex flex-wrap items-center gap-1"
     >
       {TRIP_ASSIGNMENT_FILTERS.map((filter) => {
         const selected = filter === value;

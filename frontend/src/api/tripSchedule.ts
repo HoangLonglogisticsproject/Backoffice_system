@@ -46,6 +46,17 @@ export interface CreateTripInput {
    */
   pickupLocationId?: string | null;
   deliveryLocationId?: string | null;
+  /**
+   * ★ A STRING, e.g. `"4500000"` — the same rule every amount in
+   * `tripCost.ts` follows, and for the same reason. A JSON number is float64,
+   * so `4500000.01` would arrive as something a little else; the server
+   * refuses a number outright, and refuses a third decimal place too, because
+   * `NUMERIC(14,2)` would ROUND that rather than reject it.
+   *
+   * `null` clears it. Zero is refused — a trip charged nothing and a trip not
+   * yet priced are different rows and must not render alike.
+   */
+  price?: string | null;
   note?: string | null;
   status?: TripStatus;
 }
@@ -88,6 +99,57 @@ export async function fetchTripSchedules(
     },
   });
   return data;
+}
+
+/**
+ * The API's ceiling on one page — `MAX_LIMIT` in the backend's `cursor.ts`.
+ *
+ * Asking for more is refused rather than clamped, on purpose, so this constant
+ * has to match. It is the page size for the walk below and nothing else: the
+ * board on screen keeps its own, smaller one.
+ */
+const MAX_PAGE_SIZE = 200;
+
+/**
+ * Every trip matching a filter, across every page.
+ *
+ * ★ THIS IS NOT THE READER THE BOARD USES, AND MUST NOT BECOME IT. The screen
+ * pages deliberately — see the header of `types/pagination.ts` — and the whole
+ * argument for offset pagination here is that a mandatory date range keeps the
+ * result set small. This walk leans on the SAME bound rather than escaping it:
+ * a range is at most 366 days, so the loop is bounded by something the server
+ * enforces, not by the caller's good manners.
+ *
+ * It exists for the Excel export, which is the one operation whose subject
+ * genuinely IS the result set rather than a page of it. Rendering these rows in
+ * a table would put the app back where the workbook was.
+ *
+ * ★ SEQUENTIAL, NOT CONCURRENT. `totalPages` comes from the first response, so
+ * the pages after it could be fetched at once — but firing fifty requests at a
+ * server sized for a dispatch office trades a progress bar nobody watches for a
+ * spike everybody feels. In order, one at a time, reporting as it goes.
+ *
+ * ⚠ AND IT IS A SNAPSHOT ACROSS SEVERAL READS, not one consistent query. A trip
+ * added while the walk runs can shift rows between pages. For an export of a
+ * past range — what this is for — that cannot happen; for today's board it can,
+ * and the fix would be a server-side export, not a smarter loop here.
+ */
+export async function fetchAllTripSchedules(
+  request: Omit<TripScheduleQuery, 'page' | 'limit'> = {},
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<TripScheduleWithRefs[]> {
+  const first = await fetchTripSchedules({ ...request, page: 1, limit: MAX_PAGE_SIZE });
+
+  const rows = [...first.items];
+  onProgress?.(rows.length, first.total);
+
+  for (let page = 2; page <= first.totalPages; page += 1) {
+    const next = await fetchTripSchedules({ ...request, page, limit: MAX_PAGE_SIZE });
+    rows.push(...next.items);
+    onProgress?.(rows.length, first.total);
+  }
+
+  return rows;
 }
 
 export async function fetchTripSchedule(tripId: string): Promise<TripScheduleWithRefs> {

@@ -139,6 +139,12 @@ describe('0011_trip_schedule.sql', () => {
     it('★ promotes the row colour to a constrained status column', () => {
       // In the workbook this is fill colour with a legend at the bottom of the
       // sheet. A colour cannot be filtered or counted.
+      //
+      // ⚠ THESE FIVE VALUES ARE HISTORY, NOT THE BOARD'S VOCABULARY. 0025
+      // replaced them with four lifecycle states and remapped every stored row.
+      // The assertion stays because it pins what 0011 SAID — a forward-only
+      // migration must not be edited to match today — and the file it reads is
+      // unchanged. For what the column accepts NOW, see the 0025 block below.
       expect(sectionFor('trip_schedules')).toContain(
         "CHECK (status IN ('awaiting_production', 'awaiting_vehicle', 'needs_confirmation', 'external_booking', 'done'))",
       );
@@ -193,5 +199,85 @@ describe('0011_trip_schedule.sql', () => {
     // The workbook is full of real plates and real company names. None of them
     // belong in schema; they are rows somebody types on the day.
     expect(code()).not.toMatch(/50H4\d{4}|51D\d{5}|BLUE WATER|LESCHACO|KAPV/i);
+  });
+});
+
+/**
+ * The status vocabulary, replaced.
+ *
+ * ★ WHAT THIS SPEC IS ACTUALLY FOR. A remap that runs in the wrong ORDER is the
+ * failure mode here, and it is silent in review: 0017's trigger refuses every
+ * move out of `done`, so the `done` → `finished` UPDATE is exactly the write
+ * that trigger exists to stop. The migration drops it first and rebuilds it
+ * around the new terminal value — and if somebody reorders those statements,
+ * the deploy fails on a live database rather than here. So the order is pinned.
+ */
+describe('0025_trip_status_lifecycle.sql', () => {
+  let sql: string;
+
+  beforeAll(async () => {
+    sql = await readFile(join(MIGRATIONS_DIR, '0025_trip_status_lifecycle.sql'), 'utf8');
+  });
+
+  /** The file with its `--` prose stripped: it argues about `done` while removing it. */
+  const code = (): string => sql.replace(/^\s*--.*$/gm, '').replace(/\s+/g, ' ');
+
+  it('★ drops the old terminal guard BEFORE remapping the rows it guards', () => {
+    const dropped = code().indexOf('DROP TRIGGER IF EXISTS trip_schedules_guard_done');
+    const remapped = code().indexOf('UPDATE trip_schedules');
+
+    expect(dropped).toBeGreaterThanOrEqual(0);
+    expect(remapped).toBeGreaterThan(dropped);
+  });
+
+  it('maps every one of the five old values, and invents none', () => {
+    const body = code();
+
+    expect(body).toContain("WHEN 'awaiting_production' THEN 'pending'");
+    expect(body).toContain("WHEN 'awaiting_vehicle' THEN 'pending'");
+    expect(body).toContain("WHEN 'needs_confirmation' THEN 'pending'");
+    expect(body).toContain("WHEN 'external_booking' THEN 'confirmed'");
+    expect(body).toContain("WHEN 'done' THEN 'finished'");
+    // An unrecognised value is left alone so the CHECK below rejects it, rather
+    // than being swept into a state nobody chose for it.
+    expect(body).toContain('ELSE status');
+  });
+
+  it('constrains the column to the four lifecycle states and defaults to pending', () => {
+    expect(code()).toContain(
+      "CHECK (status IN ('pending', 'confirmed', 'executing', 'finished'))",
+    );
+    expect(code()).toContain("ALTER COLUMN status SET DEFAULT 'pending'");
+  });
+
+  it('★ rebuilds the terminal guard around `finished`', () => {
+    const body = code();
+
+    expect(body).toContain("IF OLD.status = 'finished' AND NEW.status <> 'finished' THEN");
+    expect(body).toContain('CREATE TRIGGER trip_schedules_guard_finished');
+    // The old function is removed, not left behind pointing at a value the
+    // column can no longer hold.
+    expect(body).toContain('DROP FUNCTION IF EXISTS trip_schedules_guard_done()');
+  });
+
+  it('★ leaves trip_status_history alone — it is evidence, in its own vocabulary', () => {
+    // Rewriting it cannot even be done consistently: the three waiting values
+    // all collapse to `pending`, so a real move becomes `pending` → `pending`,
+    // which 0017's CHECK refuses and whose row cannot be deleted either.
+    expect(code()).not.toMatch(/UPDATE\s+trip_status_history/i);
+    expect(code()).not.toMatch(/DELETE\s+FROM\s+trip_status_history/i);
+  });
+
+  it('is re-runnable', () => {
+    const body = code();
+
+    for (const guarded of [
+      'DROP TRIGGER IF EXISTS',
+      'DROP CONSTRAINT IF EXISTS',
+      'CREATE OR REPLACE FUNCTION',
+      'DROP FUNCTION IF EXISTS',
+    ]) {
+      expect(body).toContain(guarded);
+    }
   });
 });

@@ -1,8 +1,7 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Pool } from 'pg';
 import {
   TEST_URL,
+  applyAllMigrations,
   assertLooksLikeATestDatabase,
   describeIntegration,
   fakeHasher,
@@ -56,7 +55,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   let author: string;
   let trip: string;
 
-  const newTrip = async (status = 'awaiting_production'): Promise<string> => {
+  const newTrip = async (status = 'pending'): Promise<string> => {
     const rows = await pool.query<{ id: string }>(
       `INSERT INTO trip_schedules (scheduled_on, status, created_by)
        VALUES ('2026-08-04', $1, $2) RETURNING id`,
@@ -77,30 +76,12 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
 
     pool = new Pool({ connectionString: TEST_URL, max: 4, options: `-c search_path=${SCHEMA}` });
 
-    const migrations = join(__dirname, '..', '..', 'migrations');
-    for (const file of [
-      '0001_identity.sql',
-      '0002_users_updated_at.sql',
-      '0011_trip_schedule.sql',
-      '0012_trip_cost.sql',
-      // The operational lifecycle. Listed in full because 0016 and 0017 carry
-      // foreign keys back into 0013 and 0014 — a subset simply fails to apply.
-      '0013_trip_carrier_and_vehicle_ownership.sql',
-      '0014_trip_driver_assignment.sql',
-      '0015_trip_execution_event.sql',
-      '0016_trip_cost_lifecycle.sql',
-      '0017_trip_completion_and_history.sql',
-      // 0018 adds `users.account_type`, which provisioning now writes on every
-      // insert — so every spec that creates a user needs it.
-      '0018_driver_account.sql',
-      '0019_trip_location.sql',
-      // 0021 relaxes 0012's void constraint so a withdrawal needs no reason.
-      // Without it this list tests a schema the running code no longer targets.
-      '0021_void_reason_optional.sql',
-      '0022_trip_locations.sql',
-    ]) {
-      await pool.query(await readFile(join(migrations, file), 'utf8'));
-    }
+    // ★ EVERY MIGRATION ON DISK, NOT A LIST KEPT HERE. The list this replaced
+    // named its files one by one and went stale: 0024 added
+    // `trip_schedules.price`, which every trip SELECT now reads, and 0025
+    // replaced the five old status words with the four this spec already uses.
+    // A list can drift from the schema; reading the directory cannot.
+    await applyAllMigrations(pool);
 
     const database = poolAsDatabase(pool);
 
@@ -547,17 +528,31 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   });
 
   /**
-   * ★ THE BOARD MUST NOT LEAK THE MONEY.
+   * ★ THE BOARD MUST NOT LEAK WHAT A RUN COST US.
    *
    * `trip.read` is `'any'` — every finished account reads the dispatch board.
    * The whole reason cost lives in its own tables behind its own permission is
-   * that the amounts must never ride along on a trip response. This asserts it
-   * against REAL rows rather than against the type: a join added to
+   * that those amounts must never ride along on a trip response. This asserts
+   * it against REAL rows rather than against the type: a join added to
    * `tripsWithRefs` for a plausible reason would break here, loudly, on the day
    * it is written.
+   *
+   * ★ `price` IS THE ONE FIGURE ALLOWED THROUGH, and naming it here rather
+   * than loosening the pattern is the point. 0024 put `GIÁ CƯỚC` — what we
+   * CHARGE — on `trip_schedules` as a column every trip SELECT reads, and
+   * wrote down that this widens the board deliberately. What a run COSTS US is
+   * untouched by that decision, so the tripwire below still fires on every
+   * other money-shaped field: subtracting one known name keeps the next one
+   * loud.
    */
-  describe('★ the general trip API exposes no money', () => {
+  describe('★ the general trip API exposes no cost money', () => {
     const MONEY_WORDS = /amount|cost|price|total|hire|carrier|vat/i;
+
+    /** The quoted price, and nothing else, may ride on a trip payload. */
+    const ALLOWED = new Set(['price']);
+
+    const leakedMoneyKeys = (row: object) =>
+      Object.keys(row).filter((key) => MONEY_WORDS.test(key) && !ALLOWED.has(key));
 
     const asQuery = (raw: Record<string, unknown>) => ({
       ...buildDateRangePageQuerySchema(() => new Date('2026-08-15T03:00:00Z')).parse(raw),
@@ -574,8 +569,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       const row = page.items.find((item) => item.id === trip);
       expect(row).toBeDefined();
 
-      const leaked = Object.keys(row as object).filter((key) => MONEY_WORDS.test(key));
-      expect(leaked).toEqual([]);
+      expect(leakedMoneyKeys(row as object)).toEqual([]);
       // And nothing anywhere in the serialised row says the figures either.
       expect(JSON.stringify(row)).not.toContain('1500000');
       expect(JSON.stringify(row)).not.toContain('4500000');
@@ -585,7 +579,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       await money.createCost({ tripId: trip, category: 'fuel', amount: '1500000', createdBy: author });
 
       const row = await board.findById(trip);
-      expect(Object.keys(row).filter((key) => MONEY_WORDS.test(key))).toEqual([]);
+      expect(leakedMoneyKeys(row)).toEqual([]);
       expect(JSON.stringify(row)).not.toContain('1500000');
     });
   });
@@ -594,11 +588,11 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
 
   describe('★ cost does not care where the trip is', () => {
     it.each([
-      'awaiting_production',
-      'awaiting_vehicle',
-      'needs_confirmation',
-      'external_booking',
-      'done',
+      'pending',
+      'confirmed',
+      'pending',
+      'confirmed',
+      'finished',
     ])('records money on a trip that is %s', async (status) => {
       const target = await newTrip(status);
       await expect(
@@ -607,7 +601,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     });
 
     it('★ records money on a FINISHED trip — the case the feature exists for', async () => {
-      const done = await newTrip('done');
+      const done = await newTrip('finished');
       await money.createCost({ tripId: done, category: 'overtime', amount: '250000', createdBy: author });
       await money.createHire({ tripId: done, carrierName: 'Hải Râu', agreedAmount: '3000000', createdBy: author });
 

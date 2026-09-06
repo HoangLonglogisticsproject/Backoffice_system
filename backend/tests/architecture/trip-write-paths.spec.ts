@@ -7,7 +7,7 @@ import { join } from 'node:path';
  * ★ WHY THIS IS A TEST AND NOT A CODE REVIEW.
  *
  * Every rule below is one that holds today by ARRANGEMENT rather than by
- * construction: `done` has one write path because two services happen to be
+ * construction: `finished` has one write path because two services happen to be
  * written the way they are, and a status change records history because three
  * call sites happen to remember to. Both survive exactly as long as nobody adds
  * a fourth call site — and neither the type checker nor any unit test would
@@ -54,26 +54,26 @@ describe('trip_schedules.status — the write paths', () => {
     }
   });
 
-  it('★ reaches `done` from exactly one place: the completion service', async () => {
-    // The single most important assertion here. 0017 makes `done` terminal, so
-    // a second way in is a way to close a trip permanently while skipping the
+  it('★ reaches `finished` from exactly one place: the completion service', async () => {
+    // The single most important assertion here. 0025 makes `finished` terminal,
+    // so a second way in is a way to close a trip permanently while skipping the
     // approval, the expense freeze and the closing stamp.
     const offenders: string[] = [];
 
     for (const folder of ['api', 'application']) {
       for (const file of await listFiles(folder)) {
         const body = code(await read(folder, file));
-        if (/updateStatus\([^)]*'done'/.test(body)) offenders.push(`${folder}/${file}`);
+        if (/updateStatus\([^)]*'finished'/.test(body)) offenders.push(`${folder}/${file}`);
       }
     }
 
     expect(offenders).toEqual(['application/trip-completion.service.ts']);
   });
 
-  it('refuses `done` on every route the dispatch board offers', async () => {
+  it('refuses `finished` on every route the dispatch board offers', async () => {
     // Both ordinary paths run through `requireDispatchTransition`, and creation
     // runs through the same guard it delegates to — so a trip can neither be
-    // moved to `done` nor born that way.
+    // moved to `finished` nor born that way.
     const service = code(await read('application', 'trip-schedule.service.ts'));
 
     expect(service).toContain('this.requireNotCompletionOnly(values.status)');

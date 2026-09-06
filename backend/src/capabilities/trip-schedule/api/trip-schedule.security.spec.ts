@@ -116,7 +116,7 @@ describe('trip-schedule HTTP security', () => {
     pickupAt: new Date('2026-08-04T01:30:00Z'),
     deliveryAt: new Date('2026-08-04T03:00:00Z'),
     note: null,
-    status: 'awaiting_vehicle',
+    status: 'confirmed',
     createdBy: ACTOR,
     createdAt: new Date('2026-08-01'),
     updatedAt: new Date('2026-08-01'),
@@ -137,7 +137,7 @@ describe('trip-schedule HTTP security', () => {
       findById: jest.fn().mockResolvedValue(storedTrip),
       create: jest.fn().mockResolvedValue(storedTrip),
       update: jest.fn().mockResolvedValue(storedTrip),
-      updateStatus: jest.fn().mockResolvedValue({ ...storedTrip, status: 'done' }),
+      updateStatus: jest.fn().mockResolvedValue({ ...storedTrip, status: 'finished' }),
       archive: jest.fn().mockResolvedValue(storedTrip),
       statusHistory: jest.fn().mockResolvedValue([]),
     };
@@ -312,7 +312,7 @@ describe('trip-schedule HTTP security', () => {
       const response = await request(app.getHttpServer())
         [method](path)
         .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
-        .send({ scheduledOn: '2026-08-04', plate: 'X', name: 'X', status: 'done' });
+        .send({ scheduledOn: '2026-08-04', plate: 'X', name: 'X', status: 'finished' });
 
       expect(response.status).toBe(403);
     });
@@ -362,7 +362,7 @@ describe('trip-schedule HTTP security', () => {
       ['patch', `/trip-customers/${CUSTOMER}`],
       ['post', `/trip-customers/${CUSTOMER}/archive`],
     ] as const)('★ is refused %s %s — correcting a row is administration', async (method, path) => {
-      const response = await authed(method, path).send({ status: 'done', plate: 'X', name: 'X' });
+      const response = await authed(method, path).send({ status: 'finished', plate: 'X', name: 'X' });
 
       expect(response.status).toBe(403);
       expect(response.body.error.code).toBe('FORBIDDEN');
@@ -397,7 +397,7 @@ describe('trip-schedule HTTP security', () => {
       // target. See PERMISSION_REQUIREMENT for why that needed its own tier.
       const corrected = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
       const restatused = await authed('patch', `/trip-schedules/${TRIP}/status`).send({
-        status: 'done',
+        status: 'finished',
       });
       const archived = await authed('post', `/trip-schedules/${TRIP}/archive`);
 
@@ -459,11 +459,11 @@ describe('trip-schedule HTTP security', () => {
     });
 
     it('moves a row along the board', async () => {
-      await authed('patch', `/trip-schedules/${TRIP}/status`).send({ status: 'done' }).expect(200);
+      await authed('patch', `/trip-schedules/${TRIP}/status`).send({ status: 'finished' }).expect(200);
       // ★ THE ACTOR IS NOT OPTIONAL HERE. A board move with no author is the
       // gap `trip_status_history` exists to close, so the route passes the
       // session user and never a value from the body.
-      expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'done', ACTOR, null);
+      expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'finished', ACTOR, null);
     });
 
     it('archives rather than deletes, and gets the archived row back', async () => {

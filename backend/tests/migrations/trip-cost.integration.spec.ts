@@ -124,6 +124,11 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
       // 0021 relaxes the void constraint this file is largely about: a
       // withdrawal names who and when, and no longer has to say why.
       '0021_void_reason_optional.sql',
+      // 0025 renames the board's statuses, and this file drives a trip through
+      // `pending`, `confirmed` and `finished` to show that cost does not care
+      // which one it is. Without it those words violate 0011's CHECK, which
+      // still spells the five the board shipped with.
+      '0025_trip_status_lifecycle.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -369,11 +374,11 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
 
   describe('★ cost does not care what state the trip is in', () => {
     it.each([
-      'awaiting_production',
-      'awaiting_vehicle',
-      'needs_confirmation',
-      'external_booking',
-      'done',
+      'pending',
+      'confirmed',
+      'pending',
+      'confirmed',
+      'finished',
     ])('accepts a cost line on a trip that is %s', async (status) => {
       await pool.query('UPDATE trip_schedules SET status = $2 WHERE id = $1', [trip, status]);
       await expect(addCost()).resolves.toBeDefined();
@@ -382,7 +387,7 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
     it('★ accepts cost on a FINISHED trip — the case the feature exists for', async () => {
       // Cost is a later workflow with a different approver, so the figures
       // routinely arrive after dispatch has closed the trip.
-      await pool.query(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+      await pool.query(`UPDATE trip_schedules SET status = 'finished' WHERE id = $1`, [trip]);
 
       await addCost({ category: 'overtime', amount: 250_000 });
       await addHire({ agreed_amount: 3_000_000 });

@@ -168,7 +168,7 @@ export class TripCostService {
     return this.db.transaction(async (tx) => {
       const trip = await this.trips.lockActive(input.tripId, tx);
       if (!trip) throw new NotFoundError('Trip not found.');
-      if (trip.status === 'done') throw new ConflictError('That trip is closed.');
+      if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
 
       // ★ NO VEHICLE, NO EXPENSE — contract §4.1a, the operational ordering.
       // A figure declared before a lorry is assigned has nothing to attribute

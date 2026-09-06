@@ -10,7 +10,7 @@ import type { TripStatusChange } from '../domain/trip-status-history';
  * memory of it. A trip that reads `needs_confirmation` this morning and
  * `awaiting_vehicle` this afternoon carries no trace of the change, who made it,
  * or whether it had ever been marked done — which is the one question that
- * matters once "done" becomes permanent.
+ * matters once "finished" becomes permanent.
  *
  * ★ INSERT-ONLY, AND THE DATABASE AGREES. There is no update method and no
  * delete method here, and 0017 puts a trigger behind that so the absence is a

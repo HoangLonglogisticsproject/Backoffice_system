@@ -348,7 +348,7 @@ export class TripExecutionService {
 
       // Nothing to answer with, so this is a NEW milestone — and a closed trip
       // takes none. Same rule `lockOpenTrip` applies everywhere else.
-      if (trip.status === 'done') throw new ConflictError('That trip is closed.');
+      if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
 
       const assignment = await this.assignments.lockActive(input.tripId, tx);
       if (!assignment) {
@@ -493,7 +493,7 @@ export class TripExecutionService {
   private async lockOpenTrip(tripId: string, tx: DatabaseQuery): Promise<TripSchedule> {
     const trip = await this.trips.lockActive(tripId, tx);
     if (!trip) throw new NotFoundError('Trip not found.');
-    if (trip.status === 'done') throw new ConflictError('That trip is closed.');
+    if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
     return trip;
   }
 

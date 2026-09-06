@@ -11,26 +11,32 @@ import type { TranslationKey } from './translate';
  */
 
 /**
- * ★ FIVE VALUES, AND THEY USED TO BE ROW COLOURS.
+ * ★ WHERE A TRIP IS IN ITS LIFE — four states, IN ORDER.
  *
- * In the spreadsheet this replaces, the state of a trip was the fill colour of
- * its row, with a legend written at the bottom of each monthly sheet. The
- * labels below are the legend, translated in `translate.ts` rather than here.
+ * These replace the five workbook row colours the board carried until 0025
+ * (ĐANG ĐỢI SX, SX RỒI ĐANG ĐỢI XE, THÔNG TIN CẦN XÁC NHẬN LẠI, BOOK XE NGOÀI,
+ * ĐÃ XONG). Four of those described the CARGO and one described the ROUTE;
+ * none of them said where the RUN itself was.
+ *
+ * ⚠ "BOOK XE NGOÀI" IS NOT AMONG THEM, AND THAT FACT DID NOT VANISH WITH IT.
+ * Whether a run is subcontracted is carried by the vehicle's `ownership` and by
+ * the outsource-hire records — not by the board's colour. Do not re-add it here
+ * as a fifth status: it is not a stage of the same journey.
  */
-export type TripStatus =
-  | 'awaiting_production'
-  | 'awaiting_vehicle'
-  | 'needs_confirmation'
-  | 'external_booking'
-  | 'done';
+export type TripStatus = 'pending' | 'confirmed' | 'executing' | 'finished';
 
-/** In the order the legend lists them, which is roughly the order work moves. */
+/**
+ * In lifecycle order.
+ *
+ * ⚠ THE ORDER IS NOT A RULE. The server allows every pairing except leaving
+ * `finished`, so a dispatcher can send a trip back when they mis-clicked.
+ * Nothing here may narrow that into a wizard.
+ */
 export const TRIP_STATUSES: readonly TripStatus[] = [
-  'awaiting_production',
-  'awaiting_vehicle',
-  'needs_confirmation',
-  'external_booking',
-  'done',
+  'pending',
+  'confirmed',
+  'executing',
+  'finished',
 ];
 
 /**
@@ -43,39 +49,38 @@ export const TRIP_STATUSES: readonly TripStatus[] = [
  * this file has already made once, in the trip form.
  */
 export const TRIP_STATUS_LABELS: Record<TripStatus, TranslationKey> = {
-  awaiting_production: 'tripAwaitingProduction',
-  awaiting_vehicle: 'tripAwaitingVehicle',
-  needs_confirmation: 'tripNeedsConfirmation',
-  external_booking: 'tripExternalBooking',
-  done: 'tripDone',
+  pending: 'tripPending',
+  confirmed: 'tripConfirmed',
+  executing: 'tripExecuting',
+  finished: 'tripFinished',
 };
 
 /**
  * The statuses a dispatcher may CHOOSE. Everything above is what a trip may BE.
  *
- * ★ `done` IS MISSING ON PURPOSE, AND IT IS NOT A UI PREFERENCE. A trip is
- * finished by APPROVING ITS COMPLETION REQUEST — the server refuses `done` from
- * the board and from trip creation alike, and a database trigger makes it
+ * ★ `finished` IS MISSING ON PURPOSE, AND IT IS NOT A UI PREFERENCE. A trip is
+ * finished by APPROVING ITS COMPLETION REQUEST — the server refuses `finished`
+ * from the board and from trip creation alike, and 0025's trigger makes it
  * permanent once set. Offering it in a dropdown would offer a control whose
  * only possible outcome is a 409.
  *
- * ⚠ The other four stay UNORDERED. `external_booking` is a ROUTE rather than a
- * stage and `needs_confirmation` is an exception reachable from anywhere, so
- * constraining moves between them would invent a workflow the business has not
- * described — and the first thing it would break is a dispatcher correcting a
- * mis-click.
+ * ⚠ AND THE OTHER THREE STAY UNORDERED DESPITE READING AS A SEQUENCE. The
+ * server allows any move among them, which is what lets a dispatcher send a
+ * trip back from `executing` to `pending` after a mis-click. Turning this
+ * list's order into a permitted-transitions rule would invent a workflow the
+ * business has not described.
  */
 export const DISPATCH_SELECTABLE_STATUSES: readonly TripStatus[] = TRIP_STATUSES.filter(
-  (status) => status !== 'done',
+  (status) => status !== 'finished',
 );
 
 /**
  * ★ WHO IS DRIVING, AS A FILTER — `?assignment=` on `GET /trip-schedules`.
  *
- * NOT a sixth status, and the board's tabs depend on the difference. The five
- * statuses describe the CARGO ("đang đợi SX", "đợi xe"); this describes the
- * CREW, and the two move independently — a trip can be `awaiting_vehicle` with
- * a driver already named, or `needs_confirmation` with nobody on it.
+ * NOT a fifth status, and the board's tabs depend on the difference. The four
+ * statuses describe where the RUN is; this describes the CREW, and the two move
+ * independently — a trip can be `confirmed` with a driver already named, and
+ * `confirmed` with nobody on it.
  *
  * ★ AND IT IS THE SERVER'S FILTER, NOT THE BROWSER'S. A page is not the result
  * set: dropping the crewed rows from a fetched page would hide trips without
@@ -135,6 +140,25 @@ export interface TripSchedule {
   pickupLongitude: number | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
+
+  /**
+   * ★ THE AGREED CHARGE — `GIÁ CƯỚC` — AS A DECIMAL STRING, e.g. `"4500000.00"`.
+   *
+   * ⚠ NEVER `Number(price)`. The column is `NUMERIC(14,2)` and the server
+   * sends it as text for the same reason every figure in `tripCost.ts` is
+   * text: binary floating point cannot hold a decimal exactly. Render it with
+   * `formatMoney`, which never parses.
+   *
+   * ★ AND IT IS NOT A COST. `tripCost.ts` holds what a run COSTS US — gated
+   * behind `cost.read`, fetched only when the money dialog opens, never on a
+   * trip response. This is what the customer is CHARGED: part of the booking a
+   * dispatcher types, so it rides on the board with the cargo and the
+   * addresses. The warning in `api/tripCost.ts` still stands for every field
+   * defined there.
+   *
+   * `null` until somebody prices the trip.
+   */
+  price: string | null;
 
   note: string | null;
   status: TripStatus;

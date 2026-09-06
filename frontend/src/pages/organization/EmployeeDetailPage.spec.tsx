@@ -72,7 +72,7 @@ const trip = (over: Record<string, unknown> = {}) => ({
   trip: {
     id: 'trip-1',
     scheduledOn: '2026-08-30',
-    status: 'awaiting_vehicle',
+    status: 'confirmed',
     vehicle: { id: 'v1', plate: '50H-49266' },
     customer: { id: 'c1', name: 'WWL' },
   },
