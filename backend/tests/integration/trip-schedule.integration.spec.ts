@@ -550,9 +550,9 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       // equally well. `done` is no longer reachable from the edit path at all —
       // 0017 makes it permanent, so completing a trip belongs to the completion
       // approval and to nothing else.
-      const updated = await trips.update(trip.id, { status: 'external_booking' }, author);
+      const updated = await trips.update(trip.id, { status: 'confirmed' }, author);
 
-      expect(updated.status).toBe('external_booking');
+      expect(updated.status).toBe('confirmed');
       expect(updated.vehicleId).toBe(vehicle.id);
       expect(updated.customerId).toBe(customer.id);
     });
@@ -673,10 +673,10 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
    */
   describe('★ BD-01 — `done` is terminal, and the board cannot reach it', () => {
     const OTHERS = [
-      'awaiting_production',
-      'awaiting_vehicle',
-      'needs_confirmation',
-      'external_booking',
+      'pending',
+      'confirmed',
+      'pending',
+      'confirmed',
     ] as const;
 
     const tripWith = async (status: TripStatus) =>
@@ -694,36 +694,36 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
      * approval leaves behind.
      */
     const doneTrip = async () => {
-      const trip = await tripWith('awaiting_vehicle');
-      await pool.query("UPDATE trip_schedules SET status = 'done' WHERE id = $1", [trip.id]);
+      const trip = await tripWith('confirmed');
+      await pool.query("UPDATE trip_schedules SET status = 'finished' WHERE id = $1", [trip.id]);
       return trip;
     };
 
     describe('★ reaching done — refused, whichever door is used', () => {
       it('refuses it through the status endpoint', async () => {
-        const trip = await tripWith('awaiting_vehicle');
+        const trip = await tripWith('confirmed');
 
-        await expect(trips.updateStatus(trip.id, 'done', author)).rejects.toBeInstanceOf(
+        await expect(trips.updateStatus(trip.id, 'finished', author)).rejects.toBeInstanceOf(
           ConflictError,
         );
 
-        expect((await trips.findById(trip.id))?.status).toBe('awaiting_vehicle');
+        expect((await trips.findById(trip.id))?.status).toBe('confirmed');
       });
 
       it('refuses it through the FULL PATCH too — the rule is not bypassable', async () => {
-        const trip = await tripWith('awaiting_vehicle');
+        const trip = await tripWith('confirmed');
 
-        await expect(trips.update(trip.id, { status: 'done' }, author)).rejects.toBeInstanceOf(
+        await expect(trips.update(trip.id, { status: 'finished' }, author)).rejects.toBeInstanceOf(
           ConflictError,
         );
 
-        expect((await trips.findById(trip.id))?.status).toBe('awaiting_vehicle');
+        expect((await trips.findById(trip.id))?.status).toBe('confirmed');
       });
 
       it('★ refuses a trip BORN done — a trip cannot be created closed', async () => {
         // No completion request, no approver, no frozen figures, and — because
         // the trigger makes `done` permanent — no way back.
-        await expect(tripWith('done')).rejects.toBeInstanceOf(ConflictError);
+        await expect(tripWith('finished')).rejects.toBeInstanceOf(ConflictError);
       });
     });
 
@@ -734,7 +734,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         await expect(trips.updateStatus(trip.id, to, author)).rejects.toBeInstanceOf(ConflictError);
 
         // Refused means unchanged, not partially applied.
-        expect((await trips.findById(trip.id))?.status).toBe('done');
+        expect((await trips.findById(trip.id))?.status).toBe('finished');
       });
 
       it('refuses it through the FULL PATCH too', async () => {
@@ -742,11 +742,11 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         // second door onto the same column.
         const trip = await doneTrip();
 
-        await expect(trips.update(trip.id, { status: 'awaiting_vehicle' }, author)).rejects.toBeInstanceOf(
+        await expect(trips.update(trip.id, { status: 'confirmed' }, author)).rejects.toBeInstanceOf(
           ConflictError,
         );
 
-        expect((await trips.findById(trip.id))?.status).toBe('done');
+        expect((await trips.findById(trip.id))?.status).toBe('finished');
       });
 
       it('★ rolls the WHOLE edit back, not just the status', async () => {
@@ -756,11 +756,11 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         await trips.update(trip.id, { note: 'trước' }, author);
 
         await expect(
-          trips.update(trip.id, { status: 'awaiting_vehicle', note: 'sau', cargoInfo: '17CTN' }, author),
+          trips.update(trip.id, { status: 'confirmed', note: 'sau', cargoInfo: '17CTN' }, author),
         ).rejects.toBeInstanceOf(ConflictError);
 
         const after = await trips.findById(trip.id);
-        expect(after?.status).toBe('done');
+        expect(after?.status).toBe('finished');
         expect(after?.note).toBe('trước');
         expect(after?.cargoInfo).toBeNull();
       });
@@ -781,19 +781,19 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
         expect(updated.note).toBe('giao lúc 18h');
         expect(updated.deliveryAddress).toBe('TCS');
-        expect(updated.status).toBe('done');
+        expect(updated.status).toBe('finished');
       });
 
       it('★ leaves the four non-terminal statuses freely interchangeable', async () => {
         // Deliberately NOT a pipeline. Walking them in an order the legend does
         // not describe must succeed, or somebody has invented a workflow.
-        const trip = await tripWith('awaiting_production');
+        const trip = await tripWith('pending');
 
         for (const next of [
-          'external_booking',
-          'needs_confirmation',
-          'awaiting_production',
-          'awaiting_vehicle',
+          'confirmed',
+          'pending',
+          'pending',
+          'confirmed',
         ] as const) {
           const moved = await trips.updateStatus(trip.id, next, author);
           expect(moved.status).toBe(next);
@@ -803,17 +803,17 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
     describe('interaction with the rules that already existed', () => {
       it('answers 404 for an archived trip before it ever considers the status', async () => {
-        const trip = await tripWith('awaiting_vehicle');
+        const trip = await tripWith('confirmed');
         await trips.archive(trip.id, author);
 
         await expect(
-          trips.updateStatus(trip.id, 'needs_confirmation', author),
+          trips.updateStatus(trip.id, 'pending', author),
         ).rejects.toBeInstanceOf(NotFoundError);
       });
 
       it('answers 404 for a trip that never existed', async () => {
         await expect(
-          trips.updateStatus('00000000-0000-4000-8000-000000000000', 'needs_confirmation', author),
+          trips.updateStatus('00000000-0000-4000-8000-000000000000', 'pending', author),
         ).rejects.toBeInstanceOf(NotFoundError);
       });
     });
@@ -829,28 +829,28 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const trip = await doneTrip();
 
       const results = await Promise.allSettled([
-        trips.updateStatus(trip.id, 'awaiting_vehicle', author),
-        trips.updateStatus(trip.id, 'external_booking', author),
+        trips.updateStatus(trip.id, 'confirmed', author),
+        trips.updateStatus(trip.id, 'confirmed', author),
       ]);
 
       // ★ NEITHER MAY WIN. Whichever order the lock granted, both read a row
       // that was already `done` and both are refused — there is no interleaving
       // in which one of them sees a non-terminal status.
       expect(results.every((r) => r.status === 'rejected')).toBe(true);
-      expect((await trips.findById(trip.id))?.status).toBe('done');
+      expect((await trips.findById(trip.id))?.status).toBe('finished');
     });
 
     it('★ serialises two concurrent LEGAL moves, losing neither', async () => {
-      const trip = await tripWith('awaiting_production');
+      const trip = await tripWith('pending');
 
       const results = await Promise.allSettled([
-        trips.updateStatus(trip.id, 'awaiting_vehicle', author),
-        trips.updateStatus(trip.id, 'external_booking', author),
+        trips.updateStatus(trip.id, 'confirmed', author),
+        trips.updateStatus(trip.id, 'confirmed', author),
       ]);
 
       expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
       // The row holds whichever landed second; both were legal in either order.
-      expect(['awaiting_vehicle', 'external_booking']).toContain(
+      expect(['confirmed', 'confirmed']).toContain(
         (await trips.findById(trip.id))?.status,
       );
     });

@@ -23,6 +23,8 @@ export interface TripScheduleValues {
   deliveryContact: string | null;
   pickupAt: Date | null;
   deliveryAt: Date | null;
+  /** The agreed charge, as a decimal string. `null` while the trip is unpriced. */
+  price: string | null;
   note: string | null;
   status: TripStatus;
   /** Each pair both-or-neither; the service has already checked. */
@@ -93,6 +95,13 @@ interface TripRow {
   delivery_contact: string | null;
   pickup_at: Date | null;
   delivery_at: Date | null;
+  /**
+   * ★ `NUMERIC`, WHICH `pg` HANDS BACK AS A STRING — unlike the four coordinate
+   * columns below, which are `DOUBLE PRECISION` and do arrive as numbers. That
+   * asymmetry is the point: reading this one as a number would put the figure
+   * through the float the column type exists to avoid.
+   */
+  price: string | null;
   note: string | null;
   status: TripStatus;
   /** `DOUBLE PRECISION`, which `pg` hands back as a number — unlike NUMERIC. */
@@ -146,6 +155,7 @@ const TRIP_COLUMN_NAMES = [
   'delivery_contact',
   'pickup_at',
   'delivery_at',
+  'price',
   'note',
   'status',
   'pickup_latitude',
@@ -211,6 +221,7 @@ const toTrip = (row: TripRow): TripSchedule => ({
   deliveryContact: row.delivery_contact,
   pickupAt: row.pickup_at,
   deliveryAt: row.delivery_at,
+  price: row.price,
   note: row.note,
   status: row.status,
   pickupLatitude: row.pickup_latitude,
@@ -267,6 +278,10 @@ const valueParams = (values: TripScheduleValues): unknown[] => [
   values.deliveryLongitude,
   values.pickupLocationId,
   values.deliveryLocationId,
+  // Appended rather than slotted in beside the other columns: every bind index
+  // below is positional, so a value inserted in the middle silently renumbers
+  // eighteen of them. New columns go on the end.
+  values.price,
 ];
 
 @Injectable()
@@ -399,10 +414,10 @@ export class TripScheduleRepository {
           pickup_address, delivery_address, pickup_contact, delivery_contact,
           pickup_at, delivery_at, note, status,
           pickup_latitude, pickup_longitude, delivery_latitude, delivery_longitude,
-          pickup_location_id, delivery_location_id,
+          pickup_location_id, delivery_location_id, price,
           created_by)
        VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               $13, $14, $15, $16, $17, $18, $19)
+               $13, $14, $15, $16, $17, $18, $19, $20)
        ${RETURNING_TRIP}`,
       [...valueParams(input), input.createdBy],
     );
@@ -435,7 +450,8 @@ export class TripScheduleRepository {
               pickup_at = $10, delivery_at = $11, note = $12, status = $13,
               pickup_latitude = $14, pickup_longitude = $15,
               delivery_latitude = $16, delivery_longitude = $17,
-              pickup_location_id = $18, delivery_location_id = $19
+              pickup_location_id = $18, delivery_location_id = $19,
+              price = $20
         WHERE id = $1 AND archived_at IS NULL
         ${RETURNING_TRIP}`,
       [id, ...valueParams(values)],
@@ -470,7 +486,7 @@ export class TripScheduleRepository {
    * Stamps who ended a trip, and when.
    *
    * ★ SEPARATE FROM `updateStatus`, AND ALWAYS IN THE SAME TRANSACTION AS IT.
-   * `status = 'done'` is the board's word; these two columns are the audit of
+   * `status = 'finished'` is the board's word; these two columns are the audit of
    * the decision behind it. Folding them into one statement would mean a CASE
    * expression on every ordinary board move for the sake of the one move that
    * closes a trip.

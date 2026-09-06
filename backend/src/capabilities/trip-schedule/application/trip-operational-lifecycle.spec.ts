@@ -43,7 +43,7 @@ const database = (): Database =>
 
 const openTrip = (over: Record<string, unknown> = {}) => ({
   id: TRIP,
-  status: 'awaiting_vehicle',
+  status: 'confirmed',
   vehicleId: VEHICLE,
   pickupAt: new Date('2026-08-30T02:00:00Z'),
   deliveryAt: new Date('2026-08-30T09:00:00Z'),
@@ -68,7 +68,7 @@ describe('completion', () => {
   const build = (over: Record<string, unknown> = {}) => {
     const trips = {
       lockActive: jest.fn().mockResolvedValue(openTrip()),
-      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'done' })),
+      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'finished' })),
       markClosed: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockResolvedValue(true),
       ...over,
@@ -132,7 +132,7 @@ describe('completion', () => {
 
     it('refuses a trip that is already closed', async () => {
       const { service, trips } = build();
-      trips.lockActive.mockResolvedValue(openTrip({ status: 'done' }));
+      trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
 
       await expect(service.submit(TRIP, DRIVER, 'expenses')).rejects.toThrow(ConflictError);
     });
@@ -197,7 +197,7 @@ describe('completion', () => {
       });
       trips.updateStatus.mockImplementation(async () => {
         order.push('close');
-        return openTrip({ status: 'done' });
+        return openTrip({ status: 'finished' });
       });
 
       await service.approve(TRIP, BOSS);
@@ -207,12 +207,12 @@ describe('completion', () => {
 
     it('records the move and stamps who closed it, in the same transaction', async () => {
       const { service, history, trips } = approving();
-      trips.lockActive.mockResolvedValue(openTrip({ status: 'needs_confirmation' }));
+      trips.lockActive.mockResolvedValue(openTrip({ status: 'pending' }));
 
       await service.approve(TRIP, BOSS);
 
       expect(history.record).toHaveBeenCalledWith(
-        expect.objectContaining({ from: 'needs_confirmation', to: 'done', changedBy: BOSS }),
+        expect.objectContaining({ from: 'pending', to: 'finished', changedBy: BOSS }),
         TX,
       );
       expect(trips.markClosed).toHaveBeenCalledWith(TRIP, BOSS, expect.any(Date), TX);
@@ -312,7 +312,7 @@ describe('the one write path to DONE', () => {
       lockActive: jest.fn().mockResolvedValue(openTrip()),
       create: jest.fn().mockResolvedValue(openTrip()),
       replace: jest.fn().mockResolvedValue(openTrip()),
-      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'done' })),
+      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'finished' })),
       markClosed: jest.fn(),
       exists: jest.fn().mockResolvedValue(true),
     };
@@ -339,7 +339,7 @@ describe('the one write path to DONE', () => {
     // 0017's trigger would then make the result permanent.
     const { service, trips } = build();
 
-    await expect(service.updateStatus(TRIP, 'done', BOSS)).rejects.toThrow(ConflictError);
+    await expect(service.updateStatus(TRIP, 'finished', BOSS)).rejects.toThrow(ConflictError);
     expect(trips.updateStatus).not.toHaveBeenCalled();
   });
 
@@ -348,7 +348,7 @@ describe('the one write path to DONE', () => {
     // two routes to forget.
     const { service, trips } = build();
 
-    await expect(service.update(TRIP, { status: 'done' }, BOSS)).rejects.toThrow(ConflictError);
+    await expect(service.update(TRIP, { status: 'finished' }, BOSS)).rejects.toThrow(ConflictError);
     expect(trips.replace).not.toHaveBeenCalled();
   });
 
@@ -358,31 +358,31 @@ describe('the one write path to DONE', () => {
     const { service, trips } = build();
 
     await expect(
-      service.create({ scheduledOn: '2026-08-30', status: 'done', createdBy: BOSS }),
+      service.create({ scheduledOn: '2026-08-30', status: 'finished', createdBy: BOSS }),
     ).rejects.toThrow(ConflictError);
     expect(trips.create).not.toHaveBeenCalled();
   });
 
   it('still refuses to reopen a completed trip', async () => {
     const { service, trips } = build();
-    trips.lockActive.mockResolvedValue(openTrip({ status: 'done' }));
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
 
-    await expect(service.updateStatus(TRIP, 'awaiting_vehicle', BOSS)).rejects.toThrow(
+    await expect(service.updateStatus(TRIP, 'confirmed', BOSS)).rejects.toThrow(
       ConflictError,
     );
   });
 
   it('allows every ordinary board move, and records each one', async () => {
     const { service, trips, history } = build();
-    trips.updateStatus.mockResolvedValue(openTrip({ status: 'needs_confirmation' }));
+    trips.updateStatus.mockResolvedValue(openTrip({ status: 'pending' }));
 
-    await service.updateStatus(TRIP, 'needs_confirmation', BOSS, 'Khách đổi giờ.');
+    await service.updateStatus(TRIP, 'pending', BOSS, 'Khách đổi giờ.');
 
-    expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'needs_confirmation', TX);
+    expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'pending', TX);
     expect(history.record).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: 'awaiting_vehicle',
-        to: 'needs_confirmation',
+        from: 'confirmed',
+        to: 'pending',
         reason: 'Khách đổi giờ.',
         changedBy: BOSS,
       }),
@@ -392,9 +392,9 @@ describe('the one write path to DONE', () => {
 
   it('never stamps closed_at from a board move, because it can never reach DONE', async () => {
     const { service, trips } = build();
-    trips.updateStatus.mockResolvedValue(openTrip({ status: 'external_booking' }));
+    trips.updateStatus.mockResolvedValue(openTrip({ status: 'confirmed' }));
 
-    await service.updateStatus(TRIP, 'external_booking', BOSS);
+    await service.updateStatus(TRIP, 'confirmed', BOSS);
 
     expect(trips.markClosed).not.toHaveBeenCalled();
   });
@@ -402,7 +402,7 @@ describe('the one write path to DONE', () => {
   it('writes no history when the status is set to what it already is', async () => {
     const { service, trips, history } = build();
 
-    await service.updateStatus(TRIP, 'awaiting_vehicle', BOSS);
+    await service.updateStatus(TRIP, 'confirmed', BOSS);
 
     expect(trips.updateStatus).not.toHaveBeenCalled();
     expect(history.record).not.toHaveBeenCalled();
@@ -592,7 +592,7 @@ describe('execution events', () => {
 
   it('refuses a closed trip', async () => {
     const { service, trips } = build();
-    trips.lockActive.mockResolvedValue(openTrip({ status: 'done' }));
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
 
     await expect(service.recordEvent(arriving)).rejects.toThrow(ConflictError);
   });
@@ -1191,7 +1191,7 @@ describe('★ assignment eligibility and what the driver is told', () => {
 
   it('refuses a closed trip before looking at the driver', async () => {
     const { service, trips, users } = build();
-    trips.lockActive.mockResolvedValue(openTrip({ status: 'done' }));
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
 
     await expect(service.assign(TRIP, DRIVER, BOSS)).rejects.toThrow(ConflictError);
     expect(users.findById).not.toHaveBeenCalled();
@@ -1370,7 +1370,7 @@ describe('★ a completion decision is told to the driver', () => {
   const build = () => {
     const trips = {
       lockActive: jest.fn().mockResolvedValue(openTrip()),
-      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'done' })),
+      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'finished' })),
       markClosed: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockResolvedValue(true),
     };

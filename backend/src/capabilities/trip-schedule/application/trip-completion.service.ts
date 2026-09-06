@@ -30,7 +30,7 @@ import { eventKeys } from '../../notification/domain/notification';
  * closing stamp, and every cost line on it. Any subset of those committing
  * without the rest leaves a trip that is closed but still editable, or final but
  * with no record of who closed it. There is no compensating action available
- * afterwards, because 0017 makes `done` terminal.
+ * afterwards, because 0025 makes `finished` terminal.
  */
 @Injectable()
 export class TripCompletionService {
@@ -121,7 +121,7 @@ export class TripCompletionService {
    *
    *   1. the request becomes `approved`
    *   2. every live cost line becomes `immutable`
-   *   3. the trip's status becomes `done` — which 0017 makes irreversible
+   *   3. the trip's status becomes `finished` — which 0025 makes irreversible
    *   4. the move is recorded, and the trip stamped with who closed it
    *
    * ★ ORDER MATTERS FOR ONE OF THEM. The money is frozen BEFORE the trip is
@@ -145,7 +145,7 @@ export class TripCompletionService {
 
       await this.costs.finalizeForTrip(tripId, tx);
 
-      const closed = await this.trips.updateStatus(tripId, 'done', tx);
+      const closed = await this.trips.updateStatus(tripId, 'finished', tx);
       if (!closed) throw new Error('Locked trip disappeared during completion.');
 
       const now = new Date();
@@ -153,7 +153,7 @@ export class TripCompletionService {
         {
           tripId,
           from: trip.status,
-          to: 'done',
+          to: 'finished',
           reason: 'Completion approved.',
           changedBy: decidedBy,
         },
@@ -260,14 +260,14 @@ export class TripCompletionService {
    *
    * ★ THIS IS WHAT MAKES APPROVAL TERMINAL IN THE APPLICATION. The database says
    * the same thing twice more — `uq_trip_completion_approved` allows one
-   * approval ever, and 0017's trigger refuses to move a trip out of `done` — but
+   * approval ever, and 0025's trigger refuses to move a trip out of `finished` — but
    * both of those surface as a 500. Said here, a second attempt is a 409 that
    * explains itself.
    */
   private async lockOpenTrip(tripId: string, tx: DatabaseQuery): Promise<TripSchedule> {
     const trip = await this.trips.lockActive(tripId, tx);
     if (!trip) throw new NotFoundError('Trip not found.');
-    if (trip.status === 'done') throw new ConflictError('That trip is already closed.');
+    if (trip.status === 'finished') throw new ConflictError('That trip is already closed.');
     return trip;
   }
 }

@@ -9,40 +9,61 @@ import type { VehicleOwnership } from './trip-execution';
  */
 
 /**
- * ★ THE ROW COLOUR FROM THE WORKBOOK, AS A VALUE.
+ * ★ WHERE A TRIP IS IN ITS LIFE — four states, IN ORDER.
  *
- * In the sheet this was the fill colour of the row, with a legend written at
- * the bottom (rows 71–75 of "Tháng 8-2026"). A colour cannot be filtered,
- * counted, or read at all by somebody working from a printout — so it is the
- * one field this model adds to the twelve columns dispatch already kept.
+ * This replaces the five workbook colours 0011 recorded (ĐANG ĐỢI SX, SX RỒI
+ * ĐANG ĐỢI XE, THÔNG TIN CẦN XÁC NHẬN LẠI, BOOK XE NGOÀI, ĐÃ XONG). Four of
+ * those described the CARGO's readiness and one described the ROUTE; none said
+ * where the RUN was. 0025 remaps every stored row.
  *
- * The order below is the order of the legend, which is roughly the order work
- * moves through: nothing produced yet → produced, waiting for a truck → done.
- * The other two are exceptions that leave the line.
+ * ⚠ THE ORDER IS THE LIFECYCLE, BUT IT IS NOT ENFORCED AS ONE. Only the last
+ * step is a rule — see `canTransition` — because nobody has specified whether
+ * a trip may go back from `executing` to `pending`, and refusing it here would
+ * invent a rule the first mis-click cannot get around.
  */
 export const TRIP_STATUSES = [
-  /** ĐANG ĐỢI SX — the goods do not exist yet. */
-  'awaiting_production',
-  /** SX RỒI ĐANG ĐỢI XE — goods ready, no truck assigned. */
-  'awaiting_vehicle',
-  /** THÔNG TIN CẦN XÁC NHẬN LẠI — somebody has to ring the customer back. */
-  'needs_confirmation',
-  /** BOOK XE NGOÀI — subcontracted to an outside carrier. */
-  'external_booking',
-  /** ĐÃ XONG — delivered and closed. */
-  'done',
+  /** CHỜ XỬ LÝ — booked; nothing about the run is settled yet. */
+  'pending',
+  /** ĐÃ XÁC NHẬN — the run is arranged: a lorry of ours, or a carrier booked. */
+  'confirmed',
+  /** ĐANG THỰC HIỆN — on the road. */
+  'executing',
+  /** HOÀN THÀNH — delivered and closed. Terminal; see `canTransition`. */
+  'finished',
 ] as const;
 
 export type TripStatus = (typeof TRIP_STATUSES)[number];
 
 /**
+ * ★ THE FIVE WORDS THE BOARD USED BEFORE 0025, WHICH STILL EXIST IN ONE PLACE.
+ *
+ * `trip_status_history` is insert-only, undeletable evidence of moves people
+ * made when these were the choices, and 0025 deliberately does NOT rewrite it —
+ * the three waiting values all collapse to `pending`, so a real move would
+ * become `pending` → `pending`, which 0017's CHECK refuses and whose row
+ * cannot be deleted either.
+ *
+ * ⚠ SO ANY READER OF THE HISTORY MUST EXPECT THESE. Nothing may be written with
+ * one — `trip_schedules.status` is CHECKed against `TRIP_STATUSES` alone.
+ */
+export const LEGACY_TRIP_STATUSES = [
+  'awaiting_production',
+  'awaiting_vehicle',
+  'needs_confirmation',
+  'external_booking',
+  'done',
+] as const;
+
+export type LegacyTripStatus = (typeof LEGACY_TRIP_STATUSES)[number];
+
+/**
  * ★ WHO IS DRIVING, AS A FILTER ON THE BOARD — not a status, and never a sixth one.
  *
  * A trip with no driver is not at a different STAGE of work; it is at the same
- * stage with a question still open against it. The five statuses describe the
- * cargo ("đang đợi SX", "đợi xe"); this describes the crew, and the two move
- * independently — a trip can be `awaiting_vehicle` with a driver already named,
- * and `needs_confirmation` with nobody on it.
+ * stage with a question still open against it. The four statuses describe where
+ * the RUN is; this describes the crew, and the two move independently — a trip
+ * can be `confirmed` with a driver already named, and `confirmed` with nobody
+ * on it.
  *
  * DERIVED, NEVER STORED. A trip is unassigned exactly when it has no `active`
  * row in `trip_driver_assignments`, and 0014 already makes that the single
@@ -117,6 +138,28 @@ export interface TripSchedule {
   pickupLongitude: number | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
+
+  /**
+   * What the customer is charged for this run — `GIÁ CƯỚC` — as a decimal
+   * string, e.g. `"4500000.00"`.
+   *
+   * ★ A `string`, NEVER A `number`. The column is `NUMERIC(14,2)` and `pg`
+   * hands that type back as text precisely so nothing rounds it on the way
+   * out. Parsing it into a float here would undo the reason the column has
+   * that type. Nothing in this process adds two of these; totals are SQL's.
+   *
+   * ★ AND IT IS NOT A `trip_costs` ROW. That ledger records what a run COSTS
+   * US — many lines, voided rather than edited, readable only under
+   * `cost.read`. This is what we CHARGE, agreed once when the trip is booked,
+   * and it is part of the booking a dispatcher types. 0024 records the
+   * consequence: unlike every cost figure, this one rides on the trip
+   * response, which every signed-in account can read.
+   *
+   * `null` until somebody prices the trip, which is a real state — a trip is
+   * entered before it is priced, exactly as it is entered before it has a
+   * truck.
+   */
+  price: string | null;
 
   note: string | null;
   status: TripStatus;

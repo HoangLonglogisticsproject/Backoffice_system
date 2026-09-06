@@ -369,11 +369,11 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
 
   describe('★ cost does not care what state the trip is in', () => {
     it.each([
-      'awaiting_production',
-      'awaiting_vehicle',
-      'needs_confirmation',
-      'external_booking',
-      'done',
+      'pending',
+      'confirmed',
+      'pending',
+      'confirmed',
+      'finished',
     ])('accepts a cost line on a trip that is %s', async (status) => {
       await pool.query('UPDATE trip_schedules SET status = $2 WHERE id = $1', [trip, status]);
       await expect(addCost()).resolves.toBeDefined();
@@ -382,7 +382,7 @@ describeIntegration('Trip cost against real PostgreSQL', () => {
     it('★ accepts cost on a FINISHED trip — the case the feature exists for', async () => {
       // Cost is a later workflow with a different approver, so the figures
       // routinely arrive after dispatch has closed the trip.
-      await pool.query(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+      await pool.query(`UPDATE trip_schedules SET status = 'finished' WHERE id = $1`, [trip]);
 
       await addCost({ category: 'overtime', amount: 250_000 });
       await addHire({ agreed_amount: 3_000_000 });

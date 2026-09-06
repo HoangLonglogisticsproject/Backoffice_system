@@ -56,7 +56,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   let author: string;
   let trip: string;
 
-  const newTrip = async (status = 'awaiting_production'): Promise<string> => {
+  const newTrip = async (status = 'pending'): Promise<string> => {
     const rows = await pool.query<{ id: string }>(
       `INSERT INTO trip_schedules (scheduled_on, status, created_by)
        VALUES ('2026-08-04', $1, $2) RETURNING id`,
@@ -594,11 +594,11 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
 
   describe('★ cost does not care where the trip is', () => {
     it.each([
-      'awaiting_production',
-      'awaiting_vehicle',
-      'needs_confirmation',
-      'external_booking',
-      'done',
+      'pending',
+      'confirmed',
+      'pending',
+      'confirmed',
+      'finished',
     ])('records money on a trip that is %s', async (status) => {
       const target = await newTrip(status);
       await expect(
@@ -607,7 +607,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     });
 
     it('★ records money on a FINISHED trip — the case the feature exists for', async () => {
-      const done = await newTrip('done');
+      const done = await newTrip('finished');
       await money.createCost({ tripId: done, category: 'overtime', amount: '250000', createdBy: author });
       await money.createHire({ tripId: done, carrierName: 'Hải Râu', agreedAmount: '3000000', createdBy: author });
 

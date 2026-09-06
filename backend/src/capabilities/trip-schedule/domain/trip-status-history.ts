@@ -1,12 +1,12 @@
 import type { UserSummary } from '../../../common/types/user-summary';
-import type { TripStatus } from './trip-schedule';
+import type { LegacyTripStatus, TripStatus } from './trip-schedule';
 
 /**
  * One move along the dispatch board.
  *
  * ★ BOTH ENDS OF THE TRANSITION, NOT JUST THE NEW ONE. A log saying "set to
- * awaiting_vehicle" cannot be read on its own: whether that was a step forward
- * or somebody undoing a mistake depends entirely on what it was before. Storing
+ * confirmed" cannot be read on its own: whether that was a step forward or
+ * somebody undoing a mistake depends entirely on what it was before. Storing
  * `from` costs one column and removes the need to reconstruct it by walking the
  * whole history in order.
  *
@@ -16,9 +16,15 @@ import type { TripStatus } from './trip-schedule';
  */
 export interface TripStatusChange {
   id: string;
-  /** `null` only on the row written when the trip was created. */
-  from: TripStatus | null;
-  to: TripStatus;
+  /**
+   * ★ A LEGACY VALUE IS POSSIBLE HERE AND NOWHERE ELSE. Rows written before
+   * 0025 name one of the five workbook colours, and 0025 leaves them alone on
+   * purpose — see `LEGACY_TRIP_STATUSES`. A reader that narrows this to
+   * `TripStatus` is a reader that will meet `'awaiting_vehicle'` and have no
+   * label for it.
+   */
+  from: TripStatus | LegacyTripStatus | null;
+  to: TripStatus | LegacyTripStatus;
   /** Why, when the mover said. Optional — most board moves are routine. */
   reason: string | null;
 
@@ -33,19 +39,21 @@ export interface TripStatusChange {
  *
  * ★ THIS ENCODES EXACTLY ONE RULE, AND DELIBERATELY NOT A FULL GRAPH.
  *
- * The only transition the business has actually settled is that DONE is the
+ * The only transition the business has actually settled is that FINISHED is the
  * end: a completed trip is closed permanently, because invoicing and
  * reconciliation both treat it as the point after which figures stop moving.
- * 0017 enforces that with a trigger as well, so it holds against a hand-typed
- * UPDATE too.
+ * 0025's trigger enforces that at the database as well, so it holds against a
+ * hand-typed UPDATE too.
  *
- * Every other pairing among the five dispatch values is allowed, because
- * nobody has specified an order for them and inventing one here would turn a
- * guess into a rule operators cannot get around. When the real ordering is
- * decided it belongs here, as data, with the decision recorded beside it.
+ * ⚠ AND `TRIP_STATUSES` BEING IN LIFECYCLE ORDER DOES NOT MAKE THE ORDER A
+ * RULE. Every other pairing stays allowed, because nobody has specified whether
+ * a trip may go back from `executing` to `pending` — and the first thing a
+ * guessed rule would break is a dispatcher correcting a mis-click. When the
+ * real ordering is decided it belongs here, as data, with the decision recorded
+ * beside it.
  */
 export const canTransition = (from: TripStatus, to: TripStatus): boolean =>
-  from !== 'done' || to === 'done';
+  from !== 'finished' || to === 'finished';
 
 /**
  * Whether a status may only be reached by completing the trip.
@@ -62,4 +70,4 @@ export const canTransition = (from: TripStatus, to: TripStatus): boolean =>
  * is the only caller allowed through — which it is by writing the status
  * through the repository directly, inside the transaction that does the rest.
  */
-export const isCompletionOnlyStatus = (status: TripStatus): boolean => status === 'done';
+export const isCompletionOnlyStatus = (status: TripStatus): boolean => status === 'finished';

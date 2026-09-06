@@ -513,7 +513,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         await codeOf(() =>
           sql(
             `INSERT INTO trip_status_history (trip_id, from_status, to_status, changed_by)
-             VALUES ($1, 'awaiting_vehicle', 'awaiting_vehicle', $2)`,
+             VALUES ($1, 'confirmed', 'confirmed', $2)`,
             [trip, operator],
           ),
         ),
@@ -778,7 +778,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const [row] = (await historyOf(driverA)).items;
 
       expect(row?.trip.vehicle?.plate).toMatch(/^51D-/);
-      expect(row?.trip.status).toBe('awaiting_production');
+      expect(row?.trip.status).toBe('pending');
       // No customer was set on the helper's trip, and that is a real state
       // rather than a row to drop: a LEFT JOIN keeps it.
       expect(row?.trip.customer).toBeNull();
@@ -864,7 +864,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
       expect(
         await codeOf(() =>
-          sql(`UPDATE trip_schedules SET status = 'awaiting_vehicle' WHERE id = $1`, [trip]),
+          sql(`UPDATE trip_schedules SET status = 'confirmed' WHERE id = $1`, [trip]),
         ),
       ).toBe(RESTRICT_VIOLATION);
     });
@@ -878,7 +878,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         note: string;
         status: string;
       }[];
-      expect(row).toEqual({ note: 'đã đối soát', status: 'done' });
+      expect(row).toEqual({ note: 'đã đối soát', status: 'finished' });
     });
 
     it('stamps who closed the trip and when', async () => {
@@ -1049,7 +1049,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       }[];
 
       // Every one of the four writes is gone, not just the one that threw.
-      expect(tripRow!.status).not.toBe('done');
+      expect(tripRow!.status).not.toBe('finished');
       expect(tripRow!.closed_at).toBeNull();
       expect(request!.state).toBe('pending');
       expect(cost!.state).toBe('locked');
@@ -1153,7 +1153,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const [tripRow] = (await sql(`SELECT status FROM trip_schedules WHERE id = $1`, [trip])) as {
         status: string;
       }[];
-      expect(tripRow!.status === 'done').toBe(request!.state === 'approved');
+      expect(tripRow!.status === 'finished').toBe(request!.state === 'approved');
     });
 
     it('lets only one of two simultaneous approvals win', async () => {
@@ -1343,7 +1343,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       try {
         // The completion lands while the retry is still queued: the trip is
         // DONE by the time the retry holds the lock.
-        await winner.query(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+        await winner.query(`UPDATE trip_schedules SET status = 'finished' WHERE id = $1`, [trip]);
         await winner.query('COMMIT');
 
         const answered = await retry;
@@ -1640,7 +1640,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('refuses a closed trip', async () => {
       const { trip } = await locatedTrip();
-      await sql(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+      await sql(`UPDATE trip_schedules SET status = 'finished' WHERE id = $1`, [trip]);
       const sentAt = new Date();
 
       await expect(confirm(trip, fresh(sentAt), sentAt)).rejects.toThrow(ConflictError);
@@ -1874,7 +1874,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('refuses to assign, replace or remove on a closed trip', async () => {
       const { trip } = await runningTrip();
-      await sql(`UPDATE trip_schedules SET status = 'done' WHERE id = $1`, [trip]);
+      await sql(`UPDATE trip_schedules SET status = 'finished' WHERE id = $1`, [trip]);
 
       await expect(execution.replaceDriver(trip, driverB, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
       await expect(execution.endAssignment(trip, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
@@ -2055,12 +2055,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         `SELECT status, closed_by FROM trip_schedules WHERE id = $1`,
         [trip],
       )) as { status: string; closed_by: string }[];
-      expect(tripRow).toEqual({ status: 'done', closed_by: reviewer });
+      expect(tripRow).toEqual({ status: 'finished', closed_by: reviewer });
 
       const history = await board.statusHistory(trip);
-      expect(history.map((h) => h.to)).toContain('done');
+      expect(history.map((h) => h.to)).toContain('finished');
       // The opening row, plus the close. Both ends of the last transition.
-      expect(history[0]).toMatchObject({ to: 'done', changedBy: reviewer });
+      expect(history[0]).toMatchObject({ to: 'finished', changedBy: reviewer });
       expect(history[history.length - 1]).toMatchObject({ from: null });
 
       // And the attempts are all still readable, with the reason.
@@ -2277,17 +2277,17 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
       const history = await board.statusHistory(trip);
       expect(history).toHaveLength(1);
-      expect(history[0]).toMatchObject({ from: null, to: 'awaiting_production', changedBy: operator });
+      expect(history[0]).toMatchObject({ from: null, to: 'pending', changedBy: operator });
     });
 
     it('records both ends of every board move, with who and why', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'awaiting_vehicle', operator, 'Đã có khách.');
+      await board.updateStatus(trip, 'confirmed', operator, 'Đã có khách.');
 
       const history = await board.statusHistory(trip);
       expect(history[0]).toMatchObject({
-        from: 'awaiting_production',
-        to: 'awaiting_vehicle',
+        from: 'pending',
+        to: 'confirmed',
         reason: 'Đã có khách.',
         changedBy: operator,
       });
@@ -2296,39 +2296,39 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ refuses every board route that tries to reach done', async () => {
       const trip = await newTrip();
 
-      await expect(board.updateStatus(trip, 'done', operator)).rejects.toBeInstanceOf(ConflictError);
-      await expect(board.update(trip, { status: 'done' }, operator)).rejects.toBeInstanceOf(
+      await expect(board.updateStatus(trip, 'finished', operator)).rejects.toBeInstanceOf(ConflictError);
+      await expect(board.update(trip, { status: 'finished' }, operator)).rejects.toBeInstanceOf(
         ConflictError,
       );
       await expect(
-        board.create({ scheduledOn: '2026-08-30', status: 'done', createdBy: operator }),
+        board.create({ scheduledOn: '2026-08-30', status: 'finished', createdBy: operator }),
       ).rejects.toBeInstanceOf(ConflictError);
 
       const [row] = (await sql(`SELECT status FROM trip_schedules WHERE id = $1`, [trip])) as {
         status: string;
       }[];
-      expect(row!.status).not.toBe('done');
+      expect(row!.status).not.toBe('finished');
     });
 
     it('writes no history when the status is set to what it already is', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'awaiting_production', operator);
+      await board.updateStatus(trip, 'pending', operator);
 
       expect(await board.statusHistory(trip)).toHaveLength(1);
     });
 
     it('★ every status the trip ever held is reconstructible', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'awaiting_vehicle', operator);
-      await board.updateStatus(trip, 'needs_confirmation', operator);
-      await board.updateStatus(trip, 'external_booking', operator);
+      await board.updateStatus(trip, 'confirmed', operator);
+      await board.updateStatus(trip, 'pending', operator);
+      await board.updateStatus(trip, 'confirmed', operator);
 
       const history = await board.statusHistory(trip);
       expect(history.map((h) => h.to)).toEqual([
-        'external_booking',
-        'needs_confirmation',
-        'awaiting_vehicle',
-        'awaiting_production',
+        'confirmed',
+        'pending',
+        'confirmed',
+        'pending',
       ]);
     });
   });

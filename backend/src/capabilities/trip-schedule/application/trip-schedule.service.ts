@@ -62,6 +62,20 @@ export interface CreateTripInput {
   pickupLongitude?: number | null;
   deliveryLatitude?: number | null;
   deliveryLongitude?: number | null;
+  /**
+   * The agreed charge, as a decimal string — `"4500000"` or `"4500000.00"`.
+   *
+   * ★ NEVER A NUMBER, AND NOT ROUNDED HERE. The column is `NUMERIC(14,2)`; the
+   * DTO refuses anything the column cannot hold EXACTLY, including a third
+   * decimal place, because PostgreSQL would round that rather than refuse it
+   * and the caller would be told a figure was stored when a different one was.
+   * Nothing in this service parses it.
+   *
+   * `null` clears the price — a trip that turns out not to be chargeable is
+   * unpriced, which is a state the column has. A zero is refused by the CHECK
+   * in 0024 and by the DTO before it.
+   */
+  price?: string | null;
   note?: string | null;
   status?: TripStatus;
 }
@@ -188,15 +202,15 @@ export class TripScheduleService {
       // No previous row, so every reference here is newly assigned and every
       // one of them is checked against the catalogue — and both ends are
       // snapshotted from their places, when places were named.
-      const values = await this.resolve(input, 'awaiting_production', tx, null, {
+      const values = await this.resolve(input, 'pending', tx, null, {
         pickup: true,
         delivery: true,
       });
 
       // ★ A TRIP CANNOT BE BORN CLOSED. `status` is an optional field of the
       // create body, so without this a single POST produces a trip that is
-      // permanently done, with no completion request, no approver, no frozen
-      // figures and — because 0017 makes `done` terminal — no way back.
+      // permanently closed, with no completion request, no approver, no frozen
+      // figures and — because 0025 makes `finished` terminal — no way back.
       this.requireNotCompletionOnly(values.status);
 
       const created = await this.trips.create({ ...values, createdBy: input.createdBy }, tx);
@@ -259,6 +273,7 @@ export class TripScheduleService {
         deliveryLongitude: sent('deliveryLongitude'),
         pickupLocationId: sent('pickupLocationId'),
         deliveryLocationId: sent('deliveryLocationId'),
+        price: sent('price'),
         note: sent('note'),
         status: patch.status ?? current.status,
       };
@@ -380,17 +395,17 @@ export class TripScheduleService {
   /**
    * Refuses a move the DISPATCH BOARD is not allowed to make.
    *
-   * Two rules, and they close the board off from `done` in both directions:
+   * Two rules, and they close the board off from `finished` in both directions:
    *
-   *   · nothing leaves `done` — 0017's trigger says the same thing, but that
+   *   · nothing leaves `finished` — 0025's trigger says the same thing, but that
    *     one surfaces as a 500, so it is said here where it can be a 409
-   *   · ★ and nothing on the board ENTERS `done` either
+   *   · ★ and nothing on the board ENTERS `finished` either
    *
    * The second is the important one. Completing a trip freezes its money,
    * stamps who closed it and writes the history, all in one transaction —
    * `TripCompletionService.approve` is where that happens, and it reaches the
    * status column through the repository rather than through here. A status
-   * route that could also write `done` would be a second way to close a trip
+   * route that could also write `finished` would be a second way to close a trip
    * that skipped every one of those steps, and 0017 would then make the result
    * permanent.
    */
@@ -411,7 +426,7 @@ export class TripScheduleService {
    * Writes the history row for a board move.
    *
    * ★ NO `closed_at` BRANCH HERE, AND THAT IS THE POINT. This method can never
-   * see a move to `done`, because `requireDispatchTransition` refuses one
+   * see a move to `finished`, because `requireDispatchTransition` refuses one
    * before any write happens. Closing a trip — status, stamp and history
    * together — belongs to `TripCompletionService.approve` and nowhere else, so
    * a second implementation of it here would be a second answer waiting to
@@ -542,6 +557,11 @@ export class TripScheduleService {
       deliveryLongitude: delivery.longitude,
       pickupLocationId: pickup.locationId,
       deliveryLocationId: delivery.locationId,
+      // ★ `blankToNull` AND NOTHING ELSE. The shape was settled by the DTO,
+      // which refuses anything `NUMERIC(14,2)` cannot hold exactly; padding
+      // `"4500000"` to two decimal places here would be this service deciding
+      // how PostgreSQL stores a numeric, which it already knows.
+      price: blankToNull(input.price),
       note: blankToNull(input.note),
       status: input.status ?? fallbackStatus,
     };
