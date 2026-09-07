@@ -383,7 +383,15 @@ describe('trip-schedule HTTP security', () => {
       // subtracts, so what matters is that the same two calls a member makes
       // still reach the same two service methods.
       const read = await authed('get', '/trip-schedules');
-      const write = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' });
+      // ★ WITH A SELLING PRICE, WHICH A MEMBER'S CALL DOES NOT CARRY. A head may
+      // see prices, and 0026 makes the figure compulsory for exactly the people
+      // who can: the same POST that is complete from a member is incomplete from
+      // a head. That is not seniority subtracting — the member's trip is entered
+      // unpriced and a head prices it later.
+      const write = await authed('post', '/trip-schedules').send({
+        scheduledOn: '2026-08-04',
+        sellPrice: '4500000',
+      });
 
       expect(read.status).toBe(200);
       expect(write.status).toBe(201);
@@ -547,7 +555,7 @@ describe('trip-schedule HTTP security', () => {
 
     it('strips a field the body must not decide', async () => {
       await authed('post', '/trip-schedules')
-        .send({ scheduledOn: '2026-08-04', id: 'x', createdBy: 'y', archivedAt: 'z' })
+        .send({ scheduledOn: '2026-08-04', sellPrice: '4500000', id: 'x', createdBy: 'y', archivedAt: 'z' })
         .expect(201);
 
       const payload = trips.create.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -559,6 +567,225 @@ describe('trip-schedule HTTP security', () => {
       // `z.coerce.boolean()` would make this pass archived rows through.
       await authed('get', '/trip-vehicles?includeArchived=false').expect(200);
       expect(catalogue.listVehicles).toHaveBeenCalledWith(false);
+    });
+  });
+
+  // ==================================================== ★ THE TWO PRICES ==
+
+  /**
+   * ★ WHAT A TRIP IS SOLD AND BOUGHT FOR, AND WHO MAY TOUCH EITHER FIGURE.
+   *
+   * 0024 put the quoted price on \`trip_schedules\` and wrote down that it
+   * therefore rode on a response every finished account can read. 0026 takes
+   * that back for both figures and puts them behind \`trip.price.read\`, which
+   * is 'head-anywhere' — a global administrator or the head of some department.
+   *
+   * Asserted over HTTP rather than on \`can()\` alone, because the rule has
+   * three halves living in three different places and only a request exercises
+   * all of them: the tier, the refusal to ACCEPT a price from somebody who may
+   * not set one, and the blanking of both columns on the way back out.
+   */
+  describe('★ the two prices on a trip', () => {
+    /** A row that HAS both figures, so a blanked response is visibly a blanking. */
+    const priced = { ...storedTrip, sellPrice: '4500000.00', purchasePrice: '3000000.00' };
+
+    beforeEach(() => {
+      trips.list.mockResolvedValue({ items: [priced], page: 1, limit: 50, total: 1, totalPages: 1 });
+      trips.findById.mockResolvedValue(priced);
+      trips.create.mockResolvedValue(priced);
+      trips.update.mockResolvedValue(priced);
+    });
+
+    describe('an ordinary member — the caller the figures are kept from', () => {
+      beforeEach(() => {
+        context = asContext({ memberOf: [DEPT] });
+      });
+
+      it('★ reads the board with both figures blanked, and the row otherwise whole', async () => {
+        const response = await authed('get', '/trip-schedules').expect(200);
+        const [row] = response.body.items as Record<string, unknown>[];
+
+        expect(row?.['sellPrice']).toBeNull();
+        expect(row?.['purchasePrice']).toBeNull();
+        // ★ BLANKED, NOT REMOVED, AND NOT A DIFFERENT ROW. The keys are still
+        // there — an absent key would make every client tell "withheld" from
+        // "unpriced" by feeling for it — and everything that is not money came
+        // through untouched.
+        expect(row).toHaveProperty('sellPrice');
+        expect(row).toHaveProperty('purchasePrice');
+        expect(row?.['cargoInfo']).toBe('1 kiện / 18 kgs');
+      });
+
+      it('★ finds no figure anywhere in the serialised page, not merely in those keys', async () => {
+        // The keys above could be blanked while a total, a margin or a joined
+        // copy carried the same number under another name. This is the check
+        // that does not depend on guessing what that name would be.
+        const response = await authed('get', '/trip-schedules').expect(200);
+        expect(JSON.stringify(response.body)).not.toContain('4500000');
+        expect(JSON.stringify(response.body)).not.toContain('3000000');
+      });
+
+      it('blanks them on the detail read too', async () => {
+        const response = await authed('get', `/trip-schedules/${TRIP}`).expect(200);
+        expect(response.body.sellPrice).toBeNull();
+        expect(response.body.purchasePrice).toBeNull();
+      });
+
+      it('★ still creates a trip, and it is unpriced — seniority adds, it does not gate', async () => {
+        await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(201);
+
+        const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+        expect(input).not.toHaveProperty('sellPrice');
+        expect(input).not.toHaveProperty('purchasePrice');
+      });
+
+      it('★ is REFUSED when the body carries a price, rather than having it stripped', async () => {
+        // Stripping and answering 201 would tell somebody their figure was
+        // stored when it was not. The keys are not on their form at all, so a
+        // body carrying one did not come from the form.
+        const response = await authed('post', '/trip-schedules').send({
+          scheduledOn: '2026-08-04',
+          sellPrice: '4500000',
+        });
+
+        expect(response.status).toBe(403);
+        expect(trips.create).not.toHaveBeenCalled();
+      });
+
+      it('is refused a buying price just the same', async () => {
+        const response = await authed('post', '/trip-schedules').send({
+          scheduledOn: '2026-08-04',
+          purchasePrice: '3000000',
+        });
+
+        expect(response.status).toBe(403);
+        expect(trips.create).not.toHaveBeenCalled();
+      });
+
+      it('★ is refused an explicit null too — clearing a price is still touching it', async () => {
+        // \`null\` clears a figure. Letting it through because "it is not a
+        // number" would let anybody wipe a price they cannot see.
+        //
+        // ★ ASSERTED ON CREATE, NOT ON THE PATCH, AND THE REASON IS WORTH
+        // WRITING DOWN. A member cannot reach the patch handler at all —
+        // \`trip.write\` is 'head-anywhere' and \`PermissionGuard\` refuses them
+        // before any of this runs — so a 403 from that route would have proved
+        // the tier, not the price rule, and would have gone on passing if
+        // \`requirePriceAuthority\` were deleted. \`trip.create\` is 'any', so
+        // POST is the one route where this caller genuinely reaches the check.
+        const response = await authed('post', '/trip-schedules').send({
+          scheduledOn: '2026-08-04',
+          sellPrice: null,
+        });
+
+        expect(response.status).toBe(403);
+        expect(trips.create).not.toHaveBeenCalled();
+      });
+
+      it('is refused on the patch route as well, though the tier gets there first', async () => {
+        // ⚠ THIS ONE IS BELT OVER BRACES AND SAYS SO. Every holder of
+        // \`trip.write\` also holds \`trip.price.read\` — both are
+        // 'head-anywhere' — so no caller exists who may edit a trip and not its
+        // prices, and the guard on this route refuses a member first. The check
+        // in the handler stays because that overlap is a fact about today's
+        // requirement table, not a property anybody has promised to preserve.
+        const response = await authed('patch', `/trip-schedules/${TRIP}`).send({ sellPrice: null });
+
+        expect(response.status).toBe(403);
+        expect(trips.update).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('a department head — one of the two callers who may', () => {
+      beforeEach(() => {
+        context = asContext({ headOf: [DEPT], memberOf: [DEPT] });
+      });
+
+      it('★ reads both figures as they are stored', async () => {
+        const response = await authed('get', `/trip-schedules/${TRIP}`).expect(200);
+        expect(response.body.sellPrice).toBe('4500000.00');
+        expect(response.body.purchasePrice).toBe('3000000.00');
+      });
+
+      it('★ must give a selling price when creating — the rule this change is for', async () => {
+        const response = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' });
+
+        expect(response.status).toBe(422);
+        expect(trips.create).not.toHaveBeenCalled();
+      });
+
+      it('★ is refused an explicit null selling price as well as an absent one', async () => {
+        const response = await authed('post', '/trip-schedules').send({
+          scheduledOn: '2026-08-04',
+          sellPrice: null,
+        });
+
+        expect(response.status).toBe(422);
+      });
+
+      it('★ needs no buying price — most runs are on our own lorries', async () => {
+        await authed('post', '/trip-schedules')
+          .send({ scheduledOn: '2026-08-04', sellPrice: '4500000' })
+          .expect(201);
+
+        const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+        expect(input['sellPrice']).toBe('4500000');
+      });
+
+      it('sends both through to the service when both are given', async () => {
+        await authed('post', '/trip-schedules')
+          .send({ scheduledOn: '2026-08-04', sellPrice: '4500000', purchasePrice: '3000000' })
+          .expect(201);
+
+        const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+        expect(input['sellPrice']).toBe('4500000');
+        expect(input['purchasePrice']).toBe('3000000');
+      });
+
+      it('★ patches a note without resending the price — an absent key is not a missing one', async () => {
+        // The compulsory selling price binds CREATE only. Were it enforced on
+        // the patch, every correction to a note would have to carry the figure
+        // back, and forgetting it would blank the trip.
+        await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' }).expect(200);
+        expect(trips.update).toHaveBeenCalled();
+      });
+
+      it('clears a price it can see, with an explicit null', async () => {
+        await authed('patch', `/trip-schedules/${TRIP}`).send({ sellPrice: null }).expect(200);
+
+        const [, patch] = trips.update.mock.calls[0] as [string, Record<string, unknown>];
+        expect(patch['sellPrice']).toBeNull();
+      });
+
+      it('refuses a figure NUMERIC(14,2) cannot hold exactly, and not as a 403', async () => {
+        // A third decimal place is refused rather than rounded — 422 from the
+        // schema, not 403 from the tier, because this caller IS allowed.
+        await authed('post', '/trip-schedules')
+          .send({ scheduledOn: '2026-08-04', sellPrice: '4500000.005' })
+          .expect(422);
+      });
+
+      it('refuses a zero, which is not the same fact as unpriced', async () => {
+        await authed('post', '/trip-schedules')
+          .send({ scheduledOn: '2026-08-04', sellPrice: '0' })
+          .expect(422);
+      });
+    });
+
+    describe('a global administrator', () => {
+      beforeEach(() => {
+        context = asContext({ global: true });
+      });
+
+      it('★ reads both figures — global is above every department', async () => {
+        const response = await authed('get', `/trip-schedules/${TRIP}`).expect(200);
+        expect(response.body.sellPrice).toBe('4500000.00');
+        expect(response.body.purchasePrice).toBe('3000000.00');
+      });
+
+      it('is held to the compulsory selling price just as a head is', async () => {
+        await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(422);
+      });
     });
   });
 
@@ -787,6 +1014,9 @@ describe('trip-schedule HTTP security', () => {
           pickupLongitude: 2,
           deliveryLatitude: 3,
           deliveryLongitude: 4,
+          // The caller here is global, so the sell price is compulsory. Nothing
+          // in this test is about money; it is here so the POST is well formed.
+          sellPrice: '4500000',
         })
         .expect(201);
 

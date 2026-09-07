@@ -138,6 +138,35 @@ describe('can()', () => {
       expect(can(context({ memberOf: [A, B] }), 'trip.write')).toBe(false);
     });
 
+    /**
+     * ★ THE TWO PRICES ON A TRIP ROW, WHICH ARE NOT 'any' LIKE THE ROW AROUND
+     * THEM.
+     *
+     * 0024 put the quoted price on `trip_schedules` and accepted in writing
+     * that `trip.read` = 'any' meant every finished account could read it.
+     * 0026 takes that back for both figures. The board is still company-wide;
+     * what the run is sold and bought for is not.
+     */
+    it('★ shows a trip price to a head and to the superadmin, and to nobody else', () => {
+      expect(can(memberOfA(), 'trip.price.read')).toBe(false);
+      expect(can(context(), 'trip.price.read')).toBe(false);
+      expect(can(headOfA(), 'trip.price.read')).toBe(true);
+      expect(can(superadmin(), 'trip.price.read')).toBe(true);
+    });
+
+    it('★ asks for no department either — a trip belongs to none', () => {
+      // Same trap as `trip.write` above: marked 'head' this would fail closed
+      // with no target while `grantedPermissions` listed it, so the form would
+      // draw a price field the server then blanks.
+      expect(can(headOfA(), 'trip.price.read', { departmentId: B })).toBe(true);
+      expect(grantedPermissions(headOfA())).toContain('trip.price.read');
+      expect(grantedPermissions(memberOfA())).not.toContain('trip.price.read');
+    });
+
+    it('is refused while a temporary credential is unchanged, like everything else', () => {
+      expect(can(context({ headOf: [A], mustChangeSecret: true }), 'trip.price.read')).toBe(false);
+    });
+
     it('is refused while a temporary credential is unchanged — the gate runs first', () => {
       const gated = context({ memberOf: [A], mustChangeSecret: true });
       expect(can(gated, 'trip.read')).toBe(false);
@@ -256,6 +285,9 @@ describe('grantedPermissions()', () => {
       // from the decision.
       'driver.account.request',
       'trip.create',
+      // Sorts before 'trip.read' — 'p' < 'r'. A head sees what a trip is sold
+      // and bought for; the member below does not, which is the whole tier.
+      'trip.price.read',
       'trip.read',
       'trip.write',
       'unit.member.read',

@@ -871,7 +871,8 @@ const PHRASES = {
   colCargo: { vi: 'Hàng hoá', en: 'Cargo' },
   colPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
   colDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },
-  colPrice: { vi: 'Giá cước', en: 'Price' },
+  colSellPrice: { vi: 'Giá cước bán', en: 'Selling price' },
+  colPurchasePrice: { vi: 'Giá cước mua', en: 'Buying price' },
   colNote: { vi: 'Ghi chú', en: 'Note' },
   colCreatedBy: { vi: 'Người tạo', en: 'Created by' },
   // ----------------------------------------- Xuất lịch xe ra Excel (SheetJS) --
@@ -976,11 +977,24 @@ const PHRASES = {
     en: 'Pickup coordinates are what the driver’s GPS is checked against on pickup. Enter both or leave both empty.',
   },
   fieldDeliveryAt: { vi: 'Giờ giao hàng', en: 'Delivery time' },
-  fieldPrice: { vi: 'Giá cước (VND)', en: 'Price (VND)' },
-  // Why the field may be left empty, and why it cannot be zero.
-  priceHint: {
-    vi: 'Để trống nếu chưa chốt giá. Tối đa 2 số lẻ. Ví dụ: 4,500,000',
-    en: 'Leave empty if the price is not agreed yet. At most 2 decimals. e.g. 4,500,000',
+  // ★ THE STAR ON THE SELLING PRICE IS THE FIELD'S ONLY MARK OF BEING
+  // COMPULSORY, and it matches every other required label in this file.
+  fieldSellPrice: { vi: 'Giá cước bán (VND) *', en: 'Selling price (VND) *' },
+  fieldPurchasePrice: { vi: 'Giá cước mua (VND)', en: 'Buying price (VND)' },
+  // Why the selling price cannot be left out, and why neither may be zero.
+  sellPriceHint: {
+    vi: 'Bắt buộc. Tối đa 2 số lẻ, phải lớn hơn 0. Ví dụ: 4,500,000',
+    en: 'Required. At most 2 decimals, and greater than zero. e.g. 4,500,000',
+  },
+  // Why THIS one may be left empty, unlike the one above it.
+  purchasePriceHint: {
+    vi: 'Để trống nếu chạy xe nhà hoặc chưa chốt giá mua. Tối đa 2 số lẻ. Ví dụ: 3,000,000',
+    en: 'Leave empty for our own lorry, or if the buying price is not agreed yet. At most 2 decimals. e.g. 3,000,000',
+  },
+  // Shown in place of the two fields to somebody who may not see prices.
+  priceRestricted: {
+    vi: 'Giá cước do trưởng phòng nhập. Chuyến vẫn lưu được khi chưa có giá.',
+    en: 'Prices are entered by a department head. The trip can be saved without them.',
   },
   fieldNote: { vi: 'Ghi chú', en: 'Note' },
   // Why the delivery control asks for a date as well as a time.

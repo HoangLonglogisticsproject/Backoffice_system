@@ -47,16 +47,26 @@ export interface CreateTripInput {
   pickupLocationId?: string | null;
   deliveryLocationId?: string | null;
   /**
-   * ★ A STRING, e.g. `"4500000"` — the same rule every amount in
-   * `tripCost.ts` follows, and for the same reason. A JSON number is float64,
-   * so `4500000.01` would arrive as something a little else; the server
-   * refuses a number outright, and refuses a third decimal place too, because
+   * What the customer is charged and what the carrier is paid.
+   *
+   * ★ STRINGS, e.g. `"4500000"` — the same rule every amount in `tripCost.ts`
+   * follows, and for the same reason. A JSON number is float64, so
+   * `4500000.01` would arrive as something a little else; the server refuses a
+   * number outright, and refuses a third decimal place too, because
    * `NUMERIC(14,2)` would ROUND that rather than reject it.
    *
-   * `null` clears it. Zero is refused — a trip charged nothing and a trip not
+   * `null` clears one. Zero is refused — a trip charged nothing and a trip not
    * yet priced are different rows and must not render alike.
+   *
+   * ⚠ OMIT BOTH KEYS UNLESS THE CALLER HOLDS `trip.price.read`. The server
+   * answers 403 to a body carrying either from anybody else — it does not
+   * strip them, because silently dropping a figure somebody typed and
+   * answering 201 would say the trip is priced when it is not. And when the
+   * caller DOES hold it, `sellPrice` is compulsory on create: the server
+   * answers 422 without one.
    */
-  price?: string | null;
+  sellPrice?: string | null;
+  purchasePrice?: string | null;
   note?: string | null;
   status?: TripStatus;
 }

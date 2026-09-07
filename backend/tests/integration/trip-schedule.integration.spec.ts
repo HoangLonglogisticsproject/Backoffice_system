@@ -96,7 +96,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
     // ★ EVERY MIGRATION ON DISK, NOT A LIST KEPT HERE. This spec named its
     // files one by one, and the list went stale the day 0024 added
-    // `trip_schedules.price` — every case that writes a trip failed on a column
+    // `trip_schedules.sell_price` — every case that writes a trip failed on a column
     // the running code inserts. A list can drift from the schema; reading the
     // directory cannot.
     await applyAllMigrations(pool);

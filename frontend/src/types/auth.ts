@@ -32,6 +32,19 @@ export type PermissionKey =
   | 'trip.read'
   | 'trip.create'
   | 'trip.write'
+  /**
+   * ★ THE TWO PRICES ON A TRIP ROW — what it is sold for and what it is bought
+   * for. Tier `head-anywhere` on the server: the superadmin, or the head of
+   * some department, and nobody else.
+   *
+   * ★ THE ONLY RENDER HINT ON THIS LIST THAT ALSO DECIDES WHETHER A FIELD IS
+   * COMPULSORY. Without it the form does not draw the two money inputs at all
+   * and the server REFUSES a body that carries either key — so this is not the
+   * usual "hide a button somebody could still POST to". A caller who holds it
+   * must give a selling price when creating a trip; one who does not creates
+   * the trip unpriced, and a head prices it later.
+   */
+  | 'trip.price.read'
   // The money on a trip (§21). Separate keys from `trip.*` on purpose: the
   // board is read by everybody and the amounts on it are not, so a caller
   // without `cost.read` is never sent a figure at all. All three are GLOBAL

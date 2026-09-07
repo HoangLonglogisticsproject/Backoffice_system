@@ -85,6 +85,14 @@ export function toTripSheetRows(
   trips: readonly TripScheduleWithRefs[],
   t: Translate,
   language: Language,
+  /**
+   * Does this viewer hold `trip.price.read`?
+   *
+   * ★ DEFAULTS TO FALSE, WHICH IS THE FAIL-CLOSED DIRECTION. A caller that
+   * forgets the argument exports a sheet with no money in it; the opposite
+   * default would put both figures in a file somebody then emails on.
+   */
+  includePrices = false,
 ): TripSheetRow[] {
   const heading = {
     index: t('colIndex'),
@@ -96,7 +104,8 @@ export function toTripSheetRows(
     pickup: t('colPickup'),
     delivery: t('colDelivery'),
     status: t('colStatus'),
-    price: t('colPrice'),
+    sellPrice: t('colSellPrice'),
+    purchasePrice: t('colPurchasePrice'),
     note: t('colNote'),
     createdBy: t('colCreatedBy'),
     contact: t('exportColContact'),
@@ -138,7 +147,17 @@ export function toTripSheetRows(
       [heading.status]: TRIP_STATUS_LABELS[trip.status]
         ? t(TRIP_STATUS_LABELS[trip.status])
         : trip.status,
-      [heading.price]: price(trip.price),
+      // ★ BOTH COLUMNS ARE OMITTED ENTIRELY FOR A VIEWER WHO MAY NOT SEE
+      // PRICES, exactly as the board drops them. The server has already blanked
+      // the values, so keeping the headings would export two columns of empty
+      // cells that read as "nothing is priced" — a claim about the data rather
+      // than about the reader.
+      ...(includePrices
+        ? {
+            [heading.sellPrice]: price(trip.sellPrice),
+            [heading.purchasePrice]: price(trip.purchasePrice),
+          }
+        : {}),
       [heading.note]: trip.note ?? '',
       [heading.createdBy]: trip.createdByUser.displayName,
     };
@@ -153,5 +172,19 @@ export function toTripSheetRows(
  * the widths is that the sheet is readable the moment it opens.
  */
 export const TRIP_SHEET_COLUMN_WIDTHS = [
-  6, 12, 14, 20, 24, 30, 32, 20, 18, 32, 20, 18, 16, 14, 40, 20,
+  6, 12, 14, 20, 24, 30, 32, 20, 18, 32, 20, 18, 16, 14, 14, 40, 20,
+];
+
+/**
+ * The same widths with the two price columns taken out.
+ *
+ * ★ DERIVED BY POSITION, WHICH IS FRAGILE AND SAYS SO. The widths are a
+ * positional list against the key order in `toTripSheetRows`, so a column added
+ * before the prices moves this slice. Deriving it beats keeping a second
+ * hand-written array that goes stale silently — but if this list grows a third
+ * variant, the widths should become a map keyed by heading instead.
+ */
+export const TRIP_SHEET_COLUMN_WIDTHS_WITHOUT_PRICES = [
+  ...TRIP_SHEET_COLUMN_WIDTHS.slice(0, 13),
+  ...TRIP_SHEET_COLUMN_WIDTHS.slice(15),
 ];

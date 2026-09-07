@@ -4,6 +4,7 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 import { translate } from '@/types/translate';
 
 const fetchAllTripSchedules = vi.fn();
+const useSession = vi.fn();
 const downloadTripScheduleWorkbook = vi.fn();
 const notifySuccess = vi.fn();
 const notifyError = vi.fn();
@@ -11,6 +12,12 @@ const notifyApiError = vi.fn();
 
 vi.mock('@/api/tripSchedule', () => ({
   fetchAllTripSchedules: (...args: unknown[]) => fetchAllTripSchedules(...args),
+}));
+// The button reads `can('trip.price.read')` to decide whether the sheet gets
+// its two money columns, so it needs a session even though nothing else here
+// is about authorization.
+vi.mock('@/contexts/SessionProvider', () => ({
+  useSession: () => useSession(),
 }));
 vi.mock('@/utils/export/tripScheduleWorkbook', () => ({
   downloadTripScheduleWorkbook: (...args: unknown[]) => downloadTripScheduleWorkbook(...args),
@@ -38,6 +45,20 @@ const { TripScheduleExportButton } = await import('./TripScheduleExportButton');
  */
 
 const RANGE = { from: '2026-08-01', to: '2026-08-31' };
+
+const session = (permissions: string[]) => ({
+  state: {
+    status: 'ready',
+    authorization: { userId: 'u1', username: 'dispatch', role: 'MEMBER', departmentIds: [], permissions },
+  },
+  can: (p: string) => permissions.includes(p),
+  loading: false,
+});
+
+/** A head: may see what each trip is sold and bought for. */
+const HEAD = ['trip.read', 'trip.price.read'];
+/** An ordinary dispatcher: exports the board, with no money in it. */
+const DISPATCHER = ['trip.read'];
 const vi_ = (key: Parameters<typeof translate>[1]) => translate('vi', key);
 
 const renderButton = () =>
@@ -51,6 +72,7 @@ describe('TripScheduleExportButton', () => {
   beforeEach(() => {
     fetchAllTripSchedules.mockReset().mockResolvedValue([{ id: 't1' }]);
     downloadTripScheduleWorkbook.mockReset().mockResolvedValue(1);
+    useSession.mockReset().mockReturnValue(session(HEAD));
     notifySuccess.mockReset();
     notifyError.mockReset();
     notifyApiError.mockReset();
@@ -84,6 +106,39 @@ describe('TripScheduleExportButton', () => {
       ),
     );
     expect(notifySuccess).toHaveBeenCalledWith('exportDone', expect.anything());
+  });
+
+  /**
+   * ★ WHETHER THE FILE CARRIES MONEY IS DECIDED HERE, NOT IN THE BUILDER.
+   *
+   * The builder is a pure function with no session, so the one place that can
+   * ask `can('trip.price.read')` is the component holding the click. A regression
+   * here is a spreadsheet with the company's selling and buying prices in it,
+   * emailed on by somebody who was never shown them on screen — which is why
+   * both directions are pinned rather than just the allowed one.
+   */
+  it('★ asks for the price columns when the viewer may see prices', async () => {
+    renderButton();
+    fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
+
+    await waitFor(() =>
+      expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(
+        expect.objectContaining({ includePrices: true }),
+      ),
+    );
+  });
+
+  it('★ asks for a sheet with no money in it when the viewer may not', async () => {
+    useSession.mockReturnValue(session(DISPATCHER));
+
+    renderButton();
+    fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
+
+    await waitFor(() =>
+      expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(
+        expect.objectContaining({ includePrices: false }),
+      ),
+    );
   });
 
   /**

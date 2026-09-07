@@ -3,6 +3,7 @@ import { Download, Loader2 } from 'lucide-react';
 import { fetchAllTripSchedules } from '@/api/tripSchedule';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useSession } from '@/contexts/SessionProvider';
 import { downloadTripScheduleWorkbook } from '@/utils/export/tripScheduleWorkbook';
 import { notifyApiError, notifyError, notifySuccess } from '@/utils/toast';
 
@@ -29,6 +30,7 @@ export function TripScheduleExportButton({
   range,
 }: Readonly<{ range: { from: string; to: string } }>) {
   const { t, language } = useLanguage();
+  const { can } = useSession();
   const [running, setRunning] = useState(false);
 
   const run = async () => {
@@ -46,7 +48,17 @@ export function TripScheduleExportButton({
         return;
       }
 
-      const written = await downloadTripScheduleWorkbook({ trips, t, language, range });
+      // ★ THE SAME PERMISSION THE BOARD'S COLUMNS ARE GATED ON. Without it the
+      // server has already blanked both figures, so the sheet would carry two
+      // columns of empty cells reading as "nothing is priced"; the builder
+      // drops the columns instead.
+      const written = await downloadTripScheduleWorkbook({
+        trips,
+        t,
+        language,
+        range,
+        includePrices: can('trip.price.read'),
+      });
       notifySuccess('exportDone', {
         description: `${written} ${t('exportRowsUnit')}`,
       });

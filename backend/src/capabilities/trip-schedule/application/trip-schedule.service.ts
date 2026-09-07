@@ -63,19 +63,28 @@ export interface CreateTripInput {
   deliveryLatitude?: number | null;
   deliveryLongitude?: number | null;
   /**
-   * The agreed charge, as a decimal string — `"4500000"` or `"4500000.00"`.
+   * What the customer is charged and what the carrier is paid, as decimal
+   * strings — `"4500000"` or `"4500000.00"`.
    *
-   * ★ NEVER A NUMBER, AND NOT ROUNDED HERE. The column is `NUMERIC(14,2)`; the
-   * DTO refuses anything the column cannot hold EXACTLY, including a third
+   * ★ NEVER A NUMBER, AND NOT ROUNDED HERE. The columns are `NUMERIC(14,2)`;
+   * the DTO refuses anything they cannot hold EXACTLY, including a third
    * decimal place, because PostgreSQL would round that rather than refuse it
    * and the caller would be told a figure was stored when a different one was.
-   * Nothing in this service parses it.
+   * Nothing in this service parses either of them.
    *
-   * `null` clears the price — a trip that turns out not to be chargeable is
-   * unpriced, which is a state the column has. A zero is refused by the CHECK
-   * in 0024 and by the DTO before it.
+   * `null` clears the figure — a trip that turns out not to be chargeable is
+   * unpriced, which is a state the column has, and most trips are never bought
+   * from anybody at all. A zero is refused by 0026's CHECKs and by the DTO
+   * before them.
+   *
+   * ⚠ WHO MAY SET THESE IS NOT DECIDED HERE. The controller refuses a body
+   * carrying either key from a caller without `trip.price.read`, so this
+   * service sees them only from somebody entitled to send them. It is not a
+   * second gate and must not become one — a service that re-decides
+   * authorization is a second place for the rule to drift.
    */
-  price?: string | null;
+  sellPrice?: string | null;
+  purchasePrice?: string | null;
   note?: string | null;
   status?: TripStatus;
 }
@@ -273,7 +282,8 @@ export class TripScheduleService {
         deliveryLongitude: sent('deliveryLongitude'),
         pickupLocationId: sent('pickupLocationId'),
         deliveryLocationId: sent('deliveryLocationId'),
-        price: sent('price'),
+        sellPrice: sent('sellPrice'),
+        purchasePrice: sent('purchasePrice'),
         note: sent('note'),
         status: patch.status ?? current.status,
       };
@@ -561,7 +571,8 @@ export class TripScheduleService {
       // which refuses anything `NUMERIC(14,2)` cannot hold exactly; padding
       // `"4500000"` to two decimal places here would be this service deciding
       // how PostgreSQL stores a numeric, which it already knows.
-      price: blankToNull(input.price),
+      sellPrice: blankToNull(input.sellPrice),
+      purchasePrice: blankToNull(input.purchasePrice),
       note: blankToNull(input.note),
       status: input.status ?? fallbackStatus,
     };

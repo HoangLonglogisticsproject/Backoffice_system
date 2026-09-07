@@ -1,5 +1,7 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { z } from 'zod';
+import { ForbiddenError, ValidationError } from '../../../common/errors/domain.error';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
 import {
@@ -9,7 +11,11 @@ import {
 import type { OffsetPage } from '../../../common/pagination/offset-page';
 import { pageQuerySchema, type PageQuery } from '../../../common/pagination/page-query.dto';
 import type { Page } from '../../../common/pagination/cursor';
-import { PermissionGuard, RequirePermission } from '../../../core/authorization/api/permission.guard';
+import {
+  authorizationOf,
+  PermissionGuard,
+  RequirePermission,
+} from '../../../core/authorization/api/permission.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
@@ -19,6 +25,11 @@ import { OperationalBoardService } from '../application/operational-board.servic
 import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService, type TripBoardQuery } from '../application/trip-schedule.service';
 import { isRecordableAmount } from '../domain/trip-cost';
+import {
+  canSeeTripPrices,
+  redactPrices,
+  redactPricesIn,
+} from '../domain/trip-price-visibility';
 import type { OperationalBoardRow } from '../domain/operational-board';
 import type { UserSummary } from '../../../common/types/user-summary';
 import type {
@@ -116,9 +127,15 @@ const locationId = z.string().uuid().nullable();
  * sent is the failure this whole family of types exists to prevent.
  *
  * `.nullable()` because clearing a price is a real thing to want — the trip
- * goes back to unpriced. Zero is not that: it is refused here and by 0024's
- * CHECK, because a trip charged nothing and a trip not yet priced must not
+ * goes back to unpriced. Zero is not that: it is refused here and by 0026's
+ * CHECKs, because a trip charged nothing and a trip not yet priced must not
  * render as the same row.
+ *
+ * ★ SHARED BY BOTH FIGURES, AND NEITHER IS REQUIRED HERE. Whether a sell price
+ * MUST be present is not a fact about its shape — it depends on who is asking,
+ * because a caller who may not see prices does not send one at all. That rule
+ * lives in `requirePriceAuthority` below, where the caller is known. A schema
+ * cannot express it and pretending otherwise would refuse every dispatcher.
  */
 const price = z
   .string()
@@ -145,11 +162,56 @@ const createTripSchema = z.object({
   pickupLocationId: locationId.optional(),
   deliveryLocationId: locationId.optional(),
 
-  price: price.optional(),
+  sellPrice: price.optional(),
+  purchasePrice: price.optional(),
 
   note: text.optional(),
   status: tripStatus.optional(),
 });
+
+/** The two body keys this route guards. Written once so the checks agree. */
+const PRICE_KEYS = ['sellPrice', 'purchasePrice'] as const;
+
+/**
+ * The rule the schema above cannot state: WHO may put a price on a trip, and
+ * when one is compulsory.
+ *
+ * ★ TWO DIFFERENT REFUSALS, BECAUSE THEY ARE TWO DIFFERENT MISTAKES.
+ *
+ *   403  A caller without `trip.price.read` sent a price key at all. Not
+ *        ignored, not stripped: silently dropping a figure somebody typed and
+ *        answering 201 tells them the trip is priced when it is not. The keys
+ *        are never on their form, so a body carrying one is a client that has
+ *        gone wrong or a request that did not come from the form.
+ *
+ *   422  A caller who MAY price a trip created one without a sell price. This
+ *        is the "giá cước bán không thể để trống" rule, and it binds only the
+ *        people who can see the field — a dispatcher's trip is entered unpriced
+ *        and a head prices it later, exactly as a trip is entered before it has
+ *        a truck.
+ *
+ * ⚠ THE SELL PRICE IS COMPULSORY ON CREATE ONLY. On a PATCH an absent key means
+ * "leave alone", so demanding one there would make every edit to a note carry
+ * the price back — and an explicit `null` stays legal, because a figure typed
+ * by mistake has to be removable by whoever may see it.
+ */
+const requirePriceAuthority = (
+  body: Partial<Record<(typeof PRICE_KEYS)[number], string | null>>,
+  request: Request,
+  { sellPriceRequired }: { sellPriceRequired: boolean },
+): void => {
+  if (!canSeeTripPrices(authorizationOf(request))) {
+    const sent = PRICE_KEYS.filter((key) => key in body);
+    if (sent.length > 0) {
+      throw new ForbiddenError(`You are not allowed to set ${sent.join(' or ')} on a trip.`);
+    }
+    return;
+  }
+
+  if (sellPriceRequired && (body.sellPrice === undefined || body.sellPrice === null)) {
+    throw new ValidationError('A selling price is required.');
+  }
+};
 
 /**
  * The patch.
@@ -253,6 +315,21 @@ export class TripScheduleController {
   ) {}
 
   /**
+   * May the caller behind this request see a trip's two prices?
+   *
+   * Reads the context `PermissionGuard` already attached — the guard runs on
+   * every route here, so the context is present and loading it a second time
+   * would be a second database read per request that could disagree with the
+   * one the caller was judged by.
+   *
+   * ★ UNDEFINED FAILS CLOSED. `canSeeTripPrices` answers false for a missing
+   * context, which is what a route that lost its guard looks like from here.
+   */
+  private mayPrice(request: Request): boolean {
+    return canSeeTripPrices(authorizationOf(request));
+  }
+
+  /**
    * What is actually happening, for the people who have to chase it.
    *
    * ★ DECLARED BEFORE `:tripId`, and the ordering is load-bearing — Nest matches
@@ -314,8 +391,13 @@ export class TripScheduleController {
   @RequirePermission('trip.read')
   async list(
     @Query(new ZodValidationPipe(boardQuerySchema)) query: TripBoardQuery,
+    @Req() request: Request,
   ): Promise<OffsetPage<TripScheduleWithRefs>> {
-    return this.trips.list(query);
+    const page = await this.trips.list(query);
+    // ★ THE PAGE IS REBUILT, NOT PATCHED IN PLACE. `redactPricesIn` returns new
+    // rows; the envelope around them — total, page, size — is untouched, because
+    // withholding a figure must not change how many trips there are.
+    return { ...page, items: redactPricesIn(page.items, this.mayPrice(request)) };
   }
 
   @Get('trip-schedules/:tripId')
@@ -323,8 +405,9 @@ export class TripScheduleController {
   @RequirePermission('trip.read')
   async findOne(
     @Param('tripId', UuidParam) tripId: string,
+    @Req() request: Request,
   ): Promise<TripScheduleWithRefs> {
-    return this.trips.findById(tripId);
+    return redactPrices(await this.trips.findById(tripId), this.mayPrice(request));
   }
 
   @Post('trip-schedules')
@@ -333,10 +416,23 @@ export class TripScheduleController {
   async create(
     @Body(new ZodValidationPipe(createTripSchema)) body: CreateTripBody,
     @CurrentUser() actor: SessionUser,
+    @Req() request: Request,
   ): Promise<TripSchedule> {
+    // ★ BEFORE THE WRITE, NOT AFTER IT. A caller who may not price a trip and
+    // sent one is refused outright; one who may is held to the sell price being
+    // there. Both answers have to arrive before a row exists, because neither
+    // is fixable by redacting the response.
+    requirePriceAuthority(body, request, { sellPriceRequired: true });
+
     // `createdBy` from the session, never from the body. A body that names its
     // own author is a body that can name somebody else's.
-    return this.trips.create({ ...body, createdBy: actor.id });
+    const trip = await this.trips.create({ ...body, createdBy: actor.id });
+
+    // Redacted on the way back too, though only a caller who may price a trip
+    // can have put a figure on this one. The alternative is a route that
+    // answers with a price under one condition and not another, and "the write
+    // path is the exception" is the sentence that precedes every leak.
+    return redactPrices(trip, this.mayPrice(request));
   }
 
   @Patch('trip-schedules/:tripId')
@@ -346,11 +442,18 @@ export class TripScheduleController {
     @Param('tripId', UuidParam) tripId: string,
     @Body(new ZodValidationPipe(updateTripSchema)) body: UpdateTripBody,
     @CurrentUser() actor: SessionUser,
+    @Req() request: Request,
   ): Promise<TripSchedule> {
+    // ⚠ `sellPriceRequired: false` — on a patch an absent key means "leave
+    // alone", so demanding one would make correcting a note resend the price.
+    // Clearing it with an explicit `null` stays legal for whoever may see it.
+    requirePriceAuthority(body, request, { sellPriceRequired: false });
+
     // The actor is passed because this route can move the status too — `status`
     // is a field of the patch — and every board move is recorded with whoever
     // made it.
-    return this.trips.update(tripId, body, actor.id);
+    const trip = await this.trips.update(tripId, body, actor.id);
+    return redactPrices(trip, this.mayPrice(request));
   }
 
   /**
