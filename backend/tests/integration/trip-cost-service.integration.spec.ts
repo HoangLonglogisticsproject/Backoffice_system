@@ -78,7 +78,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
 
     // ★ EVERY MIGRATION ON DISK, NOT A LIST KEPT HERE. The list this replaced
     // named its files one by one and went stale: 0024 added
-    // `trip_schedules.price`, which every trip SELECT now reads, and 0025
+    // `trip_schedules.sell_price`, which every trip SELECT now reads, and 0025
     // replaced the five old status words with the four this spec already uses.
     // A list can drift from the schema; reading the directory cannot.
     await applyAllMigrations(pool);
@@ -537,19 +537,28 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
    * `tripsWithRefs` for a plausible reason would break here, loudly, on the day
    * it is written.
    *
-   * ★ `price` IS THE ONE FIGURE ALLOWED THROUGH, and naming it here rather
-   * than loosening the pattern is the point. 0024 put `GIÁ CƯỚC` — what we
-   * CHARGE — on `trip_schedules` as a column every trip SELECT reads, and
-   * wrote down that this widens the board deliberately. What a run COSTS US is
-   * untouched by that decision, so the tripwire below still fires on every
-   * other money-shaped field: subtracting one known name keeps the next one
-   * loud.
+   * ★ THE TRIP'S OWN TWO PRICES ARE ALLOWED THROUGH HERE, AND THAT IS A
+   * STATEMENT ABOUT THIS LAYER ONLY.
+   *
+   * 0026 put `sell_price` and `purchase_price` on `trip_schedules`, so the
+   * SERVICE — which is what this file drives — hands them back on every row.
+   * Who may actually SEE them is decided one layer up: the controller runs
+   * every trip response through `redactPrices`, and
+   * `trip-schedule.security.spec.ts` is where that withholding is asserted,
+   * over HTTP, with a caller who lacks `trip.price.read`.
+   *
+   * ⚠ SO A GREEN RUN HERE IS NOT EVIDENCE THAT PRICES ARE PROTECTED. What it
+   * still proves is the thing this block was written for and the thing 0026 did
+   * not change: what a run COSTS US — every `trip_costs` line and every
+   * `trip_outsource_hires` row — never reaches a trip payload at all. Naming
+   * the two known columns rather than loosening the pattern keeps the next
+   * money-shaped field that appears here loud.
    */
   describe('★ the general trip API exposes no cost money', () => {
     const MONEY_WORDS = /amount|cost|price|total|hire|carrier|vat/i;
 
-    /** The quoted price, and nothing else, may ride on a trip payload. */
-    const ALLOWED = new Set(['price']);
+    /** The trip's own two columns, and nothing else, may ride on this row. */
+    const ALLOWED = new Set(['sellPrice', 'purchasePrice']);
 
     const leakedMoneyKeys = (row: object) =>
       Object.keys(row).filter((key) => MONEY_WORDS.test(key) && !ALLOWED.has(key));

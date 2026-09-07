@@ -140,7 +140,7 @@ export interface TripSchedule {
   deliveryLongitude: number | null;
 
   /**
-   * What the customer is charged for this run — `GIÁ CƯỚC` — as a decimal
+   * What the customer is charged for this run — `GIÁ CƯỚC BÁN` — as a decimal
    * string, e.g. `"4500000.00"`.
    *
    * ★ A `string`, NEVER A `number`. The column is `NUMERIC(14,2)` and `pg`
@@ -151,15 +151,32 @@ export interface TripSchedule {
    * ★ AND IT IS NOT A `trip_costs` ROW. That ledger records what a run COSTS
    * US — many lines, voided rather than edited, readable only under
    * `cost.read`. This is what we CHARGE, agreed once when the trip is booked,
-   * and it is part of the booking a dispatcher types. 0024 records the
-   * consequence: unlike every cost figure, this one rides on the trip
-   * response, which every signed-in account can read.
+   * and it is part of the booking a shift senior types.
    *
-   * `null` until somebody prices the trip, which is a real state — a trip is
-   * entered before it is priced, exactly as it is entered before it has a
-   * truck.
+   * `null` MEANS TWO DIFFERENT THINGS ON THE WAY OUT, and only the caller
+   * knows which: the trip is genuinely unpriced, OR this caller may not see
+   * prices and `redactPrices` has blanked it. See that function for why the
+   * two are deliberately not distinguished over HTTP.
    */
-  price: string | null;
+  sellPrice: string | null;
+
+  /**
+   * What we pay the carrier to run it — `GIÁ CƯỚC MUA` — same shape, same
+   * rules, same two readings of `null`.
+   *
+   * ★ `null` ON MOST TRIPS AND THAT IS ORDINARY. A run on one of our own
+   * lorries is not bought from anybody; there is no figure to record. Nothing
+   * here treats an absent buying price as a fault.
+   *
+   * ⚠ NOT THE SAME FACT AS A `trip_outsource_hires` ROW, THOUGH THEY DESCRIBE
+   * THE SAME LORRY. That table is the cost ledger's record of a hire — voided
+   * rather than edited, sitting behind `cost.read` at 'global', carrying the
+   * carrier's name and the paperwork it came from. This is the figure agreed
+   * on the booking form, which the head arranging the run needs while
+   * arranging it. Neither is derived from the other and nothing reconciles
+   * them; if they ever should agree, that is a rule somebody has to state.
+   */
+  purchasePrice: string | null;
 
   note: string | null;
   status: TripStatus;

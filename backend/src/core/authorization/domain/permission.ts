@@ -32,6 +32,25 @@ export const PERMISSIONS = [
    */
   'trip.write',
 
+  /**
+   * ★ SEE — AND SET — THE TWO PRICES ON A TRIP ROW: what the customer is
+   * charged and what the carrier is paid.
+   *
+   * ★ ONE KEY, AND IT GATES WRITING TOO, following the precedent
+   * `trip.complete.review` sets below. Splitting it would create a holder who
+   * may TYPE a figure they are not allowed to READ BACK — the form would refuse
+   * to show them what they just saved. That is not a role anybody asked for,
+   * and the second key would be a second place for the same rule to drift.
+   *
+   * ⚠ SEPARATE FROM `cost.read`, WHICH IS A DIFFERENT LEDGER AT A DIFFERENT
+   * TIER. `cost.*` covers `trip_costs` and `trip_outsource_hires` — many
+   * lines per trip, voided rather than edited, 'global' only. These two are
+   * single columns on the trip row agreed when it is booked. A department head
+   * holds these and not those, which is exactly the difference the business
+   * asked for and the reason this is not folded into `cost.read`.
+   */
+  'trip.price.read',
+
   /** See the money on a trip: its cost lines, its hires, and their totals. */
   'cost.read',
   /** Record a cost line or an outsourced hire against a trip. */
@@ -153,6 +172,30 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'trip.read': 'any',
   'trip.create': 'any',
   'trip.write': 'head-anywhere',
+
+  /**
+   * ★ 'head-anywhere' — A GLOBAL ADMINISTRATOR OR THE HEAD OF SOME DEPARTMENT.
+   *
+   * The requirement on record is that the two trip prices are visible to the
+   * superadmin and to department heads, and to nobody else. That sentence names
+   * a RELATION, not a role, and this is the tier that expresses it: `can()`
+   * answers true for a global caller before it reads this table at all, and
+   * true for anyone holding a head assignment anywhere.
+   *
+   * ★ WHY NOT 'head'. That tier asks for a target department, and a trip
+   * belongs to none — the same reason `trip.write` above is 'head-anywhere'.
+   * Marking this 'head' would refuse every head at the guard while
+   * `grantedPermissions` listed it anyway, so the client would draw the price
+   * field and the server would blank it.
+   *
+   * ★ WHY NOT 'global', WHICH IS WHERE `cost.*` SITS. Money on a trip is not
+   * one tier. `cost.*` is the company's cost BASE — every fuel line and every
+   * carrier hire — and stays at the tightest tier until somebody decides who
+   * should hold it. These two columns are the commercial terms of one booking,
+   * which the shift senior arranging that booking has to see to do the job.
+   * Putting them at 'global' would mean no head could price a trip.
+   */
+  'trip.price.read': 'head-anywhere',
 
   /**
    * ★ MONEY IS 'global' — THE MOST RESTRICTIVE TIER — AND THIS IS A DELIBERATE

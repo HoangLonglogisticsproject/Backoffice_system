@@ -111,7 +111,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     // ★ EVERY MIGRATION ON DISK, NOT A LIST KEPT HERE. The list this replaced
     // named its files one by one and went stale: 0024 added
-    // `trip_schedules.price`, which every trip SELECT now reads, and 0025
+    // `trip_schedules.sell_price`, which every trip SELECT now reads, and 0025
     // replaced the five old status words with the four this spec already uses.
     // A list can drift from the schema; reading the directory cannot.
     await applyAllMigrations(pool);

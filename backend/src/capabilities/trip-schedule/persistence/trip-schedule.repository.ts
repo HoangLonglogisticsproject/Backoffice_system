@@ -23,8 +23,10 @@ export interface TripScheduleValues {
   deliveryContact: string | null;
   pickupAt: Date | null;
   deliveryAt: Date | null;
-  /** The agreed charge, as a decimal string. `null` while the trip is unpriced. */
-  price: string | null;
+  /** What the customer is charged, as a decimal string. `null` while unpriced. */
+  sellPrice: string | null;
+  /** What the carrier is paid for the same run. `null` on our own lorries. */
+  purchasePrice: string | null;
   note: string | null;
   status: TripStatus;
   /** Each pair both-or-neither; the service has already checked. */
@@ -98,10 +100,17 @@ interface TripRow {
   /**
    * ★ `NUMERIC`, WHICH `pg` HANDS BACK AS A STRING — unlike the four coordinate
    * columns below, which are `DOUBLE PRECISION` and do arrive as numbers. That
-   * asymmetry is the point: reading this one as a number would put the figure
-   * through the float the column type exists to avoid.
+   * asymmetry is the point: reading either of these as a number would put the
+   * figure through the float the column type exists to avoid.
+   *
+   * ⚠ SELECTED FOR EVERY CALLER, INCLUDING ONES WHO MAY NOT SEE THEM. Who is
+   * allowed to read a price is not a decision this file takes — `redactPrices`
+   * blanks them on the way out of the API. Do not add a permission-shaped
+   * branch to the SQL below; a statement that varies by caller is a statement
+   * nobody can read off the page.
    */
-  price: string | null;
+  sell_price: string | null;
+  purchase_price: string | null;
   note: string | null;
   status: TripStatus;
   /** `DOUBLE PRECISION`, which `pg` hands back as a number — unlike NUMERIC. */
@@ -155,7 +164,8 @@ const TRIP_COLUMN_NAMES = [
   'delivery_contact',
   'pickup_at',
   'delivery_at',
-  'price',
+  'sell_price',
+  'purchase_price',
   'note',
   'status',
   'pickup_latitude',
@@ -221,7 +231,8 @@ const toTrip = (row: TripRow): TripSchedule => ({
   deliveryContact: row.delivery_contact,
   pickupAt: row.pickup_at,
   deliveryAt: row.delivery_at,
-  price: row.price,
+  sellPrice: row.sell_price,
+  purchasePrice: row.purchase_price,
   note: row.note,
   status: row.status,
   pickupLatitude: row.pickup_latitude,
@@ -280,8 +291,9 @@ const valueParams = (values: TripScheduleValues): unknown[] => [
   values.deliveryLocationId,
   // Appended rather than slotted in beside the other columns: every bind index
   // below is positional, so a value inserted in the middle silently renumbers
-  // eighteen of them. New columns go on the end.
-  values.price,
+  // eighteen of them. New columns go on the end, in the order they were added.
+  values.sellPrice,
+  values.purchasePrice,
 ];
 
 @Injectable()
@@ -414,10 +426,10 @@ export class TripScheduleRepository {
           pickup_address, delivery_address, pickup_contact, delivery_contact,
           pickup_at, delivery_at, note, status,
           pickup_latitude, pickup_longitude, delivery_latitude, delivery_longitude,
-          pickup_location_id, delivery_location_id, price,
+          pickup_location_id, delivery_location_id, sell_price, purchase_price,
           created_by)
        VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               $13, $14, $15, $16, $17, $18, $19, $20)
+               $13, $14, $15, $16, $17, $18, $19, $20, $21)
        ${RETURNING_TRIP}`,
       [...valueParams(input), input.createdBy],
     );
@@ -451,7 +463,7 @@ export class TripScheduleRepository {
               pickup_latitude = $14, pickup_longitude = $15,
               delivery_latitude = $16, delivery_longitude = $17,
               pickup_location_id = $18, delivery_location_id = $19,
-              price = $20
+              sell_price = $20, purchase_price = $21
         WHERE id = $1 AND archived_at IS NULL
         ${RETURNING_TRIP}`,
       [id, ...valueParams(values)],
