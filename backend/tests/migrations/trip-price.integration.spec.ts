@@ -49,29 +49,48 @@ describeIntegration('Trip prices against real PostgreSQL', () => {
   };
 
   /**
-   * Everything up to and INCLUDING 0024, and nothing after it.
+   * Applies migrations up to and INCLUDING `last`, continuing from wherever the
+   * previous call stopped.
    *
-   * ★ THE POINT OF THE WHOLE FILE IS WHAT HAPPENS BETWEEN THIS AND 0026, so the
-   * two halves cannot be applied in one go. A row is priced here, under the old
-   * column name, by a statement that would not compile against the new schema —
-   * which is the only honest way to prove a rename carried live data rather
-   * than that a fresh column accepts writes.
+   * ★ THE POINT OF THE WHOLE FILE IS WHAT HAPPENS BETWEEN 0024 AND 0026, so the
+   * two halves cannot be applied in one go. A row is priced under the old column
+   * name by a statement that would not compile against the new schema — which
+   * is the only honest way to prove a rename carried live data rather than that
+   * a fresh column accepts writes.
+   *
+   * ⚠ RESUMES RATHER THAN REPLAYING. An earlier version re-ran 0001–0024 on the
+   * second call. Most migrations survive that — they are written `IF NOT
+   * EXISTS` — but 0026 is a RENAME, which is not idempotent by nature, and a
+   * helper that quietly re-runs everything is one edit away from proving
+   * nothing.
    */
+  let appliedCount = 0;
+
   const applyThrough = async (last: string): Promise<void> => {
     const directory = join(__dirname, '..', '..', 'migrations');
-    const files = (await readdir(directory))
+    const wanted = (await readdir(directory))
       .filter((file) => file.endsWith('.sql'))
       .sort()
       .filter((file) => file <= last);
 
-    for (const file of files) {
+    for (const file of wanted.slice(appliedCount)) {
       await pool.query(await readFile(join(directory, file), 'utf8'));
     }
+    appliedCount = wanted.length;
   };
 
   /** A trip row, written straight to the table. `created_by` needs a real user. */
   let author: string;
 
+  /**
+   * A trip AFTER 0026, so `'pending'` is a word the CHECK accepts.
+   *
+   * ⚠ ONLY VALID ONCE 0025 HAS RUN. Before it, `trip_schedules.status` held the
+   * workbook's five fill-colours — `awaiting_production`, `awaiting_vehicle`,
+   * `needs_confirmation`, `external_booking`, `done` — and `'pending'` violates
+   * the CHECK outright. That is exactly the trap the pre-0026 insert below
+   * steps around by naming no status at all.
+   */
   const addTrip = (columns: string, values: string, params: unknown[]): Promise<{ rows: { id: string }[] }> =>
     pool.query(
       `INSERT INTO trip_schedules (scheduled_on, status, created_by${columns})
@@ -79,6 +98,18 @@ describeIntegration('Trip prices against real PostgreSQL', () => {
       [author, ...params],
     );
 
+  /** The id of a trip priced BEFORE 0026 ran, under 0024's column name. */
+  let priced: string;
+
+  /**
+   * ★ THE WHOLE MIGRATION STORY HAPPENS HERE, NOT IN A TEST.
+   *
+   * An earlier version priced the trip and applied 0026 inside the first
+   * `it()`, which made every later case depend on that one having run. When it
+   * failed, all twelve failed — eleven of them reporting missing columns rather
+   * than the actual fault. Setup that other tests need is `beforeAll`'s job;
+   * a test should assert, not arrange for its neighbours.
+   */
   beforeAll(async () => {
     assertLooksLikeATestDatabase(TEST_URL as string);
     pool = await openTestSchema(TEST_URL as string, SCHEMA);
@@ -90,10 +121,27 @@ describeIntegration('Trip prices against real PostgreSQL', () => {
     // `identities`, one row per credential — and `status` and `account_type`
     // both have defaults. The same one-column insert every other integration
     // spec here uses; anything more would be this file inventing a schema.
-    const { rows } = await pool.query<{ id: string }>(
+    const user = await pool.query<{ id: string }>(
       `INSERT INTO users (display_name) VALUES ('Pricer') RETURNING id`,
     );
-    author = rows[0]!.id;
+    author = user.rows[0]!.id;
+
+    // ★ NO `status` COLUMN NAMED, AND THAT IS THE POINT. This row is written
+    // against the schema as it stood at 0024, where the five workbook words are
+    // what the CHECK accepts and `awaiting_production` is the DEFAULT. Naming
+    // `'pending'` here — the word the board uses TODAY — is refused outright,
+    // because 0025 has not run yet. Letting the default apply keeps this
+    // statement about the price, which is all this spec is about.
+    const trip = await pool.query<{ id: string }>(
+      `INSERT INTO trip_schedules (scheduled_on, created_by, price)
+       VALUES ('2026-08-04', $1, '4500000.00') RETURNING id`,
+      [author],
+    );
+    priced = trip.rows[0]!.id;
+
+    // 0025 remaps the five old words to the four new ones; 0026 renames the
+    // price column over the top of the live row written above.
+    await applyThrough('0026_trip_sell_and_purchase_price.sql');
   });
 
   afterAll(async () => {
@@ -101,20 +149,6 @@ describeIntegration('Trip prices against real PostgreSQL', () => {
   });
 
   describe('★ the rename, which is the only irreversible thing 0026 does', () => {
-    /** The id of a trip priced BEFORE 0026 ran, under 0024's column name. */
-    let priced: string;
-
-    it('prices a trip under 0024, then applies 0026 over the top of it', async () => {
-      const { rows } = await pool.query<{ id: string }>(
-        `INSERT INTO trip_schedules (scheduled_on, status, created_by, price)
-         VALUES ('2026-08-04', 'pending', $1, '4500000.00') RETURNING id`,
-        [author],
-      );
-      priced = rows[0]!.id;
-
-      await applyThrough('0026_trip_sell_and_purchase_price.sql');
-    });
-
     it('★ carries the stored figure across, EXACTLY and as a string', async () => {
       const { rows } = await pool.query<{ sell_price: string | null }>(
         `SELECT sell_price FROM trip_schedules WHERE id = $1`,
