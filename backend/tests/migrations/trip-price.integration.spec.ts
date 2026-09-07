@@ -85,10 +85,13 @@ describeIntegration('Trip prices against real PostgreSQL', () => {
 
     await applyThrough('0024_trip_price.sql');
 
+    // ★ `display_name` AND NOTHING ELSE, which is the whole of what this spec
+    // needs from identity. `users` carries no email — that lives in
+    // `identities`, one row per credential — and `status` and `account_type`
+    // both have defaults. The same one-column insert every other integration
+    // spec here uses; anything more would be this file inventing a schema.
     const { rows } = await pool.query<{ id: string }>(
-      `INSERT INTO users (email, canonical_email, display_name, password_hash, status, account_type)
-       VALUES ('pricer@example.com', 'pricer@example.com', 'Pricer', 'x', 'active', 'employee')
-       RETURNING id`,
+      `INSERT INTO users (display_name) VALUES ('Pricer') RETURNING id`,
     );
     author = rows[0]!.id;
   });
