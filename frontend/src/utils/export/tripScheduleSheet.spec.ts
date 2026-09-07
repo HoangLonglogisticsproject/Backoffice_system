@@ -54,10 +54,52 @@ describe('toTripSheetRows', () => {
    * broken — a string lands in the cell — the column goes quiet: Excel sums it
    * to zero rather than refusing.
    */
-  it('★ writes the price as a number, not the string the API sends', () => {
-    const [row] = toTripSheetRows([trip({ price: '4500000' })], t, 'vi');
+  it('★ writes both prices as numbers, not the strings the API sends', () => {
+    const [row] = toTripSheetRows(
+      [trip({ sellPrice: '4500000', purchasePrice: '3000000' })],
+      t,
+      'vi',
+      true,
+    );
 
-    expect(row[t('colPrice')]).toBe(4_500_000);
+    expect(row[t('colSellPrice')]).toBe(4_500_000);
+    expect(row[t('colPurchasePrice')]).toBe(3_000_000);
+  });
+
+  /**
+   * ★ THE COLUMNS ARE ABSENT FOR A VIEWER WHO MAY NOT SEE PRICES, NOT EMPTY.
+   *
+   * The server has already blanked both figures for such a caller, so keeping
+   * the headings would export two columns of empty cells — which reads as
+   * "nothing on this board is priced", a claim about the data rather than about
+   * the reader. Asserted on the KEYS, because a value check would pass just as
+   * well against a column full of nulls.
+   */
+  it('★ omits both price columns entirely when the viewer may not see them', () => {
+    const [row] = toTripSheetRows(
+      [trip({ sellPrice: '4500000', purchasePrice: '3000000' })],
+      t,
+      'vi',
+      false,
+    );
+
+    expect(Object.keys(row)).not.toContain(t('colSellPrice'));
+    expect(Object.keys(row)).not.toContain(t('colPurchasePrice'));
+    // And the figures are nowhere else in the row under another heading.
+    expect(JSON.stringify(row)).not.toContain('4500000');
+    expect(JSON.stringify(row)).not.toContain('3000000');
+  });
+
+  /**
+   * ★ FAIL CLOSED ON A FORGOTTEN ARGUMENT. `includePrices` defaults to false,
+   * so a caller that has not been updated exports a sheet with no money in it
+   * rather than one that quietly carries both figures into a file somebody
+   * then emails on.
+   */
+  it('★ omits them when the argument is not passed at all', () => {
+    const [row] = toTripSheetRows([trip({ sellPrice: '4500000' })], t, 'vi');
+
+    expect(Object.keys(row)).not.toContain(t('colSellPrice'));
   });
 
   /**
@@ -66,13 +108,25 @@ describe('toTripSheetRows', () => {
    * any average taken over the column without anybody noticing.
    */
   it('★ leaves an unpriced trip blank rather than writing 0', () => {
-    const [row] = toTripSheetRows([trip({ price: null })], t, 'vi');
+    const [row] = toTripSheetRows([trip({ sellPrice: null, purchasePrice: null })], t, 'vi', true);
 
-    expect(row[t('colPrice')]).toBeNull();
+    expect(row[t('colSellPrice')]).toBeNull();
+    expect(row[t('colPurchasePrice')]).toBeNull();
+  });
+
+  /**
+   * ★ A SOLD-BUT-NOT-BOUGHT TRIP IS THE ORDINARY CASE, not a half-filled row.
+   * Most runs go on our own lorries and are bought from nobody.
+   */
+  it('writes a selling price with no buying price, and leaves the other blank', () => {
+    const [row] = toTripSheetRows([trip({ sellPrice: '4500000', purchasePrice: null })], t, 'vi', true);
+
+    expect(row[t('colSellPrice')]).toBe(4_500_000);
+    expect(row[t('colPurchasePrice')]).toBeNull();
   });
 
   it('writes the status label a dispatcher reads, never the enum', () => {
-    const [row] = toTripSheetRows([trip({ status: 'executing' })], t, 'vi');
+    const [row] = toTripSheetRows([trip({ status: 'executing' })], t, 'vi', true);
 
     expect(row[t('colStatus')]).toBe(t('tripExecuting'));
     expect(row[t('colStatus')]).not.toBe('executing');

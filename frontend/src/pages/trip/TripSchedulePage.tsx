@@ -63,6 +63,12 @@ export default function TripSchedulePage() {
   // the board at all, so gating the actions column on `canManage` alone would
   // hide the only control they need.
   const canViewCost = can('cost.read');
+  // ★ A THIRD, NARROWER KEY, AND NOT EITHER OF THE TWO ABOVE. `cost.read` is
+  // the ledger of what runs COST US and is 'global'; this is what each trip is
+  // sold and bought for, which a department head arranging the run has to see.
+  // A viewer without it is sent `null` for both figures whatever the trip
+  // holds, so the columns are dropped rather than drawn full of em dashes.
+  const mayPrice = can('trip.price.read');
   const [costFor, setCostFor] = useState<string | null>(null);
   /** The trip whose driver is being chosen. `trip.write`, like every other correction. */
   const [assigning, setAssigning] = useState<TripScheduleWithRefs | null>(null);
@@ -190,9 +196,24 @@ export default function TripSchedulePage() {
                 <TableHead className="font-semibold text-gray-600">{t('colPickup')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colDelivery')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
-                <TableHead className="text-right font-semibold text-gray-600">
-                  {t('colPrice')}
-                </TableHead>
+                {/*
+                  ★ THE TWO PRICE COLUMNS ARE ABSENT, NOT EMPTY, FOR A VIEWER
+                  WHO MAY NOT SEE THEM. The server sends `null` for both to such
+                  a caller whatever the trip holds, so a rendered column would
+                  show an em dash on every row and read as "nothing is priced" —
+                  a claim about the data that is not true. Dropping the columns
+                  says nothing instead, which is the honest option.
+                */}
+                {mayPrice && (
+                  <>
+                    <TableHead className="text-right font-semibold text-gray-600">
+                      {t('colSellPrice')}
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-gray-600">
+                      {t('colPurchasePrice')}
+                    </TableHead>
+                  </>
+                )}
                 <TableHead className="font-semibold text-gray-600">{t('colNote')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCreatedBy')}</TableHead>
                 {(canManage || canViewCost) && (
@@ -288,32 +309,40 @@ export default function TripSchedulePage() {
                     )}
                   </TableCell>
                   {/*
-                    ★ THE AGREED CHARGE, ON THE BOARD — and it is the one amount
-                    that is. The wallet button beside it opens what the run COST
-                    us, which is fetched only for a holder of `cost.read` and is
-                    never in this list's data. This figure is part of the
-                    booking, so it comes down with the row.
+                    ★ THE TWO AGREED CHARGES — what this run is sold for and what
+                    it is bought for. They are the only amounts on the board, and
+                    only for a head or the superadmin. The wallet button beside
+                    them opens what the run COST us: a different ledger behind
+                    `cost.read`, fetched when that dialog opens and never in this
+                    list's data.
 
                     ★ FORMATTED, NEVER PARSED. `formatMoney` does string work —
-                    the value is `NUMERIC(14,2)` carried as text precisely so
-                    nothing rounds it, and `Number(trip.price)` here would undo
-                    that for the sake of a thousands separator.
-                  */}
-                  <TableCell className="whitespace-nowrap text-right font-medium tabular-nums text-gray-900">
-                    {/*
-                      An unpriced trip is a real state — the same em dash every
-                      other empty reference on this row uses, never a `0`.
+                    the values are `NUMERIC(14,2)` carried as text precisely so
+                    nothing rounds them, and `Number(...)` here would undo that
+                    for the sake of a thousands separator.
 
-                      ★ TESTED FOR TRUTHINESS RATHER THAN AGAINST `null`. The
-                      column is nullable, so a strict `=== null` reads
-                      correctly against the contract and still hands `undefined`
-                      to `formatMoney`, which unmounted the board on the first
-                      fixture that predated the field. A missing price and an
-                      empty one are the same fact — unpriced — and neither is
-                      worth a crash.
-                    */}
-                    {trip.price ? formatMoney(trip.price) : <Unset />}
-                  </TableCell>
+                    ★ TESTED FOR TRUTHINESS RATHER THAN AGAINST `null`. A strict
+                    `=== null` reads correctly against the contract and still
+                    hands `undefined` to `formatMoney`, which unmounted the board
+                    on the first fixture that predated the field. A missing price
+                    and an empty one are the same fact, and neither is worth a
+                    crash.
+                  */}
+                  {mayPrice && (
+                    <>
+                      <TableCell className="whitespace-nowrap text-right font-medium tabular-nums text-gray-900">
+                        {trip.sellPrice ? formatMoney(trip.sellPrice) : <Unset />}
+                      </TableCell>
+                      {/*
+                        Lighter than the selling price on purpose: this is what
+                        the run cost to buy, and the column people scan down is
+                        the one they invoice from.
+                      */}
+                      <TableCell className="whitespace-nowrap text-right tabular-nums text-gray-600">
+                        {trip.purchasePrice ? formatMoney(trip.purchasePrice) : <Unset />}
+                      </TableCell>
+                    </>
+                  )}
                   <TableCell>
                     <Prose value={trip.note} />
                   </TableCell>

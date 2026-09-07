@@ -1258,20 +1258,39 @@ describe('TripSchedulePage', () => {
   });
 
   /**
-   * ★ THE AGREED CHARGE — `GIÁ CƯỚC` — TYPED ON THE FORM AND READ ON THE BOARD.
+   * ★ THE TWO AGREED CHARGES — `GIÁ CƯỚC BÁN` AND `GIÁ CƯỚC MUA` — TYPED ON
+   * THE FORM AND READ ON THE BOARD, BY THE PEOPLE ALLOWED TO SEE THEM.
    *
-   * ⚠ AND IT IS NOT THE COST DIALOG. The wallet button opens what a run COST
-   * us: separate endpoints, `cost.read`, never in this list's data. The price
-   * is what the customer is CHARGED — part of the booking, so it comes down
-   * with the row. These cases pin that difference, because collapsing the two
-   * would put the company's cost base in front of every signed-in account.
+   * ⚠ AND NEITHER IS THE COST DIALOG. The wallet button opens what a run COST
+   * us: separate endpoints, `cost.read` at 'global', never in this list's data.
+   * These two are the commercial terms of the booking, behind
+   * `trip.price.read` at 'head-anywhere'. Three tiers, three different things,
+   * and collapsing any two of them puts figures in front of somebody who should
+   * not have them.
    */
-  describe('★ the price on a trip', () => {
-    const write = ['trip.read', 'trip.create', 'trip.write'];
+  describe('★ the two prices on a trip', () => {
+    /** A head: may correct a row AND may see what it is sold and bought for. */
+    const write = ['trip.read', 'trip.create', 'trip.write', 'trip.price.read'];
+    /** An ordinary dispatcher: adds trips, sees no money at all. */
+    const dispatcher = ['trip.read', 'trip.create'];
 
-    it('shows the figure grouped, and an unpriced trip as unset rather than as zero', async () => {
+    const pricedBoard = (over: Record<string, unknown> = {}) => {
       fetchTripSchedules.mockResolvedValue({
-        items: [trip({ price: '4500000.00' }), trip({ id: 't2', price: null })],
+        items: [trip({ sellPrice: '4500000.00', purchasePrice: '3000000.00', ...over })],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+    };
+
+    it('shows both figures grouped, and an unpriced trip as unset rather than as zero', async () => {
+      useSession.mockReturnValue(session(write));
+      fetchTripSchedules.mockResolvedValue({
+        items: [
+          trip({ sellPrice: '4500000.00', purchasePrice: '3000000.00' }),
+          trip({ id: 't2', sellPrice: null, purchasePrice: null }),
+        ],
         page: 1,
         limit: 20,
         total: 2,
@@ -1281,8 +1300,64 @@ describe('TripSchedulePage', () => {
 
       // `formatMoney` drops a fraction of zeroes — VND has no subunit in daily use.
       expect(await screen.findByText('4,500,000')).toBeInTheDocument();
+      expect(screen.getByText('3,000,000')).toBeInTheDocument();
       // The unpriced row says nothing rather than saying nought.
       expect(screen.queryByText('0')).toBeNull();
+    });
+
+    /**
+     * ★ THE COLUMNS ARE ABSENT FOR A DISPATCHER, NOT EMPTY.
+     *
+     * The server sends `null` for both to a caller without `trip.price.read`,
+     * whatever the trip holds. A drawn column would show an em dash on every
+     * row and read as "nothing on this board is priced" — a claim about the
+     * data rather than about the reader.
+     */
+    it('★ shows no price column at all to somebody who may not see prices', async () => {
+      useSession.mockReturnValue(session(dispatcher));
+      // The server would have blanked these; the fixture keeps them to prove
+      // the gate is the permission and not the absence of data.
+      pricedBoard();
+      renderPage();
+      await screen.findByText('WWL');
+
+      expect(screen.queryByText('Giá cước bán')).toBeNull();
+      expect(screen.queryByText('Giá cước mua')).toBeNull();
+      expect(screen.queryByText('4,500,000')).toBeNull();
+      expect(screen.queryByText('3,000,000')).toBeNull();
+    });
+
+    it('★ offers a dispatcher no price field on the form either', async () => {
+      useSession.mockReturnValue(session(dispatcher));
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+
+      await screen.findByLabelText('Thông tin hàng');
+      expect(screen.queryByLabelText('Giá cước bán (VND) *')).toBeNull();
+      expect(screen.queryByLabelText('Giá cước mua (VND)')).toBeNull();
+    });
+
+    /**
+     * ★ AND THE PAYLOAD CARRIES NEITHER KEY — not `null`, ABSENT.
+     *
+     * The server answers 403 to a body that so much as mentions a price from
+     * this caller, rather than stripping it, so sending "nothing to say here"
+     * as an explicit clear would fail every save a dispatcher makes.
+     */
+    it('★ sends no price key at all when a dispatcher saves', async () => {
+      useSession.mockReturnValue(session(dispatcher));
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+      await screen.findByLabelText('Thông tin hàng');
+
+      fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      expect(body).not.toHaveProperty('sellPrice');
+      expect(body).not.toHaveProperty('purchasePrice');
     });
 
     it('★ sends the digits typed, without the separators the field shows', async () => {
@@ -1291,43 +1366,75 @@ describe('TripSchedulePage', () => {
       await screen.findByText('WWL');
       fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
 
-      const price = (await screen.findByLabelText('Giá cước (VND)')) as HTMLInputElement;
-      fireEvent.change(price, { target: { value: '4500000' } });
+      const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
+      const buy = screen.getByLabelText('Giá cước mua (VND)') as HTMLInputElement;
+      fireEvent.change(sell, { target: { value: '4500000' } });
+      fireEvent.change(buy, { target: { value: '3000000' } });
       // Grouped for reading; the payload below is what actually travels.
-      expect(price.value).toBe('4,500,000');
+      expect(sell.value).toBe('4,500,000');
+      expect(buy.value).toBe('3,000,000');
 
       fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
 
       await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
       const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
-      expect(body.price).toBe('4500000');
+      expect(body.sellPrice).toBe('4500000');
+      expect(body.purchasePrice).toBe('3000000');
     });
 
-    it('★ clears a price with null, not by omitting the key', async () => {
+    /**
+     * ★ THE SELLING PRICE IS COMPULSORY WHEN CREATING, AND THE BUYING PRICE IS
+     * NOT. Most runs go on our own lorries and are bought from nobody, so an
+     * empty buying price is the ordinary case rather than an unfinished form.
+     */
+    it('★ marks the selling price required on create, and the buying price not', async () => {
       useSession.mockReturnValue(session(write));
-      fetchTripSchedules.mockResolvedValue({
-        items: [trip({ price: '4500000.00' })],
-        page: 1,
-        limit: 20,
-        total: 1,
-        totalPages: 1,
-      });
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+
+      const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
+      const buy = screen.getByLabelText('Giá cước mua (VND)') as HTMLInputElement;
+
+      expect(sell.required).toBe(true);
+      expect(buy.required).toBe(false);
+    });
+
+    /**
+     * ★ AND NOT REQUIRED ON AN EDIT, which is the half that is easy to get
+     * wrong. A price typed by mistake has to be removable by whoever may see
+     * it, and the PATCH route accepts an explicit clear.
+     */
+    it('★ does not force a selling price when correcting an existing row', async () => {
+      useSession.mockReturnValue(session(write));
+      pricedBoard();
       renderPage();
       await screen.findByText('WWL');
       fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
 
-      const price = (await screen.findByLabelText('Giá cước (VND)')) as HTMLInputElement;
+      const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
+      expect(sell.required).toBe(false);
+    });
+
+    it('★ clears a price with null, not by omitting the key', async () => {
+      useSession.mockReturnValue(session(write));
+      pricedBoard();
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+
+      const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
       // The stored figure is what the form opens on, decimals and all — a
       // dialog that rewrote it on the way in would change money by being opened.
-      expect(price.value).toBe('4,500,000.00');
-      fireEvent.change(price, { target: { value: '' } });
+      expect(sell.value).toBe('4,500,000.00');
+      fireEvent.change(sell, { target: { value: '' } });
       fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
 
       await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
       const [, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
       // `undefined` would mean "leave it alone" on the PATCH route, so a price
       // entered by mistake could never be removed.
-      expect(payload).toHaveProperty('price', null);
+      expect(payload).toHaveProperty('sellPrice', null);
     });
   });
 });

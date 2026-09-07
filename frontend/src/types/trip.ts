@@ -142,23 +142,36 @@ export interface TripSchedule {
   deliveryLongitude: number | null;
 
   /**
-   * ★ THE AGREED CHARGE — `GIÁ CƯỚC` — AS A DECIMAL STRING, e.g. `"4500000.00"`.
+   * ★ WHAT THE CUSTOMER IS CHARGED — `GIÁ CƯỚC BÁN` — AS A DECIMAL STRING,
+   * e.g. `"4500000.00"`.
    *
-   * ⚠ NEVER `Number(price)`. The column is `NUMERIC(14,2)` and the server
+   * ⚠ NEVER `Number(sellPrice)`. The column is `NUMERIC(14,2)` and the server
    * sends it as text for the same reason every figure in `tripCost.ts` is
    * text: binary floating point cannot hold a decimal exactly. Render it with
    * `formatMoney`, which never parses.
    *
-   * ★ AND IT IS NOT A COST. `tripCost.ts` holds what a run COSTS US — gated
-   * behind `cost.read`, fetched only when the money dialog opens, never on a
-   * trip response. This is what the customer is CHARGED: part of the booking a
-   * dispatcher types, so it rides on the board with the cargo and the
-   * addresses. The warning in `api/tripCost.ts` still stands for every field
-   * defined there.
-   *
-   * `null` until somebody prices the trip.
+   * ★ `null` MEANS TWO THINGS AND THIS SCREEN CANNOT TELL THEM APART. Either
+   * the trip is genuinely unpriced, or the viewer may not see prices and the
+   * server blanked it. That is deliberate on the server's side — a distinct
+   * marker would disclose THAT a figure exists to somebody who may not read it
+   * — so never render `null` as "not yet priced" to a viewer without
+   * `trip.price.read`. Gate the whole column on the permission instead.
    */
-  price: string | null;
+  sellPrice: string | null;
+
+  /**
+   * ★ WHAT WE PAY THE CARRIER — `GIÁ CƯỚC MUA` — same shape, same two
+   * readings of `null`.
+   *
+   * `null` on most trips as an ordinary fact: a run on one of our own lorries
+   * is not bought from anybody.
+   *
+   * ⚠ NOT THE SAME FACT AS A HIRE IN `tripCost.ts`. That file holds the cost
+   * LEDGER — what a run cost us, behind `cost.read`, fetched only when the
+   * money dialog opens. This is the figure agreed on the booking form. Nothing
+   * reconciles the two and neither is derived from the other.
+   */
+  purchasePrice: string | null;
 
   note: string | null;
   status: TripStatus;

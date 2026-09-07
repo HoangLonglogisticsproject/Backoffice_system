@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useSession } from '@/contexts/SessionProvider';
 import { createTripCustomer, createTripVehicle } from '@/api/tripCatalogue';
 import {
   createTripSchedule,
@@ -69,10 +70,18 @@ interface FormState {
   pickupLocationId: string | null;
   deliveryLocationId: string | null;
   /**
-   * The agreed charge, as the PLAIN decimal string the API takes — `MoneyInput`
-   * keeps the commas between itself and the DOM, so nothing here strips them.
+   * The two agreed charges, as the PLAIN decimal strings the API takes —
+   * `MoneyInput` keeps the commas between itself and the DOM, so nothing here
+   * strips them.
+   *
+   * ⚠ BOTH STAY `''` FOR A VIEWER WHO MAY NOT SEE PRICES, and the submit path
+   * drops the keys entirely rather than sending `null`. The server answers 403
+   * to a body carrying either key from such a caller — deliberately, so that a
+   * figure is never silently discarded — so sending "nothing to say here" as an
+   * explicit clear would fail every save they attempt.
    */
-  price: string;
+  sellPrice: string;
+  purchasePrice: string;
   note: string;
   status: TripStatus;
 }
@@ -90,7 +99,8 @@ const emptyForm = (): FormState => ({
   deliveryAt: '',
   pickupLocationId: null,
   deliveryLocationId: null,
-  price: '',
+  sellPrice: '',
+  purchasePrice: '',
   note: '',
   status: 'pending',
 });
@@ -148,7 +158,13 @@ const formFor = (trip: TripScheduleWithRefs): FormState => ({
   // ★ THE SERVER'S `"4500000.00"` GOES IN AS IT CAME. Trimming the decimals
   // here would make opening a trip and saving it unchanged rewrite the figure,
   // and no reading of that is reassuring when the subject is money.
-  price: trip.price ?? '',
+  //
+  // ⚠ A VIEWER WITHOUT `trip.price.read` IS SENT `null` FOR BOTH, whatever the
+  // trip actually holds, so these land as `''` — indistinguishable from an
+  // unpriced trip, which is what the server intends. They never reach a field:
+  // the form does not render one for them.
+  sellPrice: trip.sellPrice ?? '',
+  purchasePrice: trip.purchasePrice ?? '',
   note: trip.note ?? '',
   status: trip.status,
 });
@@ -179,6 +195,15 @@ export function TripFormModal({
   onCatalogueChanged,
 }: Readonly<TripFormModalProps>) {
   const { t } = useLanguage();
+  // ★ A RENDER HINT THAT ALSO CHANGES THE PAYLOAD, WHICH IS UNUSUAL HERE AND
+  // DELIBERATE. Everywhere else in this app `can()` only hides a control the
+  // server would refuse anyway. Prices are different: the server refuses a body
+  // that so much as MENTIONS them from a caller without the permission, so this
+  // decides which keys are sent, not merely which fields are drawn. Getting it
+  // wrong is a 403 on save rather than a silently ignored field — which is the
+  // failure mode worth having.
+  const { can } = useSession();
+  const mayPrice = can('trip.price.read');
   const [form, setForm] = useState<FormState>(emptyForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -311,10 +336,19 @@ export function TripFormModal({
       ...endFields('delivery'),
       pickupAt: fromDateTimeLocalValue(form.pickupAt),
       deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
-      // ★ `''` → `null`, LIKE EVERY OTHER FIELD ON THIS FORM. Clearing the
-      // price sends `null` and the trip goes back to unpriced; a form that
-      // dropped the empty key could never remove a figure typed by mistake.
-      price: blank(form.price),
+      // ★ THE TWO PRICE KEYS ARE PRESENT ONLY FOR SOMEBODY WHO MAY SET THEM,
+      // and this is the one place on the form where a key is dropped rather
+      // than sent as `null`. For a viewer without the permission the server
+      // REFUSES a body carrying either — it does not ignore them — so the
+      // usual `'' → null` would turn every save they make into a 403.
+      //
+      // For a viewer who does hold it the ordinary rule applies: `''` → `null`
+      // clears the figure, because a price typed by mistake has to be
+      // removable. The selling price cannot be cleared on CREATE — the field is
+      // `required` below and the server answers 422 — but it can on an edit.
+      ...(mayPrice
+        ? { sellPrice: blank(form.sellPrice), purchasePrice: blank(form.purchasePrice) }
+        : {}),
       note: blank(form.note),
       status: form.status,
     };
@@ -479,31 +513,76 @@ export function TripFormModal({
           onChange={(value) => set('cargoInfo', value)}
         />
 
-        <div className="space-y-2 sm:max-w-xs">
-          <label htmlFor="trip-price" className="text-sm font-medium text-gray-700">
-            {t('fieldPrice')}
-          </label>
-          {/*
-            ★ `MoneyInput`, NOT `type="number"`. The state IS the payload — a
-            plain decimal string — and the grouping exists only between the
-            field and the DOM. A number input would hand back a value the
-            browser had already put through a float, which is exactly what
-            `NUMERIC(14,2)` on the server exists to prevent.
+        {/*
+          ★ THE TWO PRICES, DRAWN ONLY FOR SOMEBODY WHO MAY SEE THEM.
 
-            ★ AND NOT `required`. A trip is entered before it is priced, the
-            same way it is entered before it has a truck; the column is
-            nullable and the form says so by leaving this optional.
-          */}
-          <MoneyInput
-            id="trip-price"
-            value={form.price}
-            onChange={(plain) => set('price', plain)}
-            aria-describedby="trip-price-hint"
-          />
-          <p id="trip-price-hint" className="text-xs text-gray-500">
-            {t('priceHint')}
-          </p>
-        </div>
+          Not disabled, not blanked — absent. A disabled field would tell a
+          dispatcher that a figure exists and is being withheld, and the server
+          goes to some trouble not to disclose even that: it sends `null` for
+          both to such a caller, so an unpriced trip and a priced one look
+          identical from here. Drawing a greyed box would undo that.
+
+          ★ `MoneyInput`, NOT `type="number"`, on both. The state IS the payload
+          — a plain decimal string — and the grouping comes from
+          `formatWithCommas`, which lives between the field and the DOM. A
+          number input would hand back a value the browser had already put
+          through a float, which is exactly what `NUMERIC(14,2)` on the server
+          exists to prevent.
+        */}
+        {mayPrice ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            
+
+            <div className="space-y-2">
+              <label htmlFor="trip-purchase-price" className="text-sm font-medium text-gray-700">
+                {t('fieldPurchasePrice')}
+              </label>
+              {/*
+                ★ AND THIS ONE IS NOT `required`, WHICH IS THE POINT OF SPLITTING
+                THEM. Most runs go on our own lorries and are not bought from
+                anybody, so an empty buying price is the ordinary case rather
+                than an unfinished form.
+              */}
+              <MoneyInput
+                id="trip-purchase-price"
+                value={form.purchasePrice}
+                onChange={(plain) => set('purchasePrice', plain)}
+                aria-describedby="trip-purchase-price-hint"
+              />
+              <p id="trip-purchase-price-hint" className="text-xs text-gray-500">
+                {t('purchasePriceHint')}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="trip-sell-price" className="text-sm font-medium text-gray-700">
+                {t('fieldSellPrice')}
+              </label>
+              {/*
+                ★ `required` ON CREATE ONLY, WHICH IS THE HALF OF THE RULE THE
+                BROWSER CAN ENFORCE. A trip is priced when it is booked, so the
+                figure is compulsory the first time — the server answers 422
+                without it. On an EDIT the field may be emptied, because a price
+                typed by mistake has to be removable by whoever may see it, and
+                the PATCH route accepts an explicit clear.
+              */}
+              <MoneyInput
+                id="trip-sell-price"
+                value={form.sellPrice}
+                onChange={(plain) => set('sellPrice', plain)}
+                required={!editing}
+                aria-describedby="trip-sell-price-hint"
+              />
+              <p id="trip-sell-price-hint" className="text-xs text-gray-500">
+                {t('sellPriceHint')}
+              </p>
+            </div>
+          </div>
+        ) : (
+          // Says the trip is saveable without a price, and does NOT say whether
+          // this one has one. See the note above.
+          <p className="text-xs text-gray-500">{t('priceRestricted')}</p>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <LocationEnd
