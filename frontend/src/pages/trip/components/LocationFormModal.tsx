@@ -307,6 +307,15 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
 }
 
 /**
+ * How the map action reads: setting a position is the work when there is
+ * none, and a quiet correction when there is one.
+ */
+const MAP_ACTION = {
+  located: { variant: 'ghost', className: 'text-gray-600', label: 'editLocationPosition' },
+  unlocated: { variant: 'outline', className: undefined, label: 'setupLocation' },
+} as const;
+
+/**
  * ★ THE POSITION, AS A STATE AND ONE ACTION — never as two numbers to type.
  * The pill, the map action, the one-line exception for a free-text address
  * nobody picked, and the numbers: behind a fold when there is a map, in the
@@ -326,6 +335,7 @@ function PositionSection({
   coordinateInputs: React.ReactNode;
 }>) {
   const { t } = useLanguage();
+  const action = MAP_ACTION[located ? 'located' : 'unlocated'];
 
   return (
     <fieldset className="space-y-2 rounded-lg border border-gray-200 p-3">
@@ -337,13 +347,13 @@ function PositionSection({
         {mapEnabled ? (
           <Button
             type="button"
-            variant={located ? 'ghost' : 'outline'}
+            variant={action.variant}
             size="sm"
-            className={located ? 'text-gray-600' : undefined}
+            className={action.className}
             onClick={onSetup}
           >
             <MapPin className="size-3.5" aria-hidden />
-            {t(located ? 'editLocationPosition' : 'setupLocation')}
+            {t(action.label)}
           </Button>
         ) : null}
       </div>
