@@ -278,6 +278,26 @@ const placeFor = (
 /** `''` → `null`: on the PATCH path this is what makes clearing a field possible. */
 const blank = (value: string): string | null => (value.trim() === '' ? null : value.trim());
 
+/** The place id the form holds for one end. */
+const locationIdAt = (form: FormState, end: End): string | null =>
+  end === 'pickup' ? form.pickupLocationId : form.deliveryLocationId;
+
+/**
+ * The server's own sentence when it refused — it knows about retired
+ * vehicles, archived customers and the date rules; this form does not — or
+ * the generic one when the failure was not the server's.
+ */
+const failureMessage = (error: unknown, fallback: string): string =>
+  isApiError(error) ? error.message : fallback;
+
+/** The row's own vehicle as an option, for `withCurrentReference`. `null` when it has none. */
+const currentVehicleOption = (trip: TripScheduleWithRefs | null): Option | null =>
+  trip?.vehicle ? { id: trip.vehicle.id, label: trip.vehicle.plate } : null;
+
+/** The same, for the customer. */
+const currentCustomerOption = (trip: TripScheduleWithRefs | null): Option | null =>
+  trip?.customer ? { id: trip.customer.id, label: trip.customer.name } : null;
+
 /**
  * One end of the payload.
  *
@@ -424,12 +444,7 @@ export function TripFormModal({
 
   /** The place one end will run against — see `placeFor`. */
   const placeAt = (end: End): ChosenPlace | null =>
-    placeFor(
-      end === 'pickup' ? form.pickupLocationId : form.deliveryLocationId,
-      locations.data ?? [],
-      snapshotOf(trip, end),
-      refreshed[end],
-    );
+    placeFor(locationIdAt(form, end), locations.data ?? [], snapshotOf(trip, end), refreshed[end]);
 
   /**
    * ★ READINESS IS "HAS COORDINATES", AND NOTHING ELSE. The driver's
@@ -480,9 +495,7 @@ export function TripFormModal({
       onSaved();
       onClose();
     } catch (error_) {
-      // The server knows about retired vehicles, archived customers and the
-      // date rules; this form does not, so its message is the honest one.
-      setError(isApiError(error_) ? error_.message : t('saveFailed'));
+      setError(failureMessage(error_, t('saveFailed')));
     } finally {
       setBusy(false);
     }
@@ -583,7 +596,7 @@ export function TripFormModal({
             newPlaceholder={t('platePlaceholder')}
             options={withCurrentReference(
               vehicles.map((vehicle) => ({ id: vehicle.id, label: vehicle.plate })),
-              trip?.vehicle ? { id: trip.vehicle.id, label: trip.vehicle.plate } : null,
+              currentVehicleOption(trip),
               cataloguesLoaded,
               t('statusArchived'),
             )}
@@ -608,7 +621,7 @@ export function TripFormModal({
             newPlaceholder={t('customerNamePlaceholder')}
             options={withCurrentReference(
               customers.map((customer) => ({ id: customer.id, label: customer.name })),
-              trip?.customer ? { id: trip.customer.id, label: trip.customer.name } : null,
+              currentCustomerOption(trip),
               cataloguesLoaded,
               t('statusArchived'),
             )}
@@ -812,9 +825,13 @@ interface ChosenPlace {
   longitude: number | null;
 }
 
-/** Both halves present — the only readiness there is. The server stores them both or neither. */
+/**
+ * Both halves present — the only readiness there is. The server stores them
+ * both or neither. `!= null` on purpose: `?.` yields `undefined` for no place,
+ * and that must read as "not located" exactly like a `null` coordinate.
+ */
 const isLocated = (place: ChosenPlace | null): boolean =>
-  place !== null && place.latitude !== null && place.longitude !== null;
+  place?.latitude != null && place?.longitude != null;
 
 /** The trip's readiness for location verification, in one line. Said here so the office sees it before the driver does. */
 function TripReadiness({ ready }: Readonly<{ ready: boolean }>) {
@@ -830,6 +847,31 @@ function TripReadiness({ ready }: Readonly<{ ready: boolean }>) {
 }
 
 type Translate = ReturnType<typeof useLanguage>['t'];
+type PhraseKey = Parameters<Translate>[0];
+
+/** The labels of the hand-typed fields, for the end with no place. */
+const TYPED_FIELD_LABELS: Record<End, { address: PhraseKey; contact: PhraseKey }> = {
+  pickup: { address: 'fieldPickupAddress', contact: 'fieldPickupContact' },
+  delivery: { address: 'fieldDeliveryAddress', contact: 'fieldDeliveryContact' },
+};
+
+/** The empty option is "no place"; anything else is an id. */
+const selectedId = (value: string): string | null => (value === '' ? null : value);
+
+/**
+ * The fix for the chosen place, or nothing. Only an ACTIVE row can be
+ * corrected — an archived place is the trip's frozen copy, and the server
+ * refuses edits to it anyway — and only by a caller who may.
+ */
+const setupActionFor = (
+  onSetup: ((location: TripLocation) => void) | null,
+  locations: TripLocation[],
+  value: string | null,
+): (() => void) | null => {
+  if (!onSetup) return null;
+  const target = locations.find((location) => location.id === value);
+  return target ? () => onSetup(target) : null;
+};
 
 /**
  * The picker's rows: the customer's active places, and the trip's own
@@ -900,10 +942,8 @@ function LocationEnd({
   const { t } = useLanguage();
   const selectId = `trip-${end}-location`;
   const options = placeOptions(locations, current, t);
-  // Only an active row can be corrected; an archived place is the trip's
-  // frozen copy, and the server refuses edits to it anyway.
-  const setupTarget = onSetup ? (locations.find((location) => location.id === value) ?? null) : null;
-  const setup = onSetup && setupTarget ? () => onSetup(setupTarget) : null;
+  const setup = setupActionFor(onSetup, locations, value);
+  const typedLabels = TYPED_FIELD_LABELS[end];
 
   return (
     <div className="space-y-2">
@@ -914,7 +954,7 @@ function LocationEnd({
         <select
           id={selectId}
           value={value ?? ''}
-          onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
+          onChange={(event) => onChange(selectedId(event.target.value))}
           disabled={customerId === null}
           className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -947,13 +987,13 @@ function LocationEnd({
           <p className="text-xs text-gray-500">{t('noLocationSelected')}</p>
           <TextArea
             id={`trip-${end}-address`}
-            label={t(end === 'pickup' ? 'fieldPickupAddress' : 'fieldDeliveryAddress')}
+            label={t(typedLabels.address)}
             value={address}
             onChange={onAddress}
           />
           <TextArea
             id={`trip-${end}-contact`}
-            label={t(end === 'pickup' ? 'fieldPickupContact' : 'fieldDeliveryContact')}
+            label={t(typedLabels.contact)}
             value={contact}
             onChange={onContact}
           />
