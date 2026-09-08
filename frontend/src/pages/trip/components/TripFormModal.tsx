@@ -946,10 +946,18 @@ function LocationEnd({
   const typedLabels = TYPED_FIELD_LABELS[end];
 
   return (
-    <div className="space-y-2">
-      <label htmlFor={selectId} className="text-sm font-medium text-gray-700">
-        {label}
-      </label>
+    <div className="space-y-2" data-end={end}>
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={selectId} className="text-sm font-medium text-gray-700">
+          {label}
+        </label>
+        {/* ★ READINESS BESIDE THE PICKER, the moment a place is chosen. */}
+        {chosen ? (
+          <StatusPill tone={isLocated(chosen) ? 'green' : 'amber'}>
+            {t(isLocated(chosen) ? 'locationLocated' : 'locationUnlocated')}
+          </StatusPill>
+        ) : null}
+      </div>
       <div className="flex gap-2">
         <select
           id={selectId}
@@ -981,7 +989,7 @@ function LocationEnd({
       ) : null}
 
       {chosen ? (
-        <ChosenPlaceCard chosen={chosen} onSetup={setup} />
+        <ChosenPlaceCard chosen={chosen} labels={typedLabels} onSetup={setup} />
       ) : (
         <>
           <p className="text-xs text-gray-500">{t('noLocationSelected')}</p>
@@ -1003,25 +1011,44 @@ function LocationEnd({
   );
 }
 
-/** The chosen place, read-only, with its readiness — and the fix, where the person who may make it is standing. */
+/**
+ * The chosen place's address and contact, under the same labels the typed
+ * fields carry, read-only — and the fix, where the person who may make it is
+ * standing.
+ *
+ * ★ ONE SOURCE. What is printed here is the place — the master row for a
+ * new choice, the trip's own snapshot for an unchanged one — and nothing on
+ * this form can type a different address beside it. The server copies the
+ * place onto the trip; the form sends no address for a named end.
+ */
 function ChosenPlaceCard({
   chosen,
+  labels,
   onSetup,
-}: Readonly<{ chosen: ChosenPlace; onSetup: (() => void) | null }>) {
+}: Readonly<{
+  chosen: ChosenPlace;
+  labels: { address: PhraseKey; contact: PhraseKey };
+  onSetup: (() => void) | null;
+}>) {
   const { t } = useLanguage();
 
   return (
-    <div className="space-y-1 rounded-lg bg-gray-50 p-3 text-sm">
-      <p className="flex items-start gap-1.5 whitespace-pre-wrap text-gray-800">
-        <MapPin className="mt-0.5 size-4 shrink-0 text-gray-400" aria-hidden />
-        <span>{chosen.address}</span>
-      </p>
-      {chosen.contact ? <p className="text-xs text-gray-600">{chosen.contact}</p> : null}
-      {isLocated(chosen) ? (
-        <StatusPill tone="green">{t('locationLocated')}</StatusPill>
-      ) : (
+    <dl className="space-y-2">
+      <div className="space-y-2">
+        <dt className="text-sm font-medium text-gray-700">{t(labels.address)}</dt>
+        <dd className="flex items-start gap-1.5 whitespace-pre-wrap rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-800">
+          <MapPin className="mt-0.5 size-4 shrink-0 text-gray-400" aria-hidden />
+          <span>{chosen.address}</span>
+        </dd>
+      </div>
+      {chosen.contact ? (
+        <div className="space-y-2">
+          <dt className="text-sm font-medium text-gray-700">{t(labels.contact)}</dt>
+          <dd className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-800">{chosen.contact}</dd>
+        </div>
+      ) : null}
+      {isLocated(chosen) ? null : (
         <div className="space-y-1.5">
-          <StatusPill tone="amber">{t('locationUnlocated')}</StatusPill>
           <output className="block text-xs font-medium text-amber-700">
             {t('locationUnlocatedWarning')}
           </output>
@@ -1033,7 +1060,7 @@ function ChosenPlaceCard({
           ) : null}
         </div>
       )}
-    </div>
+    </dl>
   );
 }
 
