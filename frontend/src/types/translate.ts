@@ -951,11 +951,47 @@ const PHRASES = {
   locationCoordinates: { vi: 'Toạ độ', en: 'Coordinates' },
   locationLocated: { vi: 'Đã định vị', en: 'Located' },
   locationUnlocated: { vi: 'Chưa định vị', en: 'Not located' },
-  // No map provider yet: the pair is entered here, once, as master data — and
-  // never on a trip.
+  // Shown when NO map is configured for the deployment: the pair is entered
+  // here by hand, once, as master data — and never on a trip.
   locationCoordinatesHint: {
     vi: 'Không bắt buộc. Nhập cả hai hoặc để trống cả hai; hệ thống chưa tự tra toạ độ từ địa chỉ.',
     en: 'Optional. Enter both or leave both empty; the system does not look coordinates up from the address.',
+  },
+  // ------------------------------------------- location authoring with a map --
+  locationSearch: { vi: 'Tìm địa chỉ / địa điểm', en: 'Search address or place' },
+  locationSearchPlaceholder: { vi: 'Ví dụ: Kho TCS Bình Dương', en: 'For example: Kho TCS Bình Dương' },
+  locationSearching: { vi: 'Đang tìm…', en: 'Searching…' },
+  locationNoResults: { vi: 'Không tìm thấy địa điểm phù hợp.', en: 'No matching place found.' },
+  locationSearchFailed: {
+    vi: 'Không tìm được địa điểm. Thử lại, hoặc đặt ghim trực tiếp trên bản đồ.',
+    en: 'The search failed. Try again, or place the pin on the map directly.',
+  },
+  // ★ THE POINT OF THE MAP. Google finds the parcel; the operator finds the gate.
+  locationPinHint: {
+    vi: 'Điều chỉnh ghim đến đúng cổng/điểm mà tài xế cần đến. Kéo ghim hoặc bấm lên bản đồ; toạ độ bên dưới là toạ độ được lưu.',
+    en: 'Move the pin to the exact gate or point the driver must reach. Drag it or click the map; the coordinates below are what is saved.',
+  },
+  locationMapLoading: { vi: 'Đang tải bản đồ…', en: 'Loading the map…' },
+  locationMapFailed: {
+    vi: 'Không tải được bản đồ. Vẫn có thể nhập toạ độ thủ công bên dưới.',
+    en: 'The map could not be loaded. Coordinates can still be entered by hand below.',
+  },
+  locationMapNoPin: {
+    vi: 'Chưa có ghim. Tìm địa điểm ở trên hoặc bấm lên bản đồ để đặt ghim.',
+    en: 'No pin yet. Search above or click the map to place one.',
+  },
+  // Display only: the server measures the driver, this circle merely shows the reach.
+  locationRadiusNote: {
+    vi: 'Vòng tròn là bán kính xác nhận GPS hiện hành (300 m), chỉ để hình dung.',
+    en: 'The circle is the current GPS confirmation radius (300 m), for orientation only.',
+  },
+  locationPairIncomplete: {
+    vi: 'Cần cả vĩ độ và kinh độ, hoặc để trống cả hai.',
+    en: 'Enter both latitude and longitude, or leave both empty.',
+  },
+  locationPairInvalid: {
+    vi: 'Toạ độ không hợp lệ: vĩ độ từ −90 đến 90, kinh độ từ −180 đến 180.',
+    en: 'Invalid coordinates: latitude −90 to 90, longitude −180 to 180.',
   },
   archiveLocationConfirm: { vi: 'Lưu trữ địa điểm', en: 'Archive location' },
   selectLocation: { vi: 'Chọn địa điểm', en: 'Choose a location' },
