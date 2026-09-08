@@ -467,3 +467,121 @@ describe('other failures', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/không kết nối được/i);
   });
 });
+
+/**
+ * ★ WHAT THE SERVER SAID ABOUT WHERE THE HANDSET WAS, SHOWN AS SAID.
+ *
+ * Every assertion here reads a value the mocked API returned — a verdict, a
+ * distance, an accuracy — and none of them is computed by the screen. An
+ * event with nothing on it is shown as having nothing, never as a failure.
+ * `\s` in the patterns because `Intl` may set the unit off with a
+ * non-breaking space.
+ */
+describe('★ location evidence', () => {
+  const reading = (accuracyM: number) => ({
+    latitude: 10.8188,
+    longitude: 106.6564,
+    accuracyM,
+    capturedAt: SERVER_TIME,
+  });
+
+  it('shows a verified pickup with the server’s distance and the handset’s accuracy', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED', { location: reading(18), geofencePassed: true, distanceM: 42.37 }),
+    ]);
+    await openReview();
+
+    expect(screen.getByText('Đã xác minh')).toBeInTheDocument();
+    // The label and the figure are sibling nodes, so the paragraph is read whole.
+    expect(screen.getByText(/khoảng cách tới điểm/i).parentElement).toHaveTextContent(/42\sm/);
+    expect(screen.getByText(/độ chính xác gps/i).parentElement).toHaveTextContent(/18\sm/);
+  });
+
+  it('shows a verified delivery, in kilometres when the server’s figure is that large', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED', { location: reading(12), geofencePassed: true, distanceM: 8 }),
+      event('ARRIVED_DELIVERY'),
+      event('DELIVERY_CONFIRMED', { location: reading(14), geofencePassed: true, distanceM: 1234 }),
+    ]);
+    await openReview();
+
+    expect(screen.getAllByText('Đã xác minh')).toHaveLength(2);
+    const distances = screen
+      .getAllByText(/khoảng cách tới điểm/i)
+      .map((label) => label.parentElement?.textContent ?? '');
+    expect(distances[0]).toMatch(/8\sm/);
+    expect(distances[1]).toMatch(/1,2\skm/);
+  });
+
+  it('★ says an event without evidence has none — neither verified nor failed', async () => {
+    // The default fixtures carry no location fields at all, as pre-0019 rows do.
+    await openReview();
+
+    expect(screen.getAllByText('Không có dữ liệu xác minh vị trí')).toHaveLength(2);
+    expect(screen.queryByText('Đã xác minh')).toBeNull();
+    expect(screen.queryByText('Không xác minh được')).toBeNull();
+    expect(screen.queryByText(/khoảng cách tới điểm/i)).toBeNull();
+  });
+
+  it('treats an explicit null verdict with no reading the same way', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED', { location: null, geofencePassed: null, distanceM: null }),
+    ]);
+    await openReview();
+
+    expect(screen.getByText('Không có dữ liệu xác minh vị trí')).toBeInTheDocument();
+    expect(screen.queryByText('Đã xác minh')).toBeNull();
+  });
+
+  it('shows a reading that carries no verdict as exactly that, with its accuracy', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED', { location: reading(25), geofencePassed: null, distanceM: null }),
+    ]);
+    await openReview();
+
+    expect(screen.getByText(/chưa có kết luận xác minh/i)).toBeInTheDocument();
+    expect(screen.getByText(/độ chính xác gps/i).parentElement).toHaveTextContent(/25\sm/);
+    expect(screen.queryByText(/khoảng cách tới điểm/i)).toBeNull();
+  });
+
+  it('★ renders a false verdict as the server’s word, never as verified', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED', { location: reading(9), geofencePassed: false, distanceM: 640 }),
+    ]);
+    await openReview();
+
+    expect(screen.getByText('Không xác minh được')).toBeInTheDocument();
+    expect(screen.queryByText('Đã xác minh')).toBeNull();
+    expect(screen.getByText(/khoảng cách tới điểm/i).parentElement).toHaveTextContent(/640\sm/);
+  });
+
+  it('★ renders the distance the server sent, rounded for reading and never recomputed', async () => {
+    // A reading 5 km from the stored point with a "passed" verdict is
+    // contradictory on purpose: the screen must show both as sent.
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED', { location: reading(30), geofencePassed: true, distanceM: 5000.49 }),
+    ]);
+    await openReview();
+
+    expect(screen.getByText('Đã xác minh')).toBeInTheDocument();
+    expect(screen.getByText(/khoảng cách tới điểm/i).parentElement).toHaveTextContent(/5\skm/);
+  });
+
+  it('attaches no location block to the two arrivals', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP', { location: reading(10) }),
+      event('PICKUP_CONFIRMED', { location: reading(10), geofencePassed: true, distanceM: 20 }),
+      event('ARRIVED_DELIVERY', { location: reading(10) }),
+      event('DELIVERY_CONFIRMED', { location: reading(10), geofencePassed: true, distanceM: 30 }),
+    ]);
+    await openReview();
+
+    expect(screen.getAllByText('Xác minh vị trí')).toHaveLength(2);
+  });
+});

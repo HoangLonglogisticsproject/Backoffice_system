@@ -1,11 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { MapPin, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { createTripLocation, updateTripLocation } from '@/api/tripCatalogue';
 import { isApiError } from '@/utils/errors';
+import {
+  isMapsConfigured,
+  resolvePlace,
+  searchPlaces,
+  type Coordinates,
+  type PlaceSuggestion,
+  type ResolvedPlace,
+} from '@/utils/googleMaps';
 import type { TripLocation } from '@/types/trip';
+import { LocationMap } from './LocationMap';
 
 /**
  * One of a customer's places, entered or corrected.
@@ -14,11 +24,20 @@ import type { TripLocation } from '@/types/trip';
  * belongs to and creates under that id; there is no customer picker here, so
  * a place cannot be filed under the wrong company by a slip.
  *
+ * ★ THE OPERATOR FINDS THE PLACE; THE PIN IS THE TRUTH. With a map configured,
+ * the operator searches for the warehouse, gets a pin, and drags it to the
+ * gate the lorry actually reaches. The two numbers under the map are what is
+ * saved — the same two columns the form has always written, so the trip
+ * snapshot, the driver's read model and the server's geofence see nothing
+ * new. Without a map (no key in this deployment) the numbers are typed by
+ * hand, exactly as before.
+ *
  * ★ COORDINATES ARE OPTIONAL, AND SAID SO. A place is real before anybody has
- * located it. The pair can be entered here — this is master data, entered
- * once — but the dialog says "not located" plainly when it is empty and never
- * pretends the system will find the point from the address: there is no map
- * provider in this deployment yet, and nothing here assumes one.
+ * located it. The dialog says "not located" plainly and never invents a point.
+ *
+ * ★ THE ADDRESS IS THE OPERATOR'S. A chosen search result fills it only while
+ * it is empty or still reads exactly what the last result filled in; a hand-
+ * written address is never overwritten, and moving the pin never touches it.
  */
 interface Props {
   customerId: string;
@@ -32,6 +51,41 @@ const numberField = (value: number | null): string => (value === null ? '' : Str
 const numberOrNull = (value: string): number | null =>
   value.trim() === '' ? null : Number(value);
 
+/**
+ * Six decimals is ~11 cm — finer than any GPS and coarse enough that a dragged
+ * pin does not leave fifteen digits in the field.
+ */
+const roundCoordinate = (value: number): string => String(Math.round(value * 1e6) / 1e6);
+
+/**
+ * What is wrong with the pair as typed, if anything. The server refuses the
+ * same two things with a 422; this stops the request being sent at all.
+ * `Number('')` is 0, so emptiness is checked on the text, never on the number.
+ */
+type PairProblem = 'incomplete' | 'invalid' | null;
+
+const pairProblem = (latitude: string, longitude: string): PairProblem => {
+  const hasLat = latitude.trim() !== '';
+  const hasLng = longitude.trim() !== '';
+  if (hasLat !== hasLng) return 'incomplete';
+  if (!hasLat) return null;
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  const onEarth =
+    Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+  return onEarth ? null : 'invalid';
+};
+
+/** The pair as a point, only when it is a whole, valid one. */
+const pointOf = (latitude: string, longitude: string): Coordinates | null =>
+  pairProblem(latitude, longitude) === null && latitude.trim() !== ''
+    ? { latitude: Number(latitude), longitude: Number(longitude) }
+    : null;
+
+/** Below this the API returns noise; above it a debounce keeps one request per pause. */
+const SEARCH_MIN_CHARS = 3;
+const SEARCH_DEBOUNCE_MS = 350;
+
 export function LocationFormModal({ customerId, editing, onClose, onSaved }: Readonly<Props>) {
   const { t } = useLanguage();
   const [name, setName] = useState(editing?.name ?? '');
@@ -43,10 +97,44 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const located = latitude.trim() !== '' && longitude.trim() !== '';
+  const mapEnabled = isMapsConfigured();
+  const problem = pairProblem(latitude, longitude);
+  const point = pointOf(latitude, longitude);
+  const located = point !== null;
+
+  const setPoint = ({ latitude: lat, longitude: lng }: Coordinates) => {
+    setLatitude(roundCoordinate(lat));
+    setLongitude(roundCoordinate(lng));
+  };
+
+  // What the last chosen place wrote into the address, so a later choice may
+  // replace it — and an address the operator wrote is left alone.
+  const lastFilled = useRef<string | null>(null);
+
+  /**
+   * ★ DECIDED AGAINST THE ADDRESS AS IT IS WHEN THE PLACE ARRIVES, not as it
+   * was when the row was clicked. The details fetch is asynchronous; an
+   * operator who types into the address while it is pending must not have
+   * that overwritten by a closure still holding the empty field they started
+   * from. The updater form of `setAddress` reads the current value, so the
+   * rule — fill only an empty address, or the one this search filled last —
+   * is applied to the truth at that moment. The coordinates are taken either
+   * way: they are what the place was chosen for.
+   */
+  const applyPlace = (place: ResolvedPlace) => {
+    setPoint(place);
+    const offered = place.address;
+    if (!offered) return;
+    setAddress((current) => {
+      if (current.trim() !== '' && current !== lastFilled.current) return current;
+      lastFilled.current = offered;
+      return offered;
+    });
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (problem !== null) return;
     setBusy(true);
     setError(null);
 
@@ -82,12 +170,18 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
       isOpen
       onClose={onClose}
       title={t(editing ? 'editLocation' : 'addLocation')}
+      className={mapEnabled ? 'max-w-2xl' : undefined}
       footer={
         <>
           <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
             {t('cancel')}
           </Button>
-          <Button type="submit" form={formId} disabled={busy} className="bg-blue-600 hover:bg-blue-700">
+          <Button
+            type="submit"
+            form={formId}
+            disabled={busy || problem !== null}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
             {busy ? t('saving') : t('save')}
           </Button>
         </>
@@ -95,6 +189,9 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
     >
       <form id={formId} onSubmit={submit} className="space-y-4">
         <Field id="location-name" label={t('locationName')} value={name} onChange={setName} required />
+
+        {mapEnabled ? <PlaceSearch onPick={applyPlace} /> : null}
+
         <div className="space-y-2">
           <label htmlFor="location-address" className="text-sm font-medium text-gray-700">
             {t('locationAddress')}
@@ -118,7 +215,14 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
               — {t(located ? 'locationLocated' : 'locationUnlocated')}
             </span>
           </legend>
-          <p className="text-xs text-gray-500">{t('locationCoordinatesHint')}</p>
+          {/* An existing place opened without a point: said plainly, until one is set. */}
+          {editing && !located ? (
+            <p className="text-xs font-medium text-amber-700">{t('locationNotYetLocated')}</p>
+          ) : null}
+          <p className="text-xs text-gray-500">{t(mapEnabled ? 'locationPinHint' : 'locationCoordinatesHint')}</p>
+
+          {mapEnabled ? <LocationMap point={point} onMove={setPoint} /> : null}
+
           <div className="grid grid-cols-2 gap-2">
             <Input
               id="location-latitude"
@@ -129,6 +233,7 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
               max={90}
               placeholder={t('fieldLatitude')}
               aria-label={t('fieldLatitude')}
+              aria-invalid={problem !== null || undefined}
               value={latitude}
               onChange={(event) => setLatitude(event.target.value)}
             />
@@ -141,10 +246,16 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
               max={180}
               placeholder={t('fieldLongitude')}
               aria-label={t('fieldLongitude')}
+              aria-invalid={problem !== null || undefined}
               value={longitude}
               onChange={(event) => setLongitude(event.target.value)}
             />
           </div>
+          {problem ? (
+            <p role="alert" className="text-xs text-red-600">
+              {t(problem === 'incomplete' ? 'locationPairIncomplete' : 'locationPairInvalid')}
+            </p>
+          ) : null}
         </fieldset>
 
         {error && (
@@ -154,6 +265,123 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
         )}
       </form>
     </Modal>
+  );
+}
+
+/**
+ * The search box and its results. Debounced, one request per pause, and the
+ * chosen result is fetched once — the adapter's session token makes the pair
+ * one billable session.
+ *
+ * ponytail: a list of buttons under an input, not a full ARIA combobox. Tab
+ * reaches every result and Enter picks it; add roving arrow keys the day
+ * somebody asks for them.
+ */
+function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => void }>) {
+  const { t } = useLanguage();
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<PlaceSuggestion[] | null>(null);
+  const [state, setState] = useState<'idle' | 'searching' | 'failed'>('idle');
+  // Only the newest request may publish results; an older one that resolves
+  // late must not overwrite them. Every change of intent takes a new ticket.
+  const latest = useRef(0);
+
+  useEffect(() => {
+    const input = query.trim();
+    if (input.length < SEARCH_MIN_CHARS) {
+      // ★ THE IN-FLIGHT SEARCH IS RETIRED TOO. Clearing the timer only stops
+      // a search that has not started; one already on the wire would come
+      // back and repopulate a list the operator had just emptied.
+      latest.current += 1;
+      setResults(null);
+      setState('idle');
+      return;
+    }
+    const ticket = ++latest.current;
+    const timer = window.setTimeout(() => {
+      setState('searching');
+      searchPlaces(input)
+        .then((found) => {
+          if (ticket !== latest.current) return;
+          setResults(found);
+          setState('idle');
+        })
+        .catch(() => {
+          if (ticket !== latest.current) return;
+          setResults(null);
+          setState('failed');
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const pick = async (suggestion: PlaceSuggestion) => {
+    latest.current++;
+    setResults(null);
+    setState('searching');
+    try {
+      // The row itself, not its id: the adapter resolves the prediction that
+      // produced THIS row, whatever other search has finished since.
+      onPick(await resolvePlace(suggestion));
+      setQuery(suggestion.primary);
+      setState('idle');
+    } catch {
+      setState('failed');
+    }
+  };
+
+  // What is on screen: rows from the newest search, and whether one has run.
+  const visible = results ?? [];
+  const searched = results !== null;
+
+  return (
+    <div className="space-y-2">
+      <label htmlFor="location-search" className="text-sm font-medium text-gray-700">
+        {t('locationSearch')}
+      </label>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-2 size-4 text-gray-400" aria-hidden />
+        <Input
+          id="location-search"
+          type="search"
+          autoComplete="off"
+          className="pl-8"
+          placeholder={t('locationSearchPlaceholder')}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
+      {state === 'searching' ? <p className="text-xs text-gray-500">{t('locationSearching')}</p> : null}
+      {state === 'failed' ? (
+        <p role="alert" className="text-xs text-red-600">
+          {t('locationSearchFailed')}
+        </p>
+      ) : null}
+      {searched && visible.length === 0 ? (
+        <p className="text-xs text-gray-500">{t('locationNoResults')}</p>
+      ) : null}
+      {visible.length > 0 ? (
+        <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200" aria-label={t('locationSearch')}>
+          {visible.map((suggestion) => (
+            <li key={suggestion.id}>
+              <button
+                type="button"
+                onClick={() => void pick(suggestion)}
+                className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-gray-50 focus-visible:bg-gray-50 focus-visible:outline-none"
+              >
+                <MapPin className="mt-0.5 size-4 shrink-0 text-gray-400" aria-hidden />
+                <span className="min-w-0">
+                  <span className="block text-sm text-gray-900">{suggestion.primary}</span>
+                  {suggestion.secondary ? (
+                    <span className="block text-xs text-gray-500">{suggestion.secondary}</span>
+                  ) : null}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 

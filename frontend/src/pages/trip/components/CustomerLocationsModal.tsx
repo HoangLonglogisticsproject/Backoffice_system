@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Archive, MapPin, Pencil, Plus } from 'lucide-react';
+import { StatusPill, type StatusTone } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -18,17 +19,24 @@ import { LocationFormModal } from './LocationFormModal';
  * the only door to it. Archive rather than delete — a trip that went there
  * keeps its snapshot and its reference.
  */
-/** What the badge says about a place, and how it is coloured. One decision, not a nested one. */
+/** Both halves present. The server stores them both or neither; this is the only readiness there is. */
+const isLocated = (location: TripLocation): boolean =>
+  location.latitude !== null && location.longitude !== null;
+
+/**
+ * What the pill says about a place. One decision, not a nested one.
+ *
+ * ★ "LOCATED" ANSWERS "CAN A DRIVER BE CHECKED HERE", AND NOTHING MORE. It is
+ * a fact about the master row's coordinates. Whether any driver's reading
+ * then passed at this place is the server's verdict on an execution event,
+ * worded separately in the completion review.
+ */
 const statusOf = (
   location: TripLocation,
-): { label: 'statusArchived' | 'locationLocated' | 'locationUnlocated'; tone: string } => {
-  if (location.status !== 'active') {
-    return { label: 'statusArchived', tone: 'bg-gray-50 text-gray-600 ring-gray-500/10' };
-  }
-  if (location.latitude !== null) {
-    return { label: 'locationLocated', tone: 'bg-green-50 text-green-700 ring-green-600/20' };
-  }
-  return { label: 'locationUnlocated', tone: 'bg-amber-50 text-amber-700 ring-amber-600/20' };
+): { label: 'statusArchived' | 'locationLocated' | 'locationUnlocated'; tone: StatusTone } => {
+  if (location.status !== 'active') return { label: 'statusArchived', tone: 'gray' };
+  if (isLocated(location)) return { label: 'locationLocated', tone: 'green' };
+  return { label: 'locationUnlocated', tone: 'amber' };
 };
 
 interface Props {
@@ -116,16 +124,23 @@ export function CustomerLocationsModal({ customer, canAdd, canManage, onClose }:
                       <p className="text-xs text-gray-500">{location.contact}</p>
                     ) : null}
                   </div>
-                  <span
-                    className={cn(
-                      'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
-                      status.tone,
-                    )}
-                  >
-                    {t(status.label)}
-                  </span>
+                  <StatusPill tone={status.tone}>{t(status.label)}</StatusPill>
                   {canManage && !archived ? (
                     <div className="flex shrink-0 items-center gap-1">
+                      {/* ★ THE OBVIOUS NEXT ACTION on a place that cannot be
+                          verified yet: the same dialog the pencil opens,
+                          named for the job. */}
+                      {!isLocated(location) ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-amber-700"
+                          onClick={() => setForm({ editing: location })}
+                        >
+                          <MapPin className="size-3.5" aria-hidden />
+                          {t('setupLocation')}
+                        </Button>
+                      ) : null}
                       <Button
                         variant="outline"
                         size="sm"

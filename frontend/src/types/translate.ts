@@ -67,6 +67,19 @@ const PHRASES = {
   reviewDeviceTime: { vi: 'Đồng hồ thiết bị (tham khảo)', en: 'Device clock (diagnostic)' },
   reviewNotReported: { vi: 'Chưa báo', en: 'Not reported' },
   reviewVoided: { vi: 'Đã thu hồi', en: 'Withdrawn' },
+  // ★ THE SERVER'S GEOFENCE VERDICT, SHOWN. Four readings of one event, and
+  // none of them is computed here: `geofencePassed` and `distanceM` arrive
+  // decided. Absent evidence is said to be absent — never called a failure.
+  reviewLocationCheck: { vi: 'Xác minh vị trí', en: 'Location verification' },
+  reviewLocationVerified: { vi: 'Đã xác minh', en: 'Verified' },
+  reviewLocationNotVerified: { vi: 'Không xác minh được', en: 'Not verified' },
+  reviewLocationNoEvidence: { vi: 'Không có dữ liệu xác minh vị trí', en: 'No location evidence' },
+  reviewLocationNoVerdict: {
+    vi: 'Có vị trí thiết bị, chưa có kết luận xác minh',
+    en: 'Device position recorded, no verification verdict',
+  },
+  reviewDistance: { vi: 'Khoảng cách tới điểm', en: 'Distance from the point' },
+  reviewGpsAccuracy: { vi: 'Độ chính xác GPS', en: 'GPS accuracy' },
   reviewExpenses: { vi: 'Chi phí tài xế khai', en: 'Expenses the driver declared' },
   reviewNoExpense: { vi: 'Không có khoản nào', en: 'None' },
   reviewExpensesHidden: {
@@ -951,11 +964,47 @@ const PHRASES = {
   locationCoordinates: { vi: 'Toạ độ', en: 'Coordinates' },
   locationLocated: { vi: 'Đã định vị', en: 'Located' },
   locationUnlocated: { vi: 'Chưa định vị', en: 'Not located' },
-  // No map provider yet: the pair is entered here, once, as master data — and
-  // never on a trip.
+  // Shown when NO map is configured for the deployment: the pair is entered
+  // here by hand, once, as master data — and never on a trip.
   locationCoordinatesHint: {
     vi: 'Không bắt buộc. Nhập cả hai hoặc để trống cả hai; hệ thống chưa tự tra toạ độ từ địa chỉ.',
     en: 'Optional. Enter both or leave both empty; the system does not look coordinates up from the address.',
+  },
+  // ------------------------------------------- location authoring with a map --
+  locationSearch: { vi: 'Tìm địa chỉ / địa điểm', en: 'Search address or place' },
+  locationSearchPlaceholder: { vi: 'Ví dụ: Kho TCS Bình Dương', en: 'For example: Kho TCS Bình Dương' },
+  locationSearching: { vi: 'Đang tìm…', en: 'Searching…' },
+  locationNoResults: { vi: 'Không tìm thấy địa điểm phù hợp.', en: 'No matching place found.' },
+  locationSearchFailed: {
+    vi: 'Không tìm được địa điểm. Thử lại, hoặc đặt ghim trực tiếp trên bản đồ.',
+    en: 'The search failed. Try again, or place the pin on the map directly.',
+  },
+  // ★ THE POINT OF THE MAP. Google finds the parcel; the operator finds the gate.
+  locationPinHint: {
+    vi: 'Điều chỉnh ghim đến đúng cổng/điểm mà tài xế cần đến. Kéo ghim hoặc bấm lên bản đồ; toạ độ bên dưới là toạ độ được lưu.',
+    en: 'Move the pin to the exact gate or point the driver must reach. Drag it or click the map; the coordinates below are what is saved.',
+  },
+  locationMapLoading: { vi: 'Đang tải bản đồ…', en: 'Loading the map…' },
+  locationMapFailed: {
+    vi: 'Không tải được bản đồ. Vẫn có thể nhập toạ độ thủ công bên dưới.',
+    en: 'The map could not be loaded. Coordinates can still be entered by hand below.',
+  },
+  locationMapNoPin: {
+    vi: 'Chưa có ghim. Tìm địa điểm ở trên hoặc bấm lên bản đồ để đặt ghim.',
+    en: 'No pin yet. Search above or click the map to place one.',
+  },
+  // Display only: the server measures the driver, this circle merely shows the reach.
+  locationRadiusNote: {
+    vi: 'Vòng tròn là bán kính xác nhận GPS hiện hành (300 m), chỉ để hình dung.',
+    en: 'The circle is the current GPS confirmation radius (300 m), for orientation only.',
+  },
+  locationPairIncomplete: {
+    vi: 'Cần cả vĩ độ và kinh độ, hoặc để trống cả hai.',
+    en: 'Enter both latitude and longitude, or leave both empty.',
+  },
+  locationPairInvalid: {
+    vi: 'Toạ độ không hợp lệ: vĩ độ từ −90 đến 90, kinh độ từ −180 đến 180.',
+    en: 'Invalid coordinates: latitude −90 to 90, longitude −180 to 180.',
   },
   archiveLocationConfirm: { vi: 'Lưu trữ địa điểm', en: 'Archive location' },
   selectLocation: { vi: 'Chọn địa điểm', en: 'Choose a location' },
@@ -969,6 +1018,18 @@ const PHRASES = {
   },
   fieldPickupLocation: { vi: 'Điểm lấy hàng', en: 'Pickup location' },
   fieldDeliveryLocation: { vi: 'Điểm giao hàng', en: 'Delivery location' },
+  // ------------------------------------------------ location readiness --
+  // "Located" means the place has coordinates and can be checked against;
+  // it says nothing about whether any driver's reading passed. That verdict
+  // is the server's and is worded separately (reviewLocation*).
+  setupLocation: { vi: 'Thiết lập vị trí', en: 'Set up location' },
+  locationNotYetLocated: {
+    vi: 'Địa điểm này chưa được định vị.',
+    en: 'This location has not been located yet.',
+  },
+  tripLocationReadiness: { vi: 'Xác minh vị trí của chuyến', en: 'Trip location verification' },
+  tripLocationReady: { vi: 'Sẵn sàng xác minh vị trí', en: 'Ready for location verification' },
+  tripLocationNotReady: { vi: 'Chưa sẵn sàng xác minh vị trí', en: 'Not ready for location verification' },
   fieldLatitude: { vi: 'Vĩ độ', en: 'Latitude' },
   fieldLongitude: { vi: 'Kinh độ', en: 'Longitude' },
   // Why the office is asked for numbers next to a prose address.
