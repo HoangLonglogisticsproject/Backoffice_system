@@ -967,9 +967,23 @@ const PHRASES = {
   // Shown when NO map is configured for the deployment: the pair is entered
   // here by hand, once, as master data — and never on a trip.
   locationCoordinatesHint: {
-    vi: 'Không bắt buộc. Nhập cả hai hoặc để trống cả hai; hệ thống chưa tự tra toạ độ từ địa chỉ.',
-    en: 'Optional. Enter both or leave both empty; the system does not look coordinates up from the address.',
+    vi: 'Bản đồ chưa được bật cho môi trường này. Nếu có sẵn vĩ độ và kinh độ, nhập cả hai; nếu không, để trống cả hai.',
+    en: 'The map is not enabled for this environment. If you have the latitude and longitude, enter both; otherwise leave both empty.',
   },
+  // ------------------------------------------- the position, as the operator sees it --
+  locationPosition: { vi: 'Vị trí', en: 'Position' },
+  // ★ THE NORMAL PATH IN ONE LINE: pick the suggested address, and the position is done.
+  locationAddressHint: {
+    vi: 'Chọn một gợi ý khi nhập địa chỉ — vị trí sẽ được xác định tự động.',
+    en: 'Pick a suggestion as you type the address — the position is set automatically.',
+  },
+  locationResolveHint: {
+    vi: 'Chọn một gợi ý địa chỉ ở trên, hoặc xác định vị trí trên bản đồ.',
+    en: 'Pick an address suggestion above, or set the position on the map.',
+  },
+  editLocationPosition: { vi: 'Chỉnh sửa vị trí', en: 'Edit position' },
+  confirmPosition: { vi: 'Xác nhận vị trí', en: 'Confirm position' },
+  manualCoordinates: { vi: 'Nhập toạ độ thủ công (nâng cao)', en: 'Enter coordinates by hand (advanced)' },
   // ------------------------------------------- location authoring with a map --
   locationSearch: { vi: 'Tìm địa chỉ / địa điểm', en: 'Search address or place' },
   locationSearchPlaceholder: { vi: 'Ví dụ: Kho TCS Bình Dương', en: 'For example: Kho TCS Bình Dương' },
@@ -1024,8 +1038,8 @@ const PHRASES = {
   // is the server's and is worded separately (reviewLocation*).
   setupLocation: { vi: 'Thiết lập vị trí', en: 'Set up location' },
   locationNotYetLocated: {
-    vi: 'Địa điểm này chưa được định vị.',
-    en: 'This location has not been located yet.',
+    vi: 'Địa điểm này chưa có vị trí trên bản đồ.',
+    en: 'This location has no position on the map yet.',
   },
   tripLocationReadiness: { vi: 'Xác minh vị trí của chuyến', en: 'Trip location verification' },
   tripLocationReady: { vi: 'Sẵn sàng xác minh vị trí', en: 'Ready for location verification' },

@@ -378,7 +378,7 @@ describe('TripMasterDataPage', () => {
         expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
         expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Nhà máy Bình Dương');
         expect(screen.getByLabelText('Địa chỉ')).toHaveValue('KCN Sóng Thần');
-        expect(screen.getByText('Địa điểm này chưa được định vị.')).toBeInTheDocument();
+        expect(screen.getByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeInTheDocument();
         expect(document.querySelectorAll('#location-form')).toHaveLength(1);
       });
 
