@@ -616,6 +616,75 @@ describe('TripSchedulePage', () => {
       }
     });
 
+    /**
+     * ★ CHOOSING A PLACE IS THE WHOLE JOB. The place's address and contact
+     * appear at once, under the same labels the typed fields carry, read-only
+     * — nobody types the warehouse's address a second time, and nothing on
+     * the form can hold a different one beside it. The readiness pill sits
+     * beside the picker. The typed fields return the moment no place is
+     * chosen, exactly as before.
+     */
+    describe('★ the chosen place fills the address', () => {
+      const endBlock = (end: 'pickup' | 'delivery') => {
+        const block = document.querySelector(`[data-end="${end}"]`);
+        if (!block) throw new Error(`no ${end} block`);
+        return within(block as HTMLElement);
+      };
+
+      it('★ pickup: the place’s address and contact are shown under their labels, and there is nothing to type', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        const pickup = screen.getByLabelText('Điểm lấy hàng');
+        await within(pickup).findByRole('option', { name: 'Kho OSC' });
+
+        fireEvent.change(pickup, { target: { value: 'l1' } });
+
+        const block = endBlock('pickup');
+        expect(block.getByText('Địa chỉ lấy hàng')).toBeInTheDocument();
+        expect(block.getByText('KCN Sóng Thần, Dĩ An')).toBeInTheDocument();
+        expect(block.getByText('Liên hệ lấy hàng')).toBeInTheDocument();
+        expect(block.getByText('0909 111 222')).toBeInTheDocument();
+        expect(block.queryByRole('textbox')).toBeNull();
+        expect(block.getByText('Đã định vị')).toBeInTheDocument();
+        // The delivery end is untouched: still typed by hand.
+        expect(screen.getByLabelText('Địa chỉ giao hàng')).toBeInTheDocument();
+      });
+
+      it('★ delivery: the same, for an unlocated place, with the warning and the fix', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        const delivery = screen.getByLabelText('Điểm giao hàng');
+        await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương (Chưa định vị)' });
+
+        fireEvent.change(delivery, { target: { value: 'l2' } });
+
+        const block = endBlock('delivery');
+        expect(block.getByText('Địa chỉ giao hàng')).toBeInTheDocument();
+        expect(block.getByText('Bình Dương')).toBeInTheDocument();
+        // No contact on this place: no contact row, rather than an empty one.
+        expect(block.queryByText('Liên hệ giao hàng')).toBeNull();
+        expect(block.queryByRole('textbox')).toBeNull();
+        expect(block.getByText('Chưa định vị')).toBeInTheDocument();
+        expect(block.getByRole('status')).toHaveTextContent(/chưa có toạ độ/i);
+        expect(block.getByRole('button', { name: 'Thiết lập vị trí' })).toBeInTheDocument();
+      });
+
+      it('brings the typed fields back when the place is cleared again', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        const pickup = screen.getByLabelText('Điểm lấy hàng');
+        await within(pickup).findByRole('option', { name: 'Kho OSC' });
+        fireEvent.change(pickup, { target: { value: 'l1' } });
+        expect(endBlock('pickup').queryByRole('textbox')).toBeNull();
+
+        fireEvent.change(pickup, { target: { value: '' } });
+
+        expect(screen.getByLabelText('Địa chỉ lấy hàng')).toHaveValue('');
+        expect(endBlock('pickup').queryByText('Đã định vị')).toBeNull();
+        expect(endBlock('pickup').queryByText('KCN Sóng Thần, Dĩ An')).toBeNull();
+      });
+    });
+
     it('★ warns, before the trip exists, that an unlocated place cannot be confirmed by GPS', async () => {
       await openAddForm();
       await chooseCustomer('c9');
@@ -1560,20 +1629,14 @@ describe('★ an existing trip and its snapshot', () => {
     ...over,
   });
 
-  /**
-   * The pill in the pickup or delivery block, found by the address it sits
-   * under. The same address is also printed in the board row behind the
-   * dialog, so only the occurrence inside a chosen-place card counts.
-   */
-  const pillUnder = (address: string): HTMLElement => {
-    const card = screen
-      .getAllByText(address)
-      .map((node) => node.closest('div.bg-gray-50'))
-      .find((node): node is HTMLElement => node !== null);
-    const pill = card?.querySelector('span.rounded-full');
-    if (!pill) throw new Error(`no readiness pill under "${address}"`);
+  /** The readiness pill beside one end's picker. */
+  const pillOf = (end: 'pickup' | 'delivery'): HTMLElement => {
+    const pill = document.querySelector(`[data-end="${end}"] span.rounded-full`);
+    if (!pill) throw new Error(`no readiness pill for ${end}`);
     return pill as HTMLElement;
   };
+  const pillUnder = (address: string): HTMLElement =>
+    pillOf(address === 'KCN Sóng Thần' ? 'pickup' : 'delivery');
 
   const placeSaveButton = (): HTMLElement => {
     const button = screen
