@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, Check, CheckCircle2, Loader2, XCircle } from 'lucide-react';
+import { StatusPill, type StatusTone } from '@/components/common/StatusPill';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,6 +8,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
 import { reviewErrorKey } from '@/utils/driverErrors';
 import { formatDateTime } from '@/utils/format/datetime';
+import { formatDistance } from '@/utils/format/distance';
 import { formatMoney } from '@/utils/format/money';
 import { formatPlate } from '@/utils/format';
 import { useCompletionDecision, useCompletionEvidence } from '@/hooks/trip/useCompletionReview';
@@ -355,6 +357,8 @@ function Timeline({
                 </div>
               ) : null}
 
+              {first && GEOFENCED.has(type) ? <LocationEvidence event={first} language={language} /> : null}
+
               {withdrawn.map((event) => (
                 <p key={event.id} className="mt-1 text-xs text-destructive">
                   {t('reviewVoided')}: {event.voidReason}
@@ -372,6 +376,77 @@ function Timeline({
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** The two confirmations are geofenced; the two arrivals are not, by contract. */
+const GEOFENCED: ReadonlySet<ExecutionEventType> = new Set(['PICKUP_CONFIRMED', 'DELIVERY_CONFIRMED']);
+
+/**
+ * What the event says about where the handset was, as the server judged it.
+ *
+ *   verified      the server measured the reading and it passed
+ *   not-verified  the server's verdict is `false` — the contract permits it,
+ *                 even though today a refused confirmation is never written
+ *   no-verdict    a reading was kept but no check applied to it
+ *   no-evidence   the event carries no reading at all
+ *
+ * ★ READ, NEVER DERIVED. `geofencePassed` is the only thing that decides the
+ * first two, and nothing here compares a distance with a radius or looks at
+ * the coordinates. A missing verdict is reported as missing, not as a failure.
+ * Older fixtures and pre-0019 rows may omit the fields entirely; absent is
+ * treated exactly as `null`.
+ */
+type EvidenceState = 'verified' | 'not-verified' | 'no-verdict' | 'no-evidence';
+
+const evidenceStateOf = (event: ExecutionEvent): EvidenceState => {
+  if (event.geofencePassed === true) return 'verified';
+  if (event.geofencePassed === false) return 'not-verified';
+  return event.location ? 'no-verdict' : 'no-evidence';
+};
+
+const EVIDENCE_PILL: Record<EvidenceState, { tone: StatusTone; label: TranslationKey }> = {
+  verified: { tone: 'green', label: 'reviewLocationVerified' },
+  'not-verified': { tone: 'amber', label: 'reviewLocationNotVerified' },
+  'no-verdict': { tone: 'gray', label: 'reviewLocationNoVerdict' },
+  'no-evidence': { tone: 'gray', label: 'reviewLocationNoEvidence' },
+};
+
+/**
+ * ★ THE SERVER'S VERDICT AND THE SERVER'S FIGURES, RENDERED. Distance is the
+ * backend's own haversine result; accuracy is what the handset reported and
+ * is shown as evidence only — no wording calls it good or bad.
+ */
+function LocationEvidence({
+  event,
+  language,
+}: Readonly<{ event: ExecutionEvent; language: 'vi' | 'en' }>) {
+  const { t } = useLanguage();
+  const state = evidenceStateOf(event);
+  const pill = EVIDENCE_PILL[state];
+  const distanceM = event.distanceM ?? null;
+  const accuracyM = event.location?.accuracyM ?? null;
+
+  return (
+    <div className="mt-2 space-y-1 border-t border-border pt-2 text-xs text-muted-foreground">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">{t('reviewLocationCheck')}</span>
+        <StatusPill tone={pill.tone}>
+          {state === 'verified' ? <Check className="mr-1 size-3" aria-hidden /> : null}
+          {t(pill.label)}
+        </StatusPill>
+      </div>
+      {distanceM !== null ? (
+        <p>
+          {t('reviewDistance')}: <span className="tabular-nums">{formatDistance(distanceM, language)}</span>
+        </p>
+      ) : null}
+      {accuracyM !== null ? (
+        <p>
+          {t('reviewGpsAccuracy')}: <span className="tabular-nums">{formatDistance(accuracyM, language)}</span>
+        </p>
+      ) : null}
+    </div>
   );
 }
 

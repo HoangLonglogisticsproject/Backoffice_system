@@ -67,6 +67,19 @@ const PHRASES = {
   reviewDeviceTime: { vi: 'Đồng hồ thiết bị (tham khảo)', en: 'Device clock (diagnostic)' },
   reviewNotReported: { vi: 'Chưa báo', en: 'Not reported' },
   reviewVoided: { vi: 'Đã thu hồi', en: 'Withdrawn' },
+  // ★ THE SERVER'S GEOFENCE VERDICT, SHOWN. Four readings of one event, and
+  // none of them is computed here: `geofencePassed` and `distanceM` arrive
+  // decided. Absent evidence is said to be absent — never called a failure.
+  reviewLocationCheck: { vi: 'Xác minh vị trí', en: 'Location verification' },
+  reviewLocationVerified: { vi: 'Đã xác minh', en: 'Verified' },
+  reviewLocationNotVerified: { vi: 'Không xác minh được', en: 'Not verified' },
+  reviewLocationNoEvidence: { vi: 'Không có dữ liệu xác minh vị trí', en: 'No location evidence' },
+  reviewLocationNoVerdict: {
+    vi: 'Có vị trí thiết bị, chưa có kết luận xác minh',
+    en: 'Device position recorded, no verification verdict',
+  },
+  reviewDistance: { vi: 'Khoảng cách tới điểm', en: 'Distance from the point' },
+  reviewGpsAccuracy: { vi: 'Độ chính xác GPS', en: 'GPS accuracy' },
   reviewExpenses: { vi: 'Chi phí tài xế khai', en: 'Expenses the driver declared' },
   reviewNoExpense: { vi: 'Không có khoản nào', en: 'None' },
   reviewExpensesHidden: {
