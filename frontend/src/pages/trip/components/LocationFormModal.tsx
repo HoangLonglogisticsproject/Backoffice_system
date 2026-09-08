@@ -89,6 +89,51 @@ const pointOf = (latitude: string, longitude: string): Coordinates | null =>
 const SEARCH_MIN_CHARS = 3;
 const SEARCH_DEBOUNCE_MS = 350;
 
+/** `''` → `null` for the optional texts; the required ones are only trimmed. */
+const blank = (value: string): string | null => (value.trim() === '' ? null : value.trim());
+
+/** What the form sends — the same body the endpoint has always taken. */
+interface LocationBody {
+  name: string;
+  address: string;
+  contact: string | null;
+  note: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+const locationBody = (fields: {
+  name: string;
+  address: string;
+  contact: string;
+  note: string;
+  latitude: string;
+  longitude: string;
+}): LocationBody => ({
+  name: fields.name.trim(),
+  address: fields.address.trim(),
+  contact: blank(fields.contact),
+  note: blank(fields.note),
+  latitude: numberOrNull(fields.latitude),
+  longitude: numberOrNull(fields.longitude),
+});
+
+/** An existing row is patched under its customer; a new one is created there. */
+const saveLocation = (
+  customerId: string,
+  editing: TripLocation | null,
+  body: LocationBody,
+): Promise<TripLocation> =>
+  editing ? updateTripLocation(customerId, editing.id, body) : createTripLocation(customerId, body);
+
+/**
+ * The server refuses half a point, a duplicate name and a retired customer
+ * with a sentence; that sentence is the honest one. Anything else gets the
+ * generic line.
+ */
+const failureMessage = (error: unknown, fallback: string): string =>
+  isApiError(error) ? error.message : fallback;
+
 export function LocationFormModal({ customerId, editing, onClose, onSaved }: Readonly<Props>) {
   const { t } = useLanguage();
   const [name, setName] = useState(editing?.name ?? '');
@@ -159,42 +204,22 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
     setBusy(true);
     setError(null);
 
-    const blank = (value: string) => (value.trim() === '' ? null : value.trim());
-    const body = {
-      name: name.trim(),
-      address: address.trim(),
-      contact: blank(contact),
-      note: blank(note),
-      latitude: numberOrNull(latitude),
-      longitude: numberOrNull(longitude),
-    };
-
     try {
-      const saved = editing
-        ? await updateTripLocation(customerId, editing.id, body)
-        : await createTripLocation(customerId, body);
+      const saved = await saveLocation(
+        customerId,
+        editing,
+        locationBody({ name, address, contact, note, latitude, longitude }),
+      );
       await onSaved(saved);
       onClose();
     } catch (error_) {
-      // The server refuses half a point, a duplicate name and a retired
-      // customer with a sentence; that sentence is the honest one.
-      setError(isApiError(error_) ? error_.message : t('saveFailed'));
+      setError(failureMessage(error_, t('saveFailed')));
     } finally {
       setBusy(false);
     }
   };
 
   const formId = 'location-form';
-
-  const coordinateInputs = (
-    <CoordinateInputs
-      latitude={latitude}
-      longitude={longitude}
-      invalid={problem !== null}
-      onLatitude={setLatitude}
-      onLongitude={setLongitude}
-    />
-  );
 
   return (
     <Modal
@@ -251,52 +276,21 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
         <Field id="location-contact" label={t('locationContact')} value={contact} onChange={setContact} />
         <Field id="location-note" label={t('noteOptional')} value={note} onChange={setNote} />
 
-        {/* ★ THE POSITION, AS A STATE AND ONE ACTION — never as two numbers to type. */}
-        <fieldset className="space-y-2 rounded-lg border border-gray-200 p-3">
-          <legend className="px-1 text-sm font-medium text-gray-700">{t('locationPosition')}</legend>
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusPill tone={located ? 'green' : 'amber'}>
-              {t(located ? 'locationLocated' : 'locationUnlocated')}
-            </StatusPill>
-            {mapEnabled ? (
-              <Button
-                type="button"
-                variant={located ? 'ghost' : 'outline'}
-                size="sm"
-                className={located ? 'text-gray-600' : undefined}
-                onClick={() => setSetupOpen(true)}
-              >
-                <MapPin className="size-3.5" aria-hidden />
-                {t(located ? 'editLocationPosition' : 'setupLocation')}
-              </Button>
-            ) : null}
-          </div>
-          {/* The exception, and only then: a free-text address nobody picked from the suggestions. */}
-          {located ? null : (
-            <p className="text-xs text-amber-700">
-              {t('locationNotYetLocated')}
-              {mapEnabled ? ` ${t('locationResolveHint')}` : ''}
-            </p>
-          )}
-
-          {mapEnabled ? (
-            // Behind a fold: for somebody who was handed coordinates, not the way in.
-            <details className="text-xs text-gray-500">
-              <summary className="cursor-pointer select-none">{t('manualCoordinates')}</summary>
-              <div className="mt-2">{coordinateInputs}</div>
-            </details>
-          ) : (
-            <>
-              <p className="text-xs text-gray-500">{t('locationCoordinatesHint')}</p>
-              {coordinateInputs}
-            </>
-          )}
-          {problem ? (
-            <p role="alert" className="text-xs text-red-600">
-              {t(problem === 'incomplete' ? 'locationPairIncomplete' : 'locationPairInvalid')}
-            </p>
-          ) : null}
-        </fieldset>
+        <PositionSection
+          located={located}
+          mapEnabled={mapEnabled}
+          problem={problem}
+          onSetup={() => setSetupOpen(true)}
+          coordinateInputs={
+            <CoordinateInputs
+              latitude={latitude}
+              longitude={longitude}
+              invalid={problem !== null}
+              onLatitude={setLatitude}
+              onLongitude={setLongitude}
+            />
+          }
+        />
 
         {error && (
           <p role="alert" className="text-sm text-red-600">
@@ -309,6 +303,76 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
         <LocationSetupModal initial={point} onCancel={() => setSetupOpen(false)} onConfirm={confirmPosition} />
       ) : null}
     </Modal>
+  );
+}
+
+/**
+ * ★ THE POSITION, AS A STATE AND ONE ACTION — never as two numbers to type.
+ * The pill, the map action, the one-line exception for a free-text address
+ * nobody picked, and the numbers: behind a fold when there is a map, in the
+ * open with plain words when there is not.
+ */
+function PositionSection({
+  located,
+  mapEnabled,
+  problem,
+  onSetup,
+  coordinateInputs,
+}: Readonly<{
+  located: boolean;
+  mapEnabled: boolean;
+  problem: PairProblem;
+  onSetup: () => void;
+  coordinateInputs: React.ReactNode;
+}>) {
+  const { t } = useLanguage();
+
+  return (
+    <fieldset className="space-y-2 rounded-lg border border-gray-200 p-3">
+      <legend className="px-1 text-sm font-medium text-gray-700">{t('locationPosition')}</legend>
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusPill tone={located ? 'green' : 'amber'}>
+          {t(located ? 'locationLocated' : 'locationUnlocated')}
+        </StatusPill>
+        {mapEnabled ? (
+          <Button
+            type="button"
+            variant={located ? 'ghost' : 'outline'}
+            size="sm"
+            className={located ? 'text-gray-600' : undefined}
+            onClick={onSetup}
+          >
+            <MapPin className="size-3.5" aria-hidden />
+            {t(located ? 'editLocationPosition' : 'setupLocation')}
+          </Button>
+        ) : null}
+      </div>
+      {/* The exception, and only then: a free-text address nobody picked from the suggestions. */}
+      {located ? null : (
+        <p className="text-xs text-amber-700">
+          {t('locationNotYetLocated')}
+          {mapEnabled ? ` ${t('locationResolveHint')}` : ''}
+        </p>
+      )}
+
+      {mapEnabled ? (
+        // Behind a fold: for somebody who was handed coordinates, not the way in.
+        <details className="text-xs text-gray-500">
+          <summary className="cursor-pointer select-none">{t('manualCoordinates')}</summary>
+          <div className="mt-2">{coordinateInputs}</div>
+        </details>
+      ) : (
+        <>
+          <p className="text-xs text-gray-500">{t('locationCoordinatesHint')}</p>
+          {coordinateInputs}
+        </>
+      )}
+      {problem ? (
+        <p role="alert" className="text-xs text-red-600">
+          {t(problem === 'incomplete' ? 'locationPairIncomplete' : 'locationPairInvalid')}
+        </p>
+      ) : null}
+    </fieldset>
   );
 }
 
