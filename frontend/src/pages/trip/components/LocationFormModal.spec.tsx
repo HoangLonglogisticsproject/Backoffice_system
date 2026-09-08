@@ -92,10 +92,67 @@ const TCS_PLACE: ResolvedPlace = { address: 'Đường số 3, KCN VSIP 1, Thu�
 describe('LocationFormModal with a map', () => {
   beforeEach(() => {
     configured.value = true;
-    search.mockReset();
+    // The address field searches as it is typed, so a stand-in that answers
+    // only the one query the tests pick from keeps every other typing quiet.
+    search.mockReset().mockImplementation(async (input) => (input === 'Kho TCS' ? [TCS] : []));
     resolve.mockReset();
     create.mockReset();
     update.mockReset();
+  });
+
+  it('★ the normal path: type the address, pick the suggestion — the position is set with no number and no map', async () => {
+    resolve.mockResolvedValue(TCS_PLACE);
+    create.mockResolvedValue(location({ id: 'l9', name: 'Kho TCS', latitude: 10.9, longitude: 106.72 }));
+    renderForm();
+
+    type('Tên địa điểm', 'Kho TCS');
+    type('Địa chỉ', 'Kho TCS');
+    await waitFor(() => expect(search).toHaveBeenCalledWith('Kho TCS'));
+    fireEvent.click(await screen.findByRole('button', { name: /Kho TCS/ }));
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' })));
+
+    // The address reads as the place wrote it, and the position came with it.
+    await waitFor(() => expect(screen.getByLabelText('Địa chỉ')).toHaveValue(TCS_PLACE.address));
+    expect(screen.getByText('Đã định vị')).toBeInTheDocument();
+    expect(screen.queryByText(/Địa điểm này chưa có vị trí trên bản đồ\./)).toBeNull();
+    expect(screen.queryByTestId('map')).toBeNull();
+    // The numbers are only on the record, behind the fold.
+    expect(screen.getByLabelText('Vĩ độ')).toHaveValue(10.9);
+    expect(screen.getByLabelText('Kinh độ')).toHaveValue(106.72);
+
+    // The text the pick wrote is not searched again.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 450));
+    expect(search).toHaveBeenCalledTimes(1);
+
+    save();
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith('c1', {
+        name: 'Kho TCS',
+        address: TCS_PLACE.address,
+        contact: null,
+        note: null,
+        latitude: 10.9,
+        longitude: 106.72,
+      }),
+    );
+  });
+
+  it('★ a free-text address nobody picked is the exception: unlocated, with the way out named', async () => {
+    renderForm();
+
+    type('Địa chỉ', 'Số 5 ngõ nhỏ, không có trên bản đồ');
+    await waitFor(() => expect(search).toHaveBeenCalled());
+    expect(await screen.findByText('Không tìm thấy địa điểm phù hợp.')).toBeInTheDocument();
+
+    expect(screen.getByText('Chưa định vị')).toBeInTheDocument();
+    expect(screen.getByText(/chưa có vị trí trên bản đồ/)).toHaveTextContent(/xác định vị trí trên bản đồ/);
+    expect(screen.getByRole('button', { name: 'Thiết lập vị trí' })).toBeInTheDocument();
+  });
+
+  it('does not search the address an existing place opened with', async () => {
+    renderForm(location());
+    await new Promise((resolveWait) => setTimeout(resolveWait, 450));
+    expect(search).not.toHaveBeenCalled();
   });
 
   it('shows a located place as located, offers "Chỉnh sửa vị trí", and keeps the numbers behind the advanced fold', () => {
@@ -103,7 +160,7 @@ describe('LocationFormModal with a map', () => {
 
     expect(screen.getByText('Đã định vị')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Chỉnh sửa vị trí' })).toBeInTheDocument();
-    expect(screen.queryByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeNull();
+    expect(screen.queryByText(/Địa điểm này chưa có vị trí trên bản đồ\./)).toBeNull();
     // No map until asked for; the numbers exist for the record, under a fold.
     expect(screen.queryByTestId('map')).toBeNull();
     expect(screen.getByText('Nhập toạ độ thủ công (nâng cao)')).toBeInTheDocument();
@@ -115,13 +172,12 @@ describe('LocationFormModal with a map', () => {
     renderForm(location({ latitude: null, longitude: null }));
 
     expect(screen.getByText('Chưa định vị')).toBeInTheDocument();
-    expect(screen.getByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeInTheDocument();
+    expect(screen.getByText(/Địa điểm này chưa có vị trí trên bản đồ\./)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Thiết lập vị trí' })).toBeInTheDocument();
     expect(screen.queryByText(/hệ thống chưa tự tra/)).toBeNull();
   });
 
-  it('★ find, pick, confirm: the place’s position and address land on the form, and it is located', async () => {
-    search.mockResolvedValue([TCS]);
+  it('★ find, pick, confirm on the map: the place’s position and address land on the form, and it is located', async () => {
     resolve.mockResolvedValue(TCS_PLACE);
     renderForm();
 
@@ -179,8 +235,7 @@ describe('LocationFormModal with a map', () => {
     expect(search).toHaveBeenCalledTimes(1);
   });
 
-  it('★ leaves a hand-written address alone when a found place is confirmed, and still takes its position', async () => {
-    search.mockResolvedValue([TCS]);
+  it('★ leaves a hand-written address alone when a place found on the map is confirmed, and still takes its position', async () => {
     let finish!: (place: ResolvedPlace) => void;
     resolve.mockImplementationOnce(
       () =>
@@ -263,11 +318,10 @@ describe('LocationFormModal with a map', () => {
   });
 
   it('★ a place located through the map is saved located, and the words say so until then', async () => {
-    search.mockResolvedValue([TCS]);
     resolve.mockResolvedValue(TCS_PLACE);
     create.mockResolvedValue(location({ id: 'l9', name: 'Kho TCS', latitude: 10.9, longitude: 106.72 }));
     renderForm();
-    expect(screen.getByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeInTheDocument();
+    expect(screen.getByText(/Địa điểm này chưa có vị trí trên bản đồ\./)).toBeInTheDocument();
 
     type('Tên địa điểm', 'Kho TCS');
     openSetup();
@@ -275,7 +329,7 @@ describe('LocationFormModal with a map', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Kho TCS/ }));
     await waitFor(() => expect(screen.getByTestId('pin')).toHaveTextContent('10.9,106.72'));
     confirm();
-    expect(screen.queryByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeNull();
+    expect(screen.queryByText(/Địa điểm này chưa có vị trí trên bản đồ\./)).toBeNull();
     save();
 
     await waitFor(() =>

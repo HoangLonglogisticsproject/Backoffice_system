@@ -972,6 +972,15 @@ const PHRASES = {
   },
   // ------------------------------------------- the position, as the operator sees it --
   locationPosition: { vi: 'Vị trí', en: 'Position' },
+  // ★ THE NORMAL PATH IN ONE LINE: pick the suggested address, and the position is done.
+  locationAddressHint: {
+    vi: 'Chọn một gợi ý khi nhập địa chỉ — vị trí sẽ được xác định tự động.',
+    en: 'Pick a suggestion as you type the address — the position is set automatically.',
+  },
+  locationResolveHint: {
+    vi: 'Chọn một gợi ý địa chỉ ở trên, hoặc xác định vị trí trên bản đồ.',
+    en: 'Pick an address suggestion above, or set the position on the map.',
+  },
   editLocationPosition: { vi: 'Chỉnh sửa vị trí', en: 'Edit position' },
   confirmPosition: { vi: 'Xác nhận vị trí', en: 'Confirm position' },
   manualCoordinates: { vi: 'Nhập toạ độ thủ công (nâng cao)', en: 'Enter coordinates by hand (advanced)' },

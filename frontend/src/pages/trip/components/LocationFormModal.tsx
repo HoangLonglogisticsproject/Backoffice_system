@@ -140,6 +140,19 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
     setSetupOpen(false);
   };
 
+  /**
+   * ★ THE NORMAL PATH: a suggestion picked IN THE ADDRESS FIELD. The operator
+   * was writing the address; the row they chose IS the address, so it is
+   * taken as written by the place, and its position comes with it — no map,
+   * no numbers, nothing further to do. Remembered as this dialog's own fill,
+   * so a later map confirm may still replace it under the rule above.
+   */
+  const addressPicked = (place: ResolvedPlace, text: string) => {
+    lastFilled.current = text;
+    setAddress(text);
+    setPoint(place);
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (problem !== null) return;
@@ -207,19 +220,34 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
       <form id={formId} onSubmit={submit} className="space-y-4">
         <Field id="location-name" label={t('locationName')} value={name} onChange={setName} required />
 
-        <div className="space-y-2">
-          <label htmlFor="location-address" className="text-sm font-medium text-gray-700">
-            {t('locationAddress')}
-          </label>
-          <textarea
+        {mapEnabled ? (
+          // The address field IS the search: suggestions as the operator
+          // types, and a pick settles the position underneath.
+          <PlaceSearch
             id="location-address"
+            label={t('locationAddress')}
             value={address}
-            onChange={(event) => setAddress(event.target.value)}
-            rows={3}
+            onChange={setAddress}
+            onPick={addressPicked}
+            multiline
             required
-            className="w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            hint={t('locationAddressHint')}
           />
-        </div>
+        ) : (
+          <div className="space-y-2">
+            <label htmlFor="location-address" className="text-sm font-medium text-gray-700">
+              {t('locationAddress')}
+            </label>
+            <textarea
+              id="location-address"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              rows={3}
+              required
+              className={TEXTAREA_CLASS}
+            />
+          </div>
+        )}
         <Field id="location-contact" label={t('locationContact')} value={contact} onChange={setContact} />
         <Field id="location-note" label={t('noteOptional')} value={note} onChange={setNote} />
 
@@ -243,7 +271,13 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
               </Button>
             ) : null}
           </div>
-          {located ? null : <p className="text-xs text-amber-700">{t('locationNotYetLocated')}</p>}
+          {/* The exception, and only then: a free-text address nobody picked from the suggestions. */}
+          {located ? null : (
+            <p className="text-xs text-amber-700">
+              {t('locationNotYetLocated')}
+              {mapEnabled ? ` ${t('locationResolveHint')}` : ''}
+            </p>
+          )}
 
           {mapEnabled ? (
             // Behind a fold: for somebody who was handed coordinates, not the way in.
@@ -298,10 +332,12 @@ function LocationSetupModal({
   onConfirm: (result: ResolvedPlace) => void;
 }>) {
   const { t } = useLanguage();
+  const [query, setQuery] = useState('');
   const [draft, setDraft] = useState<Coordinates | null>(initial);
   const [offeredAddress, setOfferedAddress] = useState<string | null>(null);
 
-  const pick = (place: ResolvedPlace) => {
+  const pick = (place: ResolvedPlace, text: string) => {
+    setQuery(text);
     setDraft(place);
     setOfferedAddress(place.address);
   };
@@ -331,7 +367,14 @@ function LocationSetupModal({
       }
     >
       <div className="space-y-4">
-        <PlaceSearch onPick={pick} />
+        <PlaceSearch
+          id="location-search"
+          label={t('locationSearch')}
+          value={query}
+          onChange={setQuery}
+          onPick={pick}
+          placeholder={t('locationSearchPlaceholder')}
+        />
         <div className="space-y-1.5">
           <p className="text-xs text-gray-500">{t('locationPinHint')}</p>
           <LocationMap point={draft} onMove={setDraft} />
@@ -341,27 +384,58 @@ function LocationSetupModal({
   );
 }
 
+const TEXTAREA_CLASS =
+  'w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50';
+
 /**
- * The search box and its results. Debounced, one request per pause, and the
- * chosen result is fetched once — the adapter's session token makes the pair
- * one billable session.
+ * A text field with place suggestions under it. Debounced, one request per
+ * pause, and the chosen result is fetched once — the adapter's session token
+ * makes the pair one billable session.
  *
- * ponytail: a list of buttons under an input, not a full ARIA combobox. Tab
+ * ★ CONTROLLED, SO THE ADDRESS FIELD CAN BE ONE. The caller owns the text;
+ * this only searches it and reports a pick. Two texts are never searched:
+ * the one the field opened with — an existing place's address is not a
+ * query — and the one a pick just wrote, or every pick would search itself.
+ *
+ * ponytail: a list of buttons under the field, not a full ARIA combobox. Tab
  * reaches every result and Enter picks it; add roving arrow keys the day
  * somebody asks for them.
  */
-function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => void }>) {
+function PlaceSearch({
+  id,
+  label,
+  value,
+  onChange,
+  onPick,
+  multiline = false,
+  required = false,
+  placeholder,
+  hint,
+}: Readonly<{
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  /** A suggestion resolved: the place, and the text the field should now read. */
+  onPick: (place: ResolvedPlace, text: string) => void;
+  multiline?: boolean;
+  required?: boolean;
+  placeholder?: string;
+  hint?: string;
+}>) {
   const { t } = useLanguage();
-  const [query, setQuery] = useState('');
   const [results, setResults] = useState<PlaceSuggestion[] | null>(null);
   const [state, setState] = useState<'idle' | 'searching' | 'failed'>('idle');
   // Only the newest request may publish results; an older one that resolves
   // late must not overwrite them. Every change of intent takes a new ticket.
   const latest = useRef(0);
+  // The text that is not a query: what the field opened with, then what the
+  // last pick wrote.
+  const settled = useRef(value);
 
   useEffect(() => {
-    const input = query.trim();
-    if (input.length < SEARCH_MIN_CHARS) {
+    const input = value.trim();
+    if (input.length < SEARCH_MIN_CHARS || value === settled.current) {
       // ★ THE IN-FLIGHT SEARCH IS RETIRED TOO. Clearing the timer only stops
       // a search that has not started; one already on the wire would come
       // back and repopulate a list the operator had just emptied.
@@ -386,7 +460,7 @@ function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => vo
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [value]);
 
   const pick = async (suggestion: PlaceSuggestion) => {
     latest.current++;
@@ -395,8 +469,10 @@ function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => vo
     try {
       // The row itself, not its id: the adapter resolves the prediction that
       // produced THIS row, whatever other search has finished since.
-      onPick(await resolvePlace(suggestion));
-      setQuery(suggestion.primary);
+      const place = await resolvePlace(suggestion);
+      const text = place.address ?? suggestion.primary;
+      settled.current = text;
+      onPick(place, text);
       setState('idle');
     } catch {
       setState('failed');
@@ -409,21 +485,34 @@ function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => vo
 
   return (
     <div className="space-y-2">
-      <label htmlFor="location-search" className="text-sm font-medium text-gray-700">
-        {t('locationSearch')}
+      <label htmlFor={id} className="text-sm font-medium text-gray-700">
+        {label}
       </label>
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-2.5 top-2 size-4 text-gray-400" aria-hidden />
-        <Input
-          id="location-search"
-          type="search"
+      {multiline ? (
+        <textarea
+          id={id}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          rows={3}
+          required={required}
           autoComplete="off"
-          className="pl-8"
-          placeholder={t('locationSearchPlaceholder')}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          className={TEXTAREA_CLASS}
         />
-      </div>
+      ) : (
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-2 size-4 text-gray-400" aria-hidden />
+          <Input
+            id={id}
+            type="search"
+            autoComplete="off"
+            className="pl-8"
+            placeholder={placeholder}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </div>
+      )}
+      {hint ? <p className="text-xs text-gray-500">{hint}</p> : null}
       {state === 'searching' ? <p className="text-xs text-gray-500">{t('locationSearching')}</p> : null}
       {state === 'failed' ? (
         <p role="alert" className="text-xs text-red-600">
@@ -434,7 +523,7 @@ function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => vo
         <p className="text-xs text-gray-500">{t('locationNoResults')}</p>
       ) : null}
       {visible.length > 0 ? (
-        <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200" aria-label={t('locationSearch')}>
+        <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200" aria-label={label}>
           {visible.map((suggestion) => (
             <li key={suggestion.id}>
               <button
