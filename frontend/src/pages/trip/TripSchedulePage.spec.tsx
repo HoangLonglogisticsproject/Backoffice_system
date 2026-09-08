@@ -654,7 +654,7 @@ describe('TripSchedulePage', () => {
         await openAddForm();
         await chooseCustomer('c9');
         const delivery = screen.getByLabelText('Điểm giao hàng');
-        await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương (Chưa định vị)' });
+        await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương' });
 
         fireEvent.change(delivery, { target: { value: 'l2' } });
 
@@ -665,7 +665,7 @@ describe('TripSchedulePage', () => {
         expect(block.queryByText('Liên hệ giao hàng')).toBeNull();
         expect(block.queryByRole('textbox')).toBeNull();
         expect(block.getByText('Chưa định vị')).toBeInTheDocument();
-        expect(block.getByRole('status')).toHaveTextContent(/chưa có toạ độ/i);
+        expect(block.getByRole('status')).toHaveTextContent(/chưa thể xác nhận gps/i);
         expect(block.getByRole('button', { name: 'Thiết lập vị trí' })).toBeInTheDocument();
       });
 
@@ -689,11 +689,11 @@ describe('TripSchedulePage', () => {
       await openAddForm();
       await chooseCustomer('c9');
       const delivery = screen.getByLabelText('Điểm giao hàng');
-      await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương (Chưa định vị)' });
+      await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương' });
 
       fireEvent.change(delivery, { target: { value: 'l2' } });
 
-      expect(screen.getByRole('status')).toHaveTextContent(/chưa có toạ độ/i);
+      expect(screen.getByRole('status')).toHaveTextContent(/chưa thể xác nhận gps/i);
       expect(screen.queryByText('Đã định vị')).toBeNull();
     });
 
@@ -711,13 +711,18 @@ describe('TripSchedulePage', () => {
         fireEvent.change(select, { target: { value: id } });
       };
 
-      it('marks an unlocated place in the picker itself, and a located one not at all', async () => {
+      it('lists places by name alone — readiness is the pill beside the picker, not a suffix', async () => {
         await openAddForm();
         await chooseCustomer('c9');
         const pickup = screen.getByLabelText('Điểm lấy hàng');
 
         expect(await within(pickup).findByRole('option', { name: 'Kho OSC' })).toBeInTheDocument();
-        expect(within(pickup).getByRole('option', { name: 'Nhà máy Bình Dương (Chưa định vị)' })).toBeInTheDocument();
+        expect(within(pickup).getByRole('option', { name: 'Nhà máy Bình Dương' })).toBeInTheDocument();
+        expect(within(pickup).queryByRole('option', { name: /Chưa định vị/ })).toBeNull();
+        expect(screen.queryByText('Chưa định vị')).toBeNull();
+
+        fireEvent.change(pickup, { target: { value: 'l2' } });
+        expect(screen.getByText('Chưa định vị')).toBeInTheDocument();
       });
 
       it('says the trip is ready when both ends name a located place', async () => {
