@@ -874,22 +874,17 @@ const setupActionFor = (
 };
 
 /**
- * The picker's rows: the customer's active places, and the trip's own
- * archived one after them.
- *
- * ★ SAID IN THE PICKER, NOT ONLY AFTER THE CHOICE. A native `<select>` can
- * carry no badge, so the word goes in the label — a dispatcher sees which
- * places can be verified before picking one.
+ * The picker's rows: the customer's active places by name, and the trip's
+ * own archived one after them. Readiness is not in the label — the pill
+ * beside the picker says it the moment a place is chosen, and a suffix on
+ * every row only made the names long enough to truncate.
  */
 const placeOptions = (
   locations: TripLocation[],
   current: ChosenPlace | null,
   t: Translate,
 ): { id: string; label: string }[] => {
-  const options = locations.map((location) => ({
-    id: location.id,
-    label: isLocated(location) ? location.name : `${location.name} (${t('locationUnlocated')})`,
-  }));
+  const options = locations.map((location) => ({ id: location.id, label: location.name }));
   if (current && !locations.some((location) => location.id === current.id)) {
     options.push({ id: current.id, label: `${current.name} (${t('statusArchived')})` });
   }
@@ -973,10 +968,11 @@ function LocationEnd({
             </option>
           ))}
         </select>
+        {/* A step lighter than the picker: adding a place is the exception, choosing one is the job. */}
         <Button
           type="button"
-          variant="outline"
-          className="shrink-0"
+          variant="ghost"
+          className="shrink-0 text-gray-600"
           disabled={customerId === null}
           onClick={onAdd}
         >

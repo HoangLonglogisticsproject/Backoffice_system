@@ -1013,8 +1013,8 @@ const PHRASES = {
   // ★ Said on the trip form the moment an unlocated place is chosen: the driver
   // will be refused the GPS confirmation there until the place is located.
   locationUnlocatedWarning: {
-    vi: 'Địa điểm này chưa có toạ độ: tài xế sẽ không xác nhận GPS được tại đây cho tới khi địa điểm được định vị.',
-    en: 'This location has no coordinates: the driver cannot confirm by GPS here until it is located.',
+    vi: 'Chưa định vị — tài xế chưa thể xác nhận GPS tại đây.',
+    en: 'Not located — the driver cannot confirm by GPS here yet.',
   },
   fieldPickupLocation: { vi: 'Điểm lấy hàng', en: 'Pickup location' },
   fieldDeliveryLocation: { vi: 'Điểm giao hàng', en: 'Delivery location' },
