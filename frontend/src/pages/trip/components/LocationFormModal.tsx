@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { MapPin, Search } from 'lucide-react';
+import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
@@ -24,20 +25,22 @@ import { LocationMap } from './LocationMap';
  * belongs to and creates under that id; there is no customer picker here, so
  * a place cannot be filed under the wrong company by a slip.
  *
- * ★ THE OPERATOR FINDS THE PLACE; THE PIN IS THE TRUTH. With a map configured,
- * the operator searches for the warehouse, gets a pin, and drags it to the
- * gate the lorry actually reaches. The two numbers under the map are what is
- * saved — the same two columns the form has always written, so the trip
- * snapshot, the driver's read model and the server's geofence see nothing
- * new. Without a map (no key in this deployment) the numbers are typed by
- * hand, exactly as before.
+ * ★ THE OPERATOR NEVER TYPES A COORDINATE. A place has a name, an address and
+ * a POSITION; the position is set by finding the place on a map and putting a
+ * pin on its gate — "Thiết lập vị trí" — and confirmed as a whole. The two
+ * numbers that come out of that are what `trip_locations` has always stored,
+ * so the trip snapshot, the driver read model and the server's geofence see
+ * nothing new. They stay reachable behind an "advanced" fold for the rare
+ * case somebody was handed coordinates, and are the ONLY input when this
+ * deployment has no map key — then the dialog says so in plain words.
  *
  * ★ COORDINATES ARE OPTIONAL, AND SAID SO. A place is real before anybody has
  * located it. The dialog says "not located" plainly and never invents a point.
  *
- * ★ THE ADDRESS IS THE OPERATOR'S. A chosen search result fills it only while
- * it is empty or still reads exactly what the last result filled in; a hand-
- * written address is never overwritten, and moving the pin never touches it.
+ * ★ THE ADDRESS IS THE OPERATOR'S. A place found on the map fills it only
+ * while it is empty or still reads exactly what the last find filled in; a
+ * hand-written address is never overwritten, and moving the pin never
+ * touches it.
  */
 interface Props {
   customerId: string;
@@ -96,6 +99,8 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
   const [longitude, setLongitude] = useState(numberField(editing?.longitude ?? null));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The map dialog, open on top of this one. */
+  const [setupOpen, setSetupOpen] = useState(false);
 
   const mapEnabled = isMapsConfigured();
   const problem = pairProblem(latitude, longitude);
@@ -107,19 +112,16 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
     setLongitude(roundCoordinate(lng));
   };
 
-  // What the last chosen place wrote into the address, so a later choice may
+  // What the last found place wrote into the address, so a later find may
   // replace it — and an address the operator wrote is left alone.
   const lastFilled = useRef<string | null>(null);
 
   /**
    * ★ DECIDED AGAINST THE ADDRESS AS IT IS WHEN THE PLACE ARRIVES, not as it
-   * was when the row was clicked. The details fetch is asynchronous; an
-   * operator who types into the address while it is pending must not have
-   * that overwritten by a closure still holding the empty field they started
-   * from. The updater form of `setAddress` reads the current value, so the
-   * rule — fill only an empty address, or the one this search filled last —
-   * is applied to the truth at that moment. The coordinates are taken either
-   * way: they are what the place was chosen for.
+   * was when the search began. The updater form of `setAddress` reads the
+   * current value, so the rule — fill only an empty address, or the one this
+   * dialog filled last — is applied to the truth at that moment. The
+   * coordinates are taken either way: they are what the place was found for.
    */
   const applyPlace = (place: ResolvedPlace) => {
     setPoint(place);
@@ -130,6 +132,12 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
       lastFilled.current = offered;
       return offered;
     });
+  };
+
+  /** The map dialog confirmed: the pin is the position, and any address it found is offered under the rule above. */
+  const confirmPosition = (result: ResolvedPlace) => {
+    applyPlace(result);
+    setSetupOpen(false);
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -165,12 +173,21 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
 
   const formId = 'location-form';
 
+  const coordinateInputs = (
+    <CoordinateInputs
+      latitude={latitude}
+      longitude={longitude}
+      invalid={problem !== null}
+      onLatitude={setLatitude}
+      onLongitude={setLongitude}
+    />
+  );
+
   return (
     <Modal
       isOpen
       onClose={onClose}
       title={t(editing ? 'editLocation' : 'addLocation')}
-      className={mapEnabled ? 'max-w-2xl' : undefined}
       footer={
         <>
           <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
@@ -190,8 +207,6 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
       <form id={formId} onSubmit={submit} className="space-y-4">
         <Field id="location-name" label={t('locationName')} value={name} onChange={setName} required />
 
-        {mapEnabled ? <PlaceSearch onPick={applyPlace} /> : null}
-
         <div className="space-y-2">
           <label htmlFor="location-address" className="text-sm font-medium text-gray-700">
             {t('locationAddress')}
@@ -208,49 +223,40 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
         <Field id="location-contact" label={t('locationContact')} value={contact} onChange={setContact} />
         <Field id="location-note" label={t('noteOptional')} value={note} onChange={setNote} />
 
+        {/* ★ THE POSITION, AS A STATE AND ONE ACTION — never as two numbers to type. */}
         <fieldset className="space-y-2 rounded-lg border border-gray-200 p-3">
-          <legend className="px-1 text-sm font-medium text-gray-700">
-            {t('locationCoordinates')}{' '}
-            <span className={located ? 'text-green-700' : 'text-amber-700'}>
-              — {t(located ? 'locationLocated' : 'locationUnlocated')}
-            </span>
-          </legend>
-          {/* An existing place opened without a point: said plainly, until one is set. */}
-          {editing && !located ? (
-            <p className="text-xs font-medium text-amber-700">{t('locationNotYetLocated')}</p>
-          ) : null}
-          <p className="text-xs text-gray-500">{t(mapEnabled ? 'locationPinHint' : 'locationCoordinatesHint')}</p>
-
-          {mapEnabled ? <LocationMap point={point} onMove={setPoint} /> : null}
-
-          <div className="grid grid-cols-2 gap-2">
-            <Input
-              id="location-latitude"
-              type="number"
-              inputMode="decimal"
-              step="any"
-              min={-90}
-              max={90}
-              placeholder={t('fieldLatitude')}
-              aria-label={t('fieldLatitude')}
-              aria-invalid={problem !== null || undefined}
-              value={latitude}
-              onChange={(event) => setLatitude(event.target.value)}
-            />
-            <Input
-              id="location-longitude"
-              type="number"
-              inputMode="decimal"
-              step="any"
-              min={-180}
-              max={180}
-              placeholder={t('fieldLongitude')}
-              aria-label={t('fieldLongitude')}
-              aria-invalid={problem !== null || undefined}
-              value={longitude}
-              onChange={(event) => setLongitude(event.target.value)}
-            />
+          <legend className="px-1 text-sm font-medium text-gray-700">{t('locationPosition')}</legend>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill tone={located ? 'green' : 'amber'}>
+              {t(located ? 'locationLocated' : 'locationUnlocated')}
+            </StatusPill>
+            {mapEnabled ? (
+              <Button
+                type="button"
+                variant={located ? 'ghost' : 'outline'}
+                size="sm"
+                className={located ? 'text-gray-600' : undefined}
+                onClick={() => setSetupOpen(true)}
+              >
+                <MapPin className="size-3.5" aria-hidden />
+                {t(located ? 'editLocationPosition' : 'setupLocation')}
+              </Button>
+            ) : null}
           </div>
+          {located ? null : <p className="text-xs text-amber-700">{t('locationNotYetLocated')}</p>}
+
+          {mapEnabled ? (
+            // Behind a fold: for somebody who was handed coordinates, not the way in.
+            <details className="text-xs text-gray-500">
+              <summary className="cursor-pointer select-none">{t('manualCoordinates')}</summary>
+              <div className="mt-2">{coordinateInputs}</div>
+            </details>
+          ) : (
+            <>
+              <p className="text-xs text-gray-500">{t('locationCoordinatesHint')}</p>
+              {coordinateInputs}
+            </>
+          )}
           {problem ? (
             <p role="alert" className="text-xs text-red-600">
               {t(problem === 'incomplete' ? 'locationPairIncomplete' : 'locationPairInvalid')}
@@ -264,6 +270,73 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
           </p>
         )}
       </form>
+
+      {setupOpen ? (
+        <LocationSetupModal initial={point} onCancel={() => setSetupOpen(false)} onConfirm={confirmPosition} />
+      ) : null}
+    </Modal>
+  );
+}
+
+/**
+ * The map, on top of the form: find the place, put the pin on the gate,
+ * confirm. Nothing reaches the form until "Xác nhận vị trí" — closing the
+ * dialog any other way leaves the place exactly as it was.
+ *
+ * ★ THE PIN IS THE ANSWER, NOT THE SEARCH RESULT. Google finds the parcel;
+ * the operator drags the pin to the gate the lorry actually reaches, and the
+ * pin's final position is what is confirmed. The address the found place
+ * offered travels back with it, for the form's own fill rule.
+ */
+function LocationSetupModal({
+  initial,
+  onCancel,
+  onConfirm,
+}: Readonly<{
+  initial: Coordinates | null;
+  onCancel: () => void;
+  onConfirm: (result: ResolvedPlace) => void;
+}>) {
+  const { t } = useLanguage();
+  const [draft, setDraft] = useState<Coordinates | null>(initial);
+  const [offeredAddress, setOfferedAddress] = useState<string | null>(null);
+
+  const pick = (place: ResolvedPlace) => {
+    setDraft(place);
+    setOfferedAddress(place.address);
+  };
+
+  return (
+    <Modal
+      isOpen
+      onClose={onCancel}
+      title={t('setupLocation')}
+      className="max-w-2xl"
+      footer={
+        <>
+          <Button variant="outline" type="button" onClick={onCancel}>
+            {t('cancel')}
+          </Button>
+          <Button
+            type="button"
+            disabled={draft === null}
+            className="bg-blue-600 hover:bg-blue-700"
+            onClick={() => {
+              if (draft) onConfirm({ ...draft, address: offeredAddress });
+            }}
+          >
+            {t('confirmPosition')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <PlaceSearch onPick={pick} />
+        <div className="space-y-1.5">
+          <p className="text-xs text-gray-500">{t('locationPinHint')}</p>
+          <LocationMap point={draft} onMove={setDraft} />
+        </div>
+      </div>
     </Modal>
   );
 }
@@ -381,6 +454,53 @@ function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => vo
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** The two numbers, as text fields. The server validates them again; this only keeps the pair whole. */
+function CoordinateInputs({
+  latitude,
+  longitude,
+  invalid,
+  onLatitude,
+  onLongitude,
+}: Readonly<{
+  latitude: string;
+  longitude: string;
+  invalid: boolean;
+  onLatitude: (value: string) => void;
+  onLongitude: (value: string) => void;
+}>) {
+  const { t } = useLanguage();
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <Input
+        id="location-latitude"
+        type="number"
+        inputMode="decimal"
+        step="any"
+        min={-90}
+        max={90}
+        placeholder={t('fieldLatitude')}
+        aria-label={t('fieldLatitude')}
+        aria-invalid={invalid || undefined}
+        value={latitude}
+        onChange={(event) => onLatitude(event.target.value)}
+      />
+      <Input
+        id="location-longitude"
+        type="number"
+        inputMode="decimal"
+        step="any"
+        min={-180}
+        max={180}
+        placeholder={t('fieldLongitude')}
+        aria-label={t('fieldLongitude')}
+        aria-invalid={invalid || undefined}
+        value={longitude}
+        onChange={(event) => onLongitude(event.target.value)}
+      />
     </div>
   );
 }

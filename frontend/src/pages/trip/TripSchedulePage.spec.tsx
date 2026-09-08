@@ -779,7 +779,7 @@ describe('TripSchedulePage', () => {
 
         expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
         expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Nhà máy Bình Dương');
-        expect(screen.getByText('Địa điểm này chưa được định vị.')).toBeInTheDocument();
+        expect(screen.getByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeInTheDocument();
         // The same form the master-data screen and "add place" use — not a second one.
         expect(document.querySelectorAll('#location-form')).toHaveLength(1);
       });
