@@ -352,6 +352,53 @@ describe('TripMasterDataPage', () => {
       expect(screen.queryByRole('button', { name: 'Thêm địa điểm' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
     });
+
+    /**
+     * ★ READINESS, AND THE FIX BESIDE IT. "Located" means the row has
+     * coordinates a driver can be checked against — nothing about any
+     * driver's reading. The unlocated row gets the one action that resolves
+     * it, for whoever may edit places, and it opens the existing dialog.
+     */
+    describe('★ location readiness', () => {
+      const unlocated = () => location({ id: 'l2', name: 'Nhà máy Bình Dương', latitude: null, longitude: null });
+
+      it('offers "Thiết lập vị trí" on an unlocated place, and opens the existing dialog on that place', async () => {
+        fetchTripLocations.mockResolvedValue([location(), unlocated()]);
+        await openPlaces();
+        await screen.findByText('Nhà máy Bình Dương');
+
+        expect(screen.getByText('Đã định vị')).toBeInTheDocument();
+        expect(screen.getByText('Chưa định vị')).toBeInTheDocument();
+        // One setup action: the located row has nothing to set up.
+        const setups = screen.getAllByRole('button', { name: 'Thiết lập vị trí' });
+        expect(setups).toHaveLength(1);
+
+        fireEvent.click(setups[0]!);
+
+        expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
+        expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Nhà máy Bình Dương');
+        expect(screen.getByLabelText('Địa chỉ')).toHaveValue('KCN Sóng Thần');
+        expect(screen.getByText('Địa điểm này chưa được định vị.')).toBeInTheDocument();
+        expect(document.querySelectorAll('#location-form')).toHaveLength(1);
+      });
+
+      it('★ shows a reader "Chưa định vị" and no setup action', async () => {
+        fetchTripLocations.mockResolvedValue([unlocated()]);
+        await openPlaces(['trip.read']);
+
+        expect(await screen.findByText('Chưa định vị')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Thiết lập vị trí' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
+      });
+
+      it('shows a dispatcher who may add but not edit the readiness, and no setup action', async () => {
+        fetchTripLocations.mockResolvedValue([unlocated()]);
+        await openPlaces(['trip.read', 'trip.create']);
+
+        expect(await screen.findByText('Chưa định vị')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Thiết lập vị trí' })).toBeNull();
+      });
+    });
   });
 
   describe('adding a row', () => {

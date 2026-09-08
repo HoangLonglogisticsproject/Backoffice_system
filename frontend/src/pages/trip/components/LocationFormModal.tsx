@@ -197,6 +197,10 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
               — {t(located ? 'locationLocated' : 'locationUnlocated')}
             </span>
           </legend>
+          {/* An existing place opened without a point: said plainly, until one is set. */}
+          {editing && !located ? (
+            <p className="text-xs font-medium text-amber-700">{t('locationNotYetLocated')}</p>
+          ) : null}
           <p className="text-xs text-gray-500">{t(mapEnabled ? 'locationPinHint' : 'locationCoordinatesHint')}</p>
 
           {mapEnabled ? <LocationMap point={point} onMove={setPoint} /> : null}

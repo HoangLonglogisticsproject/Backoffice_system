@@ -550,8 +550,8 @@ describe('TripSchedulePage', () => {
       ...over,
     });
 
-    const openAddForm = async () => {
-      useSession.mockReturnValue(session(write));
+    const openAddForm = async (permissions: string[] = write) => {
+      useSession.mockReturnValue(session(permissions));
       fetchTripCustomers.mockResolvedValue([
         { id: 'c9', name: 'WWL', note: null, status: 'active' },
         { id: 'c8', name: 'VIỄN ĐẠT', note: null, status: 'active' },
@@ -619,12 +619,104 @@ describe('TripSchedulePage', () => {
       await openAddForm();
       await chooseCustomer('c9');
       const delivery = screen.getByLabelText('Điểm giao hàng');
-      await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương' });
+      await within(delivery).findByRole('option', { name: 'Nhà máy Bình Dương (Chưa định vị)' });
 
       fireEvent.change(delivery, { target: { value: 'l2' } });
 
       expect(screen.getByRole('status')).toHaveTextContent(/chưa có toạ độ/i);
       expect(screen.queryByText('Đã định vị')).toBeNull();
+    });
+
+    /**
+     * ★ READINESS IS SAID BEFORE THE TRIP EXISTS, AND IT IS ONLY "HAS
+     * COORDINATES". The server accepts a trip whose place is not located —
+     * the driver is then refused at that end — so the form never blocks;
+     * it names the problem, per end and for the trip, and offers the fix to
+     * whoever may make it. Nothing here measures anything.
+     */
+    describe('★ location readiness', () => {
+      const choose = async (end: 'Điểm lấy hàng' | 'Điểm giao hàng', id: string) => {
+        const select = screen.getByLabelText(end);
+        await within(select).findByRole('option', { name: /Kho OSC/ });
+        fireEvent.change(select, { target: { value: id } });
+      };
+
+      it('marks an unlocated place in the picker itself, and a located one not at all', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        const pickup = screen.getByLabelText('Điểm lấy hàng');
+
+        expect(await within(pickup).findByRole('option', { name: 'Kho OSC' })).toBeInTheDocument();
+        expect(within(pickup).getByRole('option', { name: 'Nhà máy Bình Dương (Chưa định vị)' })).toBeInTheDocument();
+      });
+
+      it('says the trip is ready when both ends name a located place', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        await choose('Điểm lấy hàng', 'l1');
+        await choose('Điểm giao hàng', 'l1');
+
+        expect(screen.getAllByText('Đã định vị')).toHaveLength(2);
+        expect(screen.getByText('Sẵn sàng xác minh vị trí')).toBeInTheDocument();
+      });
+
+      it('★ says the trip is not ready when one end is unlocated, and keeps the located end as it was', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        await choose('Điểm lấy hàng', 'l1');
+        await choose('Điểm giao hàng', 'l2');
+
+        expect(screen.getByText('Đã định vị')).toBeInTheDocument();
+        expect(screen.getByText('Chưa định vị')).toBeInTheDocument();
+        expect(screen.getByText('Chưa sẵn sàng xác minh vị trí')).toBeInTheDocument();
+        expect(screen.queryByText('Sẵn sàng xác minh vị trí')).toBeNull();
+      });
+
+      it('says the trip is not ready when both ends are unlocated', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        await choose('Điểm lấy hàng', 'l2');
+        await choose('Điểm giao hàng', 'l2');
+
+        expect(screen.getAllByText('Chưa định vị')).toHaveLength(2);
+        expect(screen.getByText('Chưa sẵn sàng xác minh vị trí')).toBeInTheDocument();
+      });
+
+      it('★ still lets the trip be saved with an unlocated place — the server allows it, and the driver is told there', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        await choose('Điểm giao hàng', 'l2');
+        fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-01' } });
+        const saves = screen.getAllByRole('button', { name: 'Lưu' });
+        fireEvent.click(saves[saves.length - 1]!);
+
+        await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
+        const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+        expect(body).toMatchObject({ customerId: 'c9', deliveryLocationId: 'l2' });
+      });
+
+      it('★ offers "Thiết lập vị trí" on an unlocated place to trip.write, opening the ONE place dialog on that place', async () => {
+        await openAddForm();
+        await chooseCustomer('c9');
+        await choose('Điểm giao hàng', 'l2');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Thiết lập vị trí' }));
+
+        expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
+        expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Nhà máy Bình Dương');
+        expect(screen.getByText('Địa điểm này chưa được định vị.')).toBeInTheDocument();
+        // The same form the master-data screen and "add place" use — not a second one.
+        expect(document.querySelectorAll('#location-form')).toHaveLength(1);
+      });
+
+      it('shows a dispatcher without trip.write that the place is unlocated, but no way to fix it here', async () => {
+        await openAddForm(['trip.read', 'trip.create']);
+        await chooseCustomer('c9');
+        await choose('Điểm giao hàng', 'l2');
+
+        expect(screen.getByText('Chưa định vị')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Thiết lập vị trí' })).toBeNull();
+      });
     });
 
     it('★ drops a chosen place the moment the customer changes, and says the new one has none', async () => {

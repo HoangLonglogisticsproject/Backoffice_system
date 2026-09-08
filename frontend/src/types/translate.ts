@@ -1018,6 +1018,18 @@ const PHRASES = {
   },
   fieldPickupLocation: { vi: 'Điểm lấy hàng', en: 'Pickup location' },
   fieldDeliveryLocation: { vi: 'Điểm giao hàng', en: 'Delivery location' },
+  // ------------------------------------------------ location readiness --
+  // "Located" means the place has coordinates and can be checked against;
+  // it says nothing about whether any driver's reading passed. That verdict
+  // is the server's and is worded separately (reviewLocation*).
+  setupLocation: { vi: 'Thiết lập vị trí', en: 'Set up location' },
+  locationNotYetLocated: {
+    vi: 'Địa điểm này chưa được định vị.',
+    en: 'This location has not been located yet.',
+  },
+  tripLocationReadiness: { vi: 'Xác minh vị trí của chuyến', en: 'Trip location verification' },
+  tripLocationReady: { vi: 'Sẵn sàng xác minh vị trí', en: 'Ready for location verification' },
+  tripLocationNotReady: { vi: 'Chưa sẵn sàng xác minh vị trí', en: 'Not ready for location verification' },
   fieldLatitude: { vi: 'Vĩ độ', en: 'Latitude' },
   fieldLongitude: { vi: 'Kinh độ', en: 'Longitude' },
   // Why the office is asked for numbers next to a prose address.

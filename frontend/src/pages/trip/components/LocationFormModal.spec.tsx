@@ -104,6 +104,20 @@ describe('LocationFormModal with a map', () => {
     expect(screen.getByText(/Chưa định vị/)).toBeInTheDocument();
   });
 
+  it('★ says an existing place is not yet located, until a point is set', () => {
+    renderForm(location({ latitude: null, longitude: null }));
+    expect(screen.getByText('Địa điểm này chưa được định vị.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'drag-pin' }));
+
+    expect(screen.queryByText('Địa điểm này chưa được định vị.')).toBeNull();
+    expect(screen.getByText(/Đã định vị/)).toBeInTheDocument();
+  });
+
+  it('says nothing of the kind on a brand-new place', () => {
+    renderForm();
+    expect(screen.queryByText('Địa điểm này chưa được định vị.')).toBeNull();
+  });
 
   it('★ searches after a pause, and selecting a result fills the coordinates and the empty address', async () => {
     search.mockResolvedValue([

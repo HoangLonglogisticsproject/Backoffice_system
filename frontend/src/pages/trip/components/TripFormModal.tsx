@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MapPin } from 'lucide-react';
+import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
@@ -204,6 +205,10 @@ export function TripFormModal({
   // failure mode worth having.
   const { can } = useSession();
   const mayPrice = can('trip.price.read');
+  // Correcting a place — locating it — is `trip.write`, the same key the
+  // master-data screen asks for. A dispatcher without it still sees that a
+  // place is not located; they just cannot fix it from here.
+  const mayManagePlaces = can('trip.write');
   const [form, setForm] = useState<FormState>(emptyForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -279,16 +284,53 @@ export function TripFormModal({
     if (!trip) return null;
     if (end === 'pickup') {
       return trip.pickupLocation
-        ? { ...trip.pickupLocation, address: trip.pickupAddress ?? '', contact: trip.pickupContact, latitude: trip.pickupLatitude ?? null }
+        ? {
+            ...trip.pickupLocation,
+            address: trip.pickupAddress ?? '',
+            contact: trip.pickupContact,
+            latitude: trip.pickupLatitude ?? null,
+            longitude: trip.pickupLongitude ?? null,
+          }
         : null;
     }
     return trip.deliveryLocation
-      ? { ...trip.deliveryLocation, address: trip.deliveryAddress ?? '', contact: trip.deliveryContact, latitude: trip.deliveryLatitude ?? null }
+      ? {
+          ...trip.deliveryLocation,
+          address: trip.deliveryAddress ?? '',
+          contact: trip.deliveryContact,
+          latitude: trip.deliveryLatitude ?? null,
+          longitude: trip.deliveryLongitude ?? null,
+        }
       : null;
   };
 
-  /** Which end a "new place" dialog was opened for; the new place is selected there on save. */
-  const [addingFor, setAddingFor] = useState<'pickup' | 'delivery' | null>(null);
+  /** The place one end currently names: an active row, or the trip's own copy of an archived one. */
+  const chosenFor = (end: 'pickup' | 'delivery'): ChosenPlace | null => {
+    const value = end === 'pickup' ? form.pickupLocationId : form.deliveryLocationId;
+    const own = ownPlace(end);
+    return (locations.data ?? []).find((location) => location.id === value) ?? (own?.id === value ? own : null);
+  };
+
+  /**
+   * ★ READINESS IS "HAS COORDINATES", AND NOTHING ELSE. The driver's
+   * confirmation at an end is refused by the server unless the trip's
+   * snapshot of that end carries a point, so a trip is ready for location
+   * verification exactly when BOTH ends name a located place. A hand-typed
+   * address has no point and counts as not ready — which is the truth the
+   * driver would otherwise discover at the gate. Whether a driver's reading
+   * later PASSES is a different fact, decided by the server.
+   */
+  const tripLocationReady = isLocated(chosenFor('pickup')) && isLocated(chosenFor('delivery'));
+
+  /**
+   * The place dialog, if open: which end asked for it, and — for "set up
+   * location" — which existing place it corrects. One dialog for both jobs;
+   * there is no second way to put coordinates on a place.
+   */
+  const [placeDialog, setPlaceDialog] = useState<{
+    end: 'pickup' | 'delivery';
+    editing: TripLocation | null;
+  } | null>(null);
 
   const close = () => {
     setError(null);
@@ -593,7 +635,8 @@ export function TripFormModal({
             current={ownPlace('pickup')}
             value={form.pickupLocationId}
             onChange={(id) => set('pickupLocationId', id)}
-            onAdd={() => setAddingFor('pickup')}
+            onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
+            onSetup={mayManagePlaces ? (location) => setPlaceDialog({ end: 'pickup', editing: location }) : null}
             address={form.pickupAddress}
             contact={form.pickupContact}
             onAddress={(value) => set('pickupAddress', value)}
@@ -607,12 +650,25 @@ export function TripFormModal({
             current={ownPlace('delivery')}
             value={form.deliveryLocationId}
             onChange={(id) => set('deliveryLocationId', id)}
-            onAdd={() => setAddingFor('delivery')}
+            onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
+            onSetup={mayManagePlaces ? (location) => setPlaceDialog({ end: 'delivery', editing: location }) : null}
             address={form.deliveryAddress}
             contact={form.deliveryContact}
             onAddress={(value) => set('deliveryAddress', value)}
             onContact={(value) => set('deliveryContact', value)}
           />
+
+          {/* ★ THE TRIP'S READINESS, IN ONE LINE, once there is a customer
+              whose places could make it ready. Said here so the office sees
+              it before the driver does. */}
+          {form.customerId !== null ? (
+            <p className="flex flex-wrap items-center gap-2 text-xs text-gray-600 sm:col-span-2">
+              <span>{t('tripLocationReadiness')}:</span>
+              <StatusPill tone={tripLocationReady ? 'green' : 'amber'}>
+                {t(tripLocationReady ? 'tripLocationReady' : 'tripLocationNotReady')}
+              </StatusPill>
+            </p>
+          ) : null}
 
           <div className="space-y-2">
             <label htmlFor="trip-pickup-at" className="text-sm font-medium text-gray-700">
@@ -663,19 +719,20 @@ export function TripFormModal({
         )}
       </form>
 
-      {addingFor && form.customerId ? (
+      {placeDialog && form.customerId ? (
         <LocationFormModal
           customerId={form.customerId}
-          editing={null}
-          onClose={() => setAddingFor(null)}
+          editing={placeDialog.editing}
+          onClose={() => setPlaceDialog(null)}
           onSaved={async (location) => {
             // The new place is the customer's and is selected where it was
             // asked for — AFTER the list has been re-read, so the effect that
             // drops unknown places never sees the new id before the list
-            // that contains it.
-            const end = addingFor;
+            // that contains it. A place that was only CORRECTED is already
+            // selected; the re-read list is what carries its coordinates.
+            const { end, editing } = placeDialog;
             await locations.reload();
-            set(end === 'pickup' ? 'pickupLocationId' : 'deliveryLocationId', location.id);
+            if (!editing) set(end === 'pickup' ? 'pickupLocationId' : 'deliveryLocationId', location.id);
           }}
         />
       ) : null}
@@ -690,7 +747,12 @@ interface ChosenPlace {
   address: string;
   contact: string | null;
   latitude: number | null;
+  longitude: number | null;
 }
+
+/** Both halves present — the only readiness there is. The server stores them both or neither. */
+const isLocated = (place: ChosenPlace | null): boolean =>
+  place !== null && place.latitude !== null && place.longitude !== null;
 
 /**
  * One end of the trip: the customer's place, chosen — or, with none chosen,
@@ -710,6 +772,7 @@ function LocationEnd({
   value,
   onChange,
   onAdd,
+  onSetup,
   address,
   contact,
   onAddress,
@@ -724,6 +787,8 @@ function LocationEnd({
   value: string | null;
   onChange: (id: string | null) => void;
   onAdd: () => void;
+  /** Opens the place dialog on an unlocated ACTIVE place. `null` for a caller who may not correct places. */
+  onSetup: ((location: TripLocation) => void) | null;
   address: string;
   contact: string;
   onAddress: (value: string) => void;
@@ -735,10 +800,19 @@ function LocationEnd({
   // choice: it is shown from the trip's own copy, read-only like any other.
   const chosen: ChosenPlace | null =
     locations.find((location) => location.id === value) ?? (current?.id === value ? current : null);
-  const options: { id: string; name: string }[] =
-    locations.some((location) => location.id === current?.id) || !current
-      ? locations
-      : [...locations, { id: current.id, name: `${current.name} (${t('statusArchived')})` }];
+  // ★ SAID IN THE PICKER, NOT ONLY AFTER THE CHOICE. A native `<select>` can
+  // carry no badge, so the word goes in the label — a dispatcher sees which
+  // places can be verified before picking one.
+  const options: { id: string; label: string }[] = locations.map((location) => ({
+    id: location.id,
+    label: isLocated(location) ? location.name : `${location.name} (${t('locationUnlocated')})`,
+  }));
+  if (current && !locations.some((location) => location.id === current.id)) {
+    options.push({ id: current.id, label: `${current.name} (${t('statusArchived')})` });
+  }
+  // Only an active row can be corrected; an archived place is the trip's
+  // frozen copy, and the server refuses edits to it anyway.
+  const setupTarget = onSetup ? (locations.find((location) => location.id === value) ?? null) : null;
 
   return (
     <div className="space-y-2">
@@ -754,9 +828,9 @@ function LocationEnd({
           className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <option value="">{customerId === null ? t('chooseCustomerFirst') : t('selectLocation')}</option>
-          {options.map((location) => (
-            <option key={location.id} value={location.id}>
-              {location.name}
+          {options.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -782,12 +856,22 @@ function LocationEnd({
             <span>{chosen.address}</span>
           </p>
           {chosen.contact ? <p className="text-xs text-gray-600">{chosen.contact}</p> : null}
-          {chosen.latitude !== null ? (
-            <p className="text-xs text-green-700">{t('locationLocated')}</p>
+          {isLocated(chosen) ? (
+            <StatusPill tone="green">{t('locationLocated')}</StatusPill>
           ) : (
-            <output className="block text-xs font-medium text-amber-700">
-              {t('locationUnlocatedWarning')}
-            </output>
+            <div className="space-y-1.5">
+              <StatusPill tone="amber">{t('locationUnlocated')}</StatusPill>
+              <output className="block text-xs font-medium text-amber-700">
+                {t('locationUnlocatedWarning')}
+              </output>
+              {/* The fix, where the person who may make it is standing. */}
+              {setupTarget && onSetup ? (
+                <Button type="button" variant="outline" size="sm" onClick={() => onSetup(setupTarget)}>
+                  <MapPin className="size-3.5" aria-hidden />
+                  {t('setupLocation')}
+                </Button>
+              ) : null}
+            </div>
           )}
         </div>
       ) : (
