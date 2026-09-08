@@ -170,6 +170,182 @@ const formFor = (trip: TripScheduleWithRefs): FormState => ({
   status: trip.status,
 });
 
+type End = 'pickup' | 'delivery';
+type EndFlags = Record<End, boolean>;
+const NO_REFRESH: EndFlags = { pickup: false, delivery: false };
+
+/** The form as it opens: the row's values, or an empty sheet for a new trip. */
+const initialForm = (trip: TripScheduleWithRefs | null): FormState =>
+  trip ? formFor(trip) : emptyForm();
+
+/**
+ * ★ A NEW CUSTOMER MEANS NO PLACE, YET. The places on the form were the old
+ * customer's; both are cleared in the same state change as the customer, so
+ * no render — and no submit — can pair customer B with customer A's place.
+ * The server refuses that pairing anyway; this keeps the form honest.
+ */
+const withCustomer = (current: FormState, id: string | null): FormState =>
+  current.customerId === id
+    ? current
+    : { ...current, customerId: id, pickupLocationId: null, deliveryLocationId: null };
+
+/**
+ * ★ THE TRIP'S OWN COPY OF ONE END: the place it was copied from, with the
+ * address, contact and coordinates the trip actually holds. This — not the
+ * master row — is what the driver is measured against, until the reference is
+ * changed or deliberately refreshed. The active list does not carry an
+ * archived place, but the trip still names it and still holds the copy; that
+ * copy is what the form shows for it, read-only, and the reference stays
+ * selected. Nothing is reactivated; choosing another place is the
+ * dispatcher's to do.
+ */
+const snapshotOf = (trip: TripScheduleWithRefs | null, end: End): ChosenPlace | null => {
+  const ref = end === 'pickup' ? trip?.pickupLocation : trip?.deliveryLocation;
+  if (!trip || !ref) return null;
+  return end === 'pickup'
+    ? {
+        ...ref,
+        address: trip.pickupAddress ?? '',
+        contact: trip.pickupContact,
+        latitude: trip.pickupLatitude ?? null,
+        longitude: trip.pickupLongitude ?? null,
+      }
+    : {
+        ...ref,
+        address: trip.deliveryAddress ?? '',
+        contact: trip.deliveryContact,
+        latitude: trip.deliveryLatitude ?? null,
+        longitude: trip.deliveryLongitude ?? null,
+      };
+};
+
+/**
+ * ★ THE PLACES ARE THE CHOSEN CUSTOMER'S, AND NOBODY ELSE'S. A place still
+ * selected after the customer changed is dropped the moment the new list
+ * arrives without it, so a trip for customer B can never quietly carry
+ * customer A's warehouse. The trip's own (possibly archived) places stay
+ * known — but ONLY while the form still names the trip's own customer. The
+ * server refuses the wrong pairing anyway; this keeps the form honest before
+ * submit. Returns `current` itself when nothing changes, so the effect settles.
+ */
+const reconcilePlaces = (
+  current: FormState,
+  master: TripLocation[] | null,
+  trip: TripScheduleWithRefs | null,
+): FormState => {
+  if (current.customerId === null) {
+    return current.pickupLocationId === null && current.deliveryLocationId === null
+      ? current
+      : { ...current, pickupLocationId: null, deliveryLocationId: null };
+  }
+  if (master === null) return current;
+
+  const known = new Set(master.map((location) => location.id));
+  if (current.customerId === trip?.customerId) {
+    for (const end of ['pickup', 'delivery'] as const) {
+      const own = snapshotOf(trip, end);
+      if (own) known.add(own.id);
+    }
+  }
+  const keep = (id: string | null) => (id !== null && known.has(id) ? id : null);
+  const pickup = keep(current.pickupLocationId);
+  const delivery = keep(current.deliveryLocationId);
+  return pickup === current.pickupLocationId && delivery === current.deliveryLocationId
+    ? current
+    : { ...current, pickupLocationId: pickup, deliveryLocationId: delivery };
+};
+
+/**
+ * ★ THE PLACE AN END WILL ACTUALLY RUN AGAINST. For an existing trip whose
+ * reference is unchanged, that is the trip's SNAPSHOT: the master row may
+ * have been located since, but the driver is measured against the copy the
+ * trip holds until the office deliberately refreshes it. A refreshed or newly
+ * chosen place reads from the master, because that is what the next save
+ * copies. So what the readiness pill says is always what the driver will
+ * meet — never a master value the trip does not yet hold.
+ */
+const placeFor = (
+  value: string | null,
+  master: TripLocation[],
+  snapshot: ChosenPlace | null,
+  refreshed: boolean,
+): ChosenPlace | null => {
+  if (value === null) return null;
+  if (snapshot?.id === value && !refreshed) return snapshot;
+  return master.find((location) => location.id === value) ?? (snapshot?.id === value ? snapshot : null);
+};
+
+/** `''` → `null`: on the PATCH path this is what makes clearing a field possible. */
+const blank = (value: string): string | null => (value.trim() === '' ? null : value.trim());
+
+/**
+ * One end of the payload.
+ *
+ * ★ NO COORDINATE LEAVES THIS FORM. Each end names the customer's place, and
+ * the server copies that place's address, contact and coordinates onto the
+ * trip. The typed address and contact travel only for an end with no place —
+ * the hand-typed path every trip took before places existed.
+ *
+ * ★ AN END WHOSE PLACE IS UNCHANGED IS NOT IN THE PATCH. The server copies a
+ * place afresh only when the patch names it, and refuses to copy an archived
+ * one — so an edit that leaves the place alone must not name it. Otherwise
+ * correcting a note on a trip whose warehouse has since closed would be
+ * refused, and on any other trip would quietly rewrite last week's snapshot
+ * from today's master. Omitted, the trip's own copy stands.
+ *
+ * ★ UNLESS THE OFFICE REFRESHED THE PLACE FROM THIS FORM. Then naming it again
+ * is exactly the request: the server copies it afresh, and the snapshot the
+ * driver meets becomes the one the readiness pill already shows.
+ */
+const endFields = (
+  form: FormState,
+  trip: TripScheduleWithRefs | null,
+  end: End,
+  refreshed: boolean,
+): UpdateTripInput => {
+  const [id, was, address, contact] =
+    end === 'pickup'
+      ? [form.pickupLocationId, trip?.pickupLocationId, form.pickupAddress, form.pickupContact]
+      : [form.deliveryLocationId, trip?.deliveryLocationId, form.deliveryAddress, form.deliveryContact];
+  if (id !== null && id === was && !refreshed) return {};
+  return end === 'pickup'
+    ? { pickupLocationId: id, pickupAddress: id ? null : blank(address), pickupContact: id ? null : blank(contact) }
+    : { deliveryLocationId: id, deliveryAddress: id ? null : blank(address), deliveryContact: id ? null : blank(contact) };
+};
+
+/**
+ * Everything the form sends. Every field it owns is always present, with
+ * `''` as `null` — except the two prices, which are dropped entirely for a
+ * viewer without the permission: the server REFUSES a body carrying either
+ * from such a caller rather than ignoring it, so `'' → null` would turn every
+ * save they make into a 403. For a viewer who holds it, `''` clears the
+ * figure, because a price typed by mistake has to be removable.
+ */
+const tripPayload = (
+  form: FormState,
+  trip: TripScheduleWithRefs | null,
+  mayPrice: boolean,
+  refreshed: EndFlags,
+): CreateTripInput & UpdateTripInput => ({
+  scheduledOn: form.scheduledOn,
+  vehicleId: form.vehicleId,
+  customerId: form.customerId,
+  cargoInfo: blank(form.cargoInfo),
+  ...endFields(form, trip, 'pickup', refreshed.pickup),
+  ...endFields(form, trip, 'delivery', refreshed.delivery),
+  pickupAt: fromDateTimeLocalValue(form.pickupAt),
+  deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
+  ...(mayPrice ? { sellPrice: blank(form.sellPrice), purchasePrice: blank(form.purchasePrice) } : {}),
+  note: blank(form.note),
+  status: form.status,
+});
+
+/** An existing row is patched; a new one is created. */
+const saveTrip = (
+  trip: TripScheduleWithRefs | null,
+  payload: CreateTripInput & UpdateTripInput,
+): Promise<unknown> => (trip ? updateTripSchedule(trip.id, payload) : createTripSchedule(payload));
+
 /**
  * Entering or correcting one row of the dispatch board.
  *
@@ -212,6 +388,15 @@ export function TripFormModal({
   const [form, setForm] = useState<FormState>(emptyForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * ★ WHICH ENDS THE OFFICE REFRESHED FROM THIS FORM. Correcting a place
+   * through the dialog below changes the master row, not the trip; the trip
+   * keeps its snapshot until a save names the place again. These flags are
+   * what make the next save do that — see `endFields` — and what make the
+   * readiness pill read the master for that end in the meantime, so the two
+   * never disagree. Reset whenever the form opens on a row.
+   */
+  const [refreshed, setRefreshed] = useState<EndFlags>(NO_REFRESH);
 
   const editing = trip !== null;
 
@@ -220,96 +405,31 @@ export function TripFormModal({
   // new object for the same trip does not throw away what somebody is typing.
   useEffect(() => {
     if (!isOpen) return;
-    setForm(trip ? formFor(trip) : emptyForm());
+    setForm(initialForm(trip));
+    setRefreshed(NO_REFRESH);
     setError(null);
   }, [isOpen, trip?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
 
-  // ★ THE PLACES ARE THE CHOSEN CUSTOMER'S, AND NOBODY ELSE'S. Read for the
-  // customer on the form; a place still selected after the customer changed
-  // is dropped the moment the new list arrives without it, so a trip for
-  // customer B can never quietly carry customer A's warehouse. The server
-  // refuses that pairing anyway; this keeps the form honest before submit.
+  // The chosen customer's places, and the form kept honest against them —
+  // see `reconcilePlaces`.
   const locations = useTripLocations(form.customerId);
   useEffect(() => {
-    if (form.customerId === null) {
-      if (form.pickupLocationId !== null || form.deliveryLocationId !== null) {
-        setForm((current) => ({ ...current, pickupLocationId: null, deliveryLocationId: null }));
-      }
-      return;
-    }
-    if (locations.data === null) return;
-    const known = new Set(locations.data.map((location) => location.id));
-    // The row's own current places may be archived and absent from the active
-    // list; they stay selectable on that trip exactly as a retired vehicle does
-    // — but ONLY while the form still names the trip's own customer. Once the
-    // customer changes they are another customer's places and are not known.
-    if (trip && form.customerId === trip.customerId) {
-      if (trip.pickupLocation) known.add(trip.pickupLocation.id);
-      if (trip.deliveryLocation) known.add(trip.deliveryLocation.id);
-    }
-    setForm((current) => {
-      const pickup = current.pickupLocationId && known.has(current.pickupLocationId) ? current.pickupLocationId : null;
-      const delivery = current.deliveryLocationId && known.has(current.deliveryLocationId) ? current.deliveryLocationId : null;
-      return pickup === current.pickupLocationId && delivery === current.deliveryLocationId
-        ? current
-        : { ...current, pickupLocationId: pickup, deliveryLocationId: delivery };
-    });
+    setForm((current) => reconcilePlaces(current, locations.data, trip));
   }, [form.customerId, form.pickupLocationId, form.deliveryLocationId, locations.data, trip]);
 
-  /**
-   * ★ A NEW CUSTOMER MEANS NO PLACE, YET. The places on the form were the old
-   * customer's; both are cleared in the same state change as the customer, so
-   * no render — and no submit — can pair customer B with customer A's place.
-   * The server refuses that pairing anyway; this keeps the form honest.
-   */
-  const chooseCustomer = (id: string | null) =>
-    setForm((current) =>
-      current.customerId === id
-        ? current
-        : { ...current, customerId: id, pickupLocationId: null, deliveryLocationId: null },
+  const chooseCustomer = (id: string | null) => setForm((current) => withCustomer(current, id));
+
+  /** The place one end will run against — see `placeFor`. */
+  const placeAt = (end: End): ChosenPlace | null =>
+    placeFor(
+      end === 'pickup' ? form.pickupLocationId : form.deliveryLocationId,
+      locations.data ?? [],
+      snapshotOf(trip, end),
+      refreshed[end],
     );
-
-  /**
-   * ★ THE ROW'S OWN PLACE, WITH THE TRIP'S SNAPSHOT OF IT. The active list does
-   * not carry an archived place, but the trip still names it and still holds
-   * what was copied from it. That copy is what the form shows for it — read
-   * only, as for any chosen place — and the reference stays selected. Nothing
-   * is reactivated and nothing is replaced; choosing another place or clearing
-   * it is the dispatcher's to do.
-   */
-  const ownPlace = (end: 'pickup' | 'delivery'): ChosenPlace | null => {
-    if (!trip) return null;
-    if (end === 'pickup') {
-      return trip.pickupLocation
-        ? {
-            ...trip.pickupLocation,
-            address: trip.pickupAddress ?? '',
-            contact: trip.pickupContact,
-            latitude: trip.pickupLatitude ?? null,
-            longitude: trip.pickupLongitude ?? null,
-          }
-        : null;
-    }
-    return trip.deliveryLocation
-      ? {
-          ...trip.deliveryLocation,
-          address: trip.deliveryAddress ?? '',
-          contact: trip.deliveryContact,
-          latitude: trip.deliveryLatitude ?? null,
-          longitude: trip.deliveryLongitude ?? null,
-        }
-      : null;
-  };
-
-  /** The place one end currently names: an active row, or the trip's own copy of an archived one. */
-  const chosenFor = (end: 'pickup' | 'delivery'): ChosenPlace | null => {
-    const value = end === 'pickup' ? form.pickupLocationId : form.deliveryLocationId;
-    const own = ownPlace(end);
-    return (locations.data ?? []).find((location) => location.id === value) ?? (own?.id === value ? own : null);
-  };
 
   /**
    * ★ READINESS IS "HAS COORDINATES", AND NOTHING ELSE. The driver's
@@ -320,17 +440,30 @@ export function TripFormModal({
    * driver would otherwise discover at the gate. Whether a driver's reading
    * later PASSES is a different fact, decided by the server.
    */
-  const tripLocationReady = isLocated(chosenFor('pickup')) && isLocated(chosenFor('delivery'));
+  const tripLocationReady = isLocated(placeAt('pickup')) && isLocated(placeAt('delivery'));
 
   /**
    * The place dialog, if open: which end asked for it, and — for "set up
    * location" — which existing place it corrects. One dialog for both jobs;
    * there is no second way to put coordinates on a place.
    */
-  const [placeDialog, setPlaceDialog] = useState<{
-    end: 'pickup' | 'delivery';
-    editing: TripLocation | null;
-  } | null>(null);
+  const [placeDialog, setPlaceDialog] = useState<{ end: End; editing: TripLocation | null } | null>(null);
+
+  /**
+   * After the place dialog saved. A NEW place is selected where it was asked
+   * for — AFTER the list has been re-read, so the effect that drops unknown
+   * places never sees the new id before the list that contains it. A place
+   * CORRECTED from here is already selected; the re-read list carries its
+   * coordinates, and the end is marked so the next save names the place again
+   * and the server copies it afresh.
+   */
+  const placeSaved = async (location: TripLocation) => {
+    if (!placeDialog) return;
+    const { end, editing } = placeDialog;
+    await locations.reload();
+    if (editing) setRefreshed((flags) => ({ ...flags, [end]: true }));
+    else set(end === 'pickup' ? 'pickupLocationId' : 'deliveryLocationId', location.id);
+  };
 
   const close = () => {
     setError(null);
@@ -342,65 +475,8 @@ export function TripFormModal({
     setError(null);
     setBusy(true);
 
-    // `''` → `null`. See the header: this is what makes clearing a field
-    // possible on the PATCH path.
-    const blank = (value: string) => (value.trim() === '' ? null : value.trim());
-
-    // ★ NO COORDINATE LEAVES THIS FORM. Each end names the customer's place,
-    // and the server copies that place's address, contact and coordinates onto
-    // the trip. The typed address and contact travel only for an end with no
-    // place — the hand-typed path every trip took before places existed.
-    //
-    // ★ AN END WHOSE PLACE IS UNCHANGED IS NOT IN THE PATCH. The server copies
-    // a place afresh only when the patch names it, and refuses to copy an
-    // archived one — so an edit that leaves the place alone must not name it.
-    // Otherwise correcting a note on a trip whose warehouse has since closed
-    // would be refused, and on any other trip would quietly rewrite last
-    // week's snapshot from today's master. Omitted, the trip's own copy — and
-    // its reference, archived or not — stands. An end with no place is always
-    // sent: its typed address may be what changed.
-    const endFields = (end: 'pickup' | 'delivery'): UpdateTripInput => {
-      const [id, was, address, contact] =
-        end === 'pickup'
-          ? [form.pickupLocationId, trip?.pickupLocationId, form.pickupAddress, form.pickupContact]
-          : [form.deliveryLocationId, trip?.deliveryLocationId, form.deliveryAddress, form.deliveryContact];
-      if (trip && id !== null && id === was) return {};
-      return end === 'pickup'
-        ? { pickupLocationId: id, pickupAddress: id ? null : blank(address), pickupContact: id ? null : blank(contact) }
-        : { deliveryLocationId: id, deliveryAddress: id ? null : blank(address), deliveryContact: id ? null : blank(contact) };
-    };
-    const payload: CreateTripInput & UpdateTripInput = {
-      scheduledOn: form.scheduledOn,
-      vehicleId: form.vehicleId,
-      customerId: form.customerId,
-      cargoInfo: blank(form.cargoInfo),
-      ...endFields('pickup'),
-      ...endFields('delivery'),
-      pickupAt: fromDateTimeLocalValue(form.pickupAt),
-      deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
-      // ★ THE TWO PRICE KEYS ARE PRESENT ONLY FOR SOMEBODY WHO MAY SET THEM,
-      // and this is the one place on the form where a key is dropped rather
-      // than sent as `null`. For a viewer without the permission the server
-      // REFUSES a body carrying either — it does not ignore them — so the
-      // usual `'' → null` would turn every save they make into a 403.
-      //
-      // For a viewer who does hold it the ordinary rule applies: `''` → `null`
-      // clears the figure, because a price typed by mistake has to be
-      // removable. The selling price cannot be cleared on CREATE — the field is
-      // `required` below and the server answers 422 — but it can on an edit.
-      ...(mayPrice
-        ? { sellPrice: blank(form.sellPrice), purchasePrice: blank(form.purchasePrice) }
-        : {}),
-      note: blank(form.note),
-      status: form.status,
-    };
-
     try {
-      if (trip) {
-        await updateTripSchedule(trip.id, payload);
-      } else {
-        await createTripSchedule(payload);
-      }
+      await saveTrip(trip, tripPayload(form, trip, mayPrice, refreshed));
       onSaved();
       onClose();
     } catch (error_) {
@@ -632,7 +708,8 @@ export function TripFormModal({
             label={t('fieldPickupLocation')}
             customerId={form.customerId}
             locations={locations.data ?? []}
-            current={ownPlace('pickup')}
+            current={snapshotOf(trip, 'pickup')}
+            chosen={placeAt('pickup')}
             value={form.pickupLocationId}
             onChange={(id) => set('pickupLocationId', id)}
             onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
@@ -647,7 +724,8 @@ export function TripFormModal({
             label={t('fieldDeliveryLocation')}
             customerId={form.customerId}
             locations={locations.data ?? []}
-            current={ownPlace('delivery')}
+            current={snapshotOf(trip, 'delivery')}
+            chosen={placeAt('delivery')}
             value={form.deliveryLocationId}
             onChange={(id) => set('deliveryLocationId', id)}
             onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
@@ -661,14 +739,7 @@ export function TripFormModal({
           {/* ★ THE TRIP'S READINESS, IN ONE LINE, once there is a customer
               whose places could make it ready. Said here so the office sees
               it before the driver does. */}
-          {form.customerId !== null ? (
-            <p className="flex flex-wrap items-center gap-2 text-xs text-gray-600 sm:col-span-2">
-              <span>{t('tripLocationReadiness')}:</span>
-              <StatusPill tone={tripLocationReady ? 'green' : 'amber'}>
-                {t(tripLocationReady ? 'tripLocationReady' : 'tripLocationNotReady')}
-              </StatusPill>
-            </p>
-          ) : null}
+          {form.customerId !== null ? <TripReadiness ready={tripLocationReady} /> : null}
 
           <div className="space-y-2">
             <label htmlFor="trip-pickup-at" className="text-sm font-medium text-gray-700">
@@ -724,16 +795,7 @@ export function TripFormModal({
           customerId={form.customerId}
           editing={placeDialog.editing}
           onClose={() => setPlaceDialog(null)}
-          onSaved={async (location) => {
-            // The new place is the customer's and is selected where it was
-            // asked for — AFTER the list has been re-read, so the effect that
-            // drops unknown places never sees the new id before the list
-            // that contains it. A place that was only CORRECTED is already
-            // selected; the re-read list is what carries its coordinates.
-            const { end, editing } = placeDialog;
-            await locations.reload();
-            if (!editing) set(end === 'pickup' ? 'pickupLocationId' : 'deliveryLocationId', location.id);
-          }}
+          onSaved={placeSaved}
         />
       ) : null}
     </Modal>
@@ -754,6 +816,44 @@ interface ChosenPlace {
 const isLocated = (place: ChosenPlace | null): boolean =>
   place !== null && place.latitude !== null && place.longitude !== null;
 
+/** The trip's readiness for location verification, in one line. Said here so the office sees it before the driver does. */
+function TripReadiness({ ready }: Readonly<{ ready: boolean }>) {
+  const { t } = useLanguage();
+  return (
+    <p className="flex flex-wrap items-center gap-2 text-xs text-gray-600 sm:col-span-2">
+      <span>{t('tripLocationReadiness')}:</span>
+      <StatusPill tone={ready ? 'green' : 'amber'}>
+        {t(ready ? 'tripLocationReady' : 'tripLocationNotReady')}
+      </StatusPill>
+    </p>
+  );
+}
+
+type Translate = ReturnType<typeof useLanguage>['t'];
+
+/**
+ * The picker's rows: the customer's active places, and the trip's own
+ * archived one after them.
+ *
+ * ★ SAID IN THE PICKER, NOT ONLY AFTER THE CHOICE. A native `<select>` can
+ * carry no badge, so the word goes in the label — a dispatcher sees which
+ * places can be verified before picking one.
+ */
+const placeOptions = (
+  locations: TripLocation[],
+  current: ChosenPlace | null,
+  t: Translate,
+): { id: string; label: string }[] => {
+  const options = locations.map((location) => ({
+    id: location.id,
+    label: isLocated(location) ? location.name : `${location.name} (${t('locationUnlocated')})`,
+  }));
+  if (current && !locations.some((location) => location.id === current.id)) {
+    options.push({ id: current.id, label: `${current.name} (${t('statusArchived')})` });
+  }
+  return options;
+};
+
 /**
  * One end of the trip: the customer's place, chosen — or, with none chosen,
  * the address typed by hand as before.
@@ -769,6 +869,7 @@ function LocationEnd({
   customerId,
   locations,
   current,
+  chosen,
   value,
   onChange,
   onAdd,
@@ -778,12 +879,14 @@ function LocationEnd({
   onAddress,
   onContact,
 }: Readonly<{
-  end: 'pickup' | 'delivery';
+  end: End;
   label: string;
   customerId: string | null;
   locations: TripLocation[];
   /** The row's own place with the trip's snapshot of it, kept selectable and shown even when archived. */
   current: ChosenPlace | null;
+  /** What this end will run against — the snapshot or the master row, as `placeFor` decides. */
+  chosen: ChosenPlace | null;
   value: string | null;
   onChange: (id: string | null) => void;
   onAdd: () => void;
@@ -796,23 +899,11 @@ function LocationEnd({
 }>) {
   const { t } = useLanguage();
   const selectId = `trip-${end}-location`;
-  // An archived place is absent from the active list but is still the trip's
-  // choice: it is shown from the trip's own copy, read-only like any other.
-  const chosen: ChosenPlace | null =
-    locations.find((location) => location.id === value) ?? (current?.id === value ? current : null);
-  // ★ SAID IN THE PICKER, NOT ONLY AFTER THE CHOICE. A native `<select>` can
-  // carry no badge, so the word goes in the label — a dispatcher sees which
-  // places can be verified before picking one.
-  const options: { id: string; label: string }[] = locations.map((location) => ({
-    id: location.id,
-    label: isLocated(location) ? location.name : `${location.name} (${t('locationUnlocated')})`,
-  }));
-  if (current && !locations.some((location) => location.id === current.id)) {
-    options.push({ id: current.id, label: `${current.name} (${t('statusArchived')})` });
-  }
+  const options = placeOptions(locations, current, t);
   // Only an active row can be corrected; an archived place is the trip's
   // frozen copy, and the server refuses edits to it anyway.
   const setupTarget = onSetup ? (locations.find((location) => location.id === value) ?? null) : null;
+  const setup = onSetup && setupTarget ? () => onSetup(setupTarget) : null;
 
   return (
     <div className="space-y-2">
@@ -850,30 +941,7 @@ function LocationEnd({
       ) : null}
 
       {chosen ? (
-        <div className="space-y-1 rounded-lg bg-gray-50 p-3 text-sm">
-          <p className="flex items-start gap-1.5 whitespace-pre-wrap text-gray-800">
-            <MapPin className="mt-0.5 size-4 shrink-0 text-gray-400" aria-hidden />
-            <span>{chosen.address}</span>
-          </p>
-          {chosen.contact ? <p className="text-xs text-gray-600">{chosen.contact}</p> : null}
-          {isLocated(chosen) ? (
-            <StatusPill tone="green">{t('locationLocated')}</StatusPill>
-          ) : (
-            <div className="space-y-1.5">
-              <StatusPill tone="amber">{t('locationUnlocated')}</StatusPill>
-              <output className="block text-xs font-medium text-amber-700">
-                {t('locationUnlocatedWarning')}
-              </output>
-              {/* The fix, where the person who may make it is standing. */}
-              {setupTarget && onSetup ? (
-                <Button type="button" variant="outline" size="sm" onClick={() => onSetup(setupTarget)}>
-                  <MapPin className="size-3.5" aria-hidden />
-                  {t('setupLocation')}
-                </Button>
-              ) : null}
-            </div>
-          )}
-        </div>
+        <ChosenPlaceCard chosen={chosen} onSetup={setup} />
       ) : (
         <>
           <p className="text-xs text-gray-500">{t('noLocationSelected')}</p>
@@ -890,6 +958,40 @@ function LocationEnd({
             onChange={onContact}
           />
         </>
+      )}
+    </div>
+  );
+}
+
+/** The chosen place, read-only, with its readiness — and the fix, where the person who may make it is standing. */
+function ChosenPlaceCard({
+  chosen,
+  onSetup,
+}: Readonly<{ chosen: ChosenPlace; onSetup: (() => void) | null }>) {
+  const { t } = useLanguage();
+
+  return (
+    <div className="space-y-1 rounded-lg bg-gray-50 p-3 text-sm">
+      <p className="flex items-start gap-1.5 whitespace-pre-wrap text-gray-800">
+        <MapPin className="mt-0.5 size-4 shrink-0 text-gray-400" aria-hidden />
+        <span>{chosen.address}</span>
+      </p>
+      {chosen.contact ? <p className="text-xs text-gray-600">{chosen.contact}</p> : null}
+      {isLocated(chosen) ? (
+        <StatusPill tone="green">{t('locationLocated')}</StatusPill>
+      ) : (
+        <div className="space-y-1.5">
+          <StatusPill tone="amber">{t('locationUnlocated')}</StatusPill>
+          <output className="block text-xs font-medium text-amber-700">
+            {t('locationUnlocatedWarning')}
+          </output>
+          {onSetup ? (
+            <Button type="button" variant="outline" size="sm" onClick={onSetup}>
+              <MapPin className="size-3.5" aria-hidden />
+              {t('setupLocation')}
+            </Button>
+          ) : null}
+        </div>
       )}
     </div>
   );

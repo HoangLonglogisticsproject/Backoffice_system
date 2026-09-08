@@ -12,6 +12,7 @@ import {
   searchPlaces,
   type Coordinates,
   type PlaceSuggestion,
+  type ResolvedPlace,
 } from '@/utils/googleMaps';
 import type { TripLocation } from '@/types/trip';
 import { LocationMap } from './LocationMap';
@@ -106,6 +107,31 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
     setLongitude(roundCoordinate(lng));
   };
 
+  // What the last chosen place wrote into the address, so a later choice may
+  // replace it — and an address the operator wrote is left alone.
+  const lastFilled = useRef<string | null>(null);
+
+  /**
+   * ★ DECIDED AGAINST THE ADDRESS AS IT IS WHEN THE PLACE ARRIVES, not as it
+   * was when the row was clicked. The details fetch is asynchronous; an
+   * operator who types into the address while it is pending must not have
+   * that overwritten by a closure still holding the empty field they started
+   * from. The updater form of `setAddress` reads the current value, so the
+   * rule — fill only an empty address, or the one this search filled last —
+   * is applied to the truth at that moment. The coordinates are taken either
+   * way: they are what the place was chosen for.
+   */
+  const applyPlace = (place: ResolvedPlace) => {
+    setPoint(place);
+    const offered = place.address;
+    if (!offered) return;
+    setAddress((current) => {
+      if (current.trim() !== '' && current !== lastFilled.current) return current;
+      lastFilled.current = offered;
+      return offered;
+    });
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (problem !== null) return;
@@ -164,15 +190,7 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
       <form id={formId} onSubmit={submit} className="space-y-4">
         <Field id="location-name" label={t('locationName')} value={name} onChange={setName} required />
 
-        {mapEnabled ? (
-          <PlaceSearch
-            onPick={(place) => {
-              setPoint(place);
-              if (place.address) setAddress(place.address);
-            }}
-            addressIsEditable={(filled) => address.trim() === '' || address === filled}
-          />
-        ) : null}
+        {mapEnabled ? <PlaceSearch onPick={applyPlace} /> : null}
 
         <div className="space-y-2">
           <label htmlFor="location-address" className="text-sm font-medium text-gray-700">
@@ -259,28 +277,22 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
  * reaches every result and Enter picks it; add roving arrow keys the day
  * somebody asks for them.
  */
-function PlaceSearch({
-  onPick,
-  addressIsEditable,
-}: Readonly<{
-  onPick: (place: { address: string | null } & Coordinates) => void;
-  /** Whether the address field may be overwritten, given what this box last filled in. */
-  addressIsEditable: (lastFilled: string | null) => boolean;
-}>) {
+function PlaceSearch({ onPick }: Readonly<{ onPick: (place: ResolvedPlace) => void }>) {
   const { t } = useLanguage();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PlaceSuggestion[] | null>(null);
   const [state, setState] = useState<'idle' | 'searching' | 'failed'>('idle');
-  // What the last pick wrote into the address, so a later pick may replace
-  // it — and a hand-edited address is left alone.
-  const lastFilled = useRef<string | null>(null);
-  // Only the newest search may publish results; an older one that resolves
-  // late must not overwrite them.
+  // Only the newest request may publish results; an older one that resolves
+  // late must not overwrite them. Every change of intent takes a new ticket.
   const latest = useRef(0);
 
   useEffect(() => {
     const input = query.trim();
     if (input.length < SEARCH_MIN_CHARS) {
+      // ★ THE IN-FLIGHT SEARCH IS RETIRED TOO. Clearing the timer only stops
+      // a search that has not started; one already on the wire would come
+      // back and repopulate a list the operator had just emptied.
+      latest.current += 1;
       setResults(null);
       setState('idle');
       return;
@@ -308,16 +320,19 @@ function PlaceSearch({
     setResults(null);
     setState('searching');
     try {
-      const place = await resolvePlace(suggestion.id);
-      const address = addressIsEditable(lastFilled.current) ? place.address : null;
-      if (address) lastFilled.current = address;
-      onPick({ ...place, address });
+      // The row itself, not its id: the adapter resolves the prediction that
+      // produced THIS row, whatever other search has finished since.
+      onPick(await resolvePlace(suggestion));
       setQuery(suggestion.primary);
       setState('idle');
     } catch {
       setState('failed');
     }
   };
+
+  // What is on screen: rows from the newest search, and whether one has run.
+  const visible = results ?? [];
+  const searched = results !== null;
 
   return (
     <div className="space-y-2">
@@ -342,12 +357,12 @@ function PlaceSearch({
           {t('locationSearchFailed')}
         </p>
       ) : null}
-      {results && results.length === 0 ? (
+      {searched && visible.length === 0 ? (
         <p className="text-xs text-gray-500">{t('locationNoResults')}</p>
       ) : null}
-      {results && results.length > 0 ? (
+      {visible.length > 0 ? (
         <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200" aria-label={t('locationSearch')}>
-          {results.map((suggestion) => (
+          {visible.map((suggestion) => (
             <li key={suggestion.id}>
               <button
                 type="button"

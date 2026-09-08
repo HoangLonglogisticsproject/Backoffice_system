@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
+import { updateTripLocation } from '@/api/tripCatalogue';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiError } from '@/utils/errors';
@@ -1528,5 +1529,200 @@ describe('TripSchedulePage', () => {
       // entered by mistake could never be removed.
       expect(payload).toHaveProperty('sellPrice', null);
     });
+  });
+});
+
+/**
+ * ★ AN EXISTING TRIP'S PLACE IS ITS SNAPSHOT, NOT THE MASTER ROW.
+ *
+ * The driver is measured against the coordinates the trip holds. The master
+ * row may have been located since — that changes nothing on the trip until
+ * the office names the place again, which is what a deliberate "set up
+ * location" from the trip form arranges. These cases pin that the readiness
+ * pill reads the same copy the driver will meet, at every step of that path,
+ * for the pickup and for the delivery.
+ */
+describe('★ an existing trip and its snapshot', () => {
+  const write = ['trip.read', 'trip.create', 'trip.write'];
+  const master = (over: Record<string, unknown> = {}) => ({
+    id: 'la',
+    customerId: 'c1',
+    name: 'Kho A',
+    address: 'KCN Sóng Thần',
+    contact: null,
+    note: null,
+    latitude: 10.8,
+    longitude: 106.6,
+    status: 'active',
+    createdBy: 'u9',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    ...over,
+  });
+
+  /**
+   * The pill in the pickup or delivery block, found by the address it sits
+   * under. The same address is also printed in the board row behind the
+   * dialog, so only the occurrence inside a chosen-place card counts.
+   */
+  const pillUnder = (address: string): HTMLElement => {
+    const card = screen
+      .getAllByText(address)
+      .map((node) => node.closest('div.bg-gray-50'))
+      .find((node): node is HTMLElement => node !== null);
+    const pill = card?.querySelector('span.rounded-full');
+    if (!pill) throw new Error(`no readiness pill under "${address}"`);
+    return pill as HTMLElement;
+  };
+
+  const placeSaveButton = (): HTMLElement => {
+    const button = screen
+      .getAllByRole('button', { name: 'Lưu' })
+      .find((candidate) => candidate.getAttribute('form') === 'location-form');
+    if (!button) throw new Error('no place-form save button');
+    return button;
+  };
+
+  const saveTrip = async (): Promise<Record<string, unknown>> => {
+    const saves = screen.getAllByRole('button', { name: 'Lưu' });
+    fireEvent.click(saves[saves.length - 1]!);
+    await waitFor(() => expect(updateTripSchedule).toHaveBeenCalledTimes(1));
+    const [, body] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+    return body;
+  };
+
+  /**
+   * Opens the row for editing. `snapshot` is what the TRIP holds for each
+   * end; `masters` is what the customer's places say NOW. The two are set
+   * to disagree, which is the whole point.
+   */
+  const openEdit = async (
+    snapshot: Record<string, unknown>,
+    masters: Record<string, unknown>[],
+  ) => {
+    useSession.mockReturnValue(session(write));
+    fetchTripSchedules.mockResolvedValue({
+      items: [
+        trip({
+          pickupLocationId: 'la',
+          pickupLocation: { id: 'la', name: 'Kho A' },
+          pickupAddress: 'KCN Sóng Thần',
+          deliveryLocationId: 'lb',
+          deliveryLocation: { id: 'lb', name: 'Nhà máy A' },
+          deliveryAddress: 'Bình Dương',
+          ...snapshot,
+        }),
+      ],
+      page: 1, limit: 20, total: 1, totalPages: 1,
+    });
+    fetchTripCustomers.mockResolvedValue([{ id: 'c1', name: 'WWL', note: null, status: 'active' }]);
+    fetchTripLocations.mockImplementation(async (customerId: string) => (customerId === 'c1' ? masters : []));
+    renderPage();
+    await screen.findByText('WWL');
+    fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+    await screen.findByLabelText('Khách hàng');
+    await waitFor(() => expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('la'));
+    await waitFor(() => expect(fetchTripLocations).toHaveBeenCalledWith('c1', false));
+  };
+
+  // Pickup: snapshot unlocated, master located. Delivery: snapshot located, master not.
+  const pickupStale = {
+    pickupLatitude: null,
+    pickupLongitude: null,
+    deliveryLatitude: 10.9,
+    deliveryLongitude: 106.7,
+  };
+  const pickupStaleMasters = () => [
+    master(),
+    master({ id: 'lb', name: 'Nhà máy A', address: 'Bình Dương', latitude: null, longitude: null }),
+  ];
+
+  // The mirror image, for the delivery.
+  const deliveryStale = {
+    pickupLatitude: 10.8,
+    pickupLongitude: 106.6,
+    deliveryLatitude: null,
+    deliveryLongitude: null,
+  };
+  const deliveryStaleMasters = () => [
+    master(),
+    master({ id: 'lb', name: 'Nhà máy A', address: 'Bình Dương', latitude: 10.9, longitude: 106.7 }),
+  ];
+
+  // A top-level describe: the page describe's resets do not reach here, so
+  // every mock this block touches starts clean.
+  beforeEach(() => {
+    fetchTripSchedules.mockReset();
+    updateTripSchedule.mockReset().mockResolvedValue(trip());
+    createTripSchedule.mockReset().mockResolvedValue(trip());
+    fetchTripVehicles.mockReset().mockResolvedValue([]);
+    fetchTripCustomers.mockReset();
+    fetchTripLocations.mockReset();
+    createTripLocation.mockReset();
+    fetchEligibleDrivers.mockReset().mockResolvedValue([]);
+    useSession.mockReset();
+    vi.mocked(updateTripLocation).mockReset();
+  });
+
+  it('★ reads readiness from the trip’s own snapshot, not from the master row, at both ends', async () => {
+    await openEdit(pickupStale, pickupStaleMasters());
+
+    expect(pillUnder('KCN Sóng Thần')).toHaveTextContent('Chưa định vị');
+    expect(pillUnder('Bình Dương')).toHaveTextContent('Đã định vị');
+    expect(screen.getByText('Chưa sẵn sàng xác minh vị trí')).toBeInTheDocument();
+  });
+
+  it('★ leaves both references out of the patch when neither was touched — the snapshot stands', async () => {
+    await openEdit(pickupStale, pickupStaleMasters());
+
+    const body = await saveTrip();
+    expect(body).not.toHaveProperty('pickupLocationId');
+    expect(body).not.toHaveProperty('deliveryLocationId');
+    expect(body).not.toHaveProperty('pickupAddress');
+  });
+
+  it('★ a deliberate refresh of the pickup place names it again, and readiness follows the copy the save will make', async () => {
+    vi.mocked(updateTripLocation).mockResolvedValue(master() as never);
+    await openEdit(pickupStale, pickupStaleMasters());
+
+    // The fix is offered on the pickup — the end whose snapshot is unlocated.
+    fireEvent.click(screen.getByRole('button', { name: 'Thiết lập vị trí' }));
+    expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
+    expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Kho A');
+    fireEvent.click(placeSaveButton());
+    await waitFor(() =>
+      expect(updateTripLocation).toHaveBeenCalledWith('c1', 'la', expect.objectContaining({ name: 'Kho A' })),
+    );
+
+    // Readiness now reads the master for THAT end — the copy the next save makes.
+    await waitFor(() => expect(pillUnder('KCN Sóng Thần')).toHaveTextContent('Đã định vị'));
+    expect(pillUnder('Bình Dương')).toHaveTextContent('Đã định vị');
+    expect(screen.getByText('Sẵn sàng xác minh vị trí')).toBeInTheDocument();
+
+    // The patch names the pickup place again, so the server copies it afresh;
+    // the untouched delivery stays out of it.
+    const body = await saveTrip();
+    expect(body).toMatchObject({ pickupLocationId: 'la', pickupAddress: null, pickupContact: null });
+    expect(body).not.toHaveProperty('deliveryLocationId');
+  });
+
+  it('★ the same for the delivery: the refreshed place is named in the patch, the untouched pickup is not', async () => {
+    vi.mocked(updateTripLocation).mockResolvedValue(master({ id: 'lb', name: 'Nhà máy A' }) as never);
+    await openEdit(deliveryStale, deliveryStaleMasters());
+
+    expect(pillUnder('KCN Sóng Thần')).toHaveTextContent('Đã định vị');
+    expect(pillUnder('Bình Dương')).toHaveTextContent('Chưa định vị');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Thiết lập vị trí' }));
+    expect(await screen.findByLabelText('Tên địa điểm')).toHaveValue('Nhà máy A');
+    fireEvent.click(placeSaveButton());
+    await waitFor(() => expect(updateTripLocation).toHaveBeenCalledWith('c1', 'lb', expect.anything()));
+
+    await waitFor(() => expect(pillUnder('Bình Dương')).toHaveTextContent('Đã định vị'));
+    expect(screen.getByText('Sẵn sàng xác minh vị trí')).toBeInTheDocument();
+
+    const body = await saveTrip();
+    expect(body).toMatchObject({ deliveryLocationId: 'lb', deliveryAddress: null });
+    expect(body).not.toHaveProperty('pickupLocationId');
   });
 });

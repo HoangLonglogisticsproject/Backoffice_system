@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import type { TripLocation } from '@/types/trip';
-import type { Coordinates } from '@/utils/googleMaps';
+import type { Coordinates, PlaceSuggestion, ResolvedPlace } from '@/utils/googleMaps';
 import { LocationFormModal } from './LocationFormModal';
 
 /**
@@ -136,7 +136,8 @@ describe('LocationFormModal with a map', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Kho TCS/ }));
 
-    await waitFor(() => expect(resolve).toHaveBeenCalledWith('p1'));
+    // The row itself is handed back, so the adapter resolves the prediction behind THIS row.
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' })));
     await waitFor(() => expect(screen.getByLabelText('Vĩ độ')).toHaveValue(10.9));
     expect(screen.getByLabelText('Kinh độ')).toHaveValue(106.72);
     expect(screen.getByLabelText('Địa chỉ')).toHaveValue('Đường số 3, KCN VSIP 1, Thuận An');
@@ -148,6 +149,54 @@ describe('LocationFormModal with a map', () => {
     type('Tìm địa chỉ / địa điểm', 'Kh');
     await new Promise((resolveWait) => setTimeout(resolveWait, 450));
     expect(search).not.toHaveBeenCalled();
+  });
+
+  it('★ a search that comes back after the query shrank does not repopulate the list', async () => {
+    let finish!: (rows: PlaceSuggestion[]) => void;
+    search.mockImplementationOnce(
+      () =>
+        new Promise<PlaceSuggestion[]>((r) => {
+          finish = r;
+        }),
+    );
+    renderForm();
+
+    type('Tìm địa chỉ / địa điểm', 'Kho TCS');
+    await waitFor(() => expect(search).toHaveBeenCalledWith('Kho TCS'));
+    // Back below the minimum while the request is still on the wire.
+    type('Tìm địa chỉ / địa điểm', 'Kh');
+    await act(async () => {
+      finish([{ id: 'p1', primary: 'Kho TCS', secondary: '' }]);
+    });
+
+    expect(screen.queryByRole('button', { name: /Kho TCS/ })).toBeNull();
+    expect(screen.queryByText('Đang tìm…')).toBeNull();
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it('★ keeps an address typed while the place was still being fetched, and still takes the coordinates', async () => {
+    search.mockResolvedValue([{ id: 'p1', primary: 'Kho TCS', secondary: '' }]);
+    let finish!: (place: ResolvedPlace) => void;
+    resolve.mockImplementationOnce(
+      () =>
+        new Promise<ResolvedPlace>((r) => {
+          finish = r;
+        }),
+    );
+    renderForm();
+
+    type('Tìm địa chỉ / địa điểm', 'Kho TCS');
+    fireEvent.click(await screen.findByRole('button', { name: /Kho TCS/ }));
+    await waitFor(() => expect(resolve).toHaveBeenCalled());
+    // The operator writes the gate while Google is still answering.
+    type('Địa chỉ', 'Cổng bảo vệ số 2, KCN VSIP 1');
+    await act(async () => {
+      finish({ address: 'Google’s wording', latitude: 10.9, longitude: 106.72 });
+    });
+
+    expect(screen.getByLabelText('Địa chỉ')).toHaveValue('Cổng bảo vệ số 2, KCN VSIP 1');
+    expect(screen.getByLabelText('Vĩ độ')).toHaveValue(10.9);
+    expect(screen.getByLabelText('Kinh độ')).toHaveValue(106.72);
   });
 
   it('★ leaves a hand-written address alone when a result is picked', async () => {

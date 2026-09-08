@@ -203,12 +203,19 @@ export interface ResolvedPlace {
 }
 
 let session: object | null = null;
+
 /**
- * The predictions of the LAST search, by id. `toPlace()` on a prediction
- * carries the session token into the details fetch, which is what makes the
- * whole search-then-select one billable session.
+ * ★ THE PREDICTION TRAVELS WITH ITS OWN SUGGESTION, NOT IN A SHARED MAP.
+ *
+ * Two searches overlap whenever a debounce fires while the previous request
+ * is still in flight. A module-level map keyed by place id was rewritten by
+ * whichever request finished LAST — so a suggestion still on screen from the
+ * newer search could point at nothing, and clicking it failed. Keying on the
+ * suggestion OBJECT the caller renders makes each row resolvable for as long
+ * as it exists, whatever else has completed since; a `WeakMap` keeps the
+ * Google object out of the public shape and lets it go with the row.
  */
-const predictions = new Map<string, PlacePrediction>();
+const predictionOf = new WeakMap<PlaceSuggestion, PlacePrediction>();
 
 export async function searchPlaces(input: string): Promise<PlaceSuggestion[]> {
   const places = await (await loadGoogleMaps()).importLibrary('places');
@@ -221,26 +228,26 @@ export async function searchPlaces(input: string): Promise<PlaceSuggestion[]> {
     region: 'vn',
   });
 
-  predictions.clear();
   return suggestions.flatMap(({ placePrediction }) => {
     if (!placePrediction) return [];
-    predictions.set(placePrediction.placeId, placePrediction);
-    return [
-      {
-        id: placePrediction.placeId,
-        primary: placePrediction.mainText?.text ?? placePrediction.text.text,
-        secondary: placePrediction.secondaryText?.text ?? '',
-      },
-    ];
+    const suggestion: PlaceSuggestion = {
+      id: placePrediction.placeId,
+      primary: placePrediction.mainText?.text ?? placePrediction.text.text,
+      secondary: placePrediction.secondaryText?.text ?? '',
+    };
+    predictionOf.set(suggestion, placePrediction);
+    return [suggestion];
   });
 }
 
 /**
- * The coordinates and address behind one suggestion. Ends the session: the
- * next search starts a fresh token.
+ * The coordinates and address behind one suggestion, as `searchPlaces`
+ * returned it. `toPlace()` on the prediction carries the session token into
+ * the details fetch, which is what makes search-then-select one billable
+ * session; the session ends here, and the next search starts a fresh one.
  */
-export async function resolvePlace(id: string): Promise<ResolvedPlace> {
-  const prediction = predictions.get(id);
+export async function resolvePlace(suggestion: PlaceSuggestion): Promise<ResolvedPlace> {
+  const prediction = predictionOf.get(suggestion);
   if (!prediction) throw new Error('That suggestion is no longer available. Search again.');
 
   const place = prediction.toPlace();
