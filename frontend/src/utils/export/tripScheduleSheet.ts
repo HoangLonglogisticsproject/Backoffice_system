@@ -129,10 +129,16 @@ export function toTripSheetRows(
     return {
       [heading.index]: position + 1,
       [heading.date]: formatCalendarDay(trip.scheduledOn, language),
-      // Formatted for reading, exactly as the board formats it — the catalogue
-      // stores the plate as somebody typed it.
-      [heading.vehicle]: trip.vehicle ? formatPlate(trip.vehicle.plate) : '',
-      [heading.driver]: trip.driver?.displayName ?? '',
+      // ★ ONE ROW PER TRIP, WHATEVER THE CREW (ADR-0004). A trip with three
+      // lorries stays one line, its plates and its drivers joined with `;` —
+      // a sheet that grew a row per lorry would count trips wrong in every
+      // column total somebody adds later. Formatted for reading, exactly as
+      // the board formats it; the same driver on two lorries is named once.
+      [heading.vehicle]: trip.assignments
+        .map((turn) => (turn.vehicle ? formatPlate(turn.vehicle.plate) : ''))
+        .filter(Boolean)
+        .join('; '),
+      [heading.driver]: [...new Set(trip.assignments.map((turn) => turn.driver.displayName))].join('; '),
       [heading.customer]: trip.customer?.name ?? '',
       [heading.cargo]: trip.cargoInfo ?? '',
       [heading.pickup]: pickupAddress,

@@ -157,7 +157,8 @@ describe('the money — no path around the lifecycle', () => {
     const repository = code(await read('persistence', 'trip-cost.repository.ts'));
     const transitions = repository.match(/SET\s+state = '(\w+)'/g) ?? [];
 
-    // lockForTrip → locked, unlockForTrip → editable, finalizeForTrip → immutable.
+    // lockForAssignment → locked, unlockForAssignment → editable,
+    // finalizeForAssignment → immutable.
     expect(transitions.sort()).toEqual([
       "SET state = 'editable'",
       "SET state = 'immutable'",
@@ -165,12 +166,28 @@ describe('the money — no path around the lifecycle', () => {
     ]);
   });
 
+  it('★ scopes every lifecycle move to the assignment, never to the whole trip', async () => {
+    // ADR-0004: driver A asking for their turn to be closed must not freeze,
+    // reopen or finalise what driver B typed on another lorry of the same trip.
+    // Each of the three UPDATEs names `driver_assignment_id`, and none of them
+    // names `trip_id` as the scope.
+    const repository = code(await read('persistence', 'trip-cost.repository.ts'));
+    const moves = repository.match(/UPDATE trip_costs\s+SET state = '\w+'[\s\S]{0,200}?WHERE[^\n]*/g) ?? [];
+
+    expect(moves).toHaveLength(3);
+    for (const move of moves) {
+      expect(move).toContain('WHERE driver_assignment_id = $1');
+      expect(move).not.toMatch(/WHERE trip_id/);
+    }
+    expect(repository).not.toMatch(/(lock|unlock|finalize)ForTrip\(/);
+  });
+
   it('never writes `immutable` outside approval', async () => {
     const callers: string[] = [];
 
     for (const folder of ['api', 'application']) {
       for (const file of await listFiles(folder)) {
-        if (/finalizeForTrip\(/.test(code(await read(folder, file)))) {
+        if (/finalizeFor\w+\(/.test(code(await read(folder, file)))) {
           callers.push(`${folder}/${file}`);
         }
       }
@@ -242,7 +259,7 @@ describe("★ the driver read model — what cannot leave", () => {
 });
 
 describe('★ driver write routes — resource scope', () => {
-  it('guards every route that names a trip', async () => {
+  it('guards every route that names an assignment', async () => {
     const controller = await read('api', 'driver-portal.controller.ts');
     const routes = [...controller.matchAll(/@(Get|Post|Patch)\('([^']*)'\)/g)];
     const guards = [...controller.matchAll(/@UseGuards\(([^)]*)\)/g)].map((m) => m[1]);
@@ -250,13 +267,24 @@ describe('★ driver write routes — resource scope', () => {
     expect(routes).toHaveLength(guards.length);
 
     routes.forEach((match, index) => {
-      // The one route without the guard is the list, which has no `:tripId` to
-      // check — its scope IS the session user.
+      // The one route without the guard is the list, which has no
+      // `:assignmentId` to check — its scope IS the session user.
       const path = match[2] ?? '';
-      const needsGuard = path.includes(':tripId');
+      const needsGuard = path.includes(':assignmentId');
       const guarded = (guards[index] ?? '').includes('ActiveAssignmentGuard');
       expect([path, guarded]).toEqual([path, needsGuard]);
     });
+  });
+
+  it('★ names no trip on any driver route — the assignment is the scope (ADR-0004)', async () => {
+    // One driver may hold several turns on one trip, so a trip id cannot say
+    // which lorry is being reported. A driver route that took one would be a
+    // route that had to guess.
+    const controller = await read('api', 'driver-portal.controller.ts');
+    const routes = [...controller.matchAll(/@(Get|Post|Patch)\('([^']*)'\)/g)].map((m) => m[2]);
+
+    expect(routes.length).toBeGreaterThan(0);
+    for (const path of routes) expect([path, /:tripId|trips\//.test(path ?? '')]).toEqual([path, false]);
   });
 
   it('never grants a driver a department-scoped permission', async () => {
@@ -268,13 +296,13 @@ describe('★ driver write routes — resource scope', () => {
     expect(controller).not.toContain('PermissionGuard');
   });
 
-  it('reads the trip id from the route on every write, never from the body', async () => {
+  it('reads the assignment id from the route on every write, never from the body', async () => {
     const controller = code(await read('api', 'driver-portal.controller.ts'));
-    const params = [...controller.matchAll(/@Param\('tripId', UuidParam\)/g)];
+    const params = [...controller.matchAll(/@Param\('assignmentId', UuidParam\)/g)];
 
     // Four writes plus the detail read.
     expect(params).toHaveLength(5);
-    expect(controller).not.toMatch(/body\.tripId/);
+    expect(controller).not.toMatch(/body\.(assignmentId|tripId)/);
   });
 
   it('takes the actor from the session on every write, never from the body', async () => {
@@ -320,6 +348,42 @@ describe('ownership and carrier — still unclassified', () => {
     for (const file of ['trip-execution.service.ts', 'trip-cost.service.ts']) {
       const body = code(await read('application', file));
       expect([file, body.includes('vehicle?.ownership ?? null')]).toEqual([file, true]);
+    }
+  });
+});
+
+describe('★ the legacy lorry column — no writer, no dispatch reader (ADR-0004)', () => {
+  it('is never written by the application', async () => {
+    // `trip_schedules.vehicle_id` stays for the rows that carry one; nothing
+    // sets it. A write here would be a second source of dispatch truth.
+    const repository = code(await read('persistence', 'trip-schedule.repository.ts'));
+
+    expect(repository).not.toMatch(/INSERT INTO trip_schedules[\s\S]{0,400}?vehicle_id/);
+    expect(repository).not.toMatch(/SET[\s\S]{0,600}?\bvehicle_id = \$/);
+  });
+
+  it('never decides a snapshot, an expense or an event from `trip.vehicleId`', async () => {
+    // The execution and cost services snapshot the ASSIGNMENT's lorry. Reading
+    // the trip's column would be right only while a trip had one lorry.
+    for (const file of ['trip-execution.service.ts', 'trip-cost.service.ts', 'driver-portal.service.ts']) {
+      const body = code(await read('application', file));
+      expect([file, /trip\.vehicleId/.test(body)]).toEqual([file, false]);
+    }
+    const board = code(await read('persistence', 'operational-board.repository.ts'));
+    const driver = code(await read('persistence', 'driver-read-model.repository.ts'));
+    for (const [name, body] of [['operational-board', board], ['driver-read-model', driver]]) {
+      expect([name, /t\.vehicle_id/.test(body ?? '')]).toEqual([name, false]);
+    }
+  });
+
+  it('never constrains the same driver to one turn per trip', async () => {
+    // The confirmed business case is one person on several lorries of one
+    // trip. A unique index on (trip_id, driver_user_id) anywhere would refuse it.
+    const migrations = join(__dirname, '..', '..', 'migrations');
+    const files = (await readdir(migrations)).filter((name) => name.endsWith('.sql'));
+    for (const file of files) {
+      const sql = (await readFile(join(migrations, file), 'utf8')).replace(/--[^\n]*/g, '');
+      expect([file, /UNIQUE[\s\S]{0,200}?\(\s*trip_id\s*,\s*driver_user_id\s*\)/i.test(sql)]).toEqual([file, false]);
     }
   });
 

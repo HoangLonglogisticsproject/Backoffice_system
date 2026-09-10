@@ -19,9 +19,13 @@ import { TripCompletionController } from './trip-completion.controller';
  * Completion review, over HTTP.
  *
  * ★ THE POLICY THIS FILE PINS DOWN. Closing a trip is the one act with no undo:
- * it freezes the money and a trigger makes `done` permanent. So it is reserved
- * to `trip.complete.review`, which is `'global'`, while merely READING the
- * attempts rides on `trip.read` like the rest of the board.
+ * it freezes the money and a trigger makes `finished` permanent. So it is
+ * reserved to `trip.complete.review`, which is `'global'`, while merely READING
+ * the attempts rides on `trip.read` like the rest of the board.
+ *
+ * ★ AND A DECISION NAMES ITS REQUEST (ADR-0004). A trip carries one pending
+ * request per active assignment, so the route carries the request id and the
+ * service proves it belongs to the trip in the same route.
  *
  * ⚠ AND IT IS DELIBERATELY NOT `trip.write`. A dispatcher correcting a delivery
  * address and a reviewer closing a trip's books are different acts; sharing a
@@ -33,6 +37,7 @@ describe('trip-completion HTTP security', () => {
   const ACTOR = '33333333-3333-3333-3333-333333333333';
   const DEPT = '11111111-1111-1111-1111-111111111111';
   const TRIP = '55555555-5555-5555-5555-555555555555';
+  const REQUEST = '99999999-9999-4999-8999-999999999999';
 
   let app: INestApplication;
   let context: AuthorizationContext;
@@ -52,8 +57,8 @@ describe('trip-completion HTTP security', () => {
 
     completion = {
       listRequests: jest.fn().mockResolvedValue([]),
-      approve: jest.fn().mockResolvedValue({ id: 'request-1', state: 'approved' }),
-      reject: jest.fn().mockResolvedValue({ id: 'request-1', state: 'rejected' }),
+      approve: jest.fn().mockResolvedValue({ id: REQUEST, state: 'approved' }),
+      reject: jest.fn().mockResolvedValue({ id: REQUEST, state: 'rejected' }),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -96,8 +101,8 @@ describe('trip-completion HTTP security', () => {
       .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
       .set('X-Requested-With', 'XMLHttpRequest');
 
-  const APPROVE = `/trip-schedules/${TRIP}/completion-requests/approve`;
-  const REJECT = `/trip-schedules/${TRIP}/completion-requests/reject`;
+  const APPROVE = `/trip-schedules/${TRIP}/completion-requests/${REQUEST}/approve`;
+  const REJECT = `/trip-schedules/${TRIP}/completion-requests/${REQUEST}/reject`;
   const LIST = `/trip-schedules/${TRIP}/completion-requests`;
 
   const DECISIONS = [
@@ -136,14 +141,14 @@ describe('trip-completion HTTP security', () => {
   });
 
   describe('a global administrator', () => {
-    it('approves', async () => {
+    it('approves the request named in the route', async () => {
       await authed('post', APPROVE).expect(200);
-      expect(completion.approve).toHaveBeenCalledWith(TRIP, ACTOR);
+      expect(completion.approve).toHaveBeenCalledWith(TRIP, REQUEST, ACTOR);
     });
 
-    it('rejects with a reason', async () => {
+    it('rejects the request named in the route, with a reason', async () => {
       await authed('post', REJECT).send(anyBody).expect(200);
-      expect(completion.reject).toHaveBeenCalledWith(TRIP, {
+      expect(completion.reject).toHaveBeenCalledWith(TRIP, REQUEST, {
         by: ACTOR,
         reason: 'Thiếu chứng từ dầu.',
       });
@@ -251,17 +256,36 @@ describe('trip-completion HTTP security', () => {
 
     it('takes no decider from the body', async () => {
       await authed('post', APPROVE).send({ decidedBy: 'somebody-else' }).expect(200);
-      expect(completion.approve).toHaveBeenCalledWith(TRIP, ACTOR);
+      expect(completion.approve).toHaveBeenCalledWith(TRIP, REQUEST, ACTOR);
     });
 
     it('refuses a malformed trip id', async () => {
       const response = await authed(
         'post',
-        '/trip-schedules/not-a-uuid/completion-requests/approve',
+        `/trip-schedules/not-a-uuid/completion-requests/${REQUEST}/approve`,
       );
 
       expect(response.status).toBe(422);
       // Refused at the boundary: nothing reached the service to look up.
+      expect(completion.approve).not.toHaveBeenCalled();
+    });
+
+    it('refuses a malformed request id', async () => {
+      const response = await authed(
+        'post',
+        `/trip-schedules/${TRIP}/completion-requests/not-a-uuid/approve`,
+      );
+
+      expect(response.status).toBe(422);
+      expect(completion.approve).not.toHaveBeenCalled();
+    });
+
+    it('★ has no trip-level decision route any more — a trip may hold several requests', async () => {
+      // ADR-0004. The old `/completion-requests/approve` (no request id) would
+      // have to pick one of N pending requests; there is nothing to pick by.
+      const response = await authed('post', `/trip-schedules/${TRIP}/completion-requests/approve`);
+
+      expect(response.status).not.toBe(200);
       expect(completion.approve).not.toHaveBeenCalled();
     });
   });

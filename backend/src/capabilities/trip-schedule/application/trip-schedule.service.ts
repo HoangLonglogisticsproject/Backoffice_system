@@ -18,7 +18,6 @@ import {
 import {
   TripCustomerRepository,
   TripLocationRepository,
-  TripVehicleRepository,
 } from '../persistence/trip-catalogue.repository';
 import {
   TripScheduleRepository,
@@ -29,11 +28,15 @@ import { TripStatusHistoryRepository } from '../persistence/trip-status-history.
 /**
  * What a caller may say when creating a trip. Everything but the day is
  * optional, because the workbook rows show that a trip is entered before it is
- * fully known — a customer with no truck yet, a truck with no addresses yet.
+ * fully known — a customer with no addresses yet.
+ *
+ * ★ NO LORRY AND NO DRIVER HERE (ADR-0004). A trip is booked first; lorries and
+ * their drivers are dispatched onto it afterwards, as assignments, through
+ * `TripExecutionService`. There is no `vehicleId` on this input and nothing
+ * writes `trip_schedules.vehicle_id` any more.
  */
 export interface CreateTripInput {
   scheduledOn: string;
-  vehicleId?: string | null;
   customerId?: string | null;
   cargoInfo?: string | null;
   pickupAddress?: string | null;
@@ -149,7 +152,6 @@ export class TripScheduleService {
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly trips: TripScheduleRepository,
-    private readonly vehicles: TripVehicleRepository,
     private readonly customers: TripCustomerRepository,
     private readonly history: TripStatusHistoryRepository,
     private readonly locations: TripLocationRepository,
@@ -267,7 +269,6 @@ export class TripScheduleService {
 
       const merged: CreateTripInput = {
         scheduledOn: patch.scheduledOn ?? current.scheduledOn,
-        vehicleId: sent('vehicleId'),
         customerId: sent('customerId'),
         cargoInfo: sent('cargoInfo'),
         pickupAddress: sent('pickupAddress'),
@@ -317,15 +318,15 @@ export class TripScheduleService {
         merged.deliveryLongitude = null;
       }
 
-      // ★ THE ROW'S EXISTING REFERENCES GO WITH IT. `resolve` checks a
+      // ★ THE ROW'S EXISTING REFERENCE GOES WITH IT. `resolve` checks a
       // reference against the catalogue only where it CHANGES, so retiring a
-      // truck does not freeze every trip that ever used it — see the comment
-      // on `resolve`.
+      // customer does not freeze every trip that ever named them — see the
+      // comment on `resolve`.
       const values = await this.resolve(
         merged,
         current.status,
         tx,
-        { vehicleId: current.vehicleId, customerId: current.customerId },
+        { customerId: current.customerId },
         resnapshot,
       );
 
@@ -475,46 +476,37 @@ export class TripScheduleService {
    *
    * ★ THE CATALOGUE CHECK IS THE POINT OF THIS METHOD. A foreign key already
    * refuses an id that names nothing, but it says nothing about an id that
-   * names an ARCHIVED truck — and putting a retired truck on tomorrow's board
-   * is a mistake the database is happy to store. The check runs inside the
-   * caller's transaction so a truck cannot be retired between the check and the
-   * insert.
+   * names an ARCHIVED customer — and putting a retired customer on tomorrow's
+   * board is a mistake the database is happy to store. The check runs inside
+   * the caller's transaction so a customer cannot be retired between the check
+   * and the insert. (The lorry is no longer a column of this row — it is
+   * dispatched as an assignment, and `TripExecutionService` checks it there.)
    *
-   * ★ AND IT CHECKS ONLY WHAT IS BEING ASSIGNED. `previous` is the pair of
-   * references the row already held — `null` on create, where everything is new.
-   * A reference that is UNCHANGED is not re-checked, because it was already
+   * ★ AND IT CHECKS ONLY WHAT IS BEING ASSIGNED. `previous` is the reference
+   * the row already held — `null` on create, where everything is new. A
+   * reference that is UNCHANGED is not re-checked, because it was already
    * accepted once and the row is a record of what happened, not a claim about
-   * what is still available. Without that, archiving a truck made every trip
-   * that ever used it uneditable: the merged row still names it, so correcting
-   * an unrelated note answered 409 and the history could never be corrected
-   * again. Retiring a truck is routine, so that was every historical row.
+   * what is still available. Without that, archiving a catalogue row made
+   * every trip that ever used it uneditable: the merged row still names it, so
+   * correcting an unrelated note answered 409 and the history could never be
+   * corrected again.
    *
    * ⚠ WHAT IT DOES NOT RELAX. Assigning a DIFFERENT archived row is still
    * refused, on create and on update alike — that is F-002, and it is the case
    * this check exists for. Clearing a reference stays legal and always was: the
-   * `if (id)` guards below skip `null`, so "no truck yet" needs no catalogue at
-   * all.
+   * `if (id)` guard below skips `null`.
    */
   private async resolve(
     input: CreateTripInput,
     fallbackStatus: TripStatus,
     tx: DatabaseQuery,
-    previous: { vehicleId: string | null; customerId: string | null } | null,
+    previous: { customerId: string | null } | null,
     /** Which ends are copied afresh from their master place on this write. */
     resnapshot: { pickup: boolean; delivery: boolean },
   ): Promise<TripScheduleValues> {
-    const vehicleId = input.vehicleId ?? null;
-    // `previous` is null on create, so `previous?.vehicleId` is `undefined` and
-    // any id differs from it — every reference is checked, as it must be.
-    if (vehicleId && vehicleId !== previous?.vehicleId) {
-      const vehicle = await this.vehicles.findById(vehicleId, tx);
-      if (!vehicle) throw new NotFoundError('Vehicle not found.');
-      if (vehicle.status !== 'active') {
-        throw new ConflictError('That vehicle has been retired from the catalogue.');
-      }
-    }
-
     const customerId = input.customerId ?? null;
+    // `previous` is null on create, so `previous?.customerId` is `undefined` and
+    // any id differs from it — the reference is checked, as it must be.
     if (customerId && customerId !== previous?.customerId) {
       const customer = await this.customers.findById(customerId, tx);
       if (!customer) throw new NotFoundError('Customer not found.');
@@ -552,7 +544,6 @@ export class TripScheduleService {
 
     return {
       scheduledOn: input.scheduledOn,
-      vehicleId,
       customerId,
       cargoInfo: blankToNull(input.cargoInfo),
       pickupAddress: pickup.address,

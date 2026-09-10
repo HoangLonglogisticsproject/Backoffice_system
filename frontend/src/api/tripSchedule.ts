@@ -29,7 +29,6 @@ import type { OffsetPage, OffsetPageRequest } from '@/types/pagination';
 export interface CreateTripInput {
   /** `YYYY-MM-DD`. The only required field. */
   scheduledOn: string;
-  vehicleId?: string | null;
   customerId?: string | null;
   cargoInfo?: string | null;
   pickupAddress?: string | null;

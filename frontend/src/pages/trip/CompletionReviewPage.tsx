@@ -71,7 +71,10 @@ export default function CompletionReviewPage() {
   // browser clock decides which business month it is.
   const { rows: queue, loading, error, reload } = useCompletionQueue();
 
-  const [openTripId, setOpenTripId] = useState<string | null>(null);
+  // ★ THE ROW, NOT THE TRIP (ADR-0004). One trip may have two lorries waiting
+  // for review at once; each is its own row with its own request, and the
+  // modal must know which of them it is deciding.
+  const [open, setOpen] = useState<OperationalBoardRow | null>(null);
 
   const mayReview = can('trip.complete.review');
 
@@ -121,10 +124,10 @@ export default function CompletionReviewPage() {
             <TableBody>
               {queue.map((row) => (
                 <QueueRow
-                  key={row.tripId}
+                  key={row.assignmentId ?? row.tripId}
                   row={row}
                   language={language}
-                  onOpen={() => setOpenTripId(row.tripId)}
+                  onOpen={() => setOpen(row)}
                 />
               ))}
             </TableBody>
@@ -132,13 +135,15 @@ export default function CompletionReviewPage() {
         </div>
       ) : null}
 
-      {openTripId ? (
-        <Modal isOpen onClose={() => setOpenTripId(null)} title={t('reviewTitle')}>
+      {open ? (
+        <Modal isOpen onClose={() => setOpen(null)} title={t('reviewTitle')}>
           <CompletionReviewModal
-            tripId={openTripId}
-            row={queue.find((row) => row.tripId === openTripId) ?? null}
+            tripId={open.tripId}
+            assignmentId={open.assignmentId}
+            requestId={open.completionRequestId}
+            row={open}
             mayReview={mayReview}
-            onClose={() => setOpenTripId(null)}
+            onClose={() => setOpen(null)}
           />
         </Modal>
       ) : null}

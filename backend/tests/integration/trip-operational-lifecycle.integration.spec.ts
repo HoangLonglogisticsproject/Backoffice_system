@@ -85,6 +85,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   let assignments: DriverAssignmentRepository;
   let costs: TripCostRepository;
+  let eventRows: ExecutionEventRepository;
   let notificationRows: NotificationRepository;
   let stream: NotificationStream;
 
@@ -145,12 +146,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     assignments = new DriverAssignmentRepository(database);
     costs = new TripCostRepository(database);
     const events = new ExecutionEventRepository(database);
+    eventRows = events;
     const requests = new CompletionRequestRepository(database);
 
     board = new TripScheduleService(
       database,
       trips,
-      vehicles,
       customers,
       history,
       new TripLocationRepository(database),
@@ -259,10 +260,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     return {};
   };
 
-  const newTrip = async (vehicleId: string | null = null): Promise<string> => {
+  /**
+   * A trip on the board, with NO lorry and NO driver: dispatch is a separate
+   * step (ADR-0004), and `board.create` takes no `vehicleId` any more.
+   */
+  const newTrip = async (): Promise<string> => {
     const trip = await board.create({
       scheduledOn: '2026-08-30',
-      vehicleId,
       pickupAt: new Date('2026-08-30T02:00:00Z'),
       deliveryAt: new Date('2026-08-30T09:00:00Z'),
       pickupLatitude: PICKUP_POINT.latitude,
@@ -274,18 +278,43 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     return trip.id;
   };
 
+  const plate = () => `51D-${Math.floor(Math.random() * 90000) + 10000}`;
+
+  /** Dispatches a lorry (a fresh company one unless given) and a driver onto a trip. */
+  const assignTo = async (trip: string, driverUserId: string, vehicleId?: string) =>
+    execution.assign(
+      trip,
+      { vehicleId: vehicleId ?? (await newVehicle(plate())), driverUserId },
+      operator,
+    );
+
   /** A trip with a company lorry and driver A at the wheel. */
-  const runningTrip = async (): Promise<{ trip: string; assignment: string }> => {
-    const vehicle = await newVehicle(`51D-${Math.floor(Math.random() * 90000) + 10000}`);
-    const trip = await newTrip(vehicle);
-    const assignment = await execution.assign(trip, driverA, operator);
-    return { trip, assignment: assignment.id };
+  const runningTrip = async (): Promise<{ trip: string; assignment: string; vehicle: string }> => {
+    const vehicle = await newVehicle(plate());
+    const trip = await newTrip();
+    const assignment = await assignTo(trip, driverA, vehicle);
+    return { trip, assignment: assignment.id, vehicle };
   };
 
   const archive = (trip: string) => board.archive(trip, operator);
 
-  const declare = (trip: string, amount = '1500000.00') =>
-    money.declareCost({ tripId: trip, category: 'fuel', amount, declaredBy: driverA });
+  const declare = (assignment: string, amount = '1500000.00', declaredBy = driverA) =>
+    money.declareCost({ assignmentId: assignment, category: 'fuel', amount, declaredBy });
+
+  /** The one pending request on a trip that has exactly one — what the old trip-level route decided. */
+  const pendingOf = async (trip: string): Promise<string> => {
+    const rows = (await sql(
+      `SELECT id FROM trip_completion_requests WHERE trip_id = $1 AND state = 'pending'`,
+      [trip],
+    )) as { id: string }[];
+    if (rows.length !== 1) throw new Error(`expected one pending request on ${trip}, found ${rows.length}`);
+    return rows[0]!.id;
+  };
+
+  const approve = async (trip: string, by = reviewer) =>
+    completion.approve(trip, await pendingOf(trip), by);
+  const reject = async (trip: string, reason: string, by = reviewer) =>
+    completion.reject(trip, await pendingOf(trip), { by, reason });
 
   /** Two connections, each in its own transaction, for the race cases. */
   const twoClients = async (): Promise<[PoolClient, PoolClient]> => [
@@ -427,8 +456,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ refuses fuel on a hired lorry — the carrier already charges for it', async () => {
       const carrier = await newCarrier('xe Út');
       const vehicle = await newVehicle('HIRED-1', 'outsourced', carrier);
-      const trip = await newTrip(vehicle);
-      const assignment = await execution.assign(trip, driverA, operator);
+      const trip = await newTrip();
+      const assignment = await assignTo(trip, driverA, vehicle);
 
       expect(
         await codeOf(() =>
@@ -446,8 +475,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('refuses tolls on a hired lorry for the same reason', async () => {
       const carrier = await newCarrier('Mr Đạt');
       const vehicle = await newVehicle('HIRED-2', 'outsourced', carrier);
-      const trip = await newTrip(vehicle);
-      const assignment = await execution.assign(trip, driverA, operator);
+      const trip = await newTrip();
+      const assignment = await assignTo(trip, driverA, vehicle);
 
       expect(
         await codeOf(() =>
@@ -465,11 +494,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ ALLOWS warehouse fees on a hired lorry, which are ours to pay', async () => {
       const carrier = await newCarrier('Hai Thành 2');
       const vehicle = await newVehicle('HIRED-3', 'outsourced', carrier);
-      const trip = await newTrip(vehicle);
-      await execution.assign(trip, driverA, operator);
+      const trip = await newTrip();
+      const assignment = (await assignTo(trip, driverA, vehicle)).id;
 
-      const line = await money.declareCost({
-        tripId: trip,
+      const line = await money.declareCost({ assignmentId: assignment,
         category: 'warehouse',
         amount: '250000.00',
         declaredBy: driverA,
@@ -479,7 +507,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses a driver-portal line with no assignment', async () => {
-      const trip = await newTrip(await newVehicle('X6'));
+      const trip = await newTrip();
       expect(
         await codeOf(() =>
           sql(
@@ -576,7 +604,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('accepts a backoffice line with no assignment at all', async () => {
       // MATCH SIMPLE: a NULL in the composite key skips the check, which is
       // exactly right for a line that has no driver.
-      const trip = await newTrip(await newVehicle('X7'));
+      const trip = await newTrip();
       const line = await money.createCost({
         tripId: trip,
         category: 'warehouse',
@@ -593,25 +621,59 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
   // ====================================================== partial UNIQUE ==
 
   describe('partial unique indexes', () => {
-    it('★ allows exactly one ACTIVE driver per trip', async () => {
+    it('★ allows exactly one ACTIVE turn per LORRY per trip — 0027', async () => {
+      // The same lorry, another driver, straight past the service: the partial
+      // unique index is what refuses it.
+      const { trip, vehicle } = await runningTrip();
+
+      expect(
+        await codeOf(() =>
+          sql(
+            `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
+             VALUES ($1, $2, $3, $4)`,
+            [trip, vehicle, driverB, operator],
+          ),
+        ),
+      ).toBe(UNIQUE_VIOLATION);
+    });
+
+    it('★ allows the SAME driver on a second lorry of the same trip — no driver uniqueness', async () => {
+      // The confirmed business case: one person, several lorries, several turns.
       const { trip } = await runningTrip();
+      const second = await newVehicle(plate());
+
+      expect(
+        await codeOf(() =>
+          sql(
+            `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
+             VALUES ($1, $2, $3, $4)`,
+            [trip, second, driverA, operator],
+          ),
+        ),
+      ).toBeUndefined();
+    });
+
+    it('★ refuses an ACTIVE assignment with no lorry — a pair, or nothing', async () => {
+      // 0027's CHECK is NOT VALID for the rows that pre-date it, and enforced
+      // for every row written since: there is no lorry-only or driver-only turn.
+      const trip = await newTrip();
 
       expect(
         await codeOf(() =>
           sql(
             `INSERT INTO trip_driver_assignments (trip_id, driver_user_id, assigned_by)
              VALUES ($1, $2, $3)`,
-            [trip, driverB, operator],
+            [trip, driverA, operator],
           ),
         ),
-      ).toBe(UNIQUE_VIOLATION);
+      ).toBe(CHECK_VIOLATION);
     });
 
     it('allows many ENDED assignments on one trip, which is the history', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'A báo ốm.' });
-      await execution.replaceDriver(trip, driverA, { by: operator, reason: 'B hết ca.' });
+      const second = await execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'A báo ốm.' });
+      await execution.replaceDriver(trip, second.id, driverA, { by: operator, reason: 'B hết ca.' });
 
       const rows = await sql(`SELECT state FROM trip_driver_assignments WHERE trip_id = $1`, [trip]);
       expect(rows).toHaveLength(3);
@@ -620,8 +682,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ allows one PENDING completion request per trip', async () => {
       const { trip, assignment } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
 
       expect(
         await codeOf(() =>
@@ -637,9 +699,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ allows one APPROVED completion request EVER — approval is terminal', async () => {
       const { trip, assignment } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.approve(trip, reviewer);
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
+      await approve(trip);
 
       expect(
         await codeOf(() =>
@@ -656,9 +718,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('never reuses an attempt number', async () => {
       const { trip, assignment } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.reject(trip, { by: reviewer, reason: 'Thiếu chứng từ.' });
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
+      await reject(trip, 'Thiếu chứng từ.');
 
       expect(
         await codeOf(() =>
@@ -673,9 +735,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ refuses a duplicate client event id on the same trip', async () => {
-      const { trip } = await runningTrip();
-      await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date('2026-08-30T02:31:00Z'),
         clientEventId: 'tap-1',
@@ -702,14 +763,14 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const second = await runningTrip();
 
       const one = await execution.recordEvent({
-        tripId: first.trip,
+        assignmentId: first.assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date(),
         clientEventId: 'tap-1',
         recordedBy: driverA,
       });
       const two = await execution.recordEvent({
-        tripId: second.trip,
+        assignmentId: second.assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date(),
         clientEventId: 'tap-1',
@@ -740,8 +801,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       execution.listDriverHistory(driver, { limit: 50, cursor: undefined, ...over });
 
     it('★ keeps a turn the driver was TAKEN OFF — the row the live read hides', async () => {
-      const { trip } = await runningTrip();
-      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'A báo ốm.' });
+      const { trip, assignment } = await runningTrip();
+      await execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'A báo ốm.' });
 
       const live = await assignments.listActiveForDriver(driverA);
       const history = await historyOf(driverA);
@@ -757,7 +818,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('spells out the lorry and the customer, and the trip’s own status', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       const [row] = (await historyOf(driverA)).items;
 
@@ -777,8 +838,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ carries no money at all, on a trip that HAS some', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
 
       const serialised = JSON.stringify((await historyOf(driverA)).items);
 
@@ -788,8 +849,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('shows only this driver’s turns, never the other driver’s', async () => {
       const { trip: mine } = await runningTrip();
-      const { trip: theirs } = await runningTrip();
-      await execution.replaceDriver(theirs, driverB, { by: operator, reason: 'Đổi ca.' });
+      const { trip: theirs, assignment: theirsAssignment } = await runningTrip();
+      await execution.replaceDriver(theirs, theirsAssignment, driverB, { by: operator, reason: 'Đổi ca.' });
 
       const trips = (await historyOf(driverB)).items.map((row) => row.trip.id);
 
@@ -836,10 +897,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('T1 — a completed trip cannot be reopened', () => {
     const complete = async (): Promise<string> => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.approve(trip, reviewer);
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
+      await approve(trip);
       return trip;
     };
 
@@ -879,10 +940,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('T2 — an immutable figure', () => {
     const approvedLine = async (): Promise<{ trip: string; cost: string }> => {
-      const { trip } = await runningTrip();
-      const line = await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.approve(trip, reviewer);
+      const { trip, assignment } = await runningTrip();
+      const line = await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
+      await approve(trip);
       return { trip, cost: line.id };
     };
 
@@ -940,9 +1001,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses an edit once the line is merely LOCKED, before any approval', async () => {
-      const { trip } = await runningTrip();
-      const line = await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      const { trip, assignment } = await runningTrip();
+      const line = await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
 
       expect(
         await codeOf(() => sql(`UPDATE trip_costs SET amount = 1 WHERE id = $1`, [line.id])),
@@ -950,10 +1011,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('allows the edit while the line is still editable', async () => {
-      const { trip } = await runningTrip();
-      const line = await declare(trip);
+      const { trip, assignment } = await runningTrip();
+      const line = await declare(assignment);
 
-      const edited = await money.editCost(trip, line.id, { amount: '1550000.00' }, driverA);
+      const edited = await money.editCost(assignment, line.id, { amount: '1550000.00' }, driverA);
 
       expect(edited.amount).toBe('1550000.00');
       const edits = await money.listCostEdits(trip, line.id);
@@ -975,19 +1036,18 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // A boundary rule already greps the source for `DELETE`, which protects
       // the code. This protects the database from a maintenance script, an ORM
       // somebody adds later, or a psql session at the end of a long day.
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date(),
         clientEventId: 'tap-1',
         recordedBy: driverA,
       });
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.reject(trip, { by: reviewer, reason: 'Sai số.' });
+      await completion.submit(assignment, driverA, 'expenses');
+      await reject(trip, 'Sai số.');
       const line = (await costs.listActiveByTrip(trip))[0]!;
-      await money.editCost(trip, line.id, { amount: '1234.00' }, driverA);
+      await money.editCost(assignment, line.id, { amount: '1234.00' }, driverA);
       await money.createHire({
         tripId: trip,
         carrierName: 'Hai Thành',
@@ -1003,9 +1063,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('transaction rollback', () => {
     it('★ leaves NOTHING behind when an approval fails part-way', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
 
       // Force the failure at the last write of the transaction, after the
       // request, the freeze and the status have all been written.
@@ -1015,7 +1075,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       };
 
       try {
-        await expect(completion.approve(trip, reviewer)).rejects.toThrow('injected failure');
+        await expect(approve(trip)).rejects.toThrow('injected failure');
       } finally {
         TripStatusHistoryRepository.prototype.record = original;
       }
@@ -1042,7 +1102,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('FOR UPDATE', () => {
     it('★ makes the second transaction WAIT rather than read stale state', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       const [first, second] = await twoClients();
 
       try {
@@ -1079,16 +1139,20 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
   // ================================================================ races ==
 
   describe('★ concurrency, on real connections', () => {
-    it('lets only one of two simultaneous driver assignments win', async () => {
-      const trip = await newTrip(await newVehicle('RACE-1'));
+    it('★ lets only one of two simultaneous dispatches of the SAME lorry win', async () => {
+      const trip = await newTrip();
+      const lorry = await newVehicle('RACE-1');
 
       const results = await Promise.allSettled([
-        execution.assign(trip, driverA, operator),
-        execution.assign(trip, driverB, operator),
+        assignTo(trip, driverA, lorry),
+        assignTo(trip, driverB, lorry),
       ]);
 
       const won = results.filter((r) => r.status === 'fulfilled');
       expect(won).toHaveLength(1);
+      expect((results.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason).toBeInstanceOf(
+        ConflictError,
+      );
 
       const rows = await sql(
         `SELECT id FROM trip_driver_assignments WHERE trip_id = $1 AND state = 'active'`,
@@ -1097,13 +1161,24 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(rows).toHaveLength(1);
     });
 
+    it('lets two simultaneous dispatches of DIFFERENT lorries both win', async () => {
+      const trip = await newTrip();
+
+      const results = await Promise.allSettled([assignTo(trip, driverA), assignTo(trip, driverB)]);
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
+      expect(
+        await sql(`SELECT id FROM trip_driver_assignments WHERE trip_id = $1 AND state = 'active'`, [trip]),
+      ).toHaveLength(2);
+    });
+
     it('lets only one of two simultaneous completion submissions win', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
 
       const results = await Promise.allSettled([
-        completion.submit(trip, driverA, 'expenses'),
-        completion.submit(trip, driverA, 'expenses'),
+        completion.submit(assignment, driverA, 'expenses'),
+        completion.submit(assignment, driverA, 'expenses'),
       ]);
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
@@ -1116,13 +1191,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ lets only one of a simultaneous approve and reject win', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
 
       const results = await Promise.allSettled([
-        completion.approve(trip, reviewer),
-        completion.reject(trip, { by: reviewer, reason: 'Thiếu chứng từ.' }),
+        approve(trip),
+        reject(trip, 'Thiếu chứng từ.'),
       ]);
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
@@ -1141,25 +1216,25 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('lets only one of two simultaneous approvals win', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
 
       const results = await Promise.allSettled([
-        completion.approve(trip, reviewer),
-        completion.approve(trip, operator),
+        approve(trip),
+        approve(trip, operator),
       ]);
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     });
 
     it('★ refuses an expense edit that races a completion submit', async () => {
-      const { trip } = await runningTrip();
-      const line = await declare(trip);
+      const { trip, assignment } = await runningTrip();
+      const line = await declare(assignment);
 
       const results = await Promise.allSettled([
-        money.editCost(trip, line.id, { amount: '9999.00' }, driverA),
-        completion.submit(trip, driverA, 'expenses'),
+        money.editCost(assignment, line.id, { amount: '9999.00' }, driverA),
+        completion.submit(assignment, driverA, 'expenses'),
       ]);
 
       // Both may succeed if the edit lands first — what must NEVER happen is a
@@ -1176,10 +1251,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ answers every copy of a retried event with the original — none sees the index', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       const tap = () =>
-        execution.recordEvent({
-          tripId: trip,
+        execution.recordEvent({ assignmentId: assignment,
           type: 'ARRIVED_PICKUP',
           actualAt: new Date('2026-08-30T02:31:00Z'),
           clientEventId: 'tap-retry',
@@ -1281,8 +1355,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           [trip, assignment, driverA, clientEventId],
         );
 
-        const retry = execution.recordEvent({
-          tripId: trip,
+        const retry = execution.recordEvent({ assignmentId: assignment,
           type: 'ARRIVED_PICKUP',
           clientEventId,
           recordedBy: driverA,
@@ -1294,7 +1367,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         expect(observed.preTransactionLookup()).toBeNull();
         await observed.lockRequested;
 
-        return { trip, winner, retry, release };
+        return { trip, assignment, winner, retry, release };
       } catch (error) {
         release();
         throw error;
@@ -1323,7 +1396,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ answers a retry that queued behind a completion with the event committed before DONE', async () => {
       // The tap was recorded and the trip was then approved — both before the
       // retry got the lock. The retry is owed its event, not "closed".
-      const { trip, winner, retry, release } = await retryQueuedBehindWinner('before-done');
+      const { trip, assignment, winner, retry, release } = await retryQueuedBehindWinner('before-done');
       try {
         // The completion lands while the retry is still queued: the trip is
         // DONE by the time the retry holds the lock.
@@ -1344,15 +1417,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // the closed trip is refused, and a later plain retry of the recorded
       // one is still answered.
       await expect(
-        execution.recordEvent({
-          tripId: trip,
+        execution.recordEvent({ assignmentId: assignment,
           type: 'ARRIVED_PICKUP',
           clientEventId: 'after-done',
           recordedBy: driverA,
         }),
       ).rejects.toThrow(ConflictError);
-      const again = await execution.recordEvent({
-        tripId: trip,
+      const again = await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         clientEventId: 'before-done',
         recordedBy: driverA,
@@ -1363,9 +1434,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('records three different client event ids arriving together as three events', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       const tap = (clientEventId: string) =>
-        execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId, recordedBy: driverA });
+        execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId, recordedBy: driverA });
 
       const results = await Promise.all([tap('a'), tap('b'), tap('c')]);
 
@@ -1374,16 +1445,15 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ refuses the same key carrying a different milestone, concurrently, with the contract’s error', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       // The arrival stands, so a PICKUP_CONFIRMED is admissible on its own
       // merits: the only thing that can refuse one below is the key rule.
-      await execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId: 'arrive', recordedBy: driverA });
+      await execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'arrive', recordedBy: driverA });
 
       const arriveAgain = () =>
-        execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId: 'one-key', recordedBy: driverA });
+        execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'one-key', recordedBy: driverA });
       const confirmWithSameKey = () =>
-        execution.recordEvent({
-          tripId: trip,
+        execution.recordEvent({ assignmentId: assignment,
           type: 'PICKUP_CONFIRMED',
           clientEventId: 'one-key',
           deviceReportedAt: new Date(),
@@ -1415,12 +1485,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('answers a retried expense declaration with the original', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       const results = await Promise.allSettled(
         Array.from({ length: 3 }, () =>
-          money.declareCost({
-            tripId: trip,
+          money.declareCost({ assignmentId: assignment,
             category: 'fuel',
             amount: '1500000.00',
             clientRequestId: 'tap-expense',
@@ -1454,7 +1523,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const locatedTrip = async (): Promise<{ trip: string; assignment: string }> => {
       const running = await runningTrip();
       await execution.recordEvent({
-        tripId: running.trip,
+        assignmentId: running.assignment,
         type: 'ARRIVED_PICKUP',
         clientEventId: 'arrive',
         recordedBy: driverA,
@@ -1464,11 +1533,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     /** The same, on a trip Operations has NOT located yet. */
     const unlocatedTrip = async (): Promise<{ trip: string; assignment: string }> => {
-      const vehicle = await newVehicle(`51D-${Math.floor(Math.random() * 90000) + 10000}`);
-      const trip = await board.create({ scheduledOn: '2026-08-30', vehicleId: vehicle, createdBy: operator });
-      const assignment = await execution.assign(trip.id, driverA, operator);
+      const trip = await board.create({ scheduledOn: '2026-08-30', createdBy: operator });
+      const assignment = await assignTo(trip.id, driverA);
       await execution.recordEvent({
-        tripId: trip.id,
+        assignmentId: assignment.id,
         type: 'ARRIVED_PICKUP',
         clientEventId: 'arrive',
         recordedBy: driverA,
@@ -1485,9 +1553,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       ...over,
     });
 
-    const confirm = (trip: string, location: ReturnType<typeof fresh> | null, sentAt: Date, id = 'confirm') =>
-      execution.recordEvent({
-        tripId: trip,
+    const confirm = (assignment: string, location: ReturnType<typeof fresh> | null, sentAt: Date, id = 'confirm') =>
+      execution.recordEvent({ assignmentId: assignment,
         type: 'PICKUP_CONFIRMED',
         deviceReportedAt: sentAt,
         location,
@@ -1511,7 +1578,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const sentAt = new Date('2025-08-30T02:31:00Z');
       const before = Date.now();
 
-      const event = await confirm(trip, fresh(sentAt), sentAt);
+      const event = await confirm(assignment, fresh(sentAt), sentAt);
 
       const rows = await confirmations(trip);
       expect(rows).toHaveLength(1);
@@ -1535,10 +1602,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses a reading outside the radius, and writes no row', async () => {
-      const { trip } = await locatedTrip();
+      const { trip, assignment } = await locatedTrip();
       const sentAt = new Date();
 
-      const failure = await confirm(trip, fresh(sentAt, { latitude: SCSC.latitude + 0.01 }), sentAt).catch(
+      const failure = await confirm(assignment, fresh(sentAt, { latitude: SCSC.latitude + 0.01 }), sentAt).catch(
         (error: unknown) => error,
       );
 
@@ -1548,55 +1615,55 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses a reading too loose to place the lorry', async () => {
-      const { trip } = await locatedTrip();
+      const { trip, assignment } = await locatedTrip();
       const sentAt = new Date();
 
-      await expect(confirm(trip, fresh(sentAt, { accuracyM: 500 }), sentAt)).rejects.toMatchObject({
+      await expect(confirm(assignment, fresh(sentAt, { accuracyM: 500 }), sentAt)).rejects.toMatchObject({
         details: { location: 'ACCURACY_INSUFFICIENT' },
       });
       expect(await confirmations(trip)).toHaveLength(0);
     });
 
     it('refuses a fix older than the freshness window', async () => {
-      const { trip } = await locatedTrip();
+      const { trip, assignment } = await locatedTrip();
       const sentAt = new Date();
       const stale = { ...fresh(sentAt), capturedAt: new Date(sentAt.getTime() - 15 * 60_000) };
 
-      await expect(confirm(trip, stale, sentAt)).rejects.toMatchObject({
+      await expect(confirm(assignment, stale, sentAt)).rejects.toMatchObject({
         details: { location: 'LOCATION_STALE' },
       });
     });
 
     it('refuses a confirmation with no reading at all', async () => {
-      const { trip } = await locatedTrip();
+      const { trip, assignment } = await locatedTrip();
 
-      await expect(confirm(trip, null, new Date())).rejects.toMatchObject({
+      await expect(confirm(assignment, null, new Date())).rejects.toMatchObject({
         details: { location: 'LOCATION_REQUIRED' },
       });
     });
 
     it('★ refuses a trip whose pickup has no coordinates yet', async () => {
-      const { trip } = await unlocatedTrip();
+      const { trip, assignment } = await unlocatedTrip();
       const sentAt = new Date();
 
-      await expect(confirm(trip, fresh(sentAt), sentAt)).rejects.toMatchObject({
+      await expect(confirm(assignment, fresh(sentAt), sentAt)).rejects.toMatchObject({
         details: { location: 'DESTINATION_MISSING' },
       });
       expect(await confirmations(trip)).toHaveLength(0);
     });
 
     it('★ answers a double-tap and a retry with the ONE row it wrote', async () => {
-      const { trip } = await locatedTrip();
+      const { trip, assignment } = await locatedTrip();
       const sentAt = new Date();
 
       const results = await Promise.allSettled([
-        confirm(trip, fresh(sentAt), sentAt, 'tap'),
-        confirm(trip, fresh(sentAt), sentAt, 'tap'),
-        confirm(trip, fresh(sentAt), sentAt, 'tap'),
+        confirm(assignment, fresh(sentAt), sentAt, 'tap'),
+        confirm(assignment, fresh(sentAt), sentAt, 'tap'),
+        confirm(assignment, fresh(sentAt), sentAt, 'tap'),
       ]);
       // And the retry after everything settled — no reading needed, because
       // the pickup already happened.
-      const later = await confirm(trip, null, new Date(), 'tap');
+      const later = await confirm(assignment, null, new Date(), 'tap');
 
       expect(await confirmations(trip)).toHaveLength(1);
       const ids = results
@@ -1607,12 +1674,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses a driver confirming somebody else’s trip, whatever the reading says', async () => {
-      const { trip } = await locatedTrip();
+      const { trip, assignment } = await locatedTrip();
       const sentAt = new Date();
 
       await expect(
-        execution.recordEvent({
-          tripId: trip,
+        execution.recordEvent({ assignmentId: assignment,
           type: 'PICKUP_CONFIRMED',
           deviceReportedAt: sentAt,
           location: fresh(sentAt),
@@ -1623,23 +1689,23 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses a closed trip', async () => {
-      const { trip } = await locatedTrip();
+      const { trip, assignment } = await locatedTrip();
       await sql(`UPDATE trip_schedules SET status = 'finished' WHERE id = $1`, [trip]);
       const sentAt = new Date();
 
-      await expect(confirm(trip, fresh(sentAt), sentAt)).rejects.toThrow(ConflictError);
+      await expect(confirm(assignment, fresh(sentAt), sentAt)).rejects.toThrow(ConflictError);
     });
 
     describe('0019 in the database', () => {
       it('refuses a pickup latitude with no longitude on the trip', async () => {
-        const { trip } = await runningTrip();
+        const { trip, assignment } = await runningTrip();
         expect(
           await codeOf(() => sql(`UPDATE trip_schedules SET pickup_longitude = NULL WHERE id = $1`, [trip])),
         ).toBe(CHECK_VIOLATION);
       });
 
       it('refuses a latitude off the planet', async () => {
-        const { trip } = await runningTrip();
+        const { trip, assignment } = await runningTrip();
         expect(
           await codeOf(() =>
             sql(
@@ -1704,7 +1770,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
 
       it('refuses NaN on a trip’s pickup, which `BETWEEN` already bounds from above', async () => {
-        const { trip } = await runningTrip();
+        const { trip, assignment } = await runningTrip();
         expect(
           await codeOf(() =>
             sql(`UPDATE trip_schedules SET pickup_latitude = 'NaN'::double precision WHERE id = $1`, [trip]),
@@ -1728,15 +1794,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
 
       it('stores a pair from the board and hands it back to the driver read model', async () => {
-        const vehicle = await newVehicle(`51D-${Math.floor(Math.random() * 90000) + 10000}`);
         const trip = await board.create({
           scheduledOn: '2026-08-30',
-          vehicleId: vehicle,
           pickupLatitude: SCSC.latitude,
           pickupLongitude: SCSC.longitude,
           createdBy: operator,
         });
-        await execution.assign(trip.id, driverA, operator);
+        await assignTo(trip.id, driverA);
 
         const [row] = (await sql(
           `SELECT pickup_latitude, pickup_longitude, delivery_latitude FROM trip_schedules WHERE id = $1`,
@@ -1775,12 +1839,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const signalsOf = (events: readonly unknown[]) =>
       events.filter((event) => (event as { type?: string }).type === 'notification');
 
-    it('★ writes TRIP_ASSIGNED for the driver in the same transaction as the assignment', async () => {
-      const trip = await newTrip(await newVehicle('51D-10001'));
+    it('★ writes TRIP_ASSIGNED for the driver in the same transaction as the assignment, naming the lorry', async () => {
+      const trip = await newTrip();
       const heard: unknown[] = [];
       const subscription = stream.subscribe(driverA).subscribe((event) => heard.push(event));
 
-      const assignment = await execution.assign(trip, driverA, operator);
+      const assignment = await assignTo(trip, driverA, await newVehicle('51D-10001'));
 
       const notes = await notesFor(driverA);
       expect(notes).toHaveLength(1);
@@ -1789,7 +1853,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         type: 'TRIP_ASSIGNED',
         tripId: trip,
         tripScheduledOn: '2026-08-30',
-        detail: null,
+        // A driver on three lorries of one trip gets three of these; the
+        // plate is what tells them apart.
+        detail: '51D-10001',
         readAt: null,
       });
       // And the phone heard exactly that row, as a signal, after commit.
@@ -1800,112 +1866,158 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       subscription.unsubscribe();
     });
 
-    it('★ a retried assignment is refused AND leaves one notification', async () => {
-      const trip = await newTrip(await newVehicle('51D-10002'));
-      await execution.assign(trip, driverA, operator);
+    it('★ a retried dispatch of the same lorry is refused AND leaves one notification', async () => {
+      const trip = await newTrip();
+      const lorry = await newVehicle('51D-10002');
+      await assignTo(trip, driverA, lorry);
 
-      await expect(execution.assign(trip, driverA, operator)).rejects.toThrow(ConflictError);
+      await expect(assignTo(trip, driverA, lorry)).rejects.toThrow(ConflictError);
 
       expect(await notesFor(driverA)).toHaveLength(1);
     });
 
     it('★ a replacement tells the old driver they are off and the new one they are on', async () => {
-      const trip = await newTrip(await newVehicle('51D-10003'));
-      await execution.assign(trip, driverA, operator);
+      const trip = await newTrip();
+      const assignment = await assignTo(trip, driverA, await newVehicle('51D-10003'));
 
-      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'đổi ca' });
+      await execution.replaceDriver(trip, assignment.id, driverB, { by: operator, reason: 'đổi ca' });
 
       expect((await notesFor(driverA)).map((n) => n.type)).toEqual(['TRIP_UNASSIGNED', 'TRIP_ASSIGNED']);
       expect((await notesFor(driverB)).map((n) => n.type)).toEqual(['TRIP_ASSIGNED']);
     });
 
-    it('keeps every turn of an A → B → C → A reassignment, with one active', async () => {
-      const trip = await newTrip(await newVehicle('51D-10004'));
-      await execution.assign(trip, driverA, operator);
-      await execution.replaceDriver(trip, driverB, { by: operator, reason: '1' });
-      await execution.replaceDriver(trip, driverA, { by: operator, reason: '2' });
+    it('keeps every turn of an A → B → C → A reassignment on one lorry, with one active', async () => {
+      const trip = await newTrip();
+      const lorry = await newVehicle('51D-10004');
+      const first = await assignTo(trip, driverA, lorry);
+      const second = await execution.replaceDriver(trip, first.id, driverB, { by: operator, reason: '1' });
+      const third = await execution.replaceDriver(trip, second.id, driverA, { by: operator, reason: '2' });
 
       const history = await execution.listAssignments(trip);
       expect(history).toHaveLength(3);
       expect(history.filter((a) => a.state === 'active')).toHaveLength(1);
       expect(history.filter((a) => a.state === 'ended').every((a) => a.endReason && a.endedBy)).toBe(true);
+      // Every turn kept the lorry — a replacement swaps the person, not the vehicle.
+      expect(history.every((a) => a.vehicleId === lorry)).toBe(true);
+      expect(third.vehicleId).toBe(lorry);
     });
 
     it('tells the driver taken off a trip with nobody named in their place', async () => {
-      const trip = await newTrip(await newVehicle('51D-10005'));
-      await execution.assign(trip, driverA, operator);
+      const trip = await newTrip();
+      const assignment = await assignTo(trip, driverA, await newVehicle('51D-10005'));
 
-      await execution.endAssignment(trip, { by: operator, reason: 'chuyến huỷ' });
+      await execution.endAssignment(trip, assignment.id, { by: operator, reason: 'chuyến huỷ' });
 
       expect((await notesFor(driverA)).map((n) => n.type)).toEqual(['TRIP_UNASSIGNED', 'TRIP_ASSIGNED']);
     });
 
     it('★ refuses an employee account, an unknown id and a disabled driver', async () => {
-      const trip = await newTrip(await newVehicle('51D-10006'));
+      const trip = await newTrip();
       const users = new UserRepository(database);
       const disabled = (await users.insertUser({ displayName: 'Nghỉ', accountType: 'driver' })).id;
       await users.setStatus({ userId: disabled, status: 'disabled', expectedCurrent: 'active' });
 
-      await expect(execution.assign(trip, operator, operator)).rejects.toThrow(ValidationError);
-      await expect(
-        execution.assign(trip, '00000000-0000-4000-8000-000000000000', operator),
-      ).rejects.toThrow(NotFoundError);
-      await expect(execution.assign(trip, disabled, operator)).rejects.toThrow(ConflictError);
+      await expect(assignTo(trip, operator)).rejects.toThrow(ValidationError);
+      await expect(assignTo(trip, '00000000-0000-4000-8000-000000000000')).rejects.toThrow(NotFoundError);
+      await expect(assignTo(trip, disabled)).rejects.toThrow(ConflictError);
 
       expect(await execution.listAssignments(trip)).toHaveLength(0);
       expect(await notesFor(disabled)).toHaveLength(0);
     });
 
+    it('refuses a lorry retired from the catalogue', async () => {
+      const trip = await newTrip();
+      const retired = await newVehicle('51D-10006');
+      await sql(`UPDATE trip_vehicles SET status = 'archived' WHERE id = $1`, [retired]);
+
+      await expect(assignTo(trip, driverA, retired)).rejects.toThrow(ConflictError);
+      expect(await execution.listAssignments(trip)).toHaveLength(0);
+    });
+
     it('refuses to assign, replace or remove on a closed trip', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       await sql(`UPDATE trip_schedules SET status = 'finished' WHERE id = $1`, [trip]);
 
-      await expect(execution.replaceDriver(trip, driverB, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
-      await expect(execution.endAssignment(trip, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
+      await expect(execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
+      await expect(execution.endAssignment(trip, assignment, { by: operator, reason: 'x' })).rejects.toThrow(ConflictError);
       expect(await notesFor(driverB)).toHaveLength(0);
     });
 
-    it('★ THE CRITICAL SCENARIO: a driver holding a stale screen after reassignment is refused every write', async () => {
-      const { trip } = await runningTrip();
-      await execution.recordEvent({ tripId: trip, type: 'ARRIVED_PICKUP', clientEventId: 'a', recordedBy: driverA });
+    it('★ THE CRITICAL SCENARIO: a driver holding a stale screen after a pre-execution swap is refused every write', async () => {
+      const { trip, assignment } = await runningTrip();
 
-      // Operations moves the trip to B while A's screen still shows it.
-      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'đổi ca' });
+      // Operations swaps the driver BEFORE anything was reported — the only
+      // moment a swap is allowed — while A's screen still shows the old turn.
+      const replacement = await execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'đổi ca' });
 
       const sentAt = new Date();
       const fix = { ...PICKUP_POINT, accuracyM: 10, capturedAt: sentAt };
 
+      // A's turn has ended, so every write against it answers as if it did not
+      // exist — and nothing A sends can reach B's turn, whose id A never had.
       await expect(
-        execution.recordEvent({ tripId: trip, type: 'PICKUP_CONFIRMED', deviceReportedAt: sentAt, location: fix, clientEventId: 'stale-pickup', recordedBy: driverA }),
-      ).rejects.toThrow(ForbiddenError);
+        execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'stale-arrive', recordedBy: driverA }),
+      ).rejects.toThrow(NotFoundError);
       await expect(
-        money.declareCost({ tripId: trip, category: 'fuel', amount: '100000.00', declaredBy: driverA }),
+        money.declareCost({ assignmentId: assignment, category: 'fuel', amount: '100000.00', declaredBy: driverA }),
+      ).rejects.toThrow(NotFoundError);
+      await expect(completion.submit(assignment, driverA, 'none')).rejects.toThrow(NotFoundError);
+      await expect(
+        execution.recordEvent({ assignmentId: replacement.id, type: 'ARRIVED_PICKUP', clientEventId: 'stale-arrive', recordedBy: driverA }),
       ).rejects.toThrow(ForbiddenError);
-      await expect(completion.submit(trip, driverA, 'none')).rejects.toThrow(ConflictError);
 
       // Nothing of A's landed…
-      const events = (await sql(`SELECT recorded_by FROM trip_execution_events WHERE trip_id = $1 AND event_type = 'PICKUP_CONFIRMED'`, [trip])) as { recorded_by: string }[];
-      expect(events).toHaveLength(0);
+      expect(await sql(`SELECT 1 FROM trip_execution_events WHERE trip_id = $1`, [trip])).toHaveLength(0);
       expect(await sql(`SELECT 1 FROM trip_costs WHERE trip_id = $1`, [trip])).toHaveLength(0);
       expect(await sql(`SELECT 1 FROM trip_completion_requests WHERE trip_id = $1`, [trip])).toHaveLength(0);
 
-      // …B was told, and B can carry on from where the journey stands.
+      // …B was told, and B starts the journey on the same lorry.
       expect((await notesFor(driverB)).map((n) => n.type)).toEqual(['TRIP_ASSIGNED']);
-      const confirmed = await execution.recordEvent({ tripId: trip, type: 'PICKUP_CONFIRMED', deviceReportedAt: sentAt, location: fix, clientEventId: 'b-pickup', recordedBy: driverB });
+      await execution.recordEvent({ assignmentId: replacement.id, type: 'ARRIVED_PICKUP', clientEventId: 'b-arrive', recordedBy: driverB });
+      const confirmed = await execution.recordEvent({ assignmentId: replacement.id, type: 'PICKUP_CONFIRMED', deviceReportedAt: sentAt, location: fix, clientEventId: 'b-pickup', recordedBy: driverB });
       expect(confirmed.geofencePassed).toBe(true);
+      expect(confirmed.vehicleId).toBe(replacement.vehicleId);
+    });
+
+    it('★ refuses to swap or end a turn once it has started executing — no takeover (ADR-0004)', async () => {
+      const { trip, assignment } = await runningTrip();
+      await execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'a', recordedBy: driverA });
+
+      await expect(
+        execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'đổi ca' }),
+      ).rejects.toThrow(ConflictError);
+      await expect(
+        execution.endAssignment(trip, assignment, { by: operator, reason: 'huỷ' }),
+      ).rejects.toThrow(ConflictError);
+
+      // The turn is exactly as it was: still A's, still active, nobody told.
+      const [row] = (await sql(`SELECT state, driver_user_id FROM trip_driver_assignments WHERE id = $1`, [assignment])) as { state: string; driver_user_id: string }[];
+      expect(row).toEqual({ state: 'active', driver_user_id: driverA });
+      expect(await notesFor(driverB)).toHaveLength(0);
+    });
+
+    it('★ a VOIDED first event makes the turn swappable again — "started" means a live event', async () => {
+      const { trip, assignment } = await runningTrip();
+      const tap = await execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'a', recordedBy: driverA });
+      await execution.voidEvent(trip, tap.id, { by: operator, reason: 'Ghi nhầm.' });
+
+      await expect(
+        execution.endAssignment(trip, assignment, { by: operator, reason: 'huỷ' }),
+      ).resolves.toMatchObject({ state: 'ended' });
     });
 
     it('★ the completion decision reaches the driver with the reason, once, and approval closes the loop', async () => {
-      const { trip } = await runningTrip();
-      await completion.submit(trip, driverA, 'none');
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
 
-      await completion.reject(trip, { by: reviewer, reason: 'Thiếu hoá đơn dầu' });
+      await reject(trip, 'Thiếu hoá đơn dầu');
       const rejected = (await notesFor(driverA)).find((n) => n.type === 'COMPLETION_REJECTED');
       expect(rejected).toMatchObject({ detail: 'Thiếu hoá đơn dầu', tripId: trip });
 
-      await completion.submit(trip, driverA, 'none');
-      await completion.approve(trip, reviewer);
-      await expect(completion.approve(trip, reviewer)).rejects.toThrow(ConflictError);
+      const second = await completion.submit(assignment, driverA, 'none');
+      await approve(trip);
+      // Deciding the same request twice is a conflict, not a second approval.
+      await expect(completion.approve(trip, second.id, reviewer)).rejects.toThrow(ConflictError);
 
       const types = (await notesFor(driverA)).map((n) => n.type);
       expect(types.filter((t) => t === 'COMPLETION_APPROVED')).toHaveLength(1);
@@ -1925,8 +2037,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
 
       it('★ is readable and markable only by its recipient', async () => {
-        const trip = await newTrip(await newVehicle('51D-10007'));
-        await execution.assign(trip, driverA, operator);
+        const trip = await newTrip();
+        await assignTo(trip, driverA);
         const [note] = await notesFor(driverA);
 
         expect(await notesFor(driverB)).toHaveLength(0);
@@ -1941,15 +2053,15 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
 
       it('counts unread per recipient', async () => {
-        const trip = await newTrip(await newVehicle('51D-10008'));
-        await execution.assign(trip, driverA, operator);
+        const trip = await newTrip();
+        await assignTo(trip, driverA);
         expect(await notificationRows.countUnread(driverA)).toBe(1);
         expect(await notificationRows.countUnread(driverB)).toBe(0);
       });
 
       it('cannot be deleted — T3', async () => {
-        const trip = await newTrip(await newVehicle('51D-10009'));
-        await execution.assign(trip, driverA, operator);
+        const trip = await newTrip();
+        await assignTo(trip, driverA);
         expect(await codeOf(() => sql(`DELETE FROM notifications WHERE recipient_user_id = $1`, [driverA]))).toBe(RESTRICT_VIOLATION);
       });
 
@@ -1973,9 +2085,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           stream.subscribe(driverA).subscribe((e) => a2.push(e)),
           stream.subscribe(driverB).subscribe((e) => b.push(e)),
         ];
-        const trip = await newTrip(await newVehicle('51D-10010'));
+        const trip = await newTrip();
 
-        await execution.assign(trip, driverA, operator);
+        await assignTo(trip, driverA);
 
         expect(signalsOf(a1)).toHaveLength(1);
         expect(signalsOf(a2)).toHaveLength(1);
@@ -1987,9 +2099,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       it('carries ids and a type only — never the trip', async () => {
         const heard: { data: Record<string, unknown> }[] = [];
         const sub = stream.subscribe(driverA).subscribe((e) => heard.push(e as never));
-        const trip = await newTrip(await newVehicle('51D-10011'));
+        const trip = await newTrip();
 
-        await execution.assign(trip, driverA, operator);
+        await assignTo(trip, driverA);
 
         const [signal] = signalsOf(heard) as { data: Record<string, unknown> }[];
         expect(Object.keys(signal!.data).sort()).toEqual(['createdAt', 'id', 'tripId', 'type']);
@@ -2000,11 +2112,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('★ the loop, end to end', () => {
     it('runs declare → submit → reject → correct → resubmit → approve → DONE', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       for (const type of ['ARRIVED_PICKUP', 'PICKUP_CONFIRMED', 'ARRIVED_DELIVERY', 'DELIVERY_CONFIRMED'] as const) {
-        await execution.recordEvent({
-          tripId: trip,
+        await execution.recordEvent({ assignmentId: assignment,
           type,
           actualAt: new Date('2026-08-30T03:00:00Z'),
           clientEventId: `tap-${type}`,
@@ -2013,22 +2124,22 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         });
       }
 
-      const line = await declare(trip, '5000000.00');
+      const line = await declare(assignment, '5000000.00');
       expect(line.state).toBe('editable');
 
-      await completion.submit(trip, driverA, 'expenses');
+      await completion.submit(assignment, driverA, 'expenses');
       expect((await costs.listActiveByTrip(trip))[0]!.state).toBe('locked');
 
-      await completion.reject(trip, { by: reviewer, reason: 'Số tiền dầu sai.' });
+      await reject(trip, 'Số tiền dầu sai.');
       // ★ Rejection REOPENS the money — locking was only ever temporary.
       expect((await costs.listActiveByTrip(trip))[0]!.state).toBe('editable');
 
-      await money.editCost(trip, line.id, { amount: '500000.00' }, driverA);
+      await money.editCost(assignment, line.id, { amount: '500000.00' }, driverA);
 
-      const resubmitted = await completion.submit(trip, driverA, 'expenses');
+      const resubmitted = await completion.submit(assignment, driverA, 'expenses');
       expect(resubmitted.attemptNo).toBe(2);
 
-      const approved = await completion.approve(trip, reviewer);
+      const approved = await approve(trip);
       expect(approved.state).toBe('approved');
 
       // Money frozen, trip closed, history written, all from one transaction.
@@ -2057,23 +2168,22 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ refuses a second completion after the trip is done', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.approve(trip, reviewer);
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
+      await approve(trip);
 
-      await expect(completion.submit(trip, driverA, 'none')).rejects.toBeInstanceOf(ConflictError);
+      await expect(completion.submit(assignment, driverA, 'none')).rejects.toBeInstanceOf(ConflictError);
     });
 
     it('refuses an execution event after the trip is done', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.approve(trip, reviewer);
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
+      await approve(trip);
 
       await expect(
-        execution.recordEvent({
-          tripId: trip,
+        execution.recordEvent({ assignmentId: assignment,
           type: 'DELIVERY_CONFIRMED',
           actualAt: new Date(),
           clientEventId: 'late',
@@ -2087,41 +2197,41 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('★ the expense declaration', () => {
     it('refuses "nothing to claim" when the trip has live expenses', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
 
-      await expect(completion.submit(trip, driverA, 'none')).rejects.toBeInstanceOf(ConflictError);
+      await expect(completion.submit(assignment, driverA, 'none')).rejects.toBeInstanceOf(ConflictError);
     });
 
     it('refuses "there were expenses" when none were entered', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await expect(completion.submit(trip, driverA, 'expenses')).rejects.toBeInstanceOf(
+      await expect(completion.submit(assignment, driverA, 'expenses')).rejects.toBeInstanceOf(
         ConflictError,
       );
     });
 
     it('★ a VOIDED line does not count as a live expense', async () => {
-      const { trip } = await runningTrip();
-      const line = await declare(trip);
+      const { trip, assignment } = await runningTrip();
+      const line = await declare(assignment);
       await money.voidCost(trip, line.id, { by: operator, reason: 'Khai nhầm chuyến.' });
 
       // The only line on the trip is withdrawn, so "nothing to claim" is true.
-      const request = await completion.submit(trip, driverA, 'none');
+      const request = await completion.submit(assignment, driverA, 'none');
 
       expect(request.expenseDeclaration).toBe('none');
     });
 
     it('carries a NEW declaration on the resubmission', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.reject(trip, { by: reviewer, reason: 'Bỏ khoản này đi.' });
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
+      await reject(trip, 'Bỏ khoản này đi.');
 
       const line = (await costs.listActiveByTrip(trip))[0]!;
       await money.voidCost(trip, line.id, { by: driverA, reason: 'Khai nhầm.' });
 
-      const second = await completion.submit(trip, driverA, 'none');
+      const second = await completion.submit(assignment, driverA, 'none');
 
       expect(second.attemptNo).toBe(2);
       expect(second.expenseDeclaration).toBe('none');
@@ -2130,50 +2240,51 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   // ===================================================== driver boundaries ==
 
-  describe('★ a driver reaches only their own trip', () => {
-    it('refuses an event from somebody who is not the assigned driver', async () => {
-      const { trip } = await runningTrip();
+  describe('★ a driver reaches only their own assignment', () => {
+    it('refuses an event from somebody who is not the driver on the assignment', async () => {
+      const { assignment } = await runningTrip();
 
       await expect(
-        execution.recordEvent({
-          tripId: trip,
+        execution.recordEvent({ assignmentId: assignment,
           type: 'ARRIVED_PICKUP',
           actualAt: new Date(),
           clientEventId: 'x',
           recordedBy: driverB,
         }),
-      ).rejects.toThrow(/Only the driver assigned/);
+      ).rejects.toThrow(/Only the driver on an assignment/);
     });
 
-    it('refuses an expense from somebody who is not the assigned driver', async () => {
-      const { trip } = await runningTrip();
+    it('refuses an expense from somebody who is not the driver on the assignment', async () => {
+      const { assignment } = await runningTrip();
 
       await expect(
-        money.declareCost({
-          tripId: trip,
+        money.declareCost({ assignmentId: assignment,
           category: 'fuel',
           amount: '100000',
           declaredBy: driverB,
         }),
-      ).rejects.toThrow(/Only the driver assigned/);
+      ).rejects.toThrow(/Only the driver on an assignment/);
     });
 
     it('refuses a correction of somebody else’s figure', async () => {
-      const { trip } = await runningTrip();
-      const line = await declare(trip);
+      const { assignment } = await runningTrip();
+      const line = await declare(assignment);
 
       await expect(
-        money.editCost(trip, line.id, { amount: '1.00' }, driverB),
+        money.editCost(assignment, line.id, { amount: '1.00' }, driverB),
       ).rejects.toThrow(/only correct the figures they declared/);
     });
 
-    it('★ refuses an expense before a lorry is assigned', async () => {
-      const trip = await newTrip(null);
-      await execution.assign(trip, driverA, operator);
+    it('★ refuses a correction through ANOTHER assignment of the same driver', async () => {
+      // A on two lorries: a line declared on the first is not reachable through
+      // the second's route, even though both are A's.
+      const { trip, assignment: first } = await runningTrip();
+      const second = await assignTo(trip, driverA);
+      const line = await declare(first);
 
       await expect(
-        money.declareCost({ tripId: trip, category: 'fuel', amount: '100000', declaredBy: driverA }),
-      ).rejects.toBeInstanceOf(ConflictError);
+        money.editCost(second.id, line.id, { amount: '1.00' }, driverA),
+      ).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 
@@ -2181,9 +2292,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('execution events', () => {
     it('withdraws an event without destroying it', async () => {
-      const { trip } = await runningTrip();
-      const event = await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      const event = await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date('2026-08-30T02:31:00Z'),
         clientEventId: 'tap-1',
@@ -2201,9 +2311,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses a second withdrawal rather than rewriting the first', async () => {
-      const { trip } = await runningTrip();
-      const event = await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      const event = await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date(),
         clientEventId: 'tap-1',
@@ -2217,9 +2326,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ snapshots the schedule, so correcting the plan cannot rewrite history', async () => {
-      const { trip } = await runningTrip();
-      const event = await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      const event = await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date('2026-08-30T02:31:00Z'),
         clientEventId: 'tap-1',
@@ -2238,18 +2346,17 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('refuses a driver-portal write once the assignment has ended', async () => {
-      const { trip } = await runningTrip();
-      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'Đổi ca.' });
+      const { trip, assignment } = await runningTrip();
+      await execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'Đổi ca.' });
 
       await expect(
-        execution.recordEvent({
-          tripId: trip,
+        execution.recordEvent({ assignmentId: assignment,
           type: 'ARRIVED_PICKUP',
           actualAt: new Date(),
           clientEventId: 'x',
           recordedBy: driverA,
         }),
-      ).rejects.toThrow(/Only the driver assigned/);
+      ).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 
@@ -2325,19 +2432,80 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     const view = (now?: Date) => operations.list(RANGE, now);
 
-    it('reports a trip with a lorry and nobody driving it', async () => {
-      await newTrip(await newVehicle('BOARD-1'));
+    it('reports a trip with nobody on it', async () => {
+      await newTrip();
 
       const [row] = await view();
-      expect(row).toMatchObject({ stage: 'NO_DRIVER', driver: null });
+      expect(row).toMatchObject({ stage: 'NO_DRIVER', driver: null, assignmentId: null });
     });
 
-    it('names the CURRENT driver, not a previous one', async () => {
-      const { trip } = await runningTrip();
-      await execution.replaceDriver(trip, driverB, { by: operator, reason: 'Doi ca.' });
+    it('names the CURRENT driver of a lorry, not a previous one', async () => {
+      const { trip, assignment } = await runningTrip();
+      await execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'Doi ca.' });
 
-      const [row] = await view();
-      expect(row!.driver).toMatchObject({ id: driverB });
+      const rows = await view();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.driver).toMatchObject({ id: driverB });
+    });
+
+    it('★ reports one row per ACTIVE assignment, each with its own lorry and timeline', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = await assignTo(trip, driverB);
+      await execution.recordEvent({ assignmentId: a, type: 'ARRIVED_PICKUP', actualAt: new Date('2026-08-30T02:30:00Z'), clientEventId: 'a1', recordedBy: driverA });
+
+      const rows = await view(new Date('2026-08-30T05:00:00Z'));
+
+      expect(rows).toHaveLength(2);
+      const rowA = rows.find((r) => r.assignmentId === a)!;
+      const rowB = rows.find((r) => r.assignmentId === b.id)!;
+      expect(rowA).toMatchObject({ tripId: trip, stage: 'AT_PICKUP', driver: { id: driverA } });
+      expect(rowB).toMatchObject({ tripId: trip, stage: 'PICKUP_DELAYED', driver: { id: driverB }, arrivedPickupAt: null });
+      expect(rowA.vehicle!.id).not.toBe(rowB.vehicle!.id);
+    });
+
+    /**
+     * ★ THE BOARD'S GRAIN IS THE ASSIGNMENT, FORMALLY (ADR-0004 §2.3). One
+     * 10:00 → 12:00 run dispatched with three lorries in parallel is three
+     * rows, each carrying the trip's plan and its OWN stage. The same driver on
+     * two of them is two rows; the same lorry twice is refused before it can
+     * become a row.
+     */
+    it('★ three lorries dispatched in parallel for one 10:00 → 12:00 run are three rows — same driver twice allowed, same lorry twice refused', async () => {
+      const trip = (
+        await board.create({
+          scheduledOn: '2026-08-30',
+          pickupAt: new Date('2026-08-30T03:00:00Z'), // 10:00 Hồ Chí Minh
+          deliveryAt: new Date('2026-08-30T05:00:00Z'), // 12:00
+          createdBy: operator,
+        })
+      ).id;
+      const lorryA = await newVehicle(plate());
+      const a = await assignTo(trip, driverA, lorryA);
+      const b = await assignTo(trip, driverB);
+      const c = await assignTo(trip, driverA); // driver A holds a second lorry
+      await expect(assignTo(trip, driverB, lorryA)).rejects.toThrow(/already dispatched on this trip/);
+
+      const at1030 = new Date('2026-08-30T03:30:00Z');
+      const rows = (await view(at1030)).filter((row) => row.tripId === trip);
+
+      expect(rows).toHaveLength(3);
+      expect(new Set(rows.map((row) => row.assignmentId))).toEqual(new Set([a.id, b.id, c.id]));
+      expect(new Set(rows.map((row) => row.vehicle!.id)).size).toBe(3);
+      expect(rows.filter((row) => row.driver?.id === driverA)).toHaveLength(2);
+      // Same plan on every row; nothing reported yet, so every turn is 30 minutes late.
+      expect(rows.every((row) => row.stage === 'PICKUP_DELAYED' && row.pickupDelayMinutes === 30)).toBe(true);
+
+      // One turn reports; only that row moves.
+      await execution.recordEvent({
+        assignmentId: b.id,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'b:arrived',
+        recordedBy: driverB,
+        deviceReportedAt: new Date(),
+      });
+      const after = (await view(at1030)).filter((row) => row.tripId === trip);
+      expect(after.find((row) => row.assignmentId === b.id)!.stage).toBe('AT_PICKUP');
+      expect(after.filter((row) => row.assignmentId !== b.id).every((row) => row.stage === 'PICKUP_DELAYED')).toBe(true);
     });
 
     it('reports a pickup past its time with no arrival, and how late', async () => {
@@ -2361,9 +2529,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('measures the delay to the REPORTED time once it arrives', async () => {
-      const { trip } = await runningTrip();
-      await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date('2026-08-30T02:45:00Z'),
         clientEventId: 'tap-1',
@@ -2378,7 +2545,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('walks the whole timeline as the driver reports it', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       const at = new Date('2026-08-30T02:30:00Z');
       const seen: string[] = [];
 
@@ -2388,8 +2555,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         'ARRIVED_DELIVERY',
         'DELIVERY_CONFIRMED',
       ] as const) {
-        await execution.recordEvent({
-          tripId: trip,
+        await execution.recordEvent({ assignmentId: assignment,
           type,
           actualAt: at,
           clientEventId: 'tap-' + type,
@@ -2403,9 +2569,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('excludes a VOIDED event, so a withdrawn arrival stops counting', async () => {
-      const { trip } = await runningTrip();
-      const event = await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      const event = await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date('2026-08-30T02:30:00Z'),
         clientEventId: 'tap-1',
@@ -2423,16 +2588,14 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // A technical tie-break rather than a business rule: the earliest reading
       // cannot make a trip look earlier than it was. Which one is canonical when
       // a driver genuinely reports twice is still an open decision.
-      const { trip } = await runningTrip();
-      await execution.recordEvent({
-        tripId: trip,
+      const { trip, assignment } = await runningTrip();
+      await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date('2026-08-30T02:45:00Z'),
         clientEventId: 'tap-late',
         recordedBy: driverA,
       });
-      await execution.recordEvent({
-        tripId: trip,
+      await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         actualAt: new Date('2026-08-30T02:20:00Z'),
         clientEventId: 'tap-early',
@@ -2445,9 +2608,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('reports the completion states and the rejection reason', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
+      await completion.submit(assignment, driverA, 'expenses');
 
       expect((await view())[0]).toMatchObject({
         stage: 'COMPLETION_PENDING',
@@ -2456,7 +2619,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         completionAttempts: 1,
       });
 
-      await completion.reject(trip, { by: reviewer, reason: 'Thieu chung tu dau.' });
+      await reject(trip, 'Thieu chung tu dau.');
 
       expect((await view())[0]).toMatchObject({
         stage: 'COMPLETION_REJECTED',
@@ -2464,8 +2627,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         completionRejectionReason: 'Thieu chung tu dau.',
       });
 
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.approve(trip, reviewer);
+      await completion.submit(assignment, driverA, 'expenses');
+      await approve(trip);
 
       expect((await view())[0]).toMatchObject({
         stage: 'DONE',
@@ -2478,7 +2641,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('tells NOT_DECLARED apart from DECLARED_NO_EXPENSE', async () => {
       const first = await runningTrip();
       const second = await runningTrip();
-      await completion.submit(second.trip, driverA, 'none');
+      await completion.submit(second.assignment, driverA, 'none');
 
       const rows = await view();
       const a = rows.find((r) => r.tripId === first.trip)!;
@@ -2489,8 +2652,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('carries NO money at all', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip, '9999999.00');
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment, '9999999.00');
       await money.createHire({
         tripId: trip,
         carrierName: 'Hai Thanh',
@@ -2507,7 +2670,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('excludes an archived trip, which is not work in progress', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       await archive(trip);
 
       expect(await view()).toHaveLength(0);
@@ -2519,11 +2682,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   describe('the server owns every business timestamp', () => {
     it('stamps actual_at itself when no caller pins one', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
       const before = Date.now();
 
-      const recorded = await execution.recordEvent({
-        tripId: trip,
+      const recorded = await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         clientEventId: 'tap-1',
         recordedBy: driverA,
@@ -2537,10 +2699,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('stamps recorded_at from PostgreSQL, not from the process', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await execution.recordEvent({
-        tripId: trip,
+      await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         clientEventId: 'tap-1',
         recordedBy: driverA,
@@ -2557,10 +2718,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('keeps a wildly wrong device clock OUT of actual_at', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      const recorded = await execution.recordEvent({
-        tripId: trip,
+      const recorded = await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         clientEventId: 'tap-1',
         recordedBy: driverA,
@@ -2574,10 +2734,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ a wrong device clock cannot move the delay the board reports', async () => {
       // The whole reason the DTO stopped accepting `actualAt`.
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await execution.recordEvent({
-        tripId: trip,
+      await execution.recordEvent({ assignmentId: assignment,
         type: 'ARRIVED_PICKUP',
         clientEventId: 'tap-1',
         recordedBy: driverA,
@@ -2596,11 +2755,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('stamps the completion decision times on the server', async () => {
-      const { trip } = await runningTrip();
-      await declare(trip);
+      const { trip, assignment } = await runningTrip();
+      await declare(assignment);
       const before = Date.now();
-      await completion.submit(trip, driverA, 'expenses');
-      const approved = await completion.approve(trip, reviewer);
+      await completion.submit(assignment, driverA, 'expenses');
+      const approved = await approve(trip);
       const after = Date.now();
 
       const decidedAt = new Date(approved.decidedAt as unknown as string).getTime();
@@ -2620,25 +2779,34 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
   describe('the review queue survives a month boundary', () => {
     /** A trip on a given day, with a driver, ready to be completed. */
     const tripOn = async (day: string): Promise<string> => {
-      const vehicle = await newVehicle('Q-' + Math.floor(Math.random() * 90000 + 10000));
       const created = await board.create({
         scheduledOn: day,
-        vehicleId: vehicle,
         pickupAt: new Date(day + 'T02:00:00Z'),
         deliveryAt: new Date(day + 'T09:00:00Z'),
         createdBy: operator,
       });
-      await execution.assign(created.id, driverA, operator);
+      await assignTo(created.id, driverA);
       return created.id;
     };
+
+    /** The one active assignment of a helper-made trip. */
+    const assignmentOf = async (trip: string): Promise<string> => {
+      const [row] = (await sql(
+        `SELECT id FROM trip_driver_assignments WHERE trip_id = $1 AND state = 'active'`,
+        [trip],
+      )) as { id: string }[];
+      return row!.id;
+    };
+    const declareOn = async (trip: string) => declare(await assignmentOf(trip));
+    const submitOn = async (trip: string) => completion.submit(await assignmentOf(trip), driverA, 'expenses');
 
     it('★ keeps a trip scheduled LAST MONTH whose completion is still pending', async () => {
       // The defect this method exists for: filtering the queue by
       // `scheduled_on` made a request submitted on the 30th vanish on the 1st,
       // while nobody had decided it.
       const trip = await tripOn('2026-08-30');
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      await declareOn(trip);
+      await submitOn(trip);
 
       const queue = await operations.listUnresolvedCompletions();
 
@@ -2647,8 +2815,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ and the month-scoped board does NOT — which is why the queue exists', async () => {
       const trip = await tripOn('2026-08-30');
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      await declareOn(trip);
+      await submitOn(trip);
 
       // September, the month after the trip ran.
       const september = await operations.list(
@@ -2660,9 +2828,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('keeps a REJECTED completion in the queue — it is still outstanding', async () => {
       const trip = await tripOn('2026-07-15');
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
-      await completion.reject(trip, { by: reviewer, reason: 'Sai so tien.' });
+      await declareOn(trip);
+      await submitOn(trip);
+      await reject(trip, 'Sai so tien.');
 
       const queue = await operations.listUnresolvedCompletions();
 
@@ -2674,12 +2842,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ drops a trip from the queue the moment it is approved', async () => {
       const trip = await tripOn('2026-08-30');
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      await declareOn(trip);
+      await submitOn(trip);
 
       expect((await operations.listUnresolvedCompletions()).map((r) => r.tripId)).toContain(trip);
 
-      await completion.approve(trip, reviewer);
+      await approve(trip);
 
       expect((await operations.listUnresolvedCompletions()).map((r) => r.tripId)).not.toContain(
         trip,
@@ -2697,8 +2865,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('excludes an archived trip', async () => {
       const trip = await tripOn('2026-08-30');
-      await declare(trip);
-      await completion.submit(trip, driverA, 'expenses');
+      await declareOn(trip);
+      await submitOn(trip);
       await archive(trip);
 
       expect((await operations.listUnresolvedCompletions()).map((r) => r.tripId)).not.toContain(
@@ -2710,8 +2878,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const older = await tripOn('2026-07-01');
       const newer = await tripOn('2026-08-30');
       for (const trip of [newer, older]) {
-        await declare(trip);
-        await completion.submit(trip, driverA, 'expenses');
+        await declareOn(trip);
+        await submitOn(trip);
       }
 
       const queue = await operations.listUnresolvedCompletions();
@@ -2726,13 +2894,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const at = (hhmm: string) => new Date(`2026-08-30T${hhmm}:00Z`);
 
     const report = (
-      trip: string,
+      assignment: string,
       type: 'ARRIVED_PICKUP' | 'PICKUP_CONFIRMED' | 'ARRIVED_DELIVERY' | 'DELIVERY_CONFIRMED',
       clientEventId: string,
       actualAt?: Date,
     ) =>
-      execution.recordEvent({
-        tripId: trip,
+      execution.recordEvent({ assignmentId: assignment,
         type,
         clientEventId,
         recordedBy: driverA,
@@ -2745,10 +2912,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ stamps actual_at in the order the taps arrive, with no client able to reorder', async () => {
       // The DTO has no `actualAt`, so an out-of-order chronology is not
       // constructible through the API at all — it is monotonic by construction.
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      const first = await report(trip, 'ARRIVED_PICKUP', 'tap-1');
-      const second = await report(trip, 'PICKUP_CONFIRMED', 'tap-2');
+      const first = await report(assignment, 'ARRIVED_PICKUP', 'tap-1');
+      const second = await report(assignment, 'PICKUP_CONFIRMED', 'tap-2');
 
       expect(new Date(second.actualAt).getTime()).toBeGreaterThanOrEqual(
         new Date(first.actualAt).getTime(),
@@ -2758,9 +2925,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('does not let insertion order stand in for chronology', async () => {
       // Written second, happened first. The board reads `actual_at`, not `id`
       // and not insertion order.
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'late', at('02:45'));
-      await report(trip, 'ARRIVED_PICKUP', 'early', at('02:20'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'late', at('02:45'));
+      await report(assignment, 'ARRIVED_PICKUP', 'early', at('02:20'));
 
       const [board] = await operations.list(
         { from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 } as never,
@@ -2770,9 +2937,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('handles two events sharing one actual_at without losing either', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('02:00'));
 
       expect(await execution.listEvents(trip)).toHaveLength(2);
     });
@@ -2780,10 +2947,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     // ---------------------------------------------------------------- void --
 
     it('★ A · void then replace — the replacement is what counts', async () => {
-      const { trip } = await runningTrip();
-      const first = await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const first = await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
       await execution.voidEvent(trip, first.id, { by: operator, reason: 'Ghi nham.' });
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('02:30'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('02:30'));
 
       const [board] = await operations.list(
         { from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 } as never,
@@ -2799,9 +2966,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // ⚠ A TECHNICAL TIE-BREAK, NOT A DECIDED RULE. `design.md` O-5 proposes
       // the LATEST non-voided reading and is still OPEN; the read model takes
       // the earliest because it cannot make a trip look earlier than it was.
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('02:30'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('02:30'));
 
       const [board] = await operations.list(
         { from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 } as never,
@@ -2811,10 +2978,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('C · three live events of one type — still the earliest', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('03:00'));
-      await report(trip, 'ARRIVED_PICKUP', 'c', at('04:00'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('03:00'));
+      await report(assignment, 'ARRIVED_PICKUP', 'c', at('04:00'));
 
       const [board] = await operations.list(
         { from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 } as never,
@@ -2824,8 +2991,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ D · void with no replacement — the step becomes outstanding again', async () => {
-      const { trip } = await runningTrip();
-      const first = await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const first = await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
       await execution.voidEvent(trip, first.id, { by: operator, reason: 'Ghi nham.' });
 
       const [board] = await operations.list(
@@ -2840,10 +3007,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('the same, for the delivery half', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
-      await report(trip, 'PICKUP_CONFIRMED', 'b', at('02:10'));
-      const arrived = await report(trip, 'ARRIVED_DELIVERY', 'c', at('09:30'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'b', at('02:10'));
+      const arrived = await report(assignment, 'ARRIVED_DELIVERY', 'c', at('09:30'));
       await execution.voidEvent(trip, arrived.id, { by: operator, reason: 'Ghi nham.' });
 
       const [board] = await operations.list(
@@ -2856,8 +3023,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('keeps the provenance of a withdrawn event', async () => {
-      const { trip } = await runningTrip();
-      const first = await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const first = await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
       await execution.voidEvent(trip, first.id, { by: operator, reason: 'Ghi nham chuyen.' });
 
       const [withdrawn] = await execution.listEvents(trip, true);
@@ -2874,20 +3041,20 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ deduplicates on the client id, NEVER on a timestamp', async () => {
       // Two genuinely different reports that happen to share an instant must
       // both survive; a timestamp-based key would silently merge them.
-      const { trip } = await runningTrip();
-      const one = await report(trip, 'ARRIVED_PICKUP', 'first', at('02:00'));
-      const two = await report(trip, 'ARRIVED_PICKUP', 'second', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const one = await report(assignment, 'ARRIVED_PICKUP', 'first', at('02:00'));
+      const two = await report(assignment, 'ARRIVED_PICKUP', 'second', at('02:00'));
 
       expect(one.id).not.toBe(two.id);
       expect(one.actualAt).toEqual(two.actualAt);
     });
 
     it('★ answers a retry with the original, whatever the clock says', async () => {
-      const { trip } = await runningTrip();
-      const original = await report(trip, 'ARRIVED_PICKUP', 'same-tap', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const original = await report(assignment, 'ARRIVED_PICKUP', 'same-tap', at('02:00'));
       // The retry arrives later and carries a different pinned instant; the
       // client id is what decides, so the original comes back unchanged.
-      const retry = await report(trip, 'ARRIVED_PICKUP', 'same-tap', at('05:00'));
+      const retry = await report(assignment, 'ARRIVED_PICKUP', 'same-tap', at('05:00'));
 
       expect(retry.id).toBe(original.id);
       expect(retry.actualAt).toEqual(original.actualAt);
@@ -2902,10 +3069,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       //
       // A key identifies ONE intent. Reused for another milestone it is a
       // caller contradicting itself, and that is refused rather than absorbed.
-      const { trip } = await runningTrip();
-      const arrival = await report(trip, 'ARRIVED_PICKUP', 'one-tap', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const arrival = await report(assignment, 'ARRIVED_PICKUP', 'one-tap', at('02:00'));
 
-      await expect(report(trip, 'PICKUP_CONFIRMED', 'one-tap', at('03:00'))).rejects.toBeInstanceOf(
+      await expect(report(assignment, 'PICKUP_CONFIRMED', 'one-tap', at('03:00'))).rejects.toBeInstanceOf(
         ConflictError,
       );
 
@@ -2920,22 +3087,22 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('still answers a retry of the SAME milestone idempotently after that refusal', async () => {
       // The narrowing must not cost the guarantee it protects: the honest
       // retry — same key, same milestone — still comes back unchanged.
-      const { trip } = await runningTrip();
-      const first = await report(trip, 'ARRIVED_PICKUP', 'one-tap', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const first = await report(assignment, 'ARRIVED_PICKUP', 'one-tap', at('02:00'));
 
-      await expect(report(trip, 'PICKUP_CONFIRMED', 'one-tap', at('03:00'))).rejects.toBeInstanceOf(
+      await expect(report(assignment, 'PICKUP_CONFIRMED', 'one-tap', at('03:00'))).rejects.toBeInstanceOf(
         ConflictError,
       );
 
-      const retry = await report(trip, 'ARRIVED_PICKUP', 'one-tap', at('04:00'));
+      const retry = await report(assignment, 'ARRIVED_PICKUP', 'one-tap', at('04:00'));
 
       expect(retry.id).toBe(first.id);
       expect(await execution.listEvents(trip)).toHaveLength(1);
     });
 
     it('refuses a duplicate client id at the database, not only in the service', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'tap-1', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'tap-1', at('02:00'));
 
       expect(
         await codeOf(() =>
@@ -2953,11 +3120,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ a withdrawn event still holds its client id, so the tap cannot be replayed', async () => {
       // Voiding does not free the idempotency key: the same tap arriving again
       // must not create a second event just because the first was withdrawn.
-      const { trip } = await runningTrip();
-      const first = await report(trip, 'ARRIVED_PICKUP', 'tap-1', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      const first = await report(assignment, 'ARRIVED_PICKUP', 'tap-1', at('02:00'));
       await execution.voidEvent(trip, first.id, { by: operator, reason: 'Ghi nham.' });
 
-      const replay = await report(trip, 'ARRIVED_PICKUP', 'tap-1', at('03:00'));
+      const replay = await report(assignment, 'ARRIVED_PICKUP', 'tap-1', at('03:00'));
 
       expect(replay.id).toBe(first.id);
       expect(replay.voidedAt).not.toBeNull();
@@ -2979,12 +3146,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
      * then measure against a step with no time.
      */
     const report = (
-      trip: string,
+      assignment: string,
       type: 'ARRIVED_PICKUP' | 'PICKUP_CONFIRMED' | 'ARRIVED_DELIVERY' | 'DELIVERY_CONFIRMED',
       clientEventId: string,
     ) =>
-      execution.recordEvent({
-        tripId: trip,
+      execution.recordEvent({ assignmentId: assignment,
         type,
         clientEventId,
         recordedBy: driverA,
@@ -2992,33 +3158,33 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
 
     it('★ refuses PICKUP_CONFIRMED before ARRIVED_PICKUP', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await expect(report(trip, 'PICKUP_CONFIRMED', 'a')).rejects.toBeInstanceOf(ConflictError);
+      await expect(report(assignment, 'PICKUP_CONFIRMED', 'a')).rejects.toBeInstanceOf(ConflictError);
       expect(await execution.listEvents(trip)).toHaveLength(0);
     });
 
     it('refuses ARRIVED_DELIVERY before the pickup is confirmed', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a');
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a');
 
-      await expect(report(trip, 'ARRIVED_DELIVERY', 'b')).rejects.toBeInstanceOf(ConflictError);
+      await expect(report(assignment, 'ARRIVED_DELIVERY', 'b')).rejects.toBeInstanceOf(ConflictError);
     });
 
     it('refuses DELIVERY_CONFIRMED on a trip that never reported a pickup at all', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await expect(report(trip, 'DELIVERY_CONFIRMED', 'a')).rejects.toBeInstanceOf(ConflictError);
+      await expect(report(assignment, 'DELIVERY_CONFIRMED', 'a')).rejects.toBeInstanceOf(ConflictError);
     });
 
     it('names the step that is missing, so the driver knows what to do', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await expect(report(trip, 'DELIVERY_CONFIRMED', 'a')).rejects.toThrow(/ARRIVED_PICKUP/);
+      await expect(report(assignment, 'DELIVERY_CONFIRMED', 'a')).rejects.toThrow(/ARRIVED_PICKUP/);
     });
 
     it('accepts the four in order', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       for (const [index, type] of [
         'ARRIVED_PICKUP',
@@ -3027,7 +3193,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         'DELIVERY_CONFIRMED',
       ].entries()) {
         await expect(
-          report(trip, type as 'ARRIVED_PICKUP', `tap-${index}`),
+          report(assignment, type as 'ARRIVED_PICKUP', `tap-${index}`),
         ).resolves.toBeDefined();
       }
 
@@ -3035,19 +3201,19 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('★ still accepts a REPEATED milestone — leaving and coming back is real', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a');
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a');
 
-      await expect(report(trip, 'ARRIVED_PICKUP', 'b')).resolves.toBeDefined();
+      await expect(report(assignment, 'ARRIVED_PICKUP', 'b')).resolves.toBeDefined();
       expect(await execution.listEvents(trip)).toHaveLength(2);
     });
 
     it('★ voiding an arrival makes the confirmation skippable again — and refused', async () => {
-      const { trip } = await runningTrip();
-      const arrival = await report(trip, 'ARRIVED_PICKUP', 'a');
+      const { trip, assignment } = await runningTrip();
+      const arrival = await report(assignment, 'ARRIVED_PICKUP', 'a');
       await execution.voidEvent(trip, arrival.id, { by: operator, reason: 'Ghi nham.' });
 
-      await expect(report(trip, 'PICKUP_CONFIRMED', 'b')).rejects.toBeInstanceOf(ConflictError);
+      await expect(report(assignment, 'PICKUP_CONFIRMED', 'b')).rejects.toBeInstanceOf(ConflictError);
     });
 
     it('★ is enforced by the APPLICATION, because the database cannot express it', async () => {
@@ -3056,12 +3222,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // exactly why the rule lives in the service, inside the transaction that
       // already holds the trip lock. A maintenance script bypassing the service
       // still gets in; that is the honest limit of the chosen layer.
-      const { trip } = await runningTrip();
-
-      const [assignment] = (await sql(
-        `SELECT id FROM trip_driver_assignments WHERE trip_id = $1 AND state = 'active'`,
-        [trip],
-      )) as { id: string }[];
+      const { trip, assignment } = await runningTrip();
 
       // Straight past the service, as a maintenance script would.
       expect(
@@ -3070,7 +3231,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
             `INSERT INTO trip_execution_events
                (trip_id, driver_assignment_id, event_type, actual_at, client_event_id, recorded_by)
              VALUES ($1, $2, 'DELIVERY_CONFIRMED', now(), 'raw', $3)`,
-            [trip, assignment!.id, driverA],
+            [trip, assignment, driverA],
           ),
         ),
       ).toBeUndefined();
@@ -3099,17 +3260,17 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // remains under test is exactly what the title claims: two simultaneous
       // writers on one trip row serialise, and neither write is lost. The
       // gated pair keeps its own test, directly below.
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
-      await report(trip, 'ARRIVED_PICKUP', 'seed');
+      await report(assignment, 'ARRIVED_PICKUP', 'seed');
 
       const results = await Promise.allSettled([
         // Prerequisite already satisfied by the seed.
-        report(trip, 'PICKUP_CONFIRMED', 'a'),
+        report(assignment, 'PICKUP_CONFIRMED', 'a'),
         // A repeat is never refused: it is the first milestone, so it has no
         // prerequisite, and a driver who leaves and comes back reports an
         // arrival twice.
-        report(trip, 'ARRIVED_PICKUP', 'b'),
+        report(assignment, 'ARRIVED_PICKUP', 'b'),
       ]);
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
@@ -3141,11 +3302,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // What must never happen is a confirmation stored with no arrival behind
       // it, which is precisely what an unserialised read of the event list
       // would produce.
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       const [confirmed, arrived] = await Promise.allSettled([
-        report(trip, 'PICKUP_CONFIRMED', 'b'),
-        report(trip, 'ARRIVED_PICKUP', 'a'),
+        report(assignment, 'PICKUP_CONFIRMED', 'b'),
+        report(assignment, 'ARRIVED_PICKUP', 'a'),
       ]);
 
       // The arrival has no prerequisite, so it is stored whichever order the
@@ -3170,13 +3331,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // them, so each is judged against a settled state — and only the ones
       // whose prerequisites actually hold get in. What must NEVER happen is a
       // confirmation stored with no arrival behind it.
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       await Promise.allSettled([
-        report(trip, 'ARRIVED_PICKUP', 'a'),
-        report(trip, 'PICKUP_CONFIRMED', 'b'),
-        report(trip, 'ARRIVED_DELIVERY', 'c'),
-        report(trip, 'DELIVERY_CONFIRMED', 'd'),
+        report(assignment, 'ARRIVED_PICKUP', 'a'),
+        report(assignment, 'PICKUP_CONFIRMED', 'b'),
+        report(assignment, 'ARRIVED_DELIVERY', 'c'),
+        report(assignment, 'DELIVERY_CONFIRMED', 'd'),
       ]);
 
       const stored = (await execution.listEvents(trip)).map((event) => event.type);
@@ -3192,12 +3353,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('serialises repeated readings of one milestone and loses none', async () => {
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       const results = await Promise.allSettled([
-        report(trip, 'ARRIVED_PICKUP', 'a'),
-        report(trip, 'ARRIVED_PICKUP', 'b'),
-        report(trip, 'ARRIVED_PICKUP', 'c'),
+        report(assignment, 'ARRIVED_PICKUP', 'a'),
+        report(assignment, 'ARRIVED_PICKUP', 'b'),
+        report(assignment, 'ARRIVED_PICKUP', 'c'),
       ]);
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(3);
@@ -3206,11 +3367,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ still refuses two concurrent taps sharing one client id', async () => {
       // The idempotency guarantee is unaffected by the ordering question.
-      const { trip } = await runningTrip();
+      const { trip, assignment } = await runningTrip();
 
       const results = await Promise.allSettled([
-        report(trip, 'ARRIVED_PICKUP', 'same'),
-        report(trip, 'ARRIVED_PICKUP', 'same'),
+        report(assignment, 'ARRIVED_PICKUP', 'same'),
+        report(assignment, 'ARRIVED_PICKUP', 'same'),
       ]);
 
       const ids = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value.id] : []));
@@ -3228,13 +3389,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const at = (hhmm: string) => new Date(`2026-08-30T${hhmm}:00Z`);
 
     const report = (
-      trip: string,
+      assignment: string,
       type: 'ARRIVED_PICKUP' | 'PICKUP_CONFIRMED' | 'ARRIVED_DELIVERY' | 'DELIVERY_CONFIRMED',
       clientEventId: string,
       actualAt: Date,
     ) =>
-      execution.recordEvent({
-        tripId: trip,
+      execution.recordEvent({ assignmentId: assignment,
         type,
         clientEventId,
         recordedBy: driverA,
@@ -3250,9 +3410,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('takes the EARLIEST ARRIVED_PICKUP', async () => {
       // Arriving is a moment: a later duplicate must not make the trip look as
       // though it got there later than it did.
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a', at('02:45'));
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('02:20'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:45'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('02:20'));
 
       expect((await board(trip)).arrivedPickupAt?.toISOString()).toBe('2026-08-30T02:20:00.000Z');
     });
@@ -3260,31 +3420,31 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ takes the LATEST PICKUP_CONFIRMED', async () => {
       // Finishing is a state: a driver who confirms, loads more and confirms
       // again finished at the SECOND confirmation.
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'pre', at('02:00'));
-      await report(trip, 'PICKUP_CONFIRMED', 'a', at('02:20'));
-      await report(trip, 'PICKUP_CONFIRMED', 'b', at('02:45'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'pre', at('02:00'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'a', at('02:20'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'b', at('02:45'));
 
       expect((await board(trip)).pickupConfirmedAt?.toISOString()).toBe('2026-08-30T02:45:00.000Z');
     });
 
     it('takes the EARLIEST ARRIVED_DELIVERY', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'p1', at('02:00'));
-      await report(trip, 'PICKUP_CONFIRMED', 'p2', at('02:10'));
-      await report(trip, 'ARRIVED_DELIVERY', 'a', at('10:00'));
-      await report(trip, 'ARRIVED_DELIVERY', 'b', at('09:00'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'p1', at('02:00'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'p2', at('02:10'));
+      await report(assignment, 'ARRIVED_DELIVERY', 'a', at('10:00'));
+      await report(assignment, 'ARRIVED_DELIVERY', 'b', at('09:00'));
 
       expect((await board(trip)).arrivedDeliveryAt?.toISOString()).toBe('2026-08-30T09:00:00.000Z');
     });
 
     it('★ takes the LATEST DELIVERY_CONFIRMED', async () => {
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'p1', at('02:00'));
-      await report(trip, 'PICKUP_CONFIRMED', 'p2', at('02:10'));
-      await report(trip, 'ARRIVED_DELIVERY', 'p3', at('09:00'));
-      await report(trip, 'DELIVERY_CONFIRMED', 'a', at('09:30'));
-      await report(trip, 'DELIVERY_CONFIRMED', 'b', at('10:30'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'p1', at('02:00'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'p2', at('02:10'));
+      await report(assignment, 'ARRIVED_DELIVERY', 'p3', at('09:00'));
+      await report(assignment, 'DELIVERY_CONFIRMED', 'a', at('09:30'));
+      await report(assignment, 'DELIVERY_CONFIRMED', 'b', at('10:30'));
 
       expect((await board(trip)).deliveryConfirmedAt?.toISOString()).toBe(
         '2026-08-30T10:30:00.000Z',
@@ -3293,22 +3453,22 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ the split changes the delay figure, which is the point of the rule', async () => {
       // Scheduled pickup is 02:00. Arrival at 02:20 and again at 02:45.
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a', at('02:45'));
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('02:20'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:45'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('02:20'));
 
       // 20 minutes, from the earliest arrival — not 45 from the duplicate.
       expect((await board(trip)).pickupDelayMinutes).toBe(20);
     });
 
     it('excludes voided readings from both halves', async () => {
-      const { trip } = await runningTrip();
-      const early = await report(trip, 'ARRIVED_PICKUP', 'a', at('02:20'));
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('02:45'));
+      const { trip, assignment } = await runningTrip();
+      const early = await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:20'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('02:45'));
       await execution.voidEvent(trip, early.id, { by: operator, reason: 'Ghi nham.' });
 
-      const late = await report(trip, 'PICKUP_CONFIRMED', 'c', at('03:30'));
-      await report(trip, 'PICKUP_CONFIRMED', 'd', at('03:00'));
+      const late = await report(assignment, 'PICKUP_CONFIRMED', 'c', at('03:30'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'd', at('03:00'));
       await execution.voidEvent(trip, late.id, { by: operator, reason: 'Ghi nham.' });
 
       const row = await board(trip);
@@ -3322,9 +3482,9 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // Two taps CAN share an instant: the server stamps `actual_at`, and a
       // pinned value makes the tie reproducible here. Without a full ordering
       // the planner would decide, and two runs could disagree.
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'a', at('02:00'));
-      await report(trip, 'ARRIVED_PICKUP', 'b', at('02:00'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'a', at('02:00'));
+      await report(assignment, 'ARRIVED_PICKUP', 'b', at('02:00'));
 
       const first = (await board(trip)).arrivedPickupAt?.toISOString();
       const second = (await board(trip)).arrivedPickupAt?.toISOString();
@@ -3336,10 +3496,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('agrees with the driver portal, which applies the same rule', async () => {
       // Two canonical rules would put two different times on two screens.
-      const { trip } = await runningTrip();
-      await report(trip, 'ARRIVED_PICKUP', 'pre', at('02:00'));
-      await report(trip, 'PICKUP_CONFIRMED', 'a', at('02:20'));
-      await report(trip, 'PICKUP_CONFIRMED', 'b', at('02:45'));
+      const { trip, assignment } = await runningTrip();
+      await report(assignment, 'ARRIVED_PICKUP', 'pre', at('02:00'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'a', at('02:20'));
+      await report(assignment, 'PICKUP_CONFIRMED', 'b', at('02:45'));
 
       const events = await execution.listEvents(trip);
       const latest = events
@@ -3358,7 +3518,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('records a hire against a trip running a hired lorry', async () => {
       const carrier = await newCarrier('Hai Thành 3');
       const vehicle = await newVehicle('HIRED-9', 'outsourced', carrier);
-      const trip = await newTrip(vehicle);
+      const trip = await newTrip();
+      await assignTo(trip, driverA, vehicle);
 
       const hire = await money.createHire({
         tripId: trip,
@@ -3375,8 +3536,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // a cost line nor theirs, and lives in a different table entirely.
       const carrier = await newCarrier('Hai Thành 4');
       const vehicle = await newVehicle('HIRED-10', 'outsourced', carrier);
-      const trip = await newTrip(vehicle);
-      await execution.assign(trip, driverA, operator);
+      const trip = await newTrip();
+      const assignment = (await assignTo(trip, driverA, vehicle)).id;
       await money.createHire({
         tripId: trip,
         carrierName: 'Hai Thành',
@@ -3389,14 +3550,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         amount: '999999.00',
         createdBy: operator,
       });
-      await money.declareCost({
-        tripId: trip,
+      await money.declareCost({ assignmentId: assignment,
         category: 'loading',
         amount: '200000.00',
         declaredBy: driverA,
       });
 
-      const visible = await costs.listDeclaredByDriver(trip, driverA);
+      const visible = await costs.listDeclaredByDriver(assignment, driverA);
 
       expect(visible).toHaveLength(1);
       expect(visible[0]!.amount).toBe('200000.00');
@@ -3421,4 +3581,264 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(row).toEqual({ carrier_id: null, carrier_name: 'xe Út' });
     });
   });
+
+  // ============================================ ★ multi-vehicle (ADR-0004) ==
+
+  /**
+   * ★ ONE TRIP, SEVERAL LORRIES, EACH WITH ITS OWN TURN.
+   *
+   * Everything above still holds with one lorry on the trip. These cases are
+   * the ones that only exist because a trip can carry several: that the same
+   * driver may hold two of them, that the second lorry's driver cannot see or
+   * move the first's progress or money, that closing one turn does not close
+   * the trip, and that closing the last one does — exactly once, whatever two
+   * reviewers do at the same instant.
+   */
+  describe('★ multi-vehicle dispatch — the assignment is the boundary', () => {
+    const journey = ['ARRIVED_PICKUP', 'PICKUP_CONFIRMED', 'ARRIVED_DELIVERY', 'DELIVERY_CONFIRMED'] as const;
+
+    /** Drives one turn all the way, as that turn's driver. */
+    const drive = async (assignment: string, recordedBy: string, upTo = 4) => {
+      for (const type of journey.slice(0, upTo)) {
+        await execution.recordEvent({
+          assignmentId: assignment,
+          type,
+          clientEventId: `${assignment}:${type}`,
+          recordedBy,
+          deviceReportedAt: new Date(),
+          ...readingFor(type),
+        });
+      }
+    };
+
+    /** Submits one turn with no expenses and returns the request. */
+    const ask = (assignment: string, by: string) => completion.submit(assignment, by, 'none');
+
+    const tripStatus = async (trip: string) =>
+      (await sql(`SELECT status, closed_by FROM trip_schedules WHERE id = $1`, [trip]))[0] as {
+        status: string;
+        closed_by: string | null;
+      };
+
+    it('★ dispatches three lorries onto one trip — two of them to the same driver', async () => {
+      const trip = await newTrip();
+
+      const a1 = await assignTo(trip, driverA);
+      const a2 = await assignTo(trip, driverA);
+      const b1 = await assignTo(trip, driverB);
+
+      const active = await execution.listAssignments(trip);
+      expect(active).toHaveLength(3);
+      expect(active.every((a) => a.state === 'active')).toBe(true);
+      expect(new Set(active.map((a) => a.vehicleId)).size).toBe(3);
+      expect(active.filter((a) => a.driverUserId === driverA)).toHaveLength(2);
+
+      // Each turn is its own row for the driver: A holds two, B holds one.
+      expect((await assignments.listActiveForDriver(driverA)).map((a) => a.id).sort()).toEqual(
+        [a1.id, a2.id].sort(),
+      );
+      expect((await assignments.listActiveForDriver(driverB)).map((a) => a.id)).toEqual([b1.id]);
+    });
+
+    it('★ refuses the same lorry twice through the service, with a readable 409', async () => {
+      const { trip, vehicle } = await runningTrip();
+
+      await expect(assignTo(trip, driverB, vehicle)).rejects.toThrow(/already dispatched on this trip/);
+      expect(await execution.listAssignments(trip)).toHaveLength(1);
+    });
+
+    it('★ keeps the journeys apart: B cannot confirm a pickup on the strength of A’s arrival', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+
+      await drive(a, driverA, 2);
+
+      // B has reported nothing; A's two milestones are not B's.
+      await expect(
+        execution.recordEvent({
+          assignmentId: b,
+          type: 'PICKUP_CONFIRMED',
+          clientEventId: 'b-confirm',
+          recordedBy: driverB,
+          deviceReportedAt: new Date(),
+          location: atPickup(),
+        }),
+      ).rejects.toThrow(/ARRIVED_PICKUP before PICKUP_CONFIRMED/);
+
+      expect(await eventRows.listByAssignment(a)).toHaveLength(2);
+      expect(await eventRows.listByAssignment(b)).toHaveLength(0);
+      // The trip-wide read still sees everything — it is the backoffice's.
+      expect(await execution.listEvents(trip)).toHaveLength(2);
+    });
+
+    it('★ snapshots each turn’s OWN lorry onto its events, never the trip row', async () => {
+      const { trip, assignment: a, vehicle: lorryA } = await runningTrip();
+      const b = await assignTo(trip, driverB);
+
+      await drive(a, driverA, 1);
+      await drive(b.id, driverB, 1);
+
+      const rows = (await sql(
+        `SELECT driver_assignment_id, vehicle_id FROM trip_execution_events WHERE trip_id = $1 ORDER BY actual_at`,
+        [trip],
+      )) as { driver_assignment_id: string; vehicle_id: string }[];
+      expect(rows).toEqual([
+        { driver_assignment_id: a, vehicle_id: lorryA },
+        { driver_assignment_id: b.id, vehicle_id: b.vehicleId },
+      ]);
+      // And the trip row carries no lorry at all.
+      expect((await sql(`SELECT vehicle_id FROM trip_schedules WHERE id = $1`, [trip]))[0]).toEqual({
+        vehicle_id: null,
+      });
+    });
+
+    it('★ the same driver on two lorries reports two separate journeys', async () => {
+      const trip = await newTrip();
+      const first = (await assignTo(trip, driverA)).id;
+      const second = (await assignTo(trip, driverA)).id;
+
+      await drive(first, driverA, 4);
+
+      // The second lorry has not moved: A must start it from the beginning.
+      await expect(
+        execution.recordEvent({
+          assignmentId: second,
+          type: 'PICKUP_CONFIRMED',
+          clientEventId: 'second-confirm',
+          recordedBy: driverA,
+          deviceReportedAt: new Date(),
+          location: atPickup(),
+        }),
+      ).rejects.toBeInstanceOf(ConflictError);
+      expect(await eventRows.listByAssignment(second)).toHaveLength(0);
+      expect(await eventRows.listByAssignment(first)).toHaveLength(4);
+    });
+
+    it('★ A’s submission freezes A’s lines only; B keeps typing', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+      const lineA = await declare(a, '1000.00', driverA);
+      const lineB = await declare(b, '2000.00', driverB);
+
+      await completion.submit(a, driverA, 'expenses');
+
+      const stateOf = async (id: string) =>
+        ((await sql(`SELECT state FROM trip_costs WHERE id = $1`, [id]))[0] as { state: string }).state;
+      expect(await stateOf(lineA.id)).toBe('locked');
+      expect(await stateOf(lineB.id)).toBe('editable');
+
+      // B corrects their own figure while A is under review.
+      const edited = await money.editCost(b, lineB.id, { amount: '2500.00' }, driverB);
+      expect(edited.amount).toBe('2500.00');
+      void trip;
+    });
+
+    it('★ rejecting A reopens A’s lines only; approving A finalises A’s lines only', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+      const lineA = await declare(a, '1000.00', driverA);
+      const lineB = await declare(b, '2000.00', driverB);
+      await completion.submit(b, driverB, 'expenses');
+
+      const stateOf = async (id: string) =>
+        ((await sql(`SELECT state FROM trip_costs WHERE id = $1`, [id]))[0] as { state: string }).state;
+
+      const first = await completion.submit(a, driverA, 'expenses');
+      await completion.reject(trip, first.id, { by: reviewer, reason: 'Sai số.' });
+      expect(await stateOf(lineA.id)).toBe('editable');
+      expect(await stateOf(lineB.id)).toBe('locked');
+
+      const second = await completion.submit(a, driverA, 'expenses');
+      await completion.approve(trip, second.id, reviewer);
+      expect(await stateOf(lineA.id)).toBe('immutable');
+      expect(await stateOf(lineB.id)).toBe('locked');
+      expect((await tripStatus(trip)).status).not.toBe('finished');
+    });
+
+    it('★ two turns may both be pending, and approving one does not close the trip', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+
+      const requestA = await ask(a, driverA);
+      const requestB = await ask(b, driverB);
+      expect(requestA.state).toBe('pending');
+      expect(requestB.state).toBe('pending');
+
+      await completion.approve(trip, requestA.id, reviewer);
+
+      expect((await tripStatus(trip)).status).toBe('pending');
+      expect(await sql(`SELECT 1 FROM trip_status_history WHERE trip_id = $1 AND to_status = 'finished'`, [trip])).toHaveLength(0);
+      // The approved turn is closed; the other is still the driver's to work.
+      expect((await completion.listRequests(trip)).map((r) => r.state).sort()).toEqual(['approved', 'pending']);
+    });
+
+    it('★ approving the LAST active turn closes the trip — once, with one history row', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+      const c = (await assignTo(trip, driverA)).id;
+
+      await completion.approve(trip, (await ask(a, driverA)).id, reviewer);
+      await completion.approve(trip, (await ask(b, driverB)).id, reviewer);
+      expect((await tripStatus(trip)).status).toBe('pending');
+
+      await completion.approve(trip, (await ask(c, driverA)).id, reviewer);
+
+      expect(await tripStatus(trip)).toEqual({ status: 'finished', closed_by: reviewer });
+      expect(await sql(`SELECT 1 FROM trip_status_history WHERE trip_id = $1 AND to_status = 'finished'`, [trip])).toHaveLength(1);
+    });
+
+    it('★ a turn ended BEFORE it started never blocks the trip from closing', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const spare = (await assignTo(trip, driverB)).id;
+      await execution.endAssignment(trip, spare, { by: operator, reason: 'Không cần xe thứ hai.' });
+
+      await completion.approve(trip, (await ask(a, driverA)).id, reviewer);
+
+      expect((await tripStatus(trip)).status).toBe('finished');
+    });
+
+    it('★ two reviewers approving two turns at the same instant close the trip exactly once', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+      const requestA = await ask(a, driverA);
+      const requestB = await ask(b, driverB);
+
+      const results = await Promise.allSettled([
+        completion.approve(trip, requestA.id, reviewer),
+        completion.approve(trip, requestB.id, operator),
+      ]);
+
+      // Both decisions are legal — they are different requests — so both win.
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
+      // And exactly one of them observed "nothing left" and closed the trip.
+      expect((await tripStatus(trip)).status).toBe('finished');
+      expect(await sql(`SELECT 1 FROM trip_status_history WHERE trip_id = $1 AND to_status = 'finished'`, [trip])).toHaveLength(1);
+      expect(await sql(`SELECT closed_at FROM trip_schedules WHERE id = $1 AND closed_at IS NOT NULL`, [trip])).toHaveLength(1);
+    });
+
+    it('★ tells the driver who ASKED, not whoever else is on the trip', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+      const requestA = await ask(a, driverA);
+      const requestB = await ask(b, driverB);
+
+      await completion.approve(trip, requestA.id, reviewer);
+      await completion.reject(trip, requestB.id, { by: reviewer, reason: 'Thiếu chứng từ.' });
+
+      const typesA = (await notificationRows.listForUser(driverA)).map((n) => n.type);
+      const typesB = (await notificationRows.listForUser(driverB)).map((n) => n.type);
+      expect(typesA).toContain('COMPLETION_APPROVED');
+      expect(typesA).not.toContain('COMPLETION_REJECTED');
+      expect(typesB).toContain('COMPLETION_REJECTED');
+      expect(typesB).not.toContain('COMPLETION_APPROVED');
+    });
+
+    it('★ a finished trip takes no new lorry', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      await completion.approve(trip, (await ask(a, driverA)).id, reviewer);
+
+      await expect(assignTo(trip, driverB)).rejects.toThrow(ConflictError);
+    });
+  });
+
 });

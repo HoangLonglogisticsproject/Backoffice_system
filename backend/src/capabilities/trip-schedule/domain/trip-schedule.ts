@@ -66,9 +66,10 @@ export type LegacyTripStatus = (typeof LEGACY_TRIP_STATUSES)[number];
  * on it.
  *
  * DERIVED, NEVER STORED. A trip is unassigned exactly when it has no `active`
- * row in `trip_driver_assignments`, and 0014 already makes that the single
- * answer to "who is driving". A column repeating it here would be a second
- * answer, wrong from the first moment the two disagree.
+ * row in `trip_driver_assignments`, and assigned when it has at least one —
+ * a trip with three lorries is as "assigned" as a trip with one. A column
+ * repeating it here would be a second answer, wrong from the first moment the
+ * two disagree.
  */
 export const TRIP_ASSIGNMENT_FILTERS = [
   /** Everything in the range, crewed or not — the board as it has always read. */
@@ -105,7 +106,12 @@ export interface TripSchedule {
    */
   scheduledOn: string;
 
-  /** `null` while the sheet would have said `ĐIỀN SAU` — no truck assigned yet. */
+  /**
+   * @deprecated LEGACY (ADR-0004). The lorry is dispatched through
+   * `trip_driver_assignments.vehicle_id`; nothing writes this column any more
+   * and nothing reads it as dispatch truth. Still returned so a trip booked
+   * with a lorry before 0027 and never crewed can be recognised and re-crewed.
+   */
   vehicleId: string | null;
   /** `null` for an internal move with no customer behind it. */
   customerId: string | null;
@@ -207,21 +213,38 @@ export interface TripSchedule {
  * chose, so the server does not go and read the plate back to them.
  */
 export interface TripScheduleWithRefs extends TripSchedule {
-  /** `null` exactly when `vehicleId` is. */
-  vehicle: TripVehicleRef | null;
   /** `null` exactly when `customerId` is. */
   customer: TripCustomerRef | null;
   /** Who wrote the row. Present always — `createdBy` is NOT NULL. */
   createdByUser: UserSummary;
   /**
-   * Who is driving it NOW — the active assignment, spelled out. `null` while
-   * nobody is. The history behind it is its own read; this is the one fact
-   * the board needs on every row.
+   * Who is on it NOW — every ACTIVE assignment, oldest first. Empty while
+   * nobody is. The history behind it is its own read; this is what the board
+   * needs on every row: which lorries, which drivers.
    */
-  driver: UserSummary | null;
+  assignments: TripAssignmentRef[];
   /** The master places the two snapshots came from, by name. `null` exactly when the id is. */
   pickupLocation: TripLocationRef | null;
   deliveryLocation: TripLocationRef | null;
+}
+
+/**
+ * One active dispatch assignment as the board shows it: the pair, and when it
+ * was made. Everything else about a turn — who assigned it, how it ended — is
+ * the assignment history's business.
+ */
+export interface TripAssignmentRef {
+  id: string;
+  /** `null` only on a row 0029 could not backfill; the UI flags it. */
+  vehicle: TripVehicleRef | null;
+  driver: UserSummary;
+  assignedAt: Date;
+  /**
+   * Has this turn started executing — one live event reported? Once it has,
+   * the pair is immutable (ADR-0004) and the board offers no swap or removal.
+   * The server refuses those anyway; this lets the UI not offer a 409.
+   */
+  started: boolean;
 }
 
 /** The smallest useful projection of a place: enough to print, nothing more. */

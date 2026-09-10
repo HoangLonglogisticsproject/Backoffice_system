@@ -259,6 +259,21 @@ export class TripCostRepository {
   }
 
   /**
+   * The live lines one assignment declared — what its completion request's
+   * declaration is checked against. Served by `idx_trip_cost_assignment`.
+   */
+  async listActiveByAssignment(
+    assignmentId: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<TripCost[]> {
+    const rows = await executor.query<CostRow>(
+      `${costsWithAuthor} WHERE c.driver_assignment_id = $1 AND c.voided_at IS NULL ${ORDER}`,
+      [assignmentId],
+    );
+    return rows.map(toCost);
+  }
+
+  /**
    * Withdraws a line without destroying it.
    *
    * `WHERE voided_at IS NULL` is what makes a second void a no-op the service
@@ -363,12 +378,14 @@ export class TripCostRepository {
   }
 
   /**
-   * The lines THIS DRIVER declared on this trip.
+   * The lines THIS DRIVER declared on THIS assignment.
    *
-   * ★ TWO FILTERS, AND BOTH ARE THE POINT. `source = 'driver_portal'` keeps
-   * backoffice cost lines out — those are internal accounting the contract
-   * keeps from the driver — and `created_by` keeps a previous driver's
-   * declarations out after a handover. Either one alone would leak.
+   * ★ THREE FILTERS, AND ALL ARE THE POINT. `driver_assignment_id` is the
+   * boundary: the same driver's lines on another lorry of the same trip are
+   * another turn's money. `source = 'driver_portal'` keeps backoffice cost
+   * lines out — those are internal accounting the contract keeps from the
+   * driver. `created_by` is defence in depth: the guard already proved the
+   * assignment is the caller's, and this makes the query say so again.
    *
    * ⚠ THERE IS NO TOTAL METHOD BESIDE THIS ONE, ON PURPOSE. A trip's total
    * includes the price agreed with a hired carrier, which is precisely the
@@ -376,18 +393,18 @@ export class TripCostRepository {
    * nothing; it lists what they typed.
    */
   async listDeclaredByDriver(
-    tripId: string,
+    assignmentId: string,
     driverUserId: string,
     executor: DatabaseQuery = this.db,
   ): Promise<TripCost[]> {
     const rows = await executor.query<CostRow>(
       `${costsWithAuthor}
-        WHERE c.trip_id = $1
+        WHERE c.driver_assignment_id = $1
           AND c.created_by = $2
           AND c.source = 'driver_portal'
           AND c.voided_at IS NULL
         ${ORDER}`,
-      [tripId, driverUserId],
+      [assignmentId, driverUserId],
     );
     return rows.map(toCost);
   }
@@ -487,7 +504,12 @@ export class TripCostRepository {
   }
 
   /**
-   * Freezes a trip's declared lines while a completion request is outstanding.
+   * Freezes one assignment's declared lines while its completion request is
+   * outstanding.
+   *
+   * ★ SCOPED TO THE ASSIGNMENT, NEVER THE TRIP (ADR-0004). Driver A asking for
+   * their turn to be closed must not freeze what driver B is still typing on
+   * another lorry of the same trip. Every UPDATE here says `driver_assignment_id`.
    *
    * ★ THREE SEPARATE METHODS RATHER THAN ONE PARAMETERISED `setState`. They
    * differ in what happens to the lock columns — set, cleared, left alone — and
@@ -497,47 +519,52 @@ export class TripCostRepository {
    * Voided lines are skipped throughout: a withdrawn figure has no state worth
    * moving, and it is excluded from every total anyway.
    */
-  async lockForTrip(tripId: string, by: string, at: Date, executor: DatabaseQuery): Promise<number> {
+  async lockForAssignment(
+    assignmentId: string,
+    by: string,
+    at: Date,
+    executor: DatabaseQuery,
+  ): Promise<number> {
     const rows = await executor.query<{ id: string }>(
       `UPDATE trip_costs
           SET state = 'locked', locked_at = $3, locked_by = $2
-        WHERE trip_id = $1 AND state = 'editable' AND voided_at IS NULL
+        WHERE driver_assignment_id = $1 AND state = 'editable' AND voided_at IS NULL
         RETURNING id`,
-      [tripId, by, at],
+      [assignmentId, by, at],
     );
     return rows.length;
   }
 
-  /** Reopens a trip's lines after a rejection. Locking was always temporary. */
-  async unlockForTrip(tripId: string, executor: DatabaseQuery): Promise<number> {
+  /** Reopens one assignment's lines after a rejection. Locking was always temporary. */
+  async unlockForAssignment(assignmentId: string, executor: DatabaseQuery): Promise<number> {
     const rows = await executor.query<{ id: string }>(
       `UPDATE trip_costs
           SET state = 'editable', locked_at = NULL, locked_by = NULL
-        WHERE trip_id = $1 AND state = 'locked' AND voided_at IS NULL
+        WHERE driver_assignment_id = $1 AND state = 'locked' AND voided_at IS NULL
         RETURNING id`,
-      [tripId],
+      [assignmentId],
     );
     return rows.length;
   }
 
   /**
-   * Makes a trip's figures permanent. This is what approval MEANS.
+   * Makes one assignment's figures permanent. This is what approval MEANS.
    *
    * `editable` is included alongside `locked` deliberately: a line declared
    * while the request was already pending was never locked, and leaving it
-   * editable after the trip closed would be a figure that can still move after
+   * editable after the turn closed would be a figure that can still move after
    * the money stopped moving.
    *
    * The lock columns are left as they are — they record when the freeze
    * happened, and a line that went straight to immutable never had one.
    */
-  async finalizeForTrip(tripId: string, executor: DatabaseQuery): Promise<number> {
+  async finalizeForAssignment(assignmentId: string, executor: DatabaseQuery): Promise<number> {
     const rows = await executor.query<{ id: string }>(
       `UPDATE trip_costs
           SET state = 'immutable'
-        WHERE trip_id = $1 AND state IN ('editable', 'locked') AND voided_at IS NULL
+        WHERE driver_assignment_id = $1 AND state IN ('editable', 'locked') AND voided_at IS NULL
         RETURNING id`,
-      [tripId],
+      [assignmentId],
     );
     return rows.length;
   }

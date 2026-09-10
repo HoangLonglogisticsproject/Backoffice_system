@@ -7,7 +7,7 @@ import { Modal } from '@/components/ui/modal';
 import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
-import { createTripCustomer, createTripVehicle } from '@/api/tripCatalogue';
+import { createTripCustomer } from '@/api/tripCatalogue';
 import {
   createTripSchedule,
   updateTripSchedule,
@@ -15,7 +15,6 @@ import {
   type UpdateTripInput,
 } from '@/api/tripSchedule';
 import { isApiError } from '@/utils/errors';
-import { stripPlate } from '@/utils/format';
 import {
   fromDateTimeLocalValue,
   todayAsCalendarDay,
@@ -28,7 +27,6 @@ import {
   type TripLocation,
   type TripScheduleWithRefs,
   type TripStatus,
-  type TripVehicle,
 } from '@/types/trip';
 import { CatalogueSelect } from './CatalogueSelect';
 import { LocationFormModal } from './LocationFormModal';
@@ -38,15 +36,18 @@ interface TripFormModalProps {
   isOpen: boolean;
   /** Absent means "add". Present means "correct this row" — GLOBAL only. */
   trip?: TripScheduleWithRefs | null;
-  vehicles: TripVehicle[];
+  /**
+   * ★ NO LORRY HERE (ADR-0004). A trip is booked without one; the lorries and
+   * their drivers are put on it afterwards, as pairs, from the dispatch panel.
+   */
   customers: TripCustomer[];
   /**
-   * Have both catalogue reads come back?
+   * Has the customer catalogue read come back?
    *
-   * Needed only to tell "this truck is retired" from "the list has not loaded
-   * yet" — the two look identical from an empty options array, and labelling an
-   * active truck as archived for the first few hundred milliseconds would be a
-   * statement that is simply untrue.
+   * Needed only to tell "this customer is archived" from "the list has not
+   * loaded yet" — the two look identical from an empty options array, and
+   * labelling an active customer as archived for the first few hundred
+   * milliseconds would be a statement that is simply untrue.
    */
   cataloguesLoaded: boolean;
   onClose: () => void;
@@ -58,7 +59,6 @@ interface TripFormModalProps {
 /** Every field, as the form holds it: strings, because that is what inputs give. */
 interface FormState {
   scheduledOn: string;
-  vehicleId: string | null;
   customerId: string | null;
   cargoInfo: string;
   pickupAddress: string;
@@ -89,7 +89,6 @@ interface FormState {
 
 const emptyForm = (): FormState => ({
   scheduledOn: todayAsCalendarDay(),
-  vehicleId: null,
   customerId: null,
   cargoInfo: '',
   pickupAddress: '',
@@ -145,7 +144,6 @@ const formFor = (trip: TripScheduleWithRefs): FormState => ({
   // that is midnight UTC, and it would move the trip a day back on the way into
   // the form for anybody west of UTC.
   scheduledOn: trip.scheduledOn,
-  vehicleId: trip.vehicleId,
   customerId: trip.customerId,
   cargoInfo: trip.cargoInfo ?? '',
   pickupAddress: trip.pickupAddress ?? '',
@@ -290,11 +288,7 @@ const locationIdAt = (form: FormState, end: End): string | null =>
 const failureMessage = (error: unknown, fallback: string): string =>
   isApiError(error) ? error.message : fallback;
 
-/** The row's own vehicle as an option, for `withCurrentReference`. `null` when it has none. */
-const currentVehicleOption = (trip: TripScheduleWithRefs | null): Option | null =>
-  trip?.vehicle ? { id: trip.vehicle.id, label: trip.vehicle.plate } : null;
-
-/** The same, for the customer. */
+/** The row's own customer as an option, for `withCurrentReference`. `null` when it has none. */
 const currentCustomerOption = (trip: TripScheduleWithRefs | null): Option | null =>
   trip?.customer ? { id: trip.customer.id, label: trip.customer.name } : null;
 
@@ -348,7 +342,6 @@ const tripPayload = (
   refreshed: EndFlags,
 ): CreateTripInput & UpdateTripInput => ({
   scheduledOn: form.scheduledOn,
-  vehicleId: form.vehicleId,
   customerId: form.customerId,
   cargoInfo: blank(form.cargoInfo),
   ...endFields(form, trip, 'pickup', refreshed.pickup),
@@ -384,7 +377,6 @@ const saveTrip = (
 export function TripFormModal({
   isOpen,
   trip = null,
-  vehicles,
   customers,
   cataloguesLoaded,
   onClose,
@@ -589,31 +581,8 @@ export function TripFormModal({
             </select>
           </div>
 
-          <CatalogueSelect
-            id="trip-vehicle"
-            label={t('fieldVehicle')}
-            placeholder={t('addVehicle')}
-            newPlaceholder={t('platePlaceholder')}
-            options={withCurrentReference(
-              vehicles.map((vehicle) => ({ id: vehicle.id, label: vehicle.plate })),
-              currentVehicleOption(trip),
-              cataloguesLoaded,
-              t('statusArchived'),
-            )}
-            value={form.vehicleId}
-            onChange={(id) => set('vehicleId', id)}
-            onCreate={async (typed) => {
-              // ★ THE PLAIN PLATE TRAVELS FROM HERE TOO. This is the second door
-              // into the vehicle catalogue — a dispatcher adding a lorry without
-              // leaving the trip form — and a plate created through it must land
-              // in the same shape as one created on the master-data screen, or
-              // the catalogue starts holding two spellings again.
-              const created = await createTripVehicle({ plate: stripPlate(typed) });
-              onCatalogueChanged();
-              return { id: created.id, label: created.plate };
-            }}
-          />
-
+          {/* ★ NO LORRY PICKER. The lorries go on the trip from the dispatch
+              panel, each with its driver (ADR-0004). */}
           <CatalogueSelect
             id="trip-customer"
             label={t('fieldCustomer')}

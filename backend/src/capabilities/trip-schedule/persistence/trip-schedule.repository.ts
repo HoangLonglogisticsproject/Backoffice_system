@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
   TripAssignmentFilter,
+  TripAssignmentRef,
   TripSchedule,
   TripScheduleWithRefs,
   TripStatus,
@@ -11,10 +12,14 @@ import {
  * SQL for the dispatch board. Opens no transaction; decides nothing.
  */
 
-/** The columns a caller may set. Shared by create and by the full-row update. */
+/**
+ * The columns a caller may set. Shared by create and by the full-row update.
+ *
+ * ★ NO `vehicleId`. The lorry is dispatched through `trip_driver_assignments`
+ * (ADR-0004); `trip_schedules.vehicle_id` is legacy and has no writer left.
+ */
 export interface TripScheduleValues {
   scheduledOn: string;
-  vehicleId: string | null;
   customerId: string | null;
   cargoInfo: string | null;
   pickupAddress: string | null;
@@ -46,35 +51,41 @@ export interface DateRange {
 }
 
 /**
- * What "is somebody driving this" is, in SQL — written twice, because the two
- * readers below stand in different places.
+ * What "is somebody on this" is, in SQL.
  *
- * ★ NEITHER IS BUILT FROM INPUT. Both are looked up from a TOTAL map keyed by a
- * union the DTO has already narrowed, so the only three strings that can ever
- * reach a statement here are the three written here. A predicate assembled from
- * a query parameter is the shape this file must never grow.
+ * ★ NOT BUILT FROM INPUT. Looked up from a TOTAL map keyed by a union the DTO
+ * has already narrowed, so the only three strings that can ever reach a
+ * statement here are the three written here. A predicate assembled from a
+ * query parameter is the shape this file must never grow.
  *
- * The paged read already LEFT JOINs the active assignment — it has to, to name
- * the driver — so it tests the joined column and pays for nothing extra. The
- * count joins nothing, and adding the join there would make `COUNT(*)` depend on
- * the join's cardinality, so it asks `EXISTS` instead — which
- * `uq_trip_active_driver_assignment` answers from the index.
+ * ★ `EXISTS`, NEVER A JOIN. A trip may carry several active assignments
+ * (ADR-0004); a join would multiply the trip's row by that number, and both
+ * `COUNT(*) OVER()` and `LIMIT/OFFSET` would then count and page over
+ * assignments while claiming to count trips. `EXISTS` is answered from
+ * `idx_trip_driver_assignment_trip` and returns each trip once.
  */
-const JOINED_ASSIGNMENT_PREDICATE: Record<TripAssignmentFilter, string> = {
-  all: '',
-  unassigned: 'AND da.driver_user_id IS NULL',
-  assigned: 'AND da.driver_user_id IS NOT NULL',
-};
-
 const ACTIVE_ASSIGNMENT_EXISTS = `SELECT 1
               FROM trip_driver_assignments da
              WHERE da.trip_id = t.id AND da.state = 'active'`;
 
-const COUNTED_ASSIGNMENT_PREDICATE: Record<TripAssignmentFilter, string> = {
+const ASSIGNMENT_PREDICATE: Record<TripAssignmentFilter, string> = {
   all: '',
   unassigned: `AND NOT EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
   assigned: `AND EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
 };
+
+/** One element of the `assignments` JSON array the read below aggregates. */
+interface AssignmentJson {
+  id: string;
+  vehicle_id: string | null;
+  vehicle_plate: string | null;
+  driver_user_id: string;
+  driver_display_name: string;
+  /** JSON carries no `Date`; `pg` hands the timestamp back as ISO text. */
+  assigned_at: string;
+  /** One live execution event exists — the turn can no longer be swapped or ended. */
+  started: boolean;
+}
 
 interface TripRow {
   id: string;
@@ -126,12 +137,10 @@ interface TripRow {
 }
 
 type TripJoinedRow = TripRow & {
-  vehicle_plate: string | null;
   customer_name: string | null;
   created_by_display_name: string;
-  /** The ACTIVE assignment's driver, or nulls. At most one exists — 0014. */
-  driver_user_id: string | null;
-  driver_display_name: string | null;
+  /** Every ACTIVE assignment, oldest first, as one JSON array — see `tripsWithRefs`. */
+  assignments: AssignmentJson[];
   /** The master places behind the snapshots, by name. */
   pickup_location_name: string | null;
   delivery_location_name: string | null;
@@ -190,32 +199,50 @@ const tripColumns = (alias: 't.' | ''): string =>
 const RETURNING_TRIP = `RETURNING ${tripColumns('')}`;
 
 /**
- * The read projection: the row, the plate, the customer name, the author.
+ * The read projection: the row, the customer name, the author, the crew.
  *
- * Two LEFT JOINs and one INNER. The joins to the catalogues are LEFT because a
- * trip legitimately has no truck yet (the workbook's `ĐIỀN SAU` rows) — an
- * INNER JOIN there would make those rows vanish from the board, which is the
- * opposite of what dispatch needs from them. `created_by` is NOT NULL with a
- * foreign key, so its join is INNER and cannot drop a row.
+ * ★ THE CREW IS AGGREGATED, NOT JOINED. A trip carries 0..N active assignments
+ * (ADR-0004). Joining them would return the trip once per assignment, and the
+ * list's `COUNT(*) OVER()` and `LIMIT/OFFSET` would then count and page over
+ * assignments while claiming to count trips. The LATERAL sub-select folds them
+ * into one JSON array per trip, so every trip is exactly one row whatever its
+ * crew size. `COALESCE(..., '[]')` because `json_agg` over no rows is NULL.
+ *
+ * The catalogue joins are LEFT because a trip legitimately has no customer
+ * yet, and the lorry inside the crew is LEFT because a pre-0027 assignment
+ * may still name none. `created_by` is NOT NULL with a foreign key, so its
+ * join is INNER and cannot drop a row.
  *
  * `extraSelect` exists for exactly one caller: the list, which adds
  * `COUNT(*) OVER()` so the count comes from the same snapshot as the rows.
  */
 const tripsWithRefs = (extraSelect = ''): string => `
   SELECT ${extraSelect}${tripColumns('t.')},
-         v.plate AS vehicle_plate,
          c.name  AS customer_name,
          au.display_name AS created_by_display_name,
-         da.driver_user_id,
-         du.display_name AS driver_display_name,
+         COALESCE(crew.assignments, '[]'::json) AS assignments,
          pl.name AS pickup_location_name,
          dl.name AS delivery_location_name
     FROM trip_schedules t
-    LEFT JOIN trip_vehicles  v  ON v.id  = t.vehicle_id
     LEFT JOIN trip_customers c  ON c.id  = t.customer_id
     JOIN      users          au ON au.id = t.created_by
-    LEFT JOIN trip_driver_assignments da ON da.trip_id = t.id AND da.state = 'active'
-    LEFT JOIN users          du ON du.id = da.driver_user_id
+    LEFT JOIN LATERAL (
+      SELECT json_agg(json_build_object(
+               'id',                  a.id,
+               'vehicle_id',          a.vehicle_id,
+               'vehicle_plate',       v.plate,
+               'driver_user_id',      a.driver_user_id,
+               'driver_display_name', du.display_name,
+               'assigned_at',         a.assigned_at,
+               'started',             EXISTS (SELECT 1 FROM trip_execution_events e
+                                               WHERE e.driver_assignment_id = a.id
+                                                 AND e.voided_at IS NULL)
+             ) ORDER BY a.assigned_at ASC, a.id ASC) AS assignments
+        FROM trip_driver_assignments a
+        JOIN users du ON du.id = a.driver_user_id
+        LEFT JOIN trip_vehicles v ON v.id = a.vehicle_id
+       WHERE a.trip_id = t.id AND a.state = 'active'
+    ) crew ON true
     LEFT JOIN trip_locations pl ON pl.id = t.pickup_location_id
     LEFT JOIN trip_locations dl ON dl.id = t.delivery_location_id`;
 
@@ -246,19 +273,23 @@ const toTrip = (row: TripRow): TripSchedule => ({
   updatedAt: row.updated_at,
 });
 
+const toAssignmentRef = (json: AssignmentJson): TripAssignmentRef => ({
+  id: json.id,
+  // The pairing is written out rather than asserted, so an outer join can
+  // never quietly produce `{ id: null }`.
+  vehicle:
+    json.vehicle_id && json.vehicle_plate ? { id: json.vehicle_id, plate: json.vehicle_plate } : null,
+  driver: { id: json.driver_user_id, displayName: json.driver_display_name },
+  assignedAt: new Date(json.assigned_at),
+  started: json.started,
+});
+
 const toTripWithRefs = (row: TripJoinedRow): TripScheduleWithRefs => ({
   ...toTrip(row),
-  // The plate is non-null exactly when the id is — that is what the LEFT JOIN
-  // on a foreign key guarantees — but the pairing is written out rather than
-  // asserted, so a future outer join cannot quietly produce `{ id: null }`.
-  vehicle: row.vehicle_id && row.vehicle_plate ? { id: row.vehicle_id, plate: row.vehicle_plate } : null,
   customer:
     row.customer_id && row.customer_name ? { id: row.customer_id, name: row.customer_name } : null,
   createdByUser: { id: row.created_by, displayName: row.created_by_display_name },
-  driver:
-    row.driver_user_id && row.driver_display_name
-      ? { id: row.driver_user_id, displayName: row.driver_display_name }
-      : null,
+  assignments: row.assignments.map(toAssignmentRef),
   pickupLocation:
     row.pickup_location_id && row.pickup_location_name
       ? { id: row.pickup_location_id, name: row.pickup_location_name }
@@ -269,10 +300,14 @@ const toTripWithRefs = (row: TripJoinedRow): TripScheduleWithRefs => ({
       : null,
 });
 
-/** The values of a full row write, in the order every statement below binds them. */
+/**
+ * The values of a full row write, in the order every statement below binds them.
+ *
+ * `vehicle_id` is absent on purpose: nothing writes it since 0027. The INSERT
+ * leaves it at its NULL default and the UPDATE leaves it as it was.
+ */
 const valueParams = (values: TripScheduleValues): unknown[] => [
   values.scheduledOn,
-  values.vehicleId,
   values.customerId,
   values.cargoInfo,
   values.pickupAddress,
@@ -327,7 +362,7 @@ export class TripScheduleRepository {
          WHERE t.archived_at IS NULL
            AND t.scheduled_on >= $1::date
            AND t.scheduled_on <= $2::date
-           ${JOINED_ASSIGNMENT_PREDICATE[assignment]}
+           ${ASSIGNMENT_PREDICATE[assignment]}
          ORDER BY t.scheduled_on DESC, t.id DESC
          LIMIT $3 OFFSET $4`,
       [range.from, range.to, limit, offset],
@@ -363,7 +398,7 @@ export class TripScheduleRepository {
         WHERE t.archived_at IS NULL
           AND t.scheduled_on >= $1::date
           AND t.scheduled_on <= $2::date
-          ${COUNTED_ASSIGNMENT_PREDICATE[assignment]}`,
+          ${ASSIGNMENT_PREDICATE[assignment]}`,
       [range.from, range.to],
     );
     return Number(rows[0]?.total ?? 0);
@@ -422,14 +457,14 @@ export class TripScheduleRepository {
   ): Promise<TripSchedule> {
     const rows = await executor.query<TripRow>(
       `INSERT INTO trip_schedules
-         (scheduled_on, vehicle_id, customer_id, cargo_info,
+         (scheduled_on, customer_id, cargo_info,
           pickup_address, delivery_address, pickup_contact, delivery_contact,
           pickup_at, delivery_at, note, status,
           pickup_latitude, pickup_longitude, delivery_latitude, delivery_longitude,
           pickup_location_id, delivery_location_id, sell_price, purchase_price,
           created_by)
-       VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               $13, $14, $15, $16, $17, $18, $19, $20, $21)
+       VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               $12, $13, $14, $15, $16, $17, $18, $19, $20)
        ${RETURNING_TRIP}`,
       [...valueParams(input), input.createdBy],
     );
@@ -456,14 +491,14 @@ export class TripScheduleRepository {
   ): Promise<TripSchedule | null> {
     const rows = await executor.query<TripRow>(
       `UPDATE trip_schedules
-          SET scheduled_on = $2::date, vehicle_id = $3, customer_id = $4, cargo_info = $5,
-              pickup_address = $6, delivery_address = $7,
-              pickup_contact = $8, delivery_contact = $9,
-              pickup_at = $10, delivery_at = $11, note = $12, status = $13,
-              pickup_latitude = $14, pickup_longitude = $15,
-              delivery_latitude = $16, delivery_longitude = $17,
-              pickup_location_id = $18, delivery_location_id = $19,
-              sell_price = $20, purchase_price = $21
+          SET scheduled_on = $2::date, customer_id = $3, cargo_info = $4,
+              pickup_address = $5, delivery_address = $6,
+              pickup_contact = $7, delivery_contact = $8,
+              pickup_at = $9, delivery_at = $10, note = $11, status = $12,
+              pickup_latitude = $13, pickup_longitude = $14,
+              delivery_latitude = $15, delivery_longitude = $16,
+              pickup_location_id = $17, delivery_location_id = $18,
+              sell_price = $19, purchase_price = $20
         WHERE id = $1 AND archived_at IS NULL
         ${RETURNING_TRIP}`,
       [id, ...valueParams(values)],

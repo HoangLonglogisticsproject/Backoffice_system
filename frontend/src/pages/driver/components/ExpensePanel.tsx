@@ -250,7 +250,10 @@ export function ExpensePanel({
         {open && adding ? (
           <ExpenseForm
             categories={categories}
-            tripId={trip.tripId}
+            // ★ KEYED BY THE ASSIGNMENT, NOT THE TRIP (ADR-0004). A driver on
+            // two lorries of one trip types two different figures; a trip-keyed
+            // draft would resurrect one lorry's half-typed fuel on the other.
+            draftKey={trip.assignment.id}
             saving={saving}
             onCancel={close}
             onSubmit={async (values, clientRequestId) => {
@@ -259,7 +262,7 @@ export function ExpensePanel({
               // driver is most likely to retry, and throwing the figure away
               // then is the one moment it must not happen.
               if (accepted) {
-                clearDraft(trip.tripId);
+                clearDraft(trip.assignment.id);
                 close();
               }
             }}
@@ -322,21 +325,22 @@ interface FormValues {
  * picked the wrong heading had no way to fix it and had to ask the office to
  * withdraw the line. The API accepted all three the whole time.
  *
- * `tripId` present means this is a NEW declaration, and only then is a draft
+ * `draftKey` present means this is a NEW declaration, and only then is a draft
  * kept: a correction is a short edit of something already stored, and persisting
- * it would resurrect an abandoned edit on the next reload.
+ * it would resurrect an abandoned edit on the next reload. The key is the
+ * ASSIGNMENT's id — the unit a driver declares against.
  */
 function ExpenseForm({
   categories,
   initial,
-  tripId,
+  draftKey,
   saving,
   onSubmit,
   onCancel,
 }: Readonly<{
   categories: TripCostCategory[];
   initial?: { category: TripCostCategory; amount: string; note: string };
-  tripId?: string;
+  draftKey?: string;
   saving: boolean;
   onSubmit: (values: FormValues, clientRequestId: string) => void;
   onCancel: () => void;
@@ -361,7 +365,7 @@ function ExpenseForm({
     // Whatever the restored draft says, the category must be one this trip can
     // actually accept.
     const fallbackCategory = initial?.category ?? categories[0] ?? 'warehouse';
-    const restored = tripId ? readDraft(tripId) : null;
+    const restored = draftKey ? readDraft(draftKey) : null;
 
     if (restored) {
       /**
@@ -392,8 +396,8 @@ function ExpenseForm({
   });
 
   useEffect(() => {
-    if (tripId) writeDraft(tripId, draft);
-  }, [tripId, draft]);
+    if (draftKey) writeDraft(draftKey, draft);
+  }, [draftKey, draft]);
 
   const set = <K extends keyof ExpenseDraft>(key: K, value: ExpenseDraft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));

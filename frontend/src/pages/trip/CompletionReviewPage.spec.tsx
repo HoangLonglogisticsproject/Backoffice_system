@@ -48,6 +48,9 @@ const session = (permissions: string[]) => ({
 
 const row = (over: Record<string, unknown> = {}) => ({
   tripId: TRIP,
+  // ★ ONE ROW PER LORRY (ADR-0004): the turn and its pending request.
+  assignmentId: 'a1',
+  completionRequestId: 'r1',
   scheduledOn: '2026-08-30',
   vehicle: { id: 'v1', plate: '51D-65233' },
   customer: { id: 'c1', name: 'VIỄN ĐẠT' },
@@ -138,7 +141,7 @@ beforeEach(() => {
     event('DELIVERY_CONFIRMED'),
   ]);
   fetchTripCosts.mockResolvedValue({
-    items: [{ id: 'c1', category: 'fuel', amount: '1500000.00', state: 'locked' }],
+    items: [{ id: 'c1', driverAssignmentId: 'a1', category: 'fuel', amount: '1500000.00', state: 'locked' }],
     total: '1500000.00',
   });
   approveCompletion.mockResolvedValue(request({ state: 'approved' }));
@@ -274,9 +277,9 @@ describe('★ approve', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
 
-    await waitFor(() => expect(approveCompletion).toHaveBeenCalledWith(TRIP));
+    await waitFor(() => expect(approveCompletion).toHaveBeenCalledWith(TRIP, 'r1'));
     // ★ The trip id and nothing else. No decidedBy, no decidedAt, no state.
-    expect(approveCompletion.mock.calls[0]).toEqual([TRIP]);
+    expect(approveCompletion.mock.calls[0]).toEqual([TRIP, 'r1']);
   });
 
   it('★ warns that it cannot be undone, before the click', async () => {
@@ -334,9 +337,9 @@ describe('★ reject', () => {
     fireEvent.click(screen.getByRole('button', { name: /^từ chối$/i }));
 
     await waitFor(() =>
-      expect(rejectCompletion).toHaveBeenCalledWith(TRIP, 'Số tiền dầu sai.'),
+      expect(rejectCompletion).toHaveBeenCalledWith(TRIP, 'r1', 'Số tiền dầu sai.'),
     );
-    expect(rejectCompletion.mock.calls[0]).toHaveLength(2);
+    expect(rejectCompletion.mock.calls[0]).toHaveLength(3);
   });
 });
 

@@ -132,6 +132,39 @@ systemctl reload nginx                                   # after an nginx.conf c
 docker inspect --format '{{index .Config.Labels "release.sha"}}'   "$(docker compose --env-file "$ENV_FILE" ps -q backend)"
 ```
 
+## Migrations 0027–0029 — multi-vehicle dispatch, and the 0030 gate
+
+`npm run migrate` applies `0027`–`0029` like any other release. They are idempotent
+and forward-only; `0027` adds the CHECK as **NOT VALID** so it cannot fail on legacy
+rows, and `0029` only backfills rows whose `vehicle_id` is still NULL. `0029` prints
+`RAISE NOTICE` counts for Case B/E/F — read them in the migrate output and keep them
+with the release notes.
+
+**Before** promoting a release that contains `0030` (VALIDATE), run the audit on
+production and require **Case B = 0**:
+
+```sql
+-- Case B: an ACTIVE assignment with no lorry — the rows VALIDATE would reject.
+SELECT a.id, a.trip_id, a.driver_user_id, a.assigned_at
+FROM trip_driver_assignments a
+WHERE a.state = 'active' AND a.vehicle_id IS NULL;
+
+-- The rest of the picture, for the log:
+SELECT
+  count(*) FILTER (WHERE state = 'active' AND vehicle_id IS NULL) AS case_b_active_no_vehicle,
+  count(*) FILTER (WHERE state = 'ended'  AND vehicle_id IS NULL) AS ended_no_vehicle,
+  count(*) FILTER (WHERE vehicle_id IS NOT NULL)                  AS with_vehicle
+FROM trip_driver_assignments;
+```
+
+If Case B is not empty, Operations fixes each row from the dispatch panel (remove the
+turn, add it again as a pair) — **never** by hand-editing `vehicle_id`. Only then:
+
+```sql
+-- 0030, when it is committed, is exactly this and nothing else:
+ALTER TABLE trip_driver_assignments VALIDATE CONSTRAINT trip_driver_assignments_active_has_vehicle;
+```
+
 ## Restricted deploy user
 
 GitHub Actions does not SSH as root, and the account it does use cannot reach

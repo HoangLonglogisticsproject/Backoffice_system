@@ -30,6 +30,8 @@ import type { TripStatus } from '../domain/trip-schedule';
 interface AssignmentRow {
   id: string;
   trip_id: string;
+  vehicle_id: string | null;
+  vehicle_plate: string | null;
   driver_user_id: string;
   driver_display_name: string;
   state: 'active' | 'ended';
@@ -43,6 +45,9 @@ interface AssignmentRow {
 const toAssignment = (row: AssignmentRow): DriverAssignment => ({
   id: row.id,
   tripId: row.trip_id,
+  vehicleId: row.vehicle_id,
+  // Written out rather than asserted, so an outer join can never yield `{ id: null }`.
+  vehicle: row.vehicle_id && row.vehicle_plate ? { id: row.vehicle_id, plate: row.vehicle_plate } : null,
   driverUserId: row.driver_user_id,
   driverUser: { id: row.driver_user_id, displayName: row.driver_display_name },
   state: row.state,
@@ -53,16 +58,32 @@ const toAssignment = (row: AssignmentRow): DriverAssignment => ({
   endReason: row.end_reason,
 });
 
+/** The assignment's own columns — the `RETURNING` list of every write below. */
+const ASSIGNMENT_COLUMNS = `id, trip_id, vehicle_id, driver_user_id, state, assigned_by, assigned_at,
+                   ended_by, ended_at, end_reason`;
+
 /**
- * ★ THE JOIN IS ON THE DRIVER, NOT ON WHOEVER ASSIGNED THEM. The question every
- * screen asks of this row is "who is driving", and a UUID is not an answer.
+ * ★ THE JOINS ARE ON THE DRIVER AND THE LORRY, NOT ON WHOEVER ASSIGNED THEM.
+ * The question every screen asks of this row is "who is driving what", and a
+ * pair of UUIDs is not an answer. LEFT JOIN on the lorry: rows from before
+ * 0027 may still carry none.
  */
 const ASSIGNMENT_SELECT = `
-  SELECT a.id, a.trip_id, a.driver_user_id, a.state, a.assigned_by, a.assigned_at,
+  SELECT a.id, a.trip_id, a.vehicle_id, a.driver_user_id, a.state, a.assigned_by, a.assigned_at,
          a.ended_by, a.ended_at, a.end_reason,
-         u.display_name AS driver_display_name
+         u.display_name AS driver_display_name,
+         v.plate        AS vehicle_plate
     FROM trip_driver_assignments a
-    JOIN users u ON u.id = a.driver_user_id`;
+    JOIN users u ON u.id = a.driver_user_id
+    LEFT JOIN trip_vehicles v ON v.id = a.vehicle_id`;
+
+/** A write, then the same projection over exactly what it wrote — one statement, no gap. */
+const assignmentWriteReturning = (write: string): string => `
+  WITH written AS (${write} RETURNING ${ASSIGNMENT_COLUMNS})
+  SELECT written.*, u.display_name AS driver_display_name, v.plate AS vehicle_plate
+    FROM written
+    JOIN users u ON u.id = written.driver_user_id
+    LEFT JOIN trip_vehicles v ON v.id = written.vehicle_id`;
 
 interface DriverHistoryRow {
   id: string;
@@ -93,8 +114,11 @@ interface DriverHistoryRow {
  *
  * ★ AND NO MONEY IS JOINED, so there is no amount here to leak into a response.
  *
- * LEFT JOIN on both catalogues: a trip legitimately has no lorry and no customer
- * yet, and an INNER JOIN would drop exactly those rows from a driver's history.
+ * ★ THE LORRY IS THE ASSIGNMENT'S, NOT THE TRIP'S. `a.vehicle_id` is what this
+ * driver actually drove on this turn; `trip_schedules.vehicle_id` is legacy.
+ *
+ * LEFT JOIN on both catalogues: a pre-0027 turn may name no lorry, and a trip
+ * legitimately has no customer yet; an INNER JOIN would drop exactly those rows.
  */
 const DRIVER_HISTORY_SELECT = `
   SELECT a.id, a.state, a.assigned_at, a.ended_at, a.end_reason,
@@ -108,7 +132,7 @@ const DRIVER_HISTORY_SELECT = `
          c.name                AS customer_name
     FROM trip_driver_assignments a
     JOIN trip_schedules  t ON t.id = a.trip_id
-    LEFT JOIN trip_vehicles  v ON v.id = t.vehicle_id
+    LEFT JOIN trip_vehicles  v ON v.id = a.vehicle_id
     LEFT JOIN trip_customers c ON c.id = t.customer_id`;
 
 const toDriverHistoryRow = (
@@ -142,28 +166,25 @@ export class DriverAssignmentRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * Puts a driver on a trip.
+   * Puts a lorry and its driver on a trip.
    *
-   * ★ NOTHING HERE CHECKS WHETHER THE TRIP ALREADY HAS ONE, on purpose. The
-   * partial unique index `uq_trip_active_driver_assignment` decides that, and it
-   * is the only thing that can: two operators assigning different drivers at the
-   * same instant both read the same empty state, and one of them has to lose at
-   * COMMIT rather than at a SELECT neither of them can trust.
+   * ★ NOTHING HERE CHECKS WHETHER THE LORRY IS ALREADY ON THE TRIP, on purpose.
+   * The partial unique index `uq_trip_active_vehicle_assignment` decides that,
+   * and it is the only thing that can: two operators adding the same lorry at
+   * the same instant both read the same empty state, and one of them has to
+   * lose at COMMIT rather than at a SELECT neither of them can trust. The
+   * service checks first only to answer with a readable 409.
    */
   async assign(
-    input: { tripId: string; driverUserId: string; assignedBy: string },
+    input: { tripId: string; vehicleId: string; driverUserId: string; assignedBy: string },
     executor: DatabaseQuery = this.db,
   ): Promise<DriverAssignment> {
     const rows = await executor.query<AssignmentRow>(
-      `WITH written AS (
-         INSERT INTO trip_driver_assignments (trip_id, driver_user_id, assigned_by)
-         VALUES ($1, $2, $3)
-         RETURNING id, trip_id, driver_user_id, state, assigned_by, assigned_at,
-                   ended_by, ended_at, end_reason
-       )
-       SELECT written.*, u.display_name AS driver_display_name
-         FROM written JOIN users u ON u.id = written.driver_user_id`,
-      [input.tripId, input.driverUserId, input.assignedBy],
+      assignmentWriteReturning(
+        `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
+         VALUES ($1, $2, $3, $4)`,
+      ),
+      [input.tripId, input.vehicleId, input.driverUserId, input.assignedBy],
     );
 
     const row = rows[0];
@@ -173,60 +194,75 @@ export class DriverAssignmentRepository {
   }
 
   /**
-   * Ends the trip's current assignment, if it has one.
+   * Ends one assignment, if it is still active.
    *
    * `WHERE state = 'active'` is what makes a second call a no-op the service
    * turns into a refusal, rather than a silent rewrite of who ended it and why.
-   * Returns `null` when there was nothing active to end.
+   * Returns `null` when the row was not active (or does not exist).
    */
   async end(
-    input: { tripId: string; endedBy: string; reason: string; now: Date },
+    input: { id: string; endedBy: string; reason: string; now: Date },
     executor: DatabaseQuery,
   ): Promise<DriverAssignment | null> {
     const rows = await executor.query<AssignmentRow>(
-      `WITH written AS (
-         UPDATE trip_driver_assignments
+      assignmentWriteReturning(
+        `UPDATE trip_driver_assignments
             SET state = 'ended', ended_by = $2, ended_at = $4, end_reason = $3
-          WHERE trip_id = $1 AND state = 'active'
-         RETURNING id, trip_id, driver_user_id, state, assigned_by, assigned_at,
-                   ended_by, ended_at, end_reason
-       )
-       SELECT written.*, u.display_name AS driver_display_name
-         FROM written JOIN users u ON u.id = written.driver_user_id`,
-      [input.tripId, input.endedBy, input.reason, input.now],
+          WHERE id = $1 AND state = 'active'`,
+      ),
+      [input.id, input.endedBy, input.reason, input.now],
     );
     return rows[0] ? toAssignment(rows[0]) : null;
   }
 
   /**
-   * The trip's current driver, locked for the rest of the transaction.
+   * One assignment, locked for the rest of the transaction, if it is active.
    *
-   * ★ `FOR UPDATE` ON THE ASSIGNMENT ROW, NOT ON THE TRIP. Recording an event
-   * and replacing a driver race over THIS row: without the lock, an event can be
-   * written against an assignment that ended a millisecond earlier, and its
+   * ★ `FOR UPDATE` ON THE ASSIGNMENT ROW, NOT ONLY ON THE TRIP. Recording an
+   * event and ending the turn race over THIS row: without the lock, an event can
+   * be written against an assignment that ended a millisecond earlier, and its
    * provenance then names somebody who was no longer driving.
    */
-  async lockActive(tripId: string, executor: DatabaseQuery): Promise<DriverAssignment | null> {
+  async lockActiveById(id: string, executor: DatabaseQuery): Promise<DriverAssignment | null> {
     const rows = await executor.query<AssignmentRow>(
-      `${ASSIGNMENT_SELECT} WHERE a.trip_id = $1 AND a.state = 'active' FOR UPDATE OF a`,
-      [tripId],
+      `${ASSIGNMENT_SELECT} WHERE a.id = $1 AND a.state = 'active' FOR UPDATE OF a`,
+      [id],
     );
     return rows[0] ? toAssignment(rows[0]) : null;
   }
 
-  async findActive(
+  /**
+   * The active turn this lorry is on for this trip, locked, if there is one.
+   * At most one exists — `uq_trip_active_vehicle_assignment`.
+   */
+  async lockActiveByVehicle(
     tripId: string,
+    vehicleId: string,
+    executor: DatabaseQuery,
+  ): Promise<DriverAssignment | null> {
+    const rows = await executor.query<AssignmentRow>(
+      `${ASSIGNMENT_SELECT}
+        WHERE a.trip_id = $1 AND a.vehicle_id = $2 AND a.state = 'active'
+        FOR UPDATE OF a`,
+      [tripId, vehicleId],
+    );
+    return rows[0] ? toAssignment(rows[0]) : null;
+  }
+
+  /** Unlocked read of one active assignment — what the driver-portal guard asks. */
+  async findActiveById(
+    id: string,
     executor: DatabaseQuery = this.db,
   ): Promise<DriverAssignment | null> {
     const rows = await executor.query<AssignmentRow>(
-      `${ASSIGNMENT_SELECT} WHERE a.trip_id = $1 AND a.state = 'active'`,
-      [tripId],
+      `${ASSIGNMENT_SELECT} WHERE a.id = $1 AND a.state = 'active'`,
+      [id],
     );
     return rows[0] ? toAssignment(rows[0]) : null;
   }
 
   /**
-   * Every driver this trip has had, newest first.
+   * Every turn this trip has had, newest first — active and ended alike.
    *
    * Not paginated, for the reason ADR-0002 §4 gives: one trip's assignments are
    * bounded small.
@@ -495,7 +531,11 @@ export class ExecutionEventRepository {
     return rows[0] ? toEvent(rows[0]) : null;
   }
 
-  /** A trip's timeline, in the order things happened. */
+  /**
+   * A trip's timeline, in the order things happened — every assignment's
+   * events together. A BACKOFFICE read: the driver's own view and the sequence
+   * rule both go through `listByAssignment`.
+   */
   async listByTrip(
     tripId: string,
     includeVoided = false,
@@ -508,6 +548,45 @@ export class ExecutionEventRepository {
       [tripId],
     );
     return rows.map(toEvent);
+  }
+
+  /**
+   * One assignment's timeline, in the order things happened.
+   *
+   * ★ THE EXECUTION BOUNDARY (ADR-0004). What one driver has reported on one
+   * lorry; what another turn on the same trip reported is not in here, so a
+   * milestone on assignment A can never satisfy a prerequisite on assignment B.
+   * Served by `idx_trip_execution_event_assignment`.
+   */
+  async listByAssignment(
+    assignmentId: string,
+    includeVoided = false,
+    executor: DatabaseQuery = this.db,
+  ): Promise<ExecutionEvent[]> {
+    const rows = await executor.query<EventRow>(
+      `${EVENTS_WITH_AUTHOR}
+        WHERE e.driver_assignment_id = $1 ${includeVoided ? '' : 'AND e.voided_at IS NULL'}
+        ORDER BY e.actual_at ASC, e.id ASC`,
+      [assignmentId],
+    );
+    return rows.map(toEvent);
+  }
+
+  /**
+   * Has this assignment started executing? One live (non-voided) event says yes.
+   *
+   * ★ THIS IS THE WHOLE DEFINITION OF "STARTED" (ADR-0004). Not a column, not
+   * an expense, not a completion request: the first milestone a driver reports
+   * is the moment the pair of lorry and driver becomes immutable.
+   */
+  async hasLiveEvents(assignmentId: string, executor: DatabaseQuery = this.db): Promise<boolean> {
+    const rows = await executor.query<{ one: number }>(
+      `SELECT 1 AS one FROM trip_execution_events
+        WHERE driver_assignment_id = $1 AND voided_at IS NULL
+        LIMIT 1`,
+      [assignmentId],
+    );
+    return rows.length > 0;
   }
 
   /** Withdraws an event without destroying it. */
@@ -580,17 +659,17 @@ export class CompletionRequestRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * Asks for the trip to be closed.
+   * Asks for one assignment's turn to be closed.
    *
-   * ★ `attempt_no` IS COMPUTED IN SQL, NOT IN JAVASCRIPT. Reading the highest
-   * attempt and adding one in the service is a read-modify-write two callers can
-   * interleave, and both would compute the same number. Here the sub-select runs
-   * inside the same statement, and if two still collide,
-   * `uq_trip_completion_attempt` refuses the loser.
+   * ★ `attempt_no` IS COMPUTED IN SQL, NOT IN JAVASCRIPT, AND PER ASSIGNMENT.
+   * Reading the highest attempt and adding one in the service is a
+   * read-modify-write two callers can interleave, and both would compute the
+   * same number. Here the sub-select runs inside the same statement, and if two
+   * still collide, `uq_assignment_completion_attempt` refuses the loser.
    *
-   * ★ AND `uq_trip_completion_pending` IS WHAT STOPS A DOUBLE SUBMIT. A driver
-   * tapping twice produces two requests that both pass every application check;
-   * only the index can reject the second.
+   * ★ AND `uq_assignment_completion_pending` IS WHAT STOPS A DOUBLE SUBMIT. A
+   * driver tapping twice produces two requests that both pass every application
+   * check; only the index can reject the second.
    */
   async submit(
     input: {
@@ -608,7 +687,7 @@ export class CompletionRequestRepository {
          SELECT $1, $2,
                 COALESCE(MAX(attempt_no), 0) + 1,
                 $3, $4
-           FROM trip_completion_requests WHERE trip_id = $1
+           FROM trip_completion_requests WHERE driver_assignment_id = $2
          RETURNING id, trip_id, driver_assignment_id, attempt_no, expense_declaration,
                    state, submitted_by, submitted_at, decided_by, decided_at, decision_reason
        )
@@ -656,28 +735,79 @@ export class CompletionRequestRepository {
   }
 
   /**
-   * The trip's outstanding request, locked for the rest of the transaction.
+   * One request, whatever its state, locked for the rest of the transaction.
    *
    * The lock is what serialises two approvers: the second waits here rather than
-   * racing the UPDATE, so it sees the decision the first made.
+   * racing the UPDATE, so it sees the decision the first made. The state comes
+   * back with the row so the service can say "already decided" rather than
+   * "not found".
    */
-  async lockPending(tripId: string, executor: DatabaseQuery): Promise<CompletionRequest | null> {
+  async lockById(id: string, executor: DatabaseQuery): Promise<CompletionRequest | null> {
     const rows = await executor.query<RequestRow>(
-      `${REQUEST_SELECT} WHERE r.trip_id = $1 AND r.state = 'pending' FOR UPDATE OF r`,
-      [tripId],
+      `${REQUEST_SELECT} WHERE r.id = $1 FOR UPDATE OF r`,
+      [id],
     );
     return rows[0] ? toRequest(rows[0]) : null;
   }
 
-  /** Every attempt on this trip, newest first. */
+  /** The assignment's outstanding request, locked, if there is one. */
+  async lockPendingByAssignment(
+    assignmentId: string,
+    executor: DatabaseQuery,
+  ): Promise<CompletionRequest | null> {
+    const rows = await executor.query<RequestRow>(
+      `${REQUEST_SELECT}
+        WHERE r.driver_assignment_id = $1 AND r.state = 'pending'
+        FOR UPDATE OF r`,
+      [assignmentId],
+    );
+    return rows[0] ? toRequest(rows[0]) : null;
+  }
+
+  /** Every attempt on this trip, across all its assignments, newest first. Served by `idx_trip_completion_trip_attempt`. */
   async listByTrip(
     tripId: string,
     executor: DatabaseQuery = this.db,
   ): Promise<CompletionRequest[]> {
     const rows = await executor.query<RequestRow>(
-      `${REQUEST_SELECT} WHERE r.trip_id = $1 ORDER BY r.attempt_no DESC`,
+      `${REQUEST_SELECT} WHERE r.trip_id = $1 ORDER BY r.submitted_at DESC, r.id DESC`,
       [tripId],
     );
     return rows.map(toRequest);
+  }
+
+  /** Every attempt on one assignment, newest first. */
+  async listByAssignment(
+    assignmentId: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<CompletionRequest[]> {
+    const rows = await executor.query<RequestRow>(
+      `${REQUEST_SELECT} WHERE r.driver_assignment_id = $1 ORDER BY r.attempt_no DESC`,
+      [assignmentId],
+    );
+    return rows.map(toRequest);
+  }
+
+  /**
+   * Is there an ACTIVE assignment on this trip whose turn has not been approved?
+   *
+   * ★ THE TRIP-FINISH QUESTION (ADR-0004), asked under the trip row lock right
+   * after one approval is written. `false` means every active assignment has an
+   * approved request, and the trip may close. Ended assignments do not count:
+   * a turn ended before it started has nothing to approve.
+   */
+  async hasUnapprovedActiveAssignment(tripId: string, executor: DatabaseQuery): Promise<boolean> {
+    const rows = await executor.query<{ one: number }>(
+      `SELECT 1 AS one
+         FROM trip_driver_assignments a
+        WHERE a.trip_id = $1
+          AND a.state = 'active'
+          AND NOT EXISTS (
+            SELECT 1 FROM trip_completion_requests r
+             WHERE r.driver_assignment_id = a.id AND r.state = 'approved')
+        LIMIT 1`,
+      [tripId],
+    );
+    return rows.length > 0;
   }
 }

@@ -82,7 +82,7 @@ describe('useNotificationStream', () => {
     expect(source?.init).toEqual({ withCredentials: true });
   });
 
-  it('★ re-reads the list and the trips on every (re)connection', () => {
+  it('★ re-reads the list and the assignments on every (re)connection', () => {
     const { invalidate } = mount();
     const [source] = FakeEventSource.instances;
     invalidate.mockClear();
@@ -90,11 +90,11 @@ describe('useNotificationStream', () => {
     source!.onopen?.();
 
     expect(invalidatedKeys(invalidate)).toEqual(
-      expect.arrayContaining([JSON.stringify(['notifications']), JSON.stringify(['driver', 'trips'])]),
+      expect.arrayContaining([JSON.stringify(['notifications']), JSON.stringify(['driver', 'assignments'])]),
     );
   });
 
-  it('★ on a signal, invalidates the list, the trips and the trip named — and sets nothing', () => {
+  it('★ on a signal, invalidates the list and the assignments (the trip named is under their prefix) — and sets nothing', () => {
     const { invalidate } = mount();
     const [source] = FakeEventSource.instances;
     invalidate.mockClear();
@@ -104,8 +104,7 @@ describe('useNotificationStream', () => {
     expect(invalidatedKeys(invalidate)).toEqual(
       expect.arrayContaining([
         JSON.stringify(['notifications']),
-        JSON.stringify(['driver', 'trips']),
-        JSON.stringify(['driver', 'trips', 't1']),
+        JSON.stringify(['driver', 'assignments']),
       ]),
     );
   });

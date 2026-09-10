@@ -57,7 +57,7 @@ function App() {
         }
       >
         <Route path="/driver" element={<DriverTripsPage />} />
-        <Route path="/driver/trips/:tripId" element={<DriverTripPage />} />
+        <Route path="/driver/assignments/:assignmentId" element={<DriverTripPage />} />
         {/* What the driver has been told. The API's list, not the stream's. */}
         <Route path="/driver/notifications" element={<DriverNotificationsPage />} />
         {/* The one account function a driver has: their password. Same page

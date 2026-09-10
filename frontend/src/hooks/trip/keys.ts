@@ -59,6 +59,13 @@ export const tripKeys = {
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,
 
+  /**
+   * One trip's dispatch history — every turn, active and ended. Its own root
+   * rather than a child of `schedules()`: the panel reads it while the board
+   * page stays as it is, and a dispatch write invalidates both explicitly.
+   */
+  assignments: (tripId: string) => [...tripKeys.all, 'assignments', tripId] as const,
+
   catalogues: () => [...tripKeys.all, 'catalogue'] as const,
   /** One customer's places. Under the catalogue prefix, so a reload clears them too. */
   locations: (customerId: string, includeArchived: boolean) =>

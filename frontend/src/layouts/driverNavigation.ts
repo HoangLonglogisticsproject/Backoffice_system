@@ -24,7 +24,7 @@ export interface DriverDestination {
 }
 
 export const DRIVER_NAVIGATION: readonly DriverDestination[] = [
-  { key: 'trips', to: '/driver', icon: Truck, label: 'driverMyTrips', exact: true, activePaths: ['/driver/trips'] },
+  { key: 'trips', to: '/driver', icon: Truck, label: 'driverMyTrips', exact: true, activePaths: ['/driver/assignments'] },
   { key: 'notifications', to: '/driver/notifications', icon: Bell, label: 'driverNotifications' },
   { key: 'profile', to: '/driver/account/security', icon: User, label: 'driverProfile' },
 ];

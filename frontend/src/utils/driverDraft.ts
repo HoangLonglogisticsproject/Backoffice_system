@@ -36,8 +36,8 @@ export interface ExpenseDraft {
   clientRequestId: string;
 }
 
-/** Scoped to the trip, so two trips open in two tabs cannot see each other's. */
-const keyFor = (tripId: string) => `driver-expense-draft:${tripId}`;
+/** Scoped to the assignment, so two turns open in two tabs cannot see each other's. */
+const keyFor = (assignmentId: string) => `driver-expense-draft:${assignmentId}`;
 
 /**
  * A stable id for one declaration attempt.

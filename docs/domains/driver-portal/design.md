@@ -263,6 +263,14 @@ câu hỏi thiết kế.
 
 ### 0.8.1 [CONFIRMED] Mô hình MVP
 
+> ⚠ **SUPERSEDED 2026-09-10 — ADR-0004.** `1 Trip = 1 Vehicle + 1 Driver` không còn là mô
+> hình canonical. Mô hình hiện hành: `1 Trip = 1 Customer + 0..N Assignment`, mỗi
+> Assignment = `1 Vehicle + 1 Driver`, trên chính `trip_driver_assignments` (thêm cột
+> `vehicle_id`, **không** có bảng mới). `trip_schedules.vehicle_id` là **legacy**: không
+> ghi nữa, không DROP. Bảng "KHÔNG làm" dưới đây vẫn đúng ở mọi dòng **trừ** hai dòng
+> `1 Trip = 1 Vehicle` / `1 Trip = 1 Driver`. Vẫn KHÔNG có Leg, segment, multi-stop.
+> Nguồn: [`../../architecture/adr-0004-dispatch-assignment-multi-vehicle.md`](../../architecture/adr-0004-dispatch-assignment-multi-vehicle.md).
+
 ```text
 1 Trip  =  1 Customer  +  1 Vehicle  +  1 Driver
 ```
@@ -303,6 +311,12 @@ phải yêu cầu của MVP, và **không** được dùng làm cơ sở để �
 **[FUTURE EXTENSION]** — không thiết kế schema cho nó bây giờ.
 
 ### 0.8.3 ★ Điều kiến trúc PHẢI làm đúng ngay: không khoá chết đường mở rộng
+
+> ⚠ **CẬP NHẬT 2026-09-10 — ADR-0004.** Năm nguyên tắc dưới đây đã **được kiểm chứng
+> đúng**: nhờ X-1 và X-2, thêm xe thứ hai không phải sửa dữ liệu cũ. Đọc lại X-2 và X-5
+> như sau: snapshot `vehicle_id` trên event/expense **lấy từ assignment**, không còn từ
+> `Trip.vehicle_id`; ràng buộc "1 active" **đã chuyển** từ `trip_id` sang
+> `(trip_id, vehicle_id)` — đúng như X-5 dự liệu, bằng một migration thay index (`0027`).
 
 Yêu cầu duy nhất mà MVP phải tôn trọng là **không tự khoá mình lại**. Năm điểm cụ thể:
 

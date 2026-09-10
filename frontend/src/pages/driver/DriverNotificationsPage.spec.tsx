@@ -40,7 +40,6 @@ const renderPage = () => {
           <Routes>
             <Route path="/driver" element={<p>TRIP LIST</p>} />
             <Route path="/driver/notifications" element={<DriverNotificationsPage />} />
-            <Route path="/driver/trips/:tripId" element={<p>TRIP PAGE</p>} />
           </Routes>
         </MemoryRouter>
       </LanguageProvider>
@@ -83,14 +82,14 @@ describe('DriverNotificationsPage', () => {
     expect(screen.getAllByRole('button', { name: /chưa đọc/i })).toHaveLength(1);
   });
 
-  it('★ marks an unread one read and opens the trip', async () => {
+  it('★ marks an unread one read and opens the list — a trip may hold two of the driver’s turns, so the list chooses', async () => {
     fetchNotifications.mockResolvedValue({ items: [note()], unreadCount: 1 });
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: /bạn được phân công chuyến/i }));
 
     await waitFor(() => expect(markNotificationRead).toHaveBeenCalledWith('n1'));
-    expect(await screen.findByText('TRIP PAGE')).toBeInTheDocument();
+    expect(await screen.findByText('TRIP LIST')).toBeInTheDocument();
   });
 
   it('does not stamp one that is already read', async () => {
@@ -99,7 +98,7 @@ describe('DriverNotificationsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /bạn được phân công chuyến/i }));
 
-    expect(await screen.findByText('TRIP PAGE')).toBeInTheDocument();
+    expect(await screen.findByText('TRIP LIST')).toBeInTheDocument();
     expect(markNotificationRead).not.toHaveBeenCalled();
   });
 
@@ -119,7 +118,7 @@ describe('DriverNotificationsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /bạn được phân công chuyến/i }));
 
-    expect(await screen.findByText('TRIP PAGE')).toBeInTheDocument();
+    expect(await screen.findByText('TRIP LIST')).toBeInTheDocument();
   });
 
   it('shows a driver-worded failure when the list cannot be read', async () => {
@@ -130,9 +129,9 @@ describe('DriverNotificationsPage', () => {
   });
 
   it('maps every type to a destination', () => {
-    expect(destinationOf(note())).toBe('/driver/trips/t1');
-    expect(destinationOf(note({ type: 'COMPLETION_REJECTED' }))).toBe('/driver/trips/t1');
-    expect(destinationOf(note({ type: 'COMPLETION_APPROVED' }))).toBe('/driver/trips/t1');
+    expect(destinationOf(note())).toBe('/driver');
+    expect(destinationOf(note({ type: 'COMPLETION_REJECTED' }))).toBe('/driver');
+    expect(destinationOf(note({ type: 'COMPLETION_APPROVED' }))).toBe('/driver');
     expect(destinationOf(note({ type: 'TRIP_UNASSIGNED' }))).toBe('/driver');
   });
 });

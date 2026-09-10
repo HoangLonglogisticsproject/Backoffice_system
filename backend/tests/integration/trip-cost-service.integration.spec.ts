@@ -91,7 +91,6 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     board = new TripScheduleService(
       database,
       trips,
-      vehicles,
       new TripCustomerRepository(database),
       new TripStatusHistoryRepository(database),
       new TripLocationRepository(database),
@@ -509,6 +508,10 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     it('★ refuses to edit a BACKOFFICE line, which is still corrected by voiding', async () => {
       // The half of 0012's rule that did NOT change. A clerk's invoice line is
       // born `immutable`, so the only correction is a void plus a new row.
+      //
+      // The edit route is scoped by a driver's ASSIGNMENT (ADR-0004), and a
+      // backoffice line belongs to none — so from any assignment it simply is
+      // not there, before its state is ever looked at.
       const line = await money.createCost({
         tripId: trip,
         category: 'overtime',
@@ -517,8 +520,8 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       });
 
       await expect(
-        money.editCost(trip, line.id, { amount: '400000' }, author),
-      ).rejects.toThrow(ConflictError);
+        money.editCost('00000000-0000-4000-8000-000000000000', line.id, { amount: '400000' }, author),
+      ).rejects.toThrow(NotFoundError);
 
       // And the figure really did not move.
       expect((await money.listCosts(trip)).items.find((row) => row.id === line.id)?.amount).toBe(

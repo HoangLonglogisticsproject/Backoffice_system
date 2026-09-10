@@ -33,20 +33,24 @@ import { ActiveAssignmentGuard } from './active-assignment.guard';
  *
  * Every permission tier the system has answers "what is this caller's relation
  * to a DEPARTMENT". A driver's authority is a relation to a ROW — the active
- * assignment on the trip in the route — so there is no key and no tier that
- * would say anything true here. Declaring one anyway would be worse than
- * declaring none: `trip.write` is `head-anywhere` and would let a driver edit
- * every trip in the company, and `cost.create` is `global` and would hand them
- * the cost base. `ActiveAssignmentGuard` asks the only question that matters,
- * and it applies the `mustChangeSecret` gate `PermissionGuard` would have.
+ * assignment in the route — so there is no key and no tier that would say
+ * anything true here. Declaring one anyway would be worse than declaring none:
+ * `trip.write` is `head-anywhere` and would let a driver edit every trip in
+ * the company, and `cost.create` is `global` and would hand them the cost
+ * base. `ActiveAssignmentGuard` asks the only question that matters, and it
+ * applies the `mustChangeSecret` gate `PermissionGuard` would have.
  *
- * ★ EVERY WRITE CARRIES `:tripId` IN THE PATH. Not in the body — a body that
- * named its own trip would let a driver assigned to one trip act on any other,
- * and the guard would have checked the wrong thing entirely.
+ * ★ EVERY ROUTE IS SCOPED BY `:assignmentId`, NEVER BY A TRIP (ADR-0004). One
+ * driver may hold several turns on one trip — one per lorry — so a trip id
+ * cannot say which lorry's progress is being reported. The assignment id can,
+ * and the trip is derived from it server-side; no driver route accepts a trip
+ * id from the client at all. In the path, not the body — a body that named its
+ * own assignment would let a driver holding one turn act on any other, and the
+ * guard would have checked the wrong thing entirely.
  *
- * ★ AND THE SERVICES CHECK AGAIN. Each one re-resolves the active assignment
- * under a row lock inside its own transaction and refuses a mismatch. The guard
- * can be forgotten on a route; the service cannot be bypassed by one.
+ * ★ AND THE SERVICES CHECK AGAIN. Each one re-reads the assignment under a row
+ * lock inside its own transaction and refuses a mismatch. The guard can be
+ * forgotten on a route; the service cannot be bypassed by one.
  */
 
 /** The same shape the cost routes use. Text, never `z.number()` — see below. */
@@ -152,33 +156,34 @@ export class DriverPortalController {
   ) {}
 
   /**
-   * The trips this driver is on.
+   * The assignments this driver holds — one per lorry, grouped by trip on the
+   * handset.
    *
-   * ★ NO `ActiveAssignmentGuard`, BECAUSE THERE IS NO `:tripId` TO CHECK. The
-   * scope IS the session user: the query starts from their assignments, so
+   * ★ NO `ActiveAssignmentGuard`, BECAUSE THERE IS NO `:assignmentId` TO CHECK.
+   * The scope IS the session user: the query starts from their assignments, so
    * there is no id a caller could supply to widen it. That is why this route
    * takes no parameter at all.
    */
-  @Get('trips')
+  @Get('assignments')
   @UseGuards(AuthGuard)
-  async listMyTrips(@CurrentUser() actor: SessionUser): Promise<DriverTrip[]> {
-    return this.portal.listMyTrips(actor.id);
+  async listMyAssignments(@CurrentUser() actor: SessionUser): Promise<DriverTrip[]> {
+    return this.portal.listMyAssignments(actor.id);
   }
 
-  /** One trip, whitelisted — see `DriverTrip` for what is absent and why. */
-  @Get('trips/:tripId')
+  /** One assignment, whitelisted — see `DriverTrip` for what is absent and why. */
+  @Get('assignments/:assignmentId')
   @UseGuards(AuthGuard, ActiveAssignmentGuard)
-  async findMyTrip(
-    @Param('tripId', UuidParam) tripId: string,
+  async findMyAssignment(
+    @Param('assignmentId', UuidParam) assignmentId: string,
     @CurrentUser() actor: SessionUser,
   ): Promise<DriverTripDetail> {
-    return this.portal.findMyTrip(tripId, actor.id);
+    return this.portal.findMyAssignment(assignmentId, actor.id);
   }
 
   // ------------------------------------------------------------- execution ----
 
   /**
-   * Reports an arrival or a confirmation.
+   * Reports an arrival or a confirmation on one assignment.
    *
    * ★ THE BODY CARRIES NO TIME THE BUSINESS READS. `actual_at` and `recorded_at`
    * are both the server's, so a wrong phone clock cannot move a delay figure.
@@ -187,16 +192,16 @@ export class DriverPortalController {
    * tapped once, and whether this request or its predecessor created the row is
    * not something they can act on.
    */
-  @Post('trips/:tripId/execution-events')
+  @Post('assignments/:assignmentId/execution-events')
   @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
   async recordEvent(
-    @Param('tripId', UuidParam) tripId: string,
+    @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(recordEventSchema)) body: RecordEventBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<ExecutionEvent> {
     return this.execution.recordEvent({
       ...body,
-      tripId,
+      assignmentId,
       // From the session, never the body. A body that named its own author is a
       // body that can name somebody else's — and `actualAt` is absent for the
       // same reason: it would be a body that named its own clock.
@@ -206,14 +211,14 @@ export class DriverPortalController {
 
   // --------------------------------------------------------------- expense ----
 
-  @Post('trips/:tripId/expenses')
+  @Post('assignments/:assignmentId/expenses')
   @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
   async declareExpense(
-    @Param('tripId', UuidParam) tripId: string,
+    @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(declareExpenseSchema)) body: DeclareExpenseBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<TripCost> {
-    return this.money.declareCost({ ...body, tripId, declaredBy: actor.id });
+    return this.money.declareCost({ ...body, assignmentId, declaredBy: actor.id });
   }
 
   /**
@@ -224,35 +229,35 @@ export class DriverPortalController {
    * reason reading "typo". A backoffice line keeps 0012's rule and is refused
    * here by the service.
    */
-  @Patch('trips/:tripId/expenses/:costId')
+  @Patch('assignments/:assignmentId/expenses/:costId')
   @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
   async editExpense(
-    @Param('tripId', UuidParam) tripId: string,
+    @Param('assignmentId', UuidParam) assignmentId: string,
     @Param('costId', UuidParam) costId: string,
     @Body(new ZodValidationPipe(editExpenseSchema)) body: EditExpenseBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<TripCost> {
-    return this.money.editCost(tripId, costId, body, actor.id);
+    return this.money.editCost(assignmentId, costId, body, actor.id);
   }
 
   // ------------------------------------------------------------ completion ----
 
   /**
-   * Asks for the trip to be closed.
+   * Asks for this assignment's turn to be closed.
    *
-   * Freezes every declared figure on the trip in the same transaction, so the
-   * approver reads a total that cannot move underneath them. A rejection
-   * reopens them all.
+   * Freezes every figure declared on THIS assignment in the same transaction,
+   * so the approver reads a total that cannot move underneath them. A rejection
+   * reopens them all. Another lorry on the same trip is untouched.
    */
-  @Post('trips/:tripId/completion-requests')
+  @Post('assignments/:assignmentId/completion-requests')
   @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
   async submitCompletion(
-    @Param('tripId', UuidParam) tripId: string,
+    @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(submitCompletionSchema)) body: SubmitCompletionBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<CompletionRequest> {
     // Resubmitting after a rejection is this same route: the service writes a
     // NEW request with the next attempt number, carrying a NEW declaration.
-    return this.completion.submit(tripId, actor.id, body.expenseDeclaration);
+    return this.completion.submit(assignmentId, actor.id, body.expenseDeclaration);
   }
 }

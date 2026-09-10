@@ -1046,10 +1046,16 @@ describe('trip-schedule HTTP security', () => {
    * assign a colleague, or end anybody's turn, whatever id they hold.
    */
   describe('★ driver assignment', () => {
+    /** The turn being swapped or ended. */
+    const ASSIGNMENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const ASSIGN = ['post', `/trip-schedules/${TRIP}/driver-assignments`] as const;
-    const REPLACE = ['post', `/trip-schedules/${TRIP}/driver-assignments/replace`] as const;
-    const END = ['post', `/trip-schedules/${TRIP}/driver-assignments/end`] as const;
-    const body = { driverUserId: DRIVER_USER, reason: 'đổi ca' };
+    const REPLACE = [
+      'post',
+      `/trip-schedules/${TRIP}/driver-assignments/${ASSIGNMENT}/replace`,
+    ] as const;
+    const END = ['post', `/trip-schedules/${TRIP}/driver-assignments/${ASSIGNMENT}/end`] as const;
+    /** Valid for every route: a pair for ADD, a driver and a reason for the rest. */
+    const body = { vehicleId: VEHICLE, driverUserId: DRIVER_USER, reason: 'đổi ca' };
 
     const noAssignmentWrite = () => {
       expect(execution.assign).not.toHaveBeenCalled();
@@ -1129,22 +1135,29 @@ describe('trip-schedule HTTP security', () => {
         context = asContext({ headOf: [DEPT], memberOf: [DEPT] });
       });
 
-      it('assigns, against the session user', async () => {
-        await authed(...ASSIGN).send({ driverUserId: DRIVER_USER }).expect(201);
-        expect(execution.assign).toHaveBeenCalledWith(TRIP, DRIVER_USER, ACTOR);
+      it('★ dispatches a lorry AND a driver, as one pair, against the session user', async () => {
+        await authed(...ASSIGN).send({ vehicleId: VEHICLE, driverUserId: DRIVER_USER }).expect(201);
+        expect(execution.assign).toHaveBeenCalledWith(
+          TRIP,
+          { vehicleId: VEHICLE, driverUserId: DRIVER_USER },
+          ACTOR,
+        );
       });
 
-      it('replaces, with a reason', async () => {
-        await authed(...REPLACE).send(body).expect(200);
-        expect(execution.replaceDriver).toHaveBeenCalledWith(TRIP, DRIVER_USER, {
+      it('replaces the driver on ONE assignment, with a reason', async () => {
+        await authed(...REPLACE).send({ driverUserId: DRIVER_USER, reason: 'đổi ca' }).expect(200);
+        expect(execution.replaceDriver).toHaveBeenCalledWith(TRIP, ASSIGNMENT, DRIVER_USER, {
           by: ACTOR,
           reason: 'đổi ca',
         });
       });
 
-      it('ends, with a reason', async () => {
+      it('ends ONE assignment, with a reason', async () => {
         await authed(...END).send({ reason: 'đổi ca' }).expect(200);
-        expect(execution.endAssignment).toHaveBeenCalledWith(TRIP, { by: ACTOR, reason: 'đổi ca' });
+        expect(execution.endAssignment).toHaveBeenCalledWith(TRIP, ASSIGNMENT, {
+          by: ACTOR,
+          reason: 'đổi ca',
+        });
       });
 
       it('lists the drivers to choose from', async () => {
@@ -1170,7 +1183,19 @@ describe('trip-schedule HTTP security', () => {
       });
 
       it('refuses a driver id that is not a UUID', async () => {
-        await authed(...ASSIGN).send({ driverUserId: 'tai-xe-a' }).expect(422);
+        await authed(...ASSIGN).send({ vehicleId: VEHICLE, driverUserId: 'tai-xe-a' }).expect(422);
+        noAssignmentWrite();
+      });
+
+      it('★ refuses a lorry with no driver — there is no lorry-only assignment', async () => {
+        // ADR-0004: an assignment is a PAIR. "Add the lorry, fill the driver in
+        // later" is not a state the board has.
+        await authed(...ASSIGN).send({ vehicleId: VEHICLE }).expect(422);
+        noAssignmentWrite();
+      });
+
+      it('★ refuses a driver with no lorry, for the same reason', async () => {
+        await authed(...ASSIGN).send({ driverUserId: DRIVER_USER }).expect(422);
         noAssignmentWrite();
       });
 
@@ -1179,10 +1204,39 @@ describe('trip-schedule HTTP security', () => {
         noAssignmentWrite();
       });
 
-      it('★ ignores an assignedBy in the body — the actor is the session', async () => {
-        await authed(...ASSIGN).send({ driverUserId: DRIVER_USER, assignedBy: DRIVER_USER }).expect(201);
-        expect(execution.assign).toHaveBeenCalledWith(TRIP, DRIVER_USER, ACTOR);
+      it('refuses a malformed assignment id on replace and end', async () => {
+        await authed('post', `/trip-schedules/${TRIP}/driver-assignments/not-a-uuid/replace`)
+          .send({ driverUserId: DRIVER_USER, reason: 'đổi ca' })
+          .expect(422);
+        await authed('post', `/trip-schedules/${TRIP}/driver-assignments/not-a-uuid/end`)
+          .send({ reason: 'đổi ca' })
+          .expect(422);
+        noAssignmentWrite();
       });
+
+      it('★ ignores an assignedBy in the body — the actor is the session', async () => {
+        await authed(...ASSIGN)
+          .send({ vehicleId: VEHICLE, driverUserId: DRIVER_USER, assignedBy: DRIVER_USER })
+          .expect(201);
+        expect(execution.assign).toHaveBeenCalledWith(
+          TRIP,
+          { vehicleId: VEHICLE, driverUserId: DRIVER_USER },
+          ACTOR,
+        );
+      });
+    });
+
+    it('★ a lorry on the trip body is not a fact — the create route strips it', async () => {
+      // ADR-0004: `trip_schedules.vehicle_id` is legacy. A client still sending
+      // one gets a trip with no lorry on the row; the lorry is dispatched as an
+      // assignment, paired with its driver, through the routes above.
+      context = asContext({ global: true });
+      await authed('post', '/trip-schedules')
+        .send({ scheduledOn: '2026-09-01', vehicleId: VEHICLE, sellPrice: '100000' })
+        .expect(201);
+
+      const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+      expect(input).not.toHaveProperty('vehicleId');
     });
 
     it('refuses every assignment route without a CSRF header', async () => {

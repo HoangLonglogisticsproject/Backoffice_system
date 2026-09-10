@@ -147,7 +147,10 @@ const createTripSchema = z.object({
   // The only required field. A trip with no day is not on the board at all.
   scheduledOn: boardDay,
 
-  vehicleId: z.string().uuid().nullable().optional(),
+  // ★ NO `vehicleId` (ADR-0004). A lorry reaches a trip as a dispatch
+  // assignment, paired with its driver, through the routes below — never as a
+  // column of the booking. Zod strips unknown keys, so a client still sending
+  // one is ignored rather than refused; what it sent was never a fact.
   customerId: z.string().uuid().nullable().optional(),
 
   cargoInfo: text.optional(),
@@ -277,14 +280,20 @@ const boardFilterSchema = z.object({
 const boardQuerySchema = dateRangePageQuerySchema.and(boardFilterSchema);
 
 /**
- * Putting a driver on a trip, or taking one off.
+ * Dispatching a lorry and its driver onto a trip, swapping the driver, or
+ * taking the pair off.
  *
- * `driverUserId` is the ONLY thing a caller names; whether that account is a
- * driver, is live, and whether the trip is still open are the service's to
- * decide under its lock. A reason is required on a change and on a removal
- * — an ended turn with no explanation is the row nobody can account for.
+ * ★ A PAIR, ALWAYS (ADR-0004). `vehicleId` and `driverUserId` are both
+ * required on add: there is no lorry-only assignment and no "fill the driver
+ * in later". Whether the lorry is free on this trip, whether the account is a
+ * live driver, and whether the trip is still open are the service's to decide
+ * under its lock. A reason is required on a change and on a removal — an
+ * ended turn with no explanation is the row nobody can account for.
  */
-const assignDriverSchema = z.object({ driverUserId: z.string().uuid() });
+const assignDriverSchema = z.object({
+  vehicleId: z.string().uuid(),
+  driverUserId: z.string().uuid(),
+});
 const replaceDriverSchema = z.object({
   driverUserId: z.string().uuid(),
   reason: z.string().trim().min(1).max(2000),
@@ -332,6 +341,12 @@ export class TripScheduleController {
   /**
    * What is actually happening, for the people who have to chase it.
    *
+   * ★ ASSIGNMENT-GRAIN, BY CONTRACT (ADR-0004 §2.3): one element per ACTIVE
+   * dispatch assignment, plus one `assignmentId: null` element for a trip
+   * with nobody on it. A trip with three lorries is three elements. Callers
+   * that want one row per trip use `GET /trip-schedules`, which aggregates the
+   * crew; this route is never aggregated back to the trip.
+   *
    * ★ DECLARED BEFORE `:tripId`, and the ordering is load-bearing — Nest matches
    * in declaration order, so below it this literal would be parsed as a trip id
    * and `UuidParam` would reject it.
@@ -373,7 +388,9 @@ export class TripScheduleController {
    * had decided it.
    *
    * Bounded without a range for the reason ADR-0002 §4 gives for the short
-   * lists: one pending request per trip, and a decided trip leaves the set.
+   * lists: one pending request per ASSIGNMENT (ADR-0004), and a decided turn
+   * leaves the set. One element per outstanding request, so a trip with two
+   * lorries waiting on review is two elements.
    * A queue that grows long is the alarm, and hiding it behind a filter would
    * silence exactly that.
    *
@@ -567,17 +584,19 @@ export class TripScheduleController {
   }
 
   /**
-   * Puts a driver on a trip that has none.
+   * Dispatches a lorry and its driver onto a trip.
    *
    * ★ `trip.write` — GLOBAL, OR THE HEAD OF ANY DEPARTMENT — and no new key.
-   * Assigning a driver is a correction to the board of exactly the kind
-   * `trip.write` already governs (who is on the row), held by the same senior
-   * people dispatch escalates to, and by nobody else: `BackofficeOnlyGuard`
-   * refuses a driver account before the permission is even asked, so a driver
-   * cannot put themselves or anybody else on a trip.
+   * Dispatching is a correction to the board of exactly the kind `trip.write`
+   * already governs (who is on the row), held by the same senior people
+   * dispatch escalates to, and by nobody else: `BackofficeOnlyGuard` refuses a
+   * driver account before the permission is even asked, so a driver cannot put
+   * themselves or anybody else on a trip.
    *
-   * 409 when the trip already has a driver: replacing is its own route with
-   * its own reason, so a second assignment can never silently become one.
+   * A trip takes any number of these. 409 when the LORRY is already on this
+   * trip: replacing its driver is its own route with its own reason, so a
+   * second pair on one lorry can never silently become one. The same DRIVER on
+   * a second lorry is ordinary dispatch and is accepted.
    */
   @Post('trip-schedules/:tripId/driver-assignments')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
@@ -587,36 +606,45 @@ export class TripScheduleController {
     @Body(new ZodValidationPipe(assignDriverSchema)) body: AssignDriverBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<DriverAssignment> {
-    return this.execution.assign(tripId, body.driverUserId, actor.id);
+    return this.execution.assign(tripId, body, actor.id);
   }
 
-  /** Swaps the driver. The previous turn is ended with the reason, never erased. */
-  @Post('trip-schedules/:tripId/driver-assignments/replace')
+  /**
+   * Swaps the driver on one lorry, before that turn has started. The previous
+   * turn is ended with the reason, never erased; the new one keeps the lorry.
+   * 409 once the turn has an execution event — the pair is then what happened.
+   */
+  @Post('trip-schedules/:tripId/driver-assignments/:assignmentId/replace')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   @HttpCode(HttpStatus.OK)
   async replaceDriver(
     @Param('tripId', UuidParam) tripId: string,
+    @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(replaceDriverSchema)) body: ReplaceDriverBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<DriverAssignment> {
-    return this.execution.replaceDriver(tripId, body.driverUserId, {
+    return this.execution.replaceDriver(tripId, assignmentId, body.driverUserId, {
       by: actor.id,
       reason: body.reason,
     });
   }
 
-  /** Takes the driver off without naming a replacement. */
-  @Post('trip-schedules/:tripId/driver-assignments/end')
+  /** Takes one lorry and its driver off the trip, before that turn has started. */
+  @Post('trip-schedules/:tripId/driver-assignments/:assignmentId/end')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.write')
   @HttpCode(HttpStatus.OK)
   async endAssignment(
     @Param('tripId', UuidParam) tripId: string,
+    @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(endAssignmentSchema)) body: EndAssignmentBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<DriverAssignment> {
-    return this.execution.endAssignment(tripId, { by: actor.id, reason: body.reason });
+    return this.execution.endAssignment(tripId, assignmentId, {
+      by: actor.id,
+      reason: body.reason,
+    });
   }
 
   /**

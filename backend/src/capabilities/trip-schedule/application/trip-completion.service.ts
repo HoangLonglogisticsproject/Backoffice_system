@@ -19,18 +19,22 @@ import { NotificationService } from '../../notification/application/notification
 import { eventKeys } from '../../notification/domain/notification';
 
 /**
- * How a trip ends.
+ * How a turn ends, and how the trip ends after it.
  *
- * A driver asks; a SuperAdmin decides; approval closes the trip permanently and
- * freezes its money. Three tables move together at that moment, and this is the
- * only place that moves them.
+ * ★ TWO DIFFERENT THINGS (ADR-0004). A driver asks for THEIR ASSIGNMENT to be
+ * closed; a SuperAdmin decides; approval freezes THAT assignment's money. The
+ * TRIP closes — status, stamp, history — only when every active assignment on
+ * it has been approved, and it closes inside the transaction of the approval
+ * that made that true. Approving one lorry of three changes nothing about the
+ * trip and nothing about the other two drivers' figures.
  *
  * ★ EVERY DECISION HERE IS ONE TRANSACTION, AND THAT IS THE WHOLE DESIGN.
- * Approving touches four things — the request, the trip's status, the trip's
- * closing stamp, and every cost line on it. Any subset of those committing
- * without the rest leaves a trip that is closed but still editable, or final but
- * with no record of who closed it. There is no compensating action available
- * afterwards, because 0025 makes `finished` terminal.
+ * Approving the last turn touches four things — the request, the trip's
+ * status, the trip's closing stamp, and the assignment's cost lines. Any subset
+ * of those committing without the rest leaves a trip that is closed but still
+ * editable, or final but with no record of who closed it. There is no
+ * compensating action available afterwards, because 0025 makes `finished`
+ * terminal.
  */
 @Injectable()
 export class TripCompletionService {
@@ -45,61 +49,67 @@ export class TripCompletionService {
   ) {}
 
   /**
-   * The driver asks for the trip to be closed.
+   * The driver asks for their assignment to be closed.
    *
-   * ★ SUBMITTING LOCKS THE MONEY, IN THE SAME TRANSACTION. The figures under
-   * review must not move while somebody is reviewing them — an approver looking
-   * at a total that changes underneath is approving something that no longer
-   * exists. Locking is TEMPORARY: a rejection reopens every line.
+   * ★ SUBMITTING LOCKS THIS ASSIGNMENT'S MONEY, IN THE SAME TRANSACTION. The
+   * figures under review must not move while somebody is reviewing them — an
+   * approver looking at a total that changes underneath is approving something
+   * that no longer exists. Locking is TEMPORARY: a rejection reopens every
+   * line. And it is THIS turn's lines only: another driver's lorry on the same
+   * trip keeps typing (ADR-0004).
    *
    * ★ WHAT IS DELIBERATELY NOT CHECKED HERE: that the four execution events have
-   * been reported. The ordinary flow reports them first, and a trip submitted
-   * without them shows up as a stuck trip in the read model — but no rule says
-   * the submission must be REFUSED, and inventing one would block a real trip
-   * whose driver lost signal at the delivery point.
+   * been reported. The ordinary flow reports them first, and a turn submitted
+   * without them shows up as stuck in the read model — but no rule says the
+   * submission must be REFUSED, and inventing one would block a real trip whose
+   * driver lost signal at the delivery point.
    */
   async submit(
-    tripId: string,
+    assignmentId: string,
     submittedBy: string,
     expenseDeclaration: ExpenseDeclaration,
   ): Promise<CompletionRequest> {
+    // Unlocked, and only for the trip id: everything that decides is re-read
+    // under the locks below, in the order trip → assignment → request → cost.
+    const named = await this.assignments.findActiveById(assignmentId);
+    if (!named) throw new NotFoundError('Assignment not found.');
+
     return this.db.transaction(async (tx) => {
-      const trip = await this.lockOpenTrip(tripId, tx);
+      const trip = await this.lockOpenTrip(named.tripId, tx);
 
-      const assignment = await this.assignments.lockActive(tripId, tx);
-      if (!assignment) {
-        throw new ConflictError('That trip has no driver, so there is nothing to complete.');
-      }
+      const assignment = await this.assignments.lockActiveById(assignmentId, tx);
+      if (!assignment) throw new ConflictError('That assignment is no longer active.');
       if (assignment.driverUserId !== submittedBy) {
-        throw new ConflictError('Only the driver assigned to a trip may ask for it to be closed.');
+        throw new ConflictError('Only the driver on an assignment may ask for it to be closed.');
       }
 
-      // A readable 409 for the ordinary double tap. `uq_trip_completion_pending`
-      // is what actually holds the rule for two taps that arrive together.
-      const pending = await this.requests.lockPending(tripId, tx);
-      if (pending) throw new ConflictError('That trip already has a completion request waiting.');
+      // A readable 409 for the ordinary double tap.
+      // `uq_assignment_completion_pending` is what actually holds the rule for
+      // two taps that arrive together.
+      const pending = await this.requests.lockPendingByAssignment(assignment.id, tx);
+      if (pending) throw new ConflictError('That assignment already has a completion request waiting.');
 
-      // ★ THE DECLARATION HAS TO AGREE WITH WHAT THE DRIVER ENTERED.
+      // ★ THE DECLARATION HAS TO AGREE WITH WHAT THE DRIVER ENTERED ON THIS TURN.
       //
       // Both halves come from the same person, so a disagreement is not a
       // difference of opinion — it is a mistake, and one that makes the two
       // read-model states below meaningless. Saying "nothing to claim" with
-      // three fuel lines on the trip would leave a dashboard unable to say
-      // which of the two the trip actually is.
+      // three fuel lines on the turn would leave a dashboard unable to say
+      // which of the two it actually is.
       //
       // ⚠ THIS IS THE ONE PLACE WHERE A CHECK CROSSES TWO TABLES, so no CHECK
       // constraint can hold it — the database has no way to see the cost lines
       // from the request row. It is held here, inside the transaction, with the
       // trip locked so no line can arrive between the count and the insert.
-      const live = await this.costs.listActiveByTrip(tripId, tx);
+      const live = await this.costs.listActiveByAssignment(assignment.id, tx);
       if (expenseDeclaration === 'none' && live.length > 0) {
         throw new ConflictError(
-          'This trip has expenses recorded on it. Withdraw them first, or declare that there were expenses.',
+          'This assignment has expenses recorded on it. Withdraw them first, or declare that there were expenses.',
         );
       }
       if (expenseDeclaration === 'expenses' && live.length === 0) {
         throw new ConflictError(
-          'No expenses have been recorded on this trip. Enter them first, or declare that there were none.',
+          'No expenses have been recorded on this assignment. Enter them first, or declare that there were none.',
         );
       }
 
@@ -108,32 +118,38 @@ export class TripCompletionService {
         tx,
       );
 
-      await this.costs.lockForTrip(tripId, submittedBy, new Date(), tx);
+      await this.costs.lockForAssignment(assignment.id, submittedBy, new Date(), tx);
 
       return request;
     });
   }
 
   /**
-   * The SuperAdmin approves, and the trip is over.
+   * The SuperAdmin approves one turn — and, if it was the last one open, the
+   * trip is over.
    *
-   * Four writes, one transaction:
+   * One transaction, in this order:
    *
-   *   1. the request becomes `approved`
-   *   2. every live cost line becomes `immutable`
-   *   3. the trip's status becomes `finished` — which 0025 makes irreversible
-   *   4. the move is recorded, and the trip stamped with who closed it
+   *   1. the trip is locked (`FOR UPDATE`) — the serialisation point for every
+   *      approval on the trip, so two approvers of two different turns run one
+   *      after the other and the second sees what the first wrote
+   *   2. the request is locked and must still be `pending`
+   *   3. the request becomes `approved`
+   *   4. THIS assignment's live cost lines become `immutable` — nobody else's
+   *   5. the trip is asked whether any ACTIVE assignment is still unapproved
+   *   6. if none is: status `finished` (0025 makes it irreversible), one history
+   *      row, the closing stamp — exactly once, because only the transaction
+   *      that observed the last approval reaches this branch
    *
    * ★ ORDER MATTERS FOR ONE OF THEM. The money is frozen BEFORE the trip is
    * marked done, so there is no instant at which a closed trip still has an
-   * editable figure on it.
+   * editable figure on an approved turn.
    */
-  async approve(tripId: string, decidedBy: string): Promise<CompletionRequest> {
+  async approve(tripId: string, requestId: string, decidedBy: string): Promise<CompletionRequest> {
     const { decided, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
 
-      const pending = await this.requests.lockPending(tripId, tx);
-      if (!pending) throw new ConflictError('That trip has no completion request waiting.');
+      const pending = await this.lockPendingOnTrip(tripId, requestId, tx);
 
       const decided = await this.requests.decide(
         { id: pending.id, state: 'approved', decidedBy, reason: null, now: new Date() },
@@ -143,29 +159,18 @@ export class TripCompletionService {
       // approver that got there first rather than a missing row.
       if (!decided) throw new ConflictError('That request has already been decided.');
 
-      await this.costs.finalizeForTrip(tripId, tx);
+      await this.costs.finalizeForAssignment(pending.driverAssignmentId, tx);
 
-      const closed = await this.trips.updateStatus(tripId, 'finished', tx);
-      if (!closed) throw new Error('Locked trip disappeared during completion.');
+      if (!(await this.requests.hasUnapprovedActiveAssignment(tripId, tx))) {
+        await this.finishTrip(trip, decidedBy, tx);
+      }
 
-      const now = new Date();
-      await this.history.record(
-        {
-          tripId,
-          from: trip.status,
-          to: 'finished',
-          reason: 'Completion approved.',
-          changedBy: decidedBy,
-        },
-        tx,
-      );
-      await this.trips.markClosed(tripId, decidedBy, now, tx);
-
-      // The driver on the trip now — or, if nobody is, the one who asked.
-      const driver = await this.assignments.findActive(tripId, tx);
+      // ★ THE PERSON WHO ASKED, read off the request. Never "whoever is on the
+      // trip now": with several turns on one trip that is several people, and
+      // with none it is nobody.
       const told = await this.notifications.record(
         {
-          recipientUserId: driver?.driverUserId ?? pending.submittedBy,
+          recipientUserId: pending.submittedBy,
           type: 'COMPLETION_APPROVED',
           tripId,
           tripScheduledOn: trip.scheduledOn,
@@ -182,19 +187,22 @@ export class TripCompletionService {
   }
 
   /**
-   * The SuperAdmin sends it back.
+   * The SuperAdmin sends one turn back.
    *
    * ★ THE REASON IS MANDATORY, HERE AND IN THE DATABASE. A driver told only
    * "rejected" has nothing to act on. Two existing approval flows in this
    * codebase collect a reason in the UI and discard it in the API — documented
    * product debt this one deliberately does not repeat.
    *
-   * ★ AND REJECTION REOPENS THE MONEY. The lines were frozen for the review, not
-   * finalised by it: the driver has to be able to correct the figure that caused
-   * the rejection. The trip's status is untouched, because it never moved.
+   * ★ AND REJECTION REOPENS THIS ASSIGNMENT'S MONEY. The lines were frozen for
+   * the review, not finalised by it: the driver has to be able to correct the
+   * figure that caused the rejection. The trip's status is untouched, because
+   * it never moved; the other turns on the trip are untouched, because they
+   * were never this request's.
    */
   async reject(
     tripId: string,
+    requestId: string,
     input: { by: string; reason: string },
   ): Promise<CompletionRequest> {
     const reason = input.reason.trim();
@@ -205,8 +213,7 @@ export class TripCompletionService {
     const { decided, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
 
-      const pending = await this.requests.lockPending(tripId, tx);
-      if (!pending) throw new ConflictError('That trip has no completion request waiting.');
+      const pending = await this.lockPendingOnTrip(tripId, requestId, tx);
 
       const decided = await this.requests.decide(
         { id: pending.id, state: 'rejected', decidedBy: input.by, reason, now: new Date() },
@@ -214,14 +221,14 @@ export class TripCompletionService {
       );
       if (!decided) throw new ConflictError('That request has already been decided.');
 
-      await this.costs.unlockForTrip(tripId, tx);
+      await this.costs.unlockForAssignment(pending.driverAssignmentId, tx);
 
-      // ★ WITH THE REASON. A driver told only "rejected" has nothing to act on
-      // — the whole argument 0017 makes for the column this is read from.
-      const driver = await this.assignments.findActive(tripId, tx);
+      // ★ WITH THE REASON, TO THE PERSON WHO ASKED. A driver told only
+      // "rejected" has nothing to act on — the whole argument 0017 makes for
+      // the column this is read from.
       const told = await this.notifications.record(
         {
-          recipientUserId: driver?.driverUserId ?? pending.submittedBy,
+          recipientUserId: pending.submittedBy,
           type: 'COMPLETION_REJECTED',
           tripId,
           tripScheduledOn: trip.scheduledOn,
@@ -238,10 +245,58 @@ export class TripCompletionService {
     return decided;
   }
 
-  /** Every attempt, newest first — including the rejected ones and why. */
+  /** Every attempt on the trip, across all its assignments, newest first — including the rejected ones and why. */
   async listRequests(tripId: string): Promise<CompletionRequest[]> {
     if (!(await this.trips.exists(tripId))) throw new NotFoundError('Trip not found.');
     return this.requests.listByTrip(tripId);
+  }
+
+  /**
+   * The request named in the route, locked, PROVEN to be on the trip in the
+   * route, and still pending. A request on another trip answers exactly as a
+   * request that does not exist: a caller holding one trip's id must not reach
+   * another trip's review by pairing it with a foreign request id.
+   */
+  private async lockPendingOnTrip(
+    tripId: string,
+    requestId: string,
+    tx: DatabaseQuery,
+  ): Promise<CompletionRequest> {
+    const request = await this.requests.lockById(requestId, tx);
+    if (!request || request.tripId !== tripId) {
+      throw new NotFoundError('Completion request not found.');
+    }
+    if (request.state !== 'pending') {
+      throw new ConflictError('That request has already been decided.');
+    }
+    return request;
+  }
+
+  /**
+   * Closes the trip: status, history, stamp — together, once.
+   *
+   * ★ THE ONLY WRITER OF `finished` IN THE CODEBASE, as it has always been.
+   * Reached only from `approve`, under the trip lock, after the last active
+   * assignment's approval was written — so two approvals racing on two turns
+   * of one trip arrive here one at a time, and only the one that observed
+   * "nothing left unapproved" gets in. `markClosed` is `WHERE closed_at IS
+   * NULL` as a second line.
+   */
+  private async finishTrip(trip: TripSchedule, decidedBy: string, tx: DatabaseQuery): Promise<void> {
+    const closed = await this.trips.updateStatus(trip.id, 'finished', tx);
+    if (!closed) throw new Error('Locked trip disappeared during completion.');
+
+    await this.history.record(
+      {
+        tripId: trip.id,
+        from: trip.status,
+        to: 'finished',
+        reason: 'All assignments approved.',
+        changedBy: decidedBy,
+      },
+      tx,
+    );
+    await this.trips.markClosed(trip.id, decidedBy, new Date(), tx);
   }
 
   /**

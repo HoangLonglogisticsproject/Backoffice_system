@@ -16,12 +16,12 @@ import DriverTripsPage from './DriverTripsPage';
  * the stepper, the header pill, the milestone cards, the expense lifecycle
  * and the completion summary.
  */
-const fetchMyTrips = vi.fn();
-const fetchMyTrip = vi.fn();
+const fetchMyAssignments = vi.fn();
+const fetchMyAssignment = vi.fn();
 
 vi.mock('@/api/driverPortal', () => ({
-  fetchMyTrips: (...a: unknown[]) => fetchMyTrips(...a),
-  fetchMyTrip: (...a: unknown[]) => fetchMyTrip(...a),
+  fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),
+  fetchMyAssignment: (...a: unknown[]) => fetchMyAssignment(...a),
   recordExecutionEvent: vi.fn(),
   declareExpense: vi.fn(),
   editExpense: vi.fn(),
@@ -128,7 +128,7 @@ const renderAt = (path: string) => {
         <MemoryRouter initialEntries={[path]}>
           <Routes>
             <Route path="/driver" element={<DriverTripsPage />} />
-            <Route path="/driver/trips/:tripId" element={<DriverTripPage />} />
+            <Route path="/driver/assignments/:assignmentId" element={<DriverTripPage />} />
           </Routes>
         </MemoryRouter>
       </LanguageProvider>
@@ -144,56 +144,107 @@ const stepper = () => {
     .map((item) => ({ label: item.textContent ?? '', current: item.getAttribute('aria-current') === 'step' }));
 };
 
+/**
+ * The trip's card: the nearest list item around the customer's name. The
+ * turns are list items INSIDE it, never around it, so `closest` lands on the
+ * card whichever row the name sits above.
+ */
+const card = (customer: string): HTMLElement => {
+  const item = screen.getByText(customer).closest('li');
+  if (!item) throw new Error(`no card for ${customer}`);
+  return item;
+};
+
 const headerPill = () => screen.getByRole('heading', { level: 1 }).parentElement?.parentElement?.textContent ?? '';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  fetchMyTrips.mockResolvedValue([]);
-  fetchMyTrip.mockResolvedValue(trip());
+  fetchMyAssignments.mockResolvedValue([]);
+  fetchMyAssignment.mockResolvedValue(trip());
 });
 
 describe('★ the trip list', () => {
   it('shows loading, then a card per trip with where from, where to and when', async () => {
     let release: (value: unknown[]) => void = () => {};
-    fetchMyTrips.mockReturnValue(new Promise((resolve) => (release = resolve)));
+    fetchMyAssignments.mockReturnValue(new Promise((resolve) => (release = resolve)));
     renderAt('/driver');
 
     expect(screen.getByText('Đang tải…')).toBeInTheDocument();
-    release([trip(), trip({ tripId: 't2', customer: { id: 'c2', name: 'VIỄN ĐẠT' }, scheduledPickupAt: null, scheduledDeliveryAt: null })]);
+    release([
+      trip(),
+      trip({
+        tripId: 't2',
+        customer: { id: 'c2', name: 'VIỄN ĐẠT' },
+        scheduledPickupAt: null,
+        scheduledDeliveryAt: null,
+        assignment: { id: 'a2', assignedAt: AT },
+      }),
+    ]);
 
     expect(await screen.findByText('BLUEWATER')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Chuyến của tôi' })).toBeInTheDocument();
     expect(screen.getByText('2 chuyến')).toBeInTheDocument();
-    const first = screen.getByText('BLUEWATER').closest('a');
-    expect(first).toHaveAttribute('href', '/driver/trips/t1');
+    const first = card('BLUEWATER');
     expect(first).toHaveTextContent('Kho HCM');
     expect(first).toHaveTextContent('KHO 3SC');
-    expect(first).toHaveTextContent('51D-65233');
     // A time window, not two full timestamps.
-    expect(first?.textContent).toMatch(/\d{2}:\d{2} – \d{2}:\d{2}/);
-    expect(screen.getByText('VIỄN ĐẠT').closest('a')).toHaveAttribute('href', '/driver/trips/t2');
+    expect(first.textContent).toMatch(/\d{2}:\d{2} – \d{2}:\d{2}/);
+    // ★ THE LINK IS THE LORRY, AND IT NAMES THE ASSIGNMENT (ADR-0004).
+    const link = within(first).getByRole('link');
+    expect(link).toHaveAttribute('href', '/driver/assignments/a1');
+    expect(link).toHaveTextContent('51D-65233');
+    expect(within(card('VIỄN ĐẠT')).getByRole('link')).toHaveAttribute('href', '/driver/assignments/a2');
   });
 
   it('★ two trips for the same customer on the same day stay two trips — the id is the identity', async () => {
     // Nothing forbids this on the server: the trip schedule has no uniqueness
     // on customer + day. The card shows customer and day, but it is BOUND to
     // the trip's canonical id and nothing else.
-    fetchMyTrips.mockResolvedValue([trip(), trip({ tripId: 't2', pickupAddress: 'Kho Bình Dương' })]);
-    fetchMyTrip.mockImplementation(async (id: string) => trip({ tripId: id, pickupAddress: id === 't2' ? 'Kho Bình Dương' : 'Kho HCM' }));
+    fetchMyAssignments.mockResolvedValue([
+      trip(),
+      trip({ tripId: 't2', pickupAddress: 'Kho Bình Dương', assignment: { id: 'a2', assignedAt: AT } }),
+    ]);
+    fetchMyAssignment.mockImplementation(async (id: string) =>
+      trip({
+        tripId: id === 'a2' ? 't2' : 't1',
+        assignment: { id, assignedAt: AT },
+        pickupAddress: id === 'a2' ? 'Kho Bình Dương' : 'Kho HCM',
+      }),
+    );
     renderAt('/driver');
 
-    const cards = await screen.findAllByText('BLUEWATER');
-    expect(cards).toHaveLength(2);
-    const hrefs = cards.map((card) => card.closest('a')?.getAttribute('href'));
-    expect(hrefs).toEqual(['/driver/trips/t1', '/driver/trips/t2']);
+    const names = await screen.findAllByText('BLUEWATER');
+    expect(names).toHaveLength(2);
+    const links = names.map((name) => within(name.closest('li')!).getByRole('link'));
+    const hrefs = links.map((link) => link.getAttribute('href'));
+    expect(hrefs).toEqual(['/driver/assignments/a1', '/driver/assignments/a2']);
     expect(new Set(hrefs).size).toBe(2);
 
-    // Opening the second card loads the SECOND trip, by its id.
-    fireEvent.click(cards[1]!.closest('a')!);
-    await waitFor(() => expect(fetchMyTrip).toHaveBeenCalledWith('t2'));
-    expect(fetchMyTrip).not.toHaveBeenCalledWith('t1');
+    // Opening the second card loads the SECOND turn, by its id.
+    fireEvent.click(links[1]!);
+    await waitFor(() => expect(fetchMyAssignment).toHaveBeenCalledWith('a2'));
+    expect(fetchMyAssignment).not.toHaveBeenCalledWith('a1');
     expect(await screen.findByText('Thông tin chuyến')).toBeInTheDocument();
     expect(screen.getByText('Kho Bình Dương')).toBeInTheDocument();
+  });
+
+  it('★ one driver on two lorries of one trip: one card, two turns, each its own link (ADR-0004)', async () => {
+    fetchMyAssignments.mockResolvedValue([
+      trip(),
+      trip({ vehicle: { id: 'v2', plate: '51D-00002' }, assignment: { id: 'a2', assignedAt: AT } }),
+    ]);
+    renderAt('/driver');
+
+    expect(await screen.findByText('BLUEWATER')).toBeInTheDocument();
+    expect(screen.getAllByText('BLUEWATER')).toHaveLength(1);
+    expect(screen.getByText('1 chuyến')).toBeInTheDocument();
+    const links = within(card('BLUEWATER')).getAllByRole('link');
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '/driver/assignments/a1',
+      '/driver/assignments/a2',
+    ]);
+    expect(links[0]).toHaveTextContent('51D-65233');
+    expect(links[1]).toHaveTextContent('51D-00002');
   });
 
   it('says so when nothing is assigned', async () => {
@@ -203,7 +254,7 @@ describe('★ the trip list', () => {
   });
 
   it('shows a driver-worded failure with a retry', async () => {
-    fetchMyTrips.mockRejectedValueOnce(new ApiError(0, undefined, 'down')).mockResolvedValueOnce([trip()]);
+    fetchMyAssignments.mockRejectedValueOnce(new ApiError(0, undefined, 'down')).mockResolvedValueOnce([trip()]);
     renderAt('/driver');
 
     expect(await screen.findByRole('alert')).toBeInTheDocument();
@@ -215,7 +266,7 @@ describe('★ the trip list', () => {
 
 describe('★ the trip detail reads the workflow', () => {
   it('before pickup: pickup is the stage, the pickup card is live and offers the arrival', async () => {
-    renderAt('/driver/trips/t1');
+    renderAt('/driver/assignments/a1');
     await screen.findByText('Kho HCM');
 
     expect(stepper().map((s) => s.current)).toEqual([true, false, false, false]);
@@ -228,8 +279,8 @@ describe('★ the trip detail reads the workflow', () => {
   });
 
   it('pickup confirmed: delivery becomes the stage and the pickup card reads done', async () => {
-    fetchMyTrip.mockResolvedValue(trip({ events: [event('ARRIVED_PICKUP'), event('PICKUP_CONFIRMED')] }));
-    renderAt('/driver/trips/t1');
+    fetchMyAssignment.mockResolvedValue(trip({ events: [event('ARRIVED_PICKUP'), event('PICKUP_CONFIRMED')] }));
+    renderAt('/driver/assignments/a1');
     await screen.findByText('Kho HCM');
 
     expect(stepper().map((s) => s.current)).toEqual([false, true, false, false]);
@@ -239,8 +290,8 @@ describe('★ the trip detail reads the workflow', () => {
   });
 
   it('delivery confirmed: the expense checkpoint is the stage and the journey is closed', async () => {
-    fetchMyTrip.mockResolvedValue(trip({ events: JOURNEY }));
-    renderAt('/driver/trips/t1');
+    fetchMyAssignment.mockResolvedValue(trip({ events: JOURNEY }));
+    renderAt('/driver/assignments/a1');
     await screen.findByText('Kho HCM');
 
     expect(stepper().map((s) => s.current)).toEqual([false, false, true, false]);
@@ -255,7 +306,7 @@ describe('★ the trip detail reads the workflow', () => {
   });
 
   it('completion pending: the review is the stage, figures locked, summary totals the driver’s lines', async () => {
-    fetchMyTrip.mockResolvedValue(
+    fetchMyAssignment.mockResolvedValue(
       trip({
         events: JOURNEY,
         expenses: [cost({ state: 'locked' }), cost({ id: 'c2', category: 'toll', amount: '130000.00', state: 'locked' })],
@@ -263,7 +314,7 @@ describe('★ the trip detail reads the workflow', () => {
         completion: completion('pending'),
       }),
     );
-    renderAt('/driver/trips/t1');
+    renderAt('/driver/assignments/a1');
     await screen.findByText('Kho HCM');
 
     expect(stepper().map((s) => s.current)).toEqual([false, false, false, true]);
@@ -276,7 +327,7 @@ describe('★ the trip detail reads the workflow', () => {
   });
 
   it('★ rejected: the expense card says so with the reason, lines are editable, and resending is a separate tap', async () => {
-    fetchMyTrip.mockResolvedValue(
+    fetchMyAssignment.mockResolvedValue(
       trip({
         events: JOURNEY,
         expenses: [cost()],
@@ -284,7 +335,7 @@ describe('★ the trip detail reads the workflow', () => {
         completion: completion('rejected', { decisionReason: 'Thiếu hoá đơn dầu.', decidedBy: 'b1', decidedAt: AT }),
       }),
     );
-    renderAt('/driver/trips/t1');
+    renderAt('/driver/assignments/a1');
     await screen.findByText('Kho HCM');
 
     expect(stepper().map((s) => s.current)).toEqual([false, false, true, false]);
@@ -297,7 +348,7 @@ describe('★ the trip detail reads the workflow', () => {
   });
 
   it('approved: every stage is done, the header says so, and nothing can be edited or reopened', async () => {
-    fetchMyTrip.mockResolvedValue(
+    fetchMyAssignment.mockResolvedValue(
       trip({
         events: JOURNEY,
         expenses: [cost({ state: 'immutable' })],
@@ -305,7 +356,7 @@ describe('★ the trip detail reads the workflow', () => {
         completion: completion('approved', { decidedBy: 'b1', decidedAt: AT }),
       }),
     );
-    renderAt('/driver/trips/t1');
+    renderAt('/driver/assignments/a1');
     await screen.findByText('Kho HCM');
 
     expect(stepper().map((s) => s.current)).toEqual([false, false, false, false]);

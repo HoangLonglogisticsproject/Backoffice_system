@@ -20,7 +20,7 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
  * backend security specs, and stays true whatever this file draws.
  */
 const useSession = vi.fn();
-const fetchMyTrips = vi.fn();
+const fetchMyAssignments = vi.fn();
 
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
@@ -33,8 +33,8 @@ vi.mock('@/api/notifications', () => ({
   notificationStreamUrl: () => '/notifications/stream',
 }));
 vi.mock('@/api/driverPortal', () => ({
-  fetchMyTrips: (...a: unknown[]) => fetchMyTrips(...a),
-  fetchMyTrip: vi.fn(),
+  fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),
+  fetchMyAssignment: vi.fn(),
   recordExecutionEvent: vi.fn(),
   declareExpense: vi.fn(),
   editExpense: vi.fn(),
@@ -92,7 +92,7 @@ const BACKOFFICE_ROWS = [
 
 beforeEach(() => {
   useSession.mockReset().mockReturnValue(driverSession());
-  fetchMyTrips.mockReset().mockResolvedValue([]);
+  fetchMyAssignments.mockReset().mockResolvedValue([]);
   fetchNotifications.mockReset().mockResolvedValue({ items: [], unreadCount: 2 });
 });
 
@@ -106,7 +106,7 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
       // parameter, because the scope is the session.
       expect(await screen.findByRole('heading', { name: /cổng tài xế/i })).toBeInTheDocument();
       expect(await screen.findByText(/chưa được phân công/i)).toBeInTheDocument();
-      expect(fetchMyTrips).toHaveBeenCalledWith();
+      expect(fetchMyAssignments).toHaveBeenCalledWith();
 
       for (const row of BACKOFFICE_ROWS) expect(screen.queryByText(row)).not.toBeInTheDocument();
       expect(screen.queryByText(/không có quyền/i)).not.toBeInTheDocument();
@@ -184,7 +184,7 @@ describe('★ the driver’s application shell', () => {
     expect(nav().getByRole('link', { name: /thông báo/i })).not.toHaveAttribute('aria-current');
 
     cleanup();
-    renderAt('/driver/trips/t1');
+    renderAt('/driver/assignments/a1');
     expect(await screen.findByRole('navigation')).toBeInTheDocument();
     expect(nav().getByRole('link', { name: /chuyến của tôi/i })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('heading', { name: /cổng tài xế/i })).toBeInTheDocument();

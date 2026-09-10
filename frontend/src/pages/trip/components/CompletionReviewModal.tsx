@@ -72,10 +72,26 @@ const CATEGORY_LABEL = {
 
 interface Props {
   tripId: string;
+  /**
+   * ★ WHICH LORRY'S TURN IS UNDER REVIEW (ADR-0004). The evidence endpoints
+   * are per trip; the decision is per assignment, so everything shown is
+   * narrowed to this turn — a second lorry's timeline must not be read as
+   * this one's. `null` only for a pre-multi-vehicle row, which shows the
+   * trip's evidence unfiltered.
+   */
+  assignmentId: string | null;
+  /** The pending request the board row named, if any. */
+  requestId: string | null;
   row: OperationalBoardRow | null;
   mayReview: boolean;
   onClose: () => void;
 }
+
+/** Narrows the trip's evidence to one turn. */
+const ofAssignment = <T extends { driverAssignmentId: string | null }>(
+  items: readonly T[],
+  assignmentId: string | null,
+): T[] => (assignmentId === null ? [...items] : items.filter((item) => item.driverAssignmentId === assignmentId));
 
 /**
  * Which of the four endings this trip has reached.
@@ -105,16 +121,31 @@ const STAGE_NOTE: Partial<Record<ReviewStage, TranslationKey>> = {
   'no-permission': 'reviewNoPermission',
 };
 
-export function CompletionReviewModal({ tripId, row, mayReview, onClose }: Readonly<Props>) {
+export function CompletionReviewModal({
+  tripId,
+  assignmentId,
+  requestId,
+  row,
+  mayReview,
+  onClose,
+}: Readonly<Props>) {
   const { t, language } = useLanguage();
-  const { requests, events, expenses, expensesHidden, loading } = useCompletionEvidence(tripId);
-  const { approve, reject } = useCompletionDecision(tripId);
-
-  const [failure, setFailure] = useState<unknown>(null);
+  const evidence = useCompletionEvidence(tripId);
+  const requests = ofAssignment(evidence.requests, assignmentId);
+  const events = ofAssignment(evidence.events, assignmentId);
+  const expenses = ofAssignment(evidence.expenses, assignmentId);
+  const { expensesHidden, loading } = evidence;
 
   const latest: CompletionRequest | null = requests[0] ?? null;
   const pending = latest?.state === 'pending';
   const approved = requests.some((request) => request.state === 'approved');
+
+  // ★ THE REQUEST DECIDED IS THE ONE THE EVIDENCE READ SAYS IS PENDING — fresher
+  // than the board row that opened the modal. The row's id is the fallback
+  // for the moment before the read lands, when no decision can be sent anyway.
+  const { approve, reject } = useCompletionDecision(tripId, (pending ? latest?.id : null) ?? requestId ?? '');
+
+  const [failure, setFailure] = useState<unknown>(null);
 
   const run = async (work: () => Promise<unknown>) => {
     setFailure(null);

@@ -180,10 +180,16 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       `INSERT INTO trip_schedules (scheduled_on, created_by) VALUES ('2026-09-10', $1) RETURNING id`,
       [boss],
     );
+    // A pair, because the schema insists (0027): an active assignment without
+    // a lorry is refused by CHECK.
+    const [vehicle] = await sql<{ id: string }>(
+      `INSERT INTO trip_vehicles (plate, created_by) VALUES ($1, $2) RETURNING id`,
+      [`51D-${String(10000 + Math.floor(Math.random() * 89999))}`, boss],
+    );
     const [assignment] = await sql<{ id: string }>(
-      `INSERT INTO trip_driver_assignments (trip_id, driver_user_id, assigned_by)
-       VALUES ($1, $2, $3) RETURNING id`,
-      [trip!.id, driverId, boss],
+      `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [trip!.id, vehicle!.id, driverId, boss],
     );
     return assignment!.id;
   };

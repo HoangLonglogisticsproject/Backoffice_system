@@ -70,6 +70,12 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0021_void_reason_optional.sql` | project | `trip_costs`: void không bắt buộc lý do — nới hai CHECK |
 | `0022_trip_locations.sql` | project | trip_locations (địa điểm của khách: tên · địa chỉ · liên hệ · toạ độ tuỳ chọn) · unique `(customer_id, name_key)` · `pickup/delivery_location_id` truy vết trên `trip_schedules` · T3 |
 | `0023_driver_roster_indexes.sql` | project | chỉ thêm index: `users(account_type, display_name, id)` cho danh sách tài xế · `trip_driver_assignments(driver_user_id, assigned_at DESC, id DESC)` cho lịch sử chuyến của một tài xế (index 0014 là partial `state='active'` nên không phục vụ được) |
+| `0027_dispatch_assignment_vehicle.sql` | project | ADR-0004: `trip_driver_assignments.vehicle_id` · bỏ unique 1 active/trip · `uq_trip_active_vehicle_assignment (trip_id, vehicle_id) WHERE active` · CHECK `active_has_vehicle` **NOT VALID** |
+| `0028_completion_per_assignment.sql` | project | completion unique theo `driver_assignment_id` (pending · approved · attempt) · `idx_trip_completion_trip_attempt` · audit RAISE trước khi đổi |
+| `0029_backfill_assignment_vehicle.sql` | project | backfill `vehicle_id`: active ← `trip_schedules.vehicle_id`; ended ← xe duy nhất trên event / cost · RAISE NOTICE đếm Case B/E/F · **không** VALIDATE |
+
+`0030` (VALIDATE CONSTRAINT `active_has_vehicle`) **chưa commit** — chỉ viết khi audit
+production cho Case B = 0. Xem `deploy/README.md`.
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
 gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0011`
@@ -102,6 +108,8 @@ Mỗi migration có một spec kiểm **hình dạng** file, chạy không cần
 `trip-operational-schema.spec.ts` cho `0013`–`0017`,
 `trip-location-schema.spec.ts` cho `0019`,
 `notification-schema.spec.ts` cho `0020`,
-`trip-location-master-schema.spec.ts` cho `0022`.
+`trip-location-master-schema.spec.ts` cho `0022`,
+`dispatch-assignment-schema.spec.ts` cho `0027`–`0029` (và
+`dispatch-assignment.integration.spec.ts` chạy trên PostgreSQL thật: backfill A–F, rerun, VALIDATE).
 Chúng bắt đúng loại lỗi sống sót qua review rồi thành lỗ hổng: thiếu unique index,
 cascade ăn mất lịch sử, seed dữ liệu nghiệp vụ.

@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationRead, notificationStreamUrl } from '@/api/notifications';
-import type { NotificationSignal } from '@/types/notification';
 import { driverKeys } from './driver';
 
 export const notificationKeys = {
@@ -58,7 +57,7 @@ export function useNotificationStream(): void {
   useEffect(() => {
     const reconcile = () => {
       void client.invalidateQueries({ queryKey: notificationKeys.all });
-      void client.invalidateQueries({ queryKey: driverKeys.trips() });
+      void client.invalidateQueries({ queryKey: driverKeys.assignments() });
     };
 
     const onVisible = () => {
@@ -75,16 +74,10 @@ export function useNotificationStream(): void {
 
     const source = new EventSource(notificationStreamUrl(), { withCredentials: true });
 
-    source.addEventListener('notification', (event) => {
-      let signal: NotificationSignal | null = null;
-      try {
-        signal = JSON.parse((event as MessageEvent<string>).data) as NotificationSignal;
-      } catch {
-        signal = null;
-      }
-      reconcile();
-      if (signal?.tripId) void client.invalidateQueries({ queryKey: driverKeys.trip(signal.tripId) });
-    });
+    // ★ THE SIGNAL'S BODY IS NOT READ (ADR-0004). It names a trip; the driver
+    // cache is keyed by assignment, and `assignments()` prefixes every turn's
+    // key — so one reconcile re-reads the list and any open turn alike.
+    source.addEventListener('notification', reconcile);
     source.onopen = reconcile;
 
     return () => {

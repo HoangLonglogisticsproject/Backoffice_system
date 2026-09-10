@@ -2,7 +2,14 @@ import type { UserSummary } from '../../../common/types/user-summary';
 import type { ExpenseAccountability, ExpenseDeclaration } from './trip-execution';
 
 /**
- * Where a trip actually stands, for the people who have to chase it.
+ * Where each dispatched lorry actually stands, for the people who have to chase it.
+ *
+ * ★ THE GRAIN IS THE ASSIGNMENT, BY DECISION (ADR-0004 §2.3). One row is one
+ * ACTIVE dispatch assignment — one lorry with its driver on one trip. A trip
+ * running three lorries in parallel is three rows, each with the trip's plan
+ * and its own timeline, stage and review. The trip stays the aggregate: the
+ * dispatch list (`trip-schedule.repository.ts`) folds the crew into one row
+ * per trip; this board deliberately does not.
  *
  * ★ EVERY VALUE HERE IS DERIVED, AND NOT ONE OF THEM IS STORED.
  *
@@ -24,7 +31,7 @@ import type { ExpenseAccountability, ExpenseDeclaration } from './trip-execution
  * loading, is past its delivery time, and has not arrived.
  */
 export const OPERATIONAL_STAGES = [
-  /** A lorry is on it, nobody is driving it. */
+  /** No active assignment on the trip — nobody and no lorry dispatched. The one `assignmentId: null` row. */
   'NO_DRIVER',
   /** A driver is on it and has reported nothing yet. */
   'DRIVER_ASSIGNED',
@@ -53,7 +60,9 @@ export const OPERATIONAL_STAGES = [
 export type OperationalStage = (typeof OPERATIONAL_STAGES)[number];
 
 /**
- * The facts a stage is computed from. One row per trip, already aggregated.
+ * The facts a stage is computed from. One row per active assignment — that
+ * turn's own events and its own latest completion request, never another
+ * lorry's on the same trip.
  *
  * ★ `null` MEANS "NOT REPORTED", NEVER "DID NOT HAPPEN". A missing
  * `deliveryConfirmedAt` on a trip that plainly delivered is exactly the case
@@ -134,7 +143,12 @@ export const delayMinutes = (
 };
 
 /**
- * One row of the operational board.
+ * One row of the operational board = one ACTIVE dispatch assignment.
+ *
+ * The trip context (`tripId`, `scheduledOn`, `customer`, the two planned
+ * times) is repeated on every row of the same trip so each row can be
+ * filtered and read on its own; it is context, not ownership — the trip
+ * remains the canonical source of those fields.
  *
  * ★ THIS IS AN OPERATIONS AND MANAGEMENT VIEW, NOT A DRIVER VIEW. It names the
  * driver and shows how late they are, which is precisely the information the
@@ -145,6 +159,15 @@ export const delayMinutes = (
 export interface OperationalBoardRow {
   tripId: string;
   scheduledOn: string;
+
+  /**
+   * ★ THE ASSIGNMENT THIS ROW IS ABOUT (ADR-0004). A trip with three lorries
+   * is three rows, each with its own timeline and its own review. `null` only
+   * on a trip with nobody on it, which is itself a finding.
+   */
+  assignmentId: string | null;
+  /** The latest completion request on this assignment — what a reviewer decides. */
+  completionRequestId: string | null;
 
   vehicle: { id: string; plate: string } | null;
   customer: { id: string; name: string } | null;

@@ -1,19 +1,25 @@
 import { httpClient } from './client';
 import type { UserSummary } from '@/types/organization';
 import type { Page, PageRequest } from '@/types/pagination';
-import type { TripStatus } from '@/types/trip';
+import type { TripStatus, TripVehicleRef } from '@/types/trip';
 
 /**
- * Who drives a trip. Backoffice routes, behind `trip.write` on the server.
+ * Who drives what on a trip. Backoffice routes, behind `trip.write` on the server.
  *
- * ★ THE DRIVER IS NAMED BY ID AND NOTHING ELSE. Whether that account is a
- * driver, is live, and whether the trip is still open are decided on the
- * server under its lock; a 409 here means the board moved — refetch it.
+ * ★ AN ASSIGNMENT IS A PAIR — a lorry AND a driver — and a trip carries any
+ * number of them (ADR-0004). The lorry and the driver are named by id and
+ * nothing else. Whether the lorry is already on the trip, whether the account
+ * is a live driver, whether the trip is still open and whether the turn has
+ * already started are all decided on the server under its lock; a 409 here
+ * means the board moved — refetch it.
  */
 
 export interface DriverAssignment {
   id: string;
   tripId: string;
+  /** `null` only on a pre-multi-vehicle row the migration could not backfill. */
+  vehicleId: string | null;
+  vehicle: TripVehicleRef | null;
   driverUserId: string;
   driverUser: UserSummary;
   state: 'active' | 'ended';
@@ -82,25 +88,43 @@ export async function fetchDriverTrips(
   return data;
 }
 
+/** Every turn on a trip, newest first — active and ended alike, with the reason each ended. */
 export async function fetchDriverAssignments(tripId: string): Promise<DriverAssignment[]> {
   const { data } = await httpClient.get<DriverAssignment[]>(path(tripId));
   return data;
 }
 
-export async function assignDriver(tripId: string, driverUserId: string): Promise<DriverAssignment> {
-  const { data } = await httpClient.post<DriverAssignment>(path(tripId), { driverUserId });
+/** Dispatches a lorry and its driver onto a trip. Both are required — there is no lorry-only turn. */
+export async function assignDriver(
+  tripId: string,
+  input: { vehicleId: string; driverUserId: string },
+): Promise<DriverAssignment> {
+  const { data } = await httpClient.post<DriverAssignment>(path(tripId), input);
   return data;
 }
 
+/** Swaps the driver on ONE lorry, before that turn has started. The lorry stays. */
 export async function replaceDriver(
   tripId: string,
+  assignmentId: string,
   input: { driverUserId: string; reason: string },
 ): Promise<DriverAssignment> {
-  const { data } = await httpClient.post<DriverAssignment>(`${path(tripId)}/replace`, input);
+  const { data } = await httpClient.post<DriverAssignment>(
+    `${path(tripId)}/${encodeURIComponent(assignmentId)}/replace`,
+    input,
+  );
   return data;
 }
 
-export async function endDriverAssignment(tripId: string, reason: string): Promise<DriverAssignment> {
-  const { data } = await httpClient.post<DriverAssignment>(`${path(tripId)}/end`, { reason });
+/** Takes ONE lorry and its driver off the trip, before that turn has started. */
+export async function endDriverAssignment(
+  tripId: string,
+  assignmentId: string,
+  reason: string,
+): Promise<DriverAssignment> {
+  const { data } = await httpClient.post<DriverAssignment>(
+    `${path(tripId)}/${encodeURIComponent(assignmentId)}/end`,
+    { reason },
+  );
   return data;
 }
