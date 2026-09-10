@@ -268,6 +268,31 @@ describe('TripSchedulePage', () => {
       await waitFor(() => expect(listCalls().length).toBeGreaterThan(1));
     });
 
+    /**
+     * ★ THE PANEL SHOWS THE CREW THE LIST NOW HOLDS, NOT THE ROW THAT WAS
+     * CLICKED. The add re-reads the board; the row on screen must be the
+     * re-read one, or the new lorry only appears after close and reopen.
+     */
+    it('★ shows a freshly added lorry in the open panel without closing it', async () => {
+      write();
+      fleet();
+      board();
+      renderPage();
+
+      const panel = await openPanel(/^phân công$/i);
+      expect(panel.queryByText('50H-49266')).toBeNull();
+      const submit = await addForm(panel);
+      // The board the re-read will return: the pair is on it now.
+      board(turn());
+      fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.click(submit());
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalled());
+      expect(await panel.findByText('50H-49266')).toBeInTheDocument();
+      expect(panel.getByText('Tài Xế A')).toBeInTheDocument();
+    });
+
     it('★ offers a lorry already on the trip to nobody, and the same driver to a second lorry', async () => {
       write();
       fleet();

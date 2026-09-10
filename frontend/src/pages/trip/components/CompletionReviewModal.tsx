@@ -191,7 +191,11 @@ export function CompletionReviewModal({
       {stage === 'approved' ? (
         <p className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <CheckCircle2 className="size-4 shrink-0 text-primary" aria-hidden />
-          {t('driverCompletionApproved')} — {t('driverCompletionApprovedHint')}
+          {/* ★ THIS TURN IS APPROVED — NOT "THE TRIP IS FINISHED". The trip
+              closes only when every active assignment is approved, and that
+              fact is the trip's status, which this row does not carry; a
+              second lorry may still be waiting. Say what is known. */}
+          {t('reviewAssignmentApproved')} — {t('reviewAssignmentApprovedHint')}
         </p>
       ) : null}
 

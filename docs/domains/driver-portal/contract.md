@@ -244,7 +244,7 @@ Xe thuê ngoài   ─┘    nhận booking → thực hiện chuyến → khai c
 
 ★ **[CONFIRMED] KHÔNG tạo flow riêng cho xe thuê ngoài.** Driver của xe thuê ngoài
 vẫn là Driver, vẫn được phân công vào Trip, vẫn đi qua đúng các bước trên, và vẫn
-chịu ràng buộc "1 Trip = 1 Driver active".
+chịu ràng buộc "1 Trip = 1 Driver active". ⚠ **SUPERSEDED — ADR-0004: assignment-scoped, xem banner đầu mục / §0.8.1**
 
 ⚠ **Điều này KHÔNG nới lỏng ranh giới tiền — xem §8.1b.**
 
@@ -341,7 +341,7 @@ unassigned_at     kết thúc khi nào (nếu đã kết thúc)
 actor             ai thực hiện việc phân công / thay đổi
 ```
 
-**[CONFIRMED]** Không mở rộng thành multi-driver trong MVP. "Đúng 1 active Driver"
+⚠ **SUPERSEDED — ADR-0004: assignment-scoped, xem banner đầu mục / §0.8.1** ~~**[CONFIRMED]** Không mở rộng thành multi-driver trong MVP. "Đúng 1 active Driver"~~ *(non-normative: nhiều assignment active, mỗi assignment 1 xe + 1 tài xế)*
 là ràng buộc về **current assignment**, không phải giới hạn về số bản ghi lịch sử.
 
 ### 4.3 Ai được phân công
@@ -974,7 +974,7 @@ giấu đi đúng những chuyến cần đi đòi.
 | # | Chưa chốt |
 |---|---|
 | ~~E-1~~ | ✅ **CHỐT** — `EDITABLE` khi khai; `LOCKED` khi gửi Completion Request (§9.6) |
-| ~~E-2~~ | ✅ **CHỐT** — khoá **khi Driver gửi Completion Request**, toàn bộ expense của Trip cùng lúc |
+| ~~E-2~~ | ✅ **CHỐT** — khoá **khi Driver gửi Completion Request**, toàn bộ expense của **assignment đó** cùng lúc *(ADR-0004; trước đây: "của Trip")* |
 | ~~E-3~~ | ✅ **CHỐT** — không ai submit từng khoản; khoá là hệ quả của Completion Request do **Driver** gửi |
 | E-4 | Void / correct **sau khi đã DONE** — thuộc quy trình quản trị riêng (§9.6) |
 | E-5 | Hình dạng **audit history** cho các lần sửa trước khi khoá |
@@ -1332,7 +1332,7 @@ nghiệp vụ nào cho nó.
 [CONFIRMED]  MÔ HÌNH B — Vehicle trước Driver trước Execution (§4.1a)
 [CONFIRMED]  Driver khai 5 nhóm operating expense, CHỈ khi Trip đã có Vehicle
 [CONFIRMED]  Driver SỬA ĐƯỢC khoản của mình khi còn editable
-[CONFIRMED]  Khoá khi gửi Completion Request — toàn bộ expense của Trip cùng lúc
+[CONFIRMED]  Khoá khi gửi Completion Request — toàn bộ expense của ASSIGNMENT đó cùng lúc (ADR-0004; trước đây: của Trip)
 [CONFIRMED]  REJECT → mở lại EDITABLE; APPROVE → bất biến vĩnh viễn (§9.6)
 [CONFIRMED]  Driver thấy khoản của mình và trạng thái của nó
 [CONFIRMED]  Audit chi phí — gồm cả các lần sửa trước khi khoá

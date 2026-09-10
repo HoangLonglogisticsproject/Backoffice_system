@@ -180,7 +180,7 @@ Booking → Operations planning → Customer → Vehicle → Driver
 Trip → Vehicle → Driver → Execution
 ```
 
-**[CONFIRMED] MVP:** `1 Trip = 1 Customer + 1 Vehicle + 1 Driver`. Xem §0.8.
+⚠ **SUPERSEDED — ADR-0004: assignment-scoped, xem banner đầu mục / §0.8.1** ~~**[CONFIRMED] MVP:** `1 Trip = 1 Customer + 1 Vehicle + 1 Driver`.~~ Hiện hành: `1 Trip = 1 Customer + 0..N Assignment (1 Vehicle + 1 Driver)`. Xem §0.8.
 
 ★ **Xe công ty và xe thuê ngoài nằm trong CÙNG Vehicle domain và CÙNG operational
 lifecycle.** Xe thuê ngoài chỉ khác ở **ownership · carrier · hire information**.
@@ -1135,7 +1135,7 @@ assignment phục vụ cả hai. Sự khác biệt nằm ở **Vehicle**, không
 assignment cần điều **ngược lại**: tài xế đổi phòng vẫn giữ nguyên lịch sử chuyến đã
 chạy. Sao chép nhầm mẫu ở đây sẽ làm mất lịch sử đúng lúc cần nhất.
 
-### B-6.3. ★ Làm sao DATABASE bảo đảm "1 trip = 1 active driver" mà vẫn giữ history
+### B-6.3. ★ Làm sao DATABASE bảo đảm "1 trip = 1 active driver" mà vẫn giữ history — ⚠ SUPERSEDED (ADR-0004: unique active nay là `(trip_id, vehicle_id)`, không còn theo trip)
 
 Đây là câu hỏi trung tâm của Phần 7 đề bài. Trả lời:
 
@@ -1166,7 +1166,7 @@ chạy. Sao chép nhầm mẫu ở đây sẽ làm mất lịch sử đúng lúc
 
 | Mục đích | Hình dạng đề xuất |
 |---|---|
-| Bảo đảm 1 active/trip | **Partial unique** `(trip_id) WHERE state='active'` |
+| ~~Bảo đảm 1 active/trip~~ → 1 active/**xe**/trip (ADR-0004) | ~~**Partial unique** `(trip_id) WHERE state='active'`~~ → `uq_trip_active_vehicle_assignment (trip_id, vehicle_id) WHERE state='active'` (0027) |
 | ★ **"Chuyến của tôi"** — truy vấn nóng nhất của Driver Portal | **Partial** `(driver_id) WHERE state='active'` |
 | Đọc lịch sử của một chuyến | `(trip_id)` — không partial, vì đọc lịch sử cần cả dòng đã kết thúc |
 | Lịch sử của một tài xế | `(driver_id)` — không partial, cùng lý do |
@@ -2212,7 +2212,7 @@ deploy/README.md                                      contract triển khai
 **[CONFIRMED]** Toàn bộ PHẦN VIII viết theo mô hình MVP:
 
 ```text
-1 Trip = 1 Customer + 1 Vehicle + 1 Driver
+1 Trip = 1 Customer + 1 Vehicle + 1 Driver   ← SUPERSEDED (ADR-0004): nay 0..N Assignment (1 Vehicle + 1 Driver)
 ```
 
 ★ Đây là mô hình **đúng**, không phải giả định cần sửa. Xem **§0.8**.
@@ -2282,7 +2282,7 @@ hai giá trị đó chưa từng cùng có hiệu lực trên Trip tại thời 
 | **Single-statement capture** | Mọi execution event / expense phải lấy `driver_assignment_id` (từ Driver Assignment `active`) **và** `vehicle_id` + `ownership` (từ `Trip`) **trong chính câu lệnh ghi** — `INSERT … SELECT`. ★ **Không** nhận chúng từ client, và **không** đọc trước rồi ghi sau | **[APPLICATION MUST ENFORCE]** |
 | **Kết quả rỗng = không ghi** | Nếu một trong hai assignment không `active` tại thời điểm câu lệnh chạy, `SELECT` trả 0 dòng → **không có row nào được tạo**. Không cần kiểm tra trước | [APPLICATION] |
 | **Composite FK** | `(driver_assignment_id, trip_id)` phải tham chiếu khoá tổ hợp trên bảng Driver Assignment — để một event **không thể** trỏ tới assignment của Trip khác | **[DB MUST ENFORCE]** |
-| **Vehicle provenance** | ★ Trong MVP không có Vehicle Assignment. Câu lệnh ghi **chụp `Trip.vehicle_id` + `ownership`** xuống dòng event/expense — §0.8.3 X-2 | **[APPLICATION MUST ENFORCE]** |
+| **Vehicle provenance** | ★ ~~Trong MVP không có Vehicle Assignment. Câu lệnh ghi chụp `Trip.vehicle_id`~~ **ADR-0004:** câu lệnh ghi chụp **`assignment.vehicle_id`** + `ownership` xuống dòng event/expense — §0.8.3 X-2 | **[APPLICATION MUST ENFORCE]** |
 | **Transaction boundary** | Ghi event/expense là **một** transaction. Nếu nằm trong một thao tác lớn hơn (ví dụ submit Completion Request) thì dùng chung transaction của thao tác đó | [APPLICATION] |
 | **Lock strategy** | Khoá dòng **Trip** (`SELECT … FOR UPDATE`) khi thao tác **đổi** assignment. Ghi event/expense **không** cần khoá — `INSERT … SELECT` đã đủ | **[WORKIK REVIEW REQUIRED]** xác nhận dưới tải thật |
 | **Concurrency** | Đổi Driver ‖ Driver ghi event: một trong hai thắng. Nếu assignment kết thúc trước, event **không** được tạo — thay vì tạo với provenance sai | [APPLICATION] |
@@ -2328,7 +2328,7 @@ bảng **hoàn toàn** insert-only nhưng làm mọi truy vấn KPI phải tự 
 |---|---|
 | Driver sửa được khi `EDITABLE`, chỉ dòng của chính mình | [APPLICATION] |
 | **Mọi lần sửa phải có provenance** — Expense Edit Log append-only | **[DB MUST ENFORCE]** |
-| Khoá toàn bộ expense của Trip cùng lúc khi submit | [APPLICATION] — cùng transaction |
+| Khoá toàn bộ expense của **assignment** cùng lúc khi submit *(ADR-0004; trước đây: của Trip)* | [APPLICATION] — cùng transaction |
 | REJECT mở lại toàn bộ về `EDITABLE` | [APPLICATION] — cùng transaction |
 | APPROVE → `IMMUTABLE` vĩnh viễn | **[DB MUST ENFORCE]** trigger T2, xem C4 |
 
@@ -2384,7 +2384,7 @@ job — một mình FK không diễn đạt được ràng buộc tồn tại.
 | 2 | **Vehicle** (+`ownership`, +`carrier_id`) | MỞ RỘNG `trip_vehicles` |
 | 3 | **Trip** (+`driver_instructions`, +`closed_at`) | MỞ RỘNG `trip_schedules` |
 | 4 | **Driver Assignment** | MỚI |
-| ~~5~~ | ~~**Vehicle Assignment**~~ | ★ **KHÔNG tạo cho MVP** — §0.8.4. Vehicle nằm trên `Trip.vehicle_id`; provenance bằng **snapshot** `vehicle_id` trên event/expense. **[FUTURE EXTENSION]** |
+| ~~5~~ | ~~**Vehicle Assignment**~~ | ★ ~~KHÔNG tạo cho MVP — §0.8.4. Vehicle nằm trên `Trip.vehicle_id`~~ **ADR-0004:** không có bảng mới — vehicle nằm trên **`trip_driver_assignments.vehicle_id`** (0027); provenance bằng **snapshot** `vehicle_id` trên event/expense. |
 | 6 | **Execution Event** | MỚI, insert-only, voidable |
 | 7 | **Driver Operational Expense** | MỞ RỘNG `trip_costs` |
 | 8 | **Expense Edit Log** | MỚI, append-only |
@@ -2398,7 +2398,7 @@ job — một mình FK không diễn đạt được ràng buộc tồn tại.
 ```text
 Carrier  1 ──< n  Vehicle
 Trip     1 ──< n  Driver Assignment    ★ đúng 1 ACTIVE
-Trip     0..1 ─►  Vehicle              (Trip.vehicle_id — MVP, không có bảng assignment)
+Trip     0..1 ─►  Vehicle              (Trip.vehicle_id — LEGACY; ADR-0004: xe nằm trên Assignment, 0..N/Trip)
 Trip     1 ──< n  Outsourced Hire      (C5 — Trip dùng xe outsourced ⟹ có hire)
 Trip     1 ──< n  Execution Event ──► driver_assignment + vehicle snapshot  ★ C1
 Trip     1 ──< n  Expense         ──► driver_assignment + vehicle snapshot  ★ C1
@@ -2429,7 +2429,7 @@ trạng thái vận hành được **suy ra** (W-8).
 |---|---|---|
 | `trip_id` | | [DB] |
 | `driver_assignment_id` | ★ Composite provenance — C1 | **[DB MUST ENFORCE]** composite FK `(driver_assignment_id, trip_id)` |
-| `vehicle_id` · `vehicle_ownership` *(snapshot)* | ★ §0.8.3 X-2 — **không** join ngược lên `Trip.vehicle_id` lúc đọc | **[APPLICATION MUST ENFORCE]** |
+| `vehicle_id` · `vehicle_ownership` *(snapshot)* | ★ §0.8.3 X-2 — chụp từ **`assignment.vehicle_id`** (ADR-0004); **không** join ngược lên Trip hay Assignment lúc đọc | **[APPLICATION MUST ENFORCE]** |
 | `event_type` | Enum đóng, 4 giá trị. Mở rộng bằng migration có chủ đích | [DB] |
 | `actual_at` | ★ **[ĐÃ SỬA — xem W-3.1]** Thời điểm sự kiện xảy ra, **do MÁY CHỦ đóng dấu** khi nhận thao tác. **Client không gửi được** | **[SERVER GENERATED]** |
 | `recorded_at` | Thời điểm PostgreSQL ghi dòng — `DEFAULT now()` | **[DATABASE GENERATED]** |
@@ -2566,7 +2566,7 @@ Bao gồm cả `rejected`: chuyến bị trả về vẫn là việc còn nợ c
 | Trường | Nhãn |
 |---|---|
 | `driver_assignment_id` | ★ C1 composite provenance — **[DB]** composite FK |
-| `vehicle_id` *(snapshot)* | ★ §0.8.3 X-2 — chụp từ `Trip.vehicle_id` lúc ghi | **[APPLICATION]** |
+| `vehicle_id` *(snapshot)* | ★ §0.8.3 X-2 — chụp từ **`assignment.vehicle_id`** lúc ghi *(ADR-0004; trước đây: `Trip.vehicle_id`)* | **[APPLICATION]** |
 | `vehicle_ownership` *(snapshot)* | Enforce cấm `fuel`/`toll` bằng `CHECK` cục bộ — **[DB MUST ENFORCE]** |
 | `state` (`editable` \| `locked` \| `immutable`) + void đã có | [DB] |
 | `locked_at` · `locked_by` | [DB] |
@@ -2845,7 +2845,7 @@ một Vehicle được khai báo trước** khi gán Driver.
 
 ### W-14.3 Vehicle Assignment — ĐÓNG, không làm cho MVP
 
-**[CONFIRMED]** `1 Trip = 1 Vehicle`. Không tạo Vehicle Assignment History — §0.8.1.
+⚠ **SUPERSEDED — ADR-0004: assignment-scoped, xem banner đầu mục / §0.8.1** ~~**[CONFIRMED]** `1 Trip = 1 Vehicle`. Không tạo Vehicle Assignment History — §0.8.1.~~ Hiện hành: 0..N assignment, mỗi assignment 1 xe; history trên chính `trip_driver_assignments`.
 
 Provenance của event/expense được bảo đảm bằng **snapshot `vehicle_id` + `ownership`**
 (§0.8.3 X-2), không bằng một bảng assignment.
@@ -2880,7 +2880,7 @@ nhà xe B. Không `CHECK` nào bắt được, vì chúng ở hai bảng.
 
 ### W-14.5 Provenance khi Vehicle của Trip thay đổi
 
-**MVP:** `Trip.vehicle_id` đổi được (`PATCH`), và việc đổi **không được lưu lại**.
+**MVP:** ~~`Trip.vehicle_id` đổi được (`PATCH`), và việc đổi không được lưu lại.~~ **ADR-0004:** `Trip.vehicle_id` là legacy, không ghi nữa; xe của mỗi lượt nằm trên assignment và có history.
 
 | Câu hỏi | Trả lời được? |
 |---|---|
@@ -2915,7 +2915,7 @@ index · read model**, không phải thiếu thực thể.
 | # | Câu hỏi | Nguồn |
 |---|---|---|
 | 1 | Khách hàng nào? | `Trip.customer_id` ✅ đã có |
-| 2 | Xe nào? | `Trip.vehicle_id` ✅ đã có *(lịch sử: xem W-14.3)* |
+| 2 | Xe nào? | `trip_driver_assignments.vehicle_id` (ADR-0004) — ~~`Trip.vehicle_id`~~ legacy *(lịch sử: xem W-14.3)* |
 | 3 | Driver nào? | Driver Assignment `active` |
 | 4 | **Ai phân công?** | `Assignment.assigned_by` |
 | 5 | Đã tới điểm lấy chưa? | event `ARRIVED_PICKUP` |

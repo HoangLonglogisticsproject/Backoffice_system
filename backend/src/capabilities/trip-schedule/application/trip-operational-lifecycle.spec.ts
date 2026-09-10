@@ -680,11 +680,20 @@ describe('execution events', () => {
     // A driver on a bad connection did nothing wrong; the honest answer to
     // "record this arrival" that is already recorded is the arrival.
     const { service, events } = build();
-    events.findByClientEventId.mockResolvedValue({ id: 'event-1', type: 'ARRIVED_PICKUP' });
+    events.findByClientEventId.mockResolvedValue({ id: 'event-1', type: 'ARRIVED_PICKUP', driverAssignmentId: ASSIGNMENT });
 
     const result = await service.recordEvent(arriving);
 
-    expect(result).toEqual({ id: 'event-1', type: 'ARRIVED_PICKUP' });
+    expect(result).toEqual({ id: 'event-1', type: 'ARRIVED_PICKUP', driverAssignmentId: ASSIGNMENT });
+    expect(events.record).not.toHaveBeenCalled();
+  });
+
+  it('★ refuses a client event id first used on ANOTHER assignment of the trip — never answers with that turn’s event', async () => {
+    const { service, events } = build();
+    events.findByClientEventId.mockResolvedValue({ id: 'event-9', type: 'ARRIVED_PICKUP', driverAssignmentId: 'assignment-2' });
+
+    await expect(service.recordEvent(arriving)).rejects.toThrow(ConflictError);
+    await expect(service.recordEvent(arriving)).rejects.toThrow(/another assignment/);
     expect(events.record).not.toHaveBeenCalled();
   });
 
@@ -863,11 +872,11 @@ describe('execution events', () => {
       // A retry after a timeout carries no new reading and must not need one:
       // the pickup already happened.
       const { service, events } = located();
-      events.findByClientEventId.mockResolvedValue({ id: 'event-2', type: 'PICKUP_CONFIRMED' });
+      events.findByClientEventId.mockResolvedValue({ id: 'event-2', type: 'PICKUP_CONFIRMED', driverAssignmentId: ASSIGNMENT });
 
       const result = await service.recordEvent(confirming);
 
-      expect(result).toEqual({ id: 'event-2', type: 'PICKUP_CONFIRMED' });
+      expect(result).toEqual({ id: 'event-2', type: 'PICKUP_CONFIRMED', driverAssignmentId: ASSIGNMENT });
       expect(events.record).not.toHaveBeenCalled();
     });
 
@@ -1158,12 +1167,20 @@ describe('a driver’s declared expense', () => {
 
   it('answers a retry with the line it already wrote', async () => {
     const { service, costs } = build();
-    costs.findByClientRequestId.mockResolvedValue({ id: 'cost-1', amount: '1500000.00' });
+    costs.findByClientRequestId.mockResolvedValue({ id: 'cost-1', amount: '1500000.00', driverAssignmentId: ASSIGNMENT });
 
     const result = await service.declareCost({ ...declaring, clientRequestId: 'tap-1' });
 
-    expect(result).toEqual({ id: 'cost-1', amount: '1500000.00' });
+    expect(result).toEqual({ id: 'cost-1', amount: '1500000.00', driverAssignmentId: ASSIGNMENT });
     expect(costs.findByClientRequestId).toHaveBeenCalledWith(TRIP, 'tap-1');
+    expect(costs.declare).not.toHaveBeenCalled();
+  });
+
+  it('★ refuses a client request id first used on ANOTHER assignment of the trip — never answers with that turn’s line', async () => {
+    const { service, costs } = build();
+    costs.findByClientRequestId.mockResolvedValue({ id: 'cost-9', amount: '1.00', driverAssignmentId: 'assignment-2' });
+
+    await expect(service.declareCost({ ...declaring, clientRequestId: 'tap-1' })).rejects.toThrow(ConflictError);
     expect(costs.declare).not.toHaveBeenCalled();
   });
 });

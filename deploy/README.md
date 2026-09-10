@@ -140,6 +140,15 @@ rows, and `0029` only backfills rows whose `vehicle_id` is still NULL. `0029` pr
 `RAISE NOTICE` counts for Case B/E/F — read them in the migrate output and keep them
 with the release notes.
 
+**The rollout window.** `vps-release.sh` builds the image first, then migrates, then
+swaps the container, so the previous backend keeps running for the few seconds between
+`0027` landing and `compose up -d` replacing it. In that window a dispatch from the OLD
+code inserts an assignment with no `vehicle_id`, which the new CHECK refuses: that
+request fails with a 500 and **nothing is written** — the constraint is what keeps the
+data clean. The same holds if a release is rolled back to the previous image after
+`0027` applied: every route works except assigning a driver, until the new code is
+released again. No data is at risk either way; a dispatcher retries after the swap.
+
 **Before** promoting a release that contains `0030` (VALIDATE), run the audit on
 production and require **Case B = 0**:
 

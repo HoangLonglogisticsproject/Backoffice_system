@@ -17,11 +17,16 @@
 --                                               the CHECK is validated after.
 --   C  ended assignment, its own execution      copy it — a snapshot written at
 --      events name exactly one lorry            the moment, not a guess.
---   D  ended assignment, no event evidence,     copy it, same reasoning.
---      its own cost lines name exactly one
+--   D  ended assignment, NO live event names     copy it, same reasoning.
+--      any lorry at all, its own cost lines
+--      name exactly one
 --   E  ended assignment, evidence disagrees     nothing. NULL is the only true
 --      or is absent                             statement; the snapshots stay
---                                               where they are.
+--                                               where they are. ★ Events that
+--                                               disagree are NOT overruled by a
+--                                               cost line: costs are consulted
+--                                               only when no live event names
+--                                               a lorry (see D).
 --   F  trip has a legacy lorry, no assignment   nothing. There is no driver to
 --                                               pair it with, and a lorry-only
 --                                               assignment is not a thing.
@@ -69,7 +74,15 @@ UPDATE trip_driver_assignments a
   ) c
  WHERE c.driver_assignment_id = a.id
    AND a.state = 'ended'
-   AND a.vehicle_id IS NULL;
+   AND a.vehicle_id IS NULL
+   -- ★ ONLY WHEN THE EVENTS SAY NOTHING. A turn whose live events name two
+   -- lorries is ambiguous (case E), and a cost line must not resolve that
+   -- ambiguity for them: `a.vehicle_id IS NULL` alone would let it.
+   AND NOT EXISTS (
+     SELECT 1 FROM trip_execution_events e
+      WHERE e.driver_assignment_id = a.id
+        AND e.voided_at IS NULL
+        AND e.vehicle_id IS NOT NULL);
 
 -- Counts, for the release log and for the 0030 gate ---------------------------
 DO $$

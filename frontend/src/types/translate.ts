@@ -90,6 +90,13 @@ const PHRASES = {
   reviewAttempts: { vi: 'Số lần gửi', en: 'Attempts' },
   reviewSubmittedAt: { vi: 'Gửi lúc', en: 'Submitted' },
   reviewDecidedAt: { vi: 'Quyết định lúc', en: 'Decided' },
+  // ★ Per assignment, never "trip completed": the trip closes only when every
+  // active assignment is approved (ADR-0004).
+  reviewAssignmentApproved: { vi: 'Lượt xe này đã được duyệt', en: 'This assignment is approved' },
+  reviewAssignmentApprovedHint: {
+    vi: 'Chi phí của lượt xe này là cuối cùng. Chuyến chỉ đóng khi mọi lượt xe đang chạy đều được duyệt.',
+    en: 'Its figures are final. The trip closes only once every active assignment is approved.',
+  },
   reviewNothingPending: {
     vi: 'Chuyến này không có yêu cầu nào đang chờ duyệt',
     en: 'This trip has no request waiting for a decision',

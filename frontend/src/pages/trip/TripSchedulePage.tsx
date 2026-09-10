@@ -70,12 +70,25 @@ export default function TripSchedulePage() {
   // holds, so the columns are dropped rather than drawn full of em dashes.
   const mayPrice = can('trip.price.read');
   const [costFor, setCostFor] = useState<string | null>(null);
-  /** The trip whose driver is being chosen. `trip.write`, like every other correction. */
-  const [assigning, setAssigning] = useState<TripScheduleWithRefs | null>(null);
+  /**
+   * The trip whose crew is being dispatched. `trip.write`, like every other correction.
+   *
+   * ★ THE ROW IS RE-DERIVED FROM THE LIST ON EVERY RENDER, by id. The panel
+   * shows `trip.assignments`, and every dispatch mutation re-reads the list;
+   * holding the object clicked would keep showing the crew as it was before
+   * the add until the panel was closed and reopened. The clicked object stays
+   * as the fallback for the moment the row leaves the current page or filter.
+   */
+  const [assigningRow, setAssigning] = useState<TripScheduleWithRefs | null>(null);
 
   // The list, its date range and its page walk — see `useTripSchedules` for why
   // those three are one hook and not three pieces of page state.
   const trips = useTripSchedules();
+
+  const assigning =
+    assigningRow === null
+      ? null
+      : (trips.items.find((row) => row.id === assigningRow.id) ?? assigningRow);
 
   // The catalogues, for the form's two dropdowns. Read once per page rather
   // than per modal open: they are small, bounded lists, and re-reading them
@@ -619,8 +632,10 @@ function Crew({
   onDispatch,
 }: Readonly<{ trip: TripScheduleWithRefs; canDispatch: boolean; onDispatch: () => void }>) {
   const { t } = useLanguage();
+  // ★ DEDUPED BY ID, KEYED BY ID, SHOWN BY NAME. Two different drivers may
+  // share a display name; folding them by name would show one person.
   const drivers = [
-    ...new Map(trip.assignments.map((turn) => [turn.driver.id, turn.driver.displayName])).values(),
+    ...new Map(trip.assignments.map((turn) => [turn.driver.id, turn.driver] as const)).values(),
   ];
   const lorries = trip.assignments.length;
 
@@ -631,8 +646,8 @@ function Crew({
           <span className="text-gray-400">{t('driverUnassigned')}</span>
         ) : (
           <ul className="space-y-0.5 text-gray-900">
-            {drivers.map((name) => (
-              <li key={name}>{name}</li>
+            {drivers.map((driver) => (
+              <li key={driver.id}>{driver.displayName}</li>
             ))}
           </ul>
         )}

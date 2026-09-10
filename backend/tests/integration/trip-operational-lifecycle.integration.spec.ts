@@ -3833,6 +3833,80 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(typesB).not.toContain('COMPLETION_APPROVED');
     });
 
+    /**
+     * ★ A CLIENT KEY BELONGS TO THE ASSIGNMENT IT WAS FIRST USED ON. The
+     * database makes it unique per TRIP (0015 / 0016); the caller is authorised
+     * per ASSIGNMENT. So a key reused on the SAME turn is answered with the
+     * original, a key reused on ANOTHER turn of the same trip is refused — never
+     * answered with the first turn's record, whoever the driver is — and the
+     * same key on another trip is simply that trip's own.
+     */
+    it('★ an execution event client id is reused only on its own assignment — never answered with another turn’s event', async () => {
+      const trip = await newTrip();
+      const a = await assignTo(trip, driverA);
+      const b = await assignTo(trip, driverB);
+      const tap = (assignment: string, recordedBy: string) =>
+        execution.recordEvent({
+          assignmentId: assignment,
+          type: 'ARRIVED_PICKUP',
+          clientEventId: 'K',
+          recordedBy,
+          deviceReportedAt: new Date(),
+        });
+
+      const first = await tap(a.id, driverA);
+      // 1. same assignment + same key → idempotent, the original comes back.
+      expect((await tap(a.id, driverA)).id).toBe(first.id);
+
+      // 2. another driver's turn on the same trip + same key → refused, not A's event.
+      await expect(tap(b.id, driverB)).rejects.toThrow(ConflictError);
+      // 3. the same driver's second lorry + same key → refused too; the key is the turn's.
+      const c = await assignTo(trip, driverA);
+      await expect(tap(c.id, driverA)).rejects.toThrow(ConflictError);
+      const rows = (await sql(
+        `SELECT driver_assignment_id FROM trip_execution_events WHERE trip_id = $1 AND client_event_id = 'K'`,
+        [trip],
+      )) as { driver_assignment_id: string }[];
+      expect(rows.map((r) => r.driver_assignment_id)).toEqual([a.id]);
+
+      // 4. another trip + same key → its own event, nothing shared.
+      const other = await assignTo(await newTrip(), driverB);
+      const theirs = await tap(other.id, driverB);
+      expect(theirs.id).not.toBe(first.id);
+      expect(theirs.driverAssignmentId).toBe(other.id);
+    });
+
+    it('★ an expense client request id is reused only on its own assignment — never answered with another turn’s line', async () => {
+      const trip = await newTrip();
+      const a = await assignTo(trip, driverA);
+      const b = await assignTo(trip, driverB);
+      const c = await assignTo(trip, driverA);
+      const claim = (assignment: string, declaredBy: string) =>
+        money.declareCost({
+          assignmentId: assignment,
+          category: 'fuel',
+          amount: '100000.00',
+          declaredBy,
+          clientRequestId: 'R',
+        });
+
+      const first = await claim(a.id, driverA);
+      expect((await claim(a.id, driverA)).id).toBe(first.id);
+
+      await expect(claim(b.id, driverB)).rejects.toThrow(ConflictError);
+      await expect(claim(c.id, driverA)).rejects.toThrow(ConflictError);
+      const rows = (await sql(
+        `SELECT driver_assignment_id FROM trip_costs WHERE trip_id = $1 AND client_request_id = 'R'`,
+        [trip],
+      )) as { driver_assignment_id: string }[];
+      expect(rows.map((r) => r.driver_assignment_id)).toEqual([a.id]);
+
+      const other = await assignTo(await newTrip(), driverB);
+      const theirs = await claim(other.id, driverB);
+      expect(theirs.id).not.toBe(first.id);
+      expect(theirs.driverAssignmentId).toBe(other.id);
+    });
+
     it('★ a finished trip takes no new lorry', async () => {
       const { trip, assignment: a } = await runningTrip();
       await completion.approve(trip, (await ask(a, driverA)).id, reviewer);

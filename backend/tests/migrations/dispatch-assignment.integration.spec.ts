@@ -86,6 +86,8 @@ describeIntegration('Multi-vehicle migrations against real PostgreSQL', () => {
   let caseF: { trip: string };
   /** Completion rows under the old trip-scoped numbering, to be carried across. */
   let completed: { trip: string; assignment: string };
+  /** Ended, live events name TWO lorries, a cost line names a THIRD. */
+  let caseG: { trip: string; assignment: string };
 
   const user = async (name: string, accountType = 'employee'): Promise<string> =>
     (await one<{ id: string }>(
@@ -200,6 +202,19 @@ describeIntegration('Multi-vehicle migrations against real PostgreSQL', () => {
       );
       completed = { trip: t, assignment: a };
     }
+    {
+      const t = await trip(null);
+      const a = await turn(t, driverA, true);
+      await event(t, a, lorry1, 'g1');
+      await event(t, a, lorry2, 'g2');
+      await pool.query(
+        `INSERT INTO trip_costs
+           (trip_id, category, amount, created_by, state, source, driver_assignment_id, vehicle_id)
+         VALUES ($1, 'fuel', 100, $2, 'immutable', 'driver_portal', $3, $4)`,
+        [t, driverA, a, lorry3],
+      );
+      caseG = { trip: t, assignment: a };
+    }
 
     // ★ THE THREE FILES UNDER TEST, over the rows above.
     await applyThrough('0029_backfill_assignment_vehicle.sql');
@@ -243,6 +258,13 @@ describeIntegration('Multi-vehicle migrations against real PostgreSQL', () => {
       expect(rows.map((r) => r.vehicle_id)).toEqual([lorry1, lorry2]);
     });
 
+    it('★ E′ · conflicting live events are NOT overruled by a cost line — the turn stays NULL', async () => {
+      // Two live events name lorry 1 and lorry 2; a cost line names lorry 3.
+      // Case D exists for a turn whose events say nothing; here they say two
+      // things, and a third source must not settle that for them.
+      expect(await vehicleOf(caseG.assignment)).toBeNull();
+    });
+
     it('F · a trip with a legacy lorry and no crew gets no assignment, and keeps its column', async () => {
       const { rows } = await pool.query(
         `SELECT 1 FROM trip_driver_assignments WHERE trip_id = $1`,
@@ -258,7 +280,7 @@ describeIntegration('Multi-vehicle migrations against real PostgreSQL', () => {
       const { rows } = await pool.query<{ vehicle_id: string | null }>(
         `SELECT vehicle_id FROM trip_schedules ORDER BY created_at`,
       );
-      expect(rows.map((r) => r.vehicle_id)).toEqual([lorry1, null, lorry3, lorry2, lorry1, lorry2, lorry3]);
+      expect(rows.map((r) => r.vehicle_id)).toEqual([lorry1, null, lorry3, lorry2, lorry1, lorry2, lorry3, null]);
     });
 
     it('carries the completion history across, with its attempt numbers intact', async () => {

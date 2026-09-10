@@ -351,10 +351,41 @@ describe('★ a decided trip offers nothing further', () => {
     ]);
     await openReview();
 
-    expect(screen.getByText(/chuyến đã hoàn tất/i)).toBeInTheDocument();
+    expect(screen.getByText(/lượt xe này đã được duyệt/i)).toBeInTheDocument();
+    expect(screen.queryByText(/chuyến đã hoàn tất/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /duyệt — đóng chuyến/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /mở lại|reopen/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * ★ ONE LORRY APPROVED, THE OTHER STILL WAITING (ADR-0004). The trip is not
+   * finished — the server's status says so, and this screen must not claim
+   * otherwise on the strength of one assignment's approval. Opening A says A is
+   * approved; opening B still offers the decision.
+   */
+  it('★ never calls the trip completed while a second assignment is still pending', async () => {
+    const rowA = row({ assignmentId: 'a1', completionRequestId: 'r1', stage: 'DONE', driver: { id: 'd1', displayName: 'Tài Xế A' } });
+    const rowB = row({ assignmentId: 'a2', completionRequestId: 'r2', stage: 'COMPLETION_PENDING', driver: { id: 'd2', displayName: 'Tài Xế B' } });
+    fetchCompletionReviewQueue.mockResolvedValue([rowA, rowB]);
+    fetchCompletionRequests.mockResolvedValue([
+      request({ id: 'r2', driverAssignmentId: 'a2', submittedBy: 'd2', state: 'pending' }),
+      request({ id: 'r1', driverAssignmentId: 'a1', state: 'approved', decidedAt: SERVER_TIME }),
+    ]);
+    renderPage();
+
+    const [openA, openB] = await screen.findAllByRole('button', { name: /xem hồ sơ/i });
+    fireEvent.click(openA!);
+    await screen.findByText(/tiến trình tài xế báo/i);
+    expect(screen.getByText(/lượt xe này đã được duyệt/i)).toBeInTheDocument();
+    expect(screen.queryByText(/chuyến đã hoàn tất|trip completed/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /đóng/i }));
+    fireEvent.click(openB!);
+    await screen.findByText(/tiến trình tài xế báo/i);
+    expect(screen.queryByText(/lượt xe này đã được duyệt/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^từ chối$/i })).toBeInTheDocument();
   });
 
   it('offers no decision when nothing is pending', async () => {

@@ -408,7 +408,7 @@ export class TripExecutionService {
     // that arrives after the trip closed still has to be able to read back the
     // event it already wrote, and `lockOpenTrip` would refuse it first.
     const already = await this.events.findByClientEventId(tripId, clientEventId);
-    if (already) return sameIntent(already, input.type);
+    if (already) return sameIntent(already, input);
 
     return this.db.transaction(async (tx) => {
       // ★ LOCKED WHATEVER ITS STATUS, AND THE KEY IS LOOKED UP BEFORE THE
@@ -433,7 +433,7 @@ export class TripExecutionService {
       // is what serialises them; the index stays as the last line for any
       // writer that bypasses this service.
       const written = await this.events.findByClientEventId(tripId, clientEventId, tx);
-      if (written) return sameIntent(written, input.type);
+      if (written) return sameIntent(written, input);
 
       // Nothing to answer with, so this is a NEW milestone — and a closed trip
       // takes none. Same rule `lockOpenTrip` applies everywhere else.
@@ -622,10 +622,26 @@ const requireReason = (value: string): string => {
  * A stored event answers a retry of the SAME milestone; the same key carrying
  * a DIFFERENT one is a caller contradicting itself, and is refused.
  */
-const sameIntent = (stored: ExecutionEvent, type: ExecutionEventType): ExecutionEvent => {
-  if (stored.type !== type) {
+/**
+ * ★ A STORED EVENT IS REUSED ONLY FOR THE ASSIGNMENT IT WAS WRITTEN FOR. The
+ * key is unique per TRIP in the database (0015), but the caller was authorised
+ * per ASSIGNMENT; answering assignment B's tap with assignment A's event would
+ * hand one driver another driver's record and silently drop B's milestone.
+ * Reuse the key on the same turn: the original. On another turn of the same
+ * trip: refused, with nothing of the other turn disclosed.
+ */
+const sameIntent = (
+  stored: ExecutionEvent,
+  input: { assignmentId: string; type: ExecutionEventType },
+): ExecutionEvent => {
+  if (stored.driverAssignmentId !== input.assignmentId) {
     throw new ConflictError(
-      `That client event id was already used to report ${stored.type}, so it cannot now report ${type}. Use a new id for a new milestone.`,
+      'That client event id was already used on another assignment of this trip. Use a new id for each assignment.',
+    );
+  }
+  if (stored.type !== input.type) {
+    throw new ConflictError(
+      `That client event id was already used to report ${stored.type}, so it cannot now report ${input.type}. Use a new id for a new milestone.`,
     );
   }
   return stored;

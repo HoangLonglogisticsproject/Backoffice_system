@@ -168,6 +168,15 @@ export class TripCostService {
     const clientRequestId = blankToNull(input.clientRequestId);
     if (clientRequestId) {
       const already = await this.costs.findByClientRequestId(tripId, clientRequestId);
+      // ★ REUSED ONLY FOR THE ASSIGNMENT IT WAS DECLARED ON. The key is unique
+      // per trip (0016); the caller was authorised per assignment. Answering
+      // turn B's declaration with turn A's line would hand a driver another
+      // turn's figure and silently drop their own.
+      if (already && already.driverAssignmentId !== input.assignmentId) {
+        throw new ConflictError(
+          'That client request id was already used on another assignment of this trip. Use a new id for each assignment.',
+        );
+      }
       if (already) return already;
     }
 
