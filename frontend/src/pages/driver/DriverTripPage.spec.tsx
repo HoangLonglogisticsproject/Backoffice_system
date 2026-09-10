@@ -598,7 +598,9 @@ describe('★ completion', () => {
     );
     renderDetail();
 
-    expect(await screen.findByText(/chuyến đã hoàn tất/i)).toBeInTheDocument();
+    expect(await screen.findByText(/lượt xe của bạn đã được duyệt/i)).toBeInTheDocument();
+    // ★ NEVER "the trip is done": another lorry on the same trip may still be running.
+    expect(screen.queryByText(/chuyến đã hoàn tất|trip completed/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /gửi hoàn tất/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /mở lại|reopen/i })).not.toBeInTheDocument();
   });

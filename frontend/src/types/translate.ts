@@ -283,6 +283,7 @@ const PHRASES = {
   dispatchEndReason: { vi: 'Lý do gỡ', en: 'Reason for removal' },
   dispatchStarted: { vi: 'Đang thực hiện', en: 'In progress' },
   dispatchHistory: { vi: 'Lịch sử điều độ', en: 'Dispatch history' },
+  dispatchHistoryFailed: { vi: 'Không tải được lịch sử điều độ.', en: 'Could not load the dispatch history.' },
   dispatchMissingVehicle: { vi: 'Thiếu xe (dữ liệu cũ)', en: 'No vehicle (legacy row)' },
   dispatchLegacyVehicle: {
     vi: 'Chuyến này có xe dự kiến từ dữ liệu cũ nhưng chưa có cặp xe + tài xế. Hãy điều độ lại.',
@@ -348,10 +349,13 @@ const PHRASES = {
   driverCompletionRejected: { vi: 'Yêu cầu bị từ chối', en: 'Sent back' },
   driverRejectReason: { vi: 'Lý do từ chối', en: 'Reason' },
   driverFixAndResubmit: { vi: 'Chỉnh sửa và gửi lại', en: 'Correct and send again' },
-  driverCompletionApproved: { vi: 'Chuyến đã hoàn tất', en: 'Trip completed' },
+  // ★ THE DRIVER'S OWN TURN, NEVER "THE TRIP" (ADR-0004). The driver read
+  // model carries no trip status, and the trip closes only when every active
+  // assignment is approved — so nothing here may claim the trip is done.
+  driverCompletionApproved: { vi: 'Lượt xe của bạn đã được duyệt', en: 'Your assignment is approved' },
   driverCompletionApprovedHint: {
-    vi: 'Chuyến đã đóng. Chi phí không thay đổi được nữa.',
-    en: 'This trip is closed. Its figures are final.',
+    vi: 'Chi phí của lượt xe này không thay đổi được nữa.',
+    en: 'Its figures are final.',
   },
   driverAttempt: { vi: 'Lần gửi', en: 'Attempt' },
   driverDeclaredNone: { vi: 'Đã khai: không phát sinh', en: 'Declared: no expenses' },

@@ -32,13 +32,15 @@ export function useEligibleDrivers(enabled: boolean) {
 export function useTripAssignments(tripId: string | null): {
   assignments: DriverAssignment[];
   loading: boolean;
+  /** ★ A failed read is not "no history". `null` when the read succeeded or has not run. */
+  error: unknown;
 } {
   const query = useQuery({
     queryKey: tripKeys.assignments(tripId ?? ''),
     queryFn: () => fetchDriverAssignments(tripId as string),
     enabled: tripId !== null,
   });
-  return { assignments: query.data ?? [], loading: query.isLoading };
+  return { assignments: query.data ?? [], loading: query.isLoading, error: query.error ?? null };
 }
 
 /**

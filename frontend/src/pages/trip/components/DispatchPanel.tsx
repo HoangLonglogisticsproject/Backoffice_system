@@ -119,7 +119,14 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
             />
           ) : null}
 
-          {ended.length > 0 ? <History turns={ended} /> : null}
+          {/* ★ A FAILED HISTORY READ SAYS SO. Silence here would read as
+              "no turn was ever ended", which is a claim about the record. */}
+          {history.error ? (
+            <p role="alert" className="text-xs text-red-600">
+              {t('dispatchHistoryFailed')}
+            </p>
+          ) : null}
+          {!history.error && ended.length > 0 ? <History turns={ended} /> : null}
         </div>
       ) : null}
     </Modal>

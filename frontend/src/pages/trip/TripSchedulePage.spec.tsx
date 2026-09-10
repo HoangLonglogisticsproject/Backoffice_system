@@ -30,9 +30,13 @@ const fetchEligibleDrivers = vi.fn();
 const assignDriver = vi.fn();
 const replaceDriver = vi.fn();
 const endDriverAssignment = vi.fn();
+const fetchDriverAssignments = vi.fn();
 vi.mock('@/api/tripAssignment', () => ({
   fetchEligibleDrivers: (...a: unknown[]) => fetchEligibleDrivers(...a),
-  fetchDriverAssignments: vi.fn(),
+  // ★ RESOLVES `[]` BY DEFAULT (see beforeEach). A bare `vi.fn()` resolves
+  // `undefined`, which TanStack Query treats as a failed query — every panel
+  // test would then be exercising the error path without saying so.
+  fetchDriverAssignments: (...a: unknown[]) => fetchDriverAssignments(...a),
   assignDriver: (...a: unknown[]) => assignDriver(...a),
   replaceDriver: (...a: unknown[]) => replaceDriver(...a),
   endDriverAssignment: (...a: unknown[]) => endDriverAssignment(...a),
@@ -168,6 +172,7 @@ describe('TripSchedulePage', () => {
     assignDriver.mockReset().mockResolvedValue({ id: 'a1', driverUserId: 'd1' });
     replaceDriver.mockReset().mockResolvedValue({ id: 'a2', driverUserId: 'd2' });
     endDriverAssignment.mockReset().mockResolvedValue({ id: 'a1', state: 'ended' });
+    fetchDriverAssignments.mockReset().mockResolvedValue([]);
     useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create']));
   });
 
@@ -291,6 +296,63 @@ describe('TripSchedulePage', () => {
       await waitFor(() => expect(assignDriver).toHaveBeenCalled());
       expect(await panel.findByText('50H-49266')).toBeInTheDocument();
       expect(panel.getByText('Tài Xế A')).toBeInTheDocument();
+    });
+
+    /**
+     * ★ EMPTY HISTORY, FAILED HISTORY AND REAL HISTORY ARE THREE DIFFERENT
+     * SCREENS. An empty read shows no history section; a failed read says so
+     * rather than passing as "nobody was ever taken off"; a real one lists the
+     * ended turn with its reason.
+     */
+    it('shows no history section when the history read comes back empty', async () => {
+      write();
+      board(turn());
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      await waitFor(() => expect(fetchDriverAssignments).toHaveBeenCalledWith('t1'));
+      expect(panel.queryByText(/lịch sử điều độ/i)).toBeNull();
+      expect(panel.queryByRole('alert')).toBeNull();
+    });
+
+    it('★ says so when the history read fails, instead of showing an empty history', async () => {
+      write();
+      board(turn());
+      fetchDriverAssignments.mockRejectedValue(new ApiError(0, undefined, 'down'));
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      expect(await panel.findByRole('alert')).toHaveTextContent(/không tải được lịch sử/i);
+      // No history SECTION — the alert sentence itself names the history, so ask for the heading.
+      expect(panel.queryByRole('heading', { name: /lịch sử điều độ/i })).toBeNull();
+    });
+
+    it('lists an ended turn with its reason when the history has one', async () => {
+      write();
+      board(turn());
+      fetchDriverAssignments.mockResolvedValue([
+        {
+          id: 'a0',
+          tripId: 't1',
+          vehicleId: 'v9',
+          vehicle: { id: 'v9', plate: '51D-00009' },
+          driverUserId: 'd2',
+          driverUser: { id: 'd2', displayName: 'Tài Xế B' },
+          state: 'ended',
+          assignedAt: '2026-08-01T00:00:00.000Z',
+          assignedBy: 'u1',
+          endedAt: '2026-08-02T00:00:00.000Z',
+          endedBy: 'u1',
+          endReason: 'xe hỏng',
+        },
+      ]);
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      expect(await panel.findByText(/lịch sử điều độ/i)).toBeInTheDocument();
+      expect(panel.getByText(/51D-00009/)).toBeInTheDocument();
+      expect(panel.getByText(/xe hỏng/)).toBeInTheDocument();
+      expect(panel.queryByRole('alert')).toBeNull();
     });
 
     it('★ offers a lorry already on the trip to nobody, and the same driver to a second lorry', async () => {

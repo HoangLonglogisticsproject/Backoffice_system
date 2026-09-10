@@ -247,6 +247,36 @@ describe('★ the trip list', () => {
     expect(links[1]).toHaveTextContent('51D-00002');
   });
 
+  /**
+   * ★ ONE TURN APPROVED, THE OTHER STILL WAITING (ADR-0004). The trip is not
+   * finished, and the driver's screen for the approved turn must not say it is.
+   */
+  it('★ an approved turn on a trip whose other turn is still pending never reads as "trip completed"', async () => {
+    fetchMyAssignments.mockResolvedValue([
+      trip(),
+      trip({ vehicle: { id: 'v2', plate: '51D-00002' }, assignment: { id: 'a2', assignedAt: AT } }),
+    ]);
+    fetchMyAssignment.mockImplementation(async (id: string) =>
+      id === 'a1'
+        ? trip({
+            events: JOURNEY,
+            accountability: 'APPROVED_IMMUTABLE',
+            completion: completion('approved', { decidedBy: 'b1', decidedAt: AT }),
+          })
+        : trip({
+            assignment: { id: 'a2', assignedAt: AT },
+            events: JOURNEY,
+            accountability: 'DECLARED_NO_EXPENSE',
+            completion: completion('pending', { id: 'r2', driverAssignmentId: 'a2', expenseDeclaration: 'none' }),
+          }),
+    );
+    renderAt('/driver/assignments/a1');
+    await screen.findByText('Kho HCM');
+
+    expect(screen.getByText('Lượt xe của bạn đã được duyệt')).toBeInTheDocument();
+    expect(screen.queryByText(/chuyến đã hoàn tất|trip completed/i)).toBeNull();
+  });
+
   it('says so when nothing is assigned', async () => {
     renderAt('/driver');
 
@@ -360,7 +390,8 @@ describe('★ the trip detail reads the workflow', () => {
     await screen.findByText('Kho HCM');
 
     expect(stepper().map((s) => s.current)).toEqual([false, false, false, false]);
-    expect(screen.getByText('Chuyến đã hoàn tất')).toBeInTheDocument();
+    expect(screen.getByText('Lượt xe của bạn đã được duyệt')).toBeInTheDocument();
+    expect(screen.queryByText(/chuyến đã hoàn tất/i)).toBeNull();
     expect(screen.getByText('Đã duyệt')).toBeInTheDocument();
     expect(screen.getByText('Đã duyệt — không sửa được')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
