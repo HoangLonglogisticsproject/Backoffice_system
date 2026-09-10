@@ -79,7 +79,7 @@ export default function TripSchedulePage() {
    * the add until the panel was closed and reopened. The clicked object stays
    * as the fallback for the moment the row leaves the current page or filter.
    */
-  const [assigningRow, setAssigning] = useState<TripScheduleWithRefs | null>(null);
+  const [assigningRow, setAssigningRow] = useState<TripScheduleWithRefs | null>(null);
 
   // The list, its date range and its page walk — see `useTripSchedules` for why
   // those three are one hook and not three pieces of page state.
@@ -272,7 +272,7 @@ export default function TripSchedulePage() {
                     <Crew
                       trip={trip}
                       canDispatch={canManage && trip.status !== 'finished'}
-                      onDispatch={() => setAssigning(trip)}
+                      onDispatch={() => setAssigningRow(trip)}
                     />
                   </TableCell>
                   <TableCell className="text-gray-900">{trip.customer?.name ?? <Unset />}</TableCell>
@@ -475,7 +475,7 @@ export default function TripSchedulePage() {
       <DispatchPanel
         trip={assigning}
         vehicles={catalogue.vehicles.items}
-        onClose={() => setAssigning(null)}
+        onClose={() => setAssigningRow(null)}
       />
 
       <ArchiveTripDialog

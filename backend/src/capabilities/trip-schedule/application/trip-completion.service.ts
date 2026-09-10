@@ -263,7 +263,7 @@ export class TripCompletionService {
     tx: DatabaseQuery,
   ): Promise<CompletionRequest> {
     const request = await this.requests.lockById(requestId, tx);
-    if (!request || request.tripId !== tripId) {
+    if (request?.tripId !== tripId) {
       throw new NotFoundError('Completion request not found.');
     }
     if (request.state !== 'pending') {

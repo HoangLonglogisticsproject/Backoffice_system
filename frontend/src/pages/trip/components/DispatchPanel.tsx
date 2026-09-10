@@ -134,6 +134,17 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
 }
 
 /**
+ * The sentence a refused change shows. A 409 is the board having moved — the
+ * mutation re-reads it — so it gets the sentence that says so; any other
+ * server refusal is shown in the server's words; anything else is generic.
+ * One place for both forms, so the two cannot drift.
+ */
+const refusalOf = (error: unknown, t: (key: 'assignConflict' | 'saveFailed') => string): string => {
+  if (!isApiError(error)) return t('saveFailed');
+  return error.status === 409 ? t('assignConflict') : error.message;
+};
+
+/**
  * One active pair: the lorry, the driver, and — only while the turn has not
  * started — the two things Operations may still do to it.
  */
@@ -176,14 +187,18 @@ function AssignmentRow({
       );
       reset();
     } catch (error_) {
-      if (isApiError(error_) && error_.status === 409) setError(t('assignConflict'));
-      else setError(isApiError(error_) ? error_.message : t('saveFailed'));
+      setError(refusalOf(error_, t));
     }
   };
 
   const formId = `dispatch-${turn.id}-${mode}`;
-  const canSubmit =
-    !change.isPending && reason.trim() !== '' && (mode === 'end' || driverUserId !== '');
+  const replacing = mode === 'replace';
+  const canSubmit = !change.isPending && reason.trim() !== '' && (!replacing || driverUserId !== '');
+  // Derived once, so the markup below asks no compound questions.
+  const canChange = !turn.started && !locked && mode === 'idle';
+  const actionLabel = replacing ? t('changeDriver') : t('dispatchRemove');
+  const submitLabel = change.isPending ? t('saving') : actionLabel;
+  const reasonLabel = replacing ? t('assignReason') : t('dispatchEndReason');
 
   return (
     <li className="rounded-lg border border-gray-200 p-3">
@@ -204,7 +219,7 @@ function AssignmentRow({
         {turn.started ? (
           <span className="text-xs font-medium text-blue-700">{t('dispatchStarted')}</span>
         ) : null}
-        {!turn.started && !locked && mode === 'idle' ? (
+        {canChange ? (
           <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => setMode('replace')}>
               {t('changeDriver')}
@@ -218,7 +233,7 @@ function AssignmentRow({
 
       {mode !== 'idle' ? (
         <form id={formId} onSubmit={submit} className="mt-3 space-y-2">
-          {mode === 'replace' ? (
+          {replacing ? (
             <DriverSelect
               id={`${formId}-driver`}
               value={driverUserId}
@@ -231,7 +246,7 @@ function AssignmentRow({
           ) : null}
           <div className="space-y-1">
             <label htmlFor={`${formId}-reason`} className="text-sm font-medium text-gray-700">
-              {mode === 'replace' ? t('assignReason') : t('dispatchEndReason')}
+              {reasonLabel}
             </label>
             <textarea
               id={`${formId}-reason`}
@@ -252,7 +267,7 @@ function AssignmentRow({
               {t('cancel')}
             </Button>
             <Button type="submit" size="sm" disabled={!canSubmit} className="bg-blue-600 hover:bg-blue-700">
-              {change.isPending ? t('saving') : mode === 'replace' ? t('changeDriver') : t('dispatchRemove')}
+              {submitLabel}
             </Button>
           </div>
         </form>
@@ -292,8 +307,7 @@ function AddAssignmentForm({
       await change.mutateAsync({ kind: 'assign', tripId, vehicleId, driverUserId });
       onDone();
     } catch (error_) {
-      if (isApiError(error_) && error_.status === 409) setError(t('assignConflict'));
-      else setError(isApiError(error_) ? error_.message : t('saveFailed'));
+      setError(refusalOf(error_, t));
     }
   };
 

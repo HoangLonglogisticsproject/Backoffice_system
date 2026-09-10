@@ -216,7 +216,7 @@ export class TripExecutionService {
     tx: DatabaseQuery,
   ): Promise<DriverAssignment> {
     const current = await this.assignments.lockActiveById(assignmentId, tx);
-    if (!current || current.tripId !== tripId) {
+    if (current?.tripId !== tripId) {
       throw new NotFoundError('Assignment not found.');
     }
     return current;

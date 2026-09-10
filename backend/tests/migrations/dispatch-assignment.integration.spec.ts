@@ -296,10 +296,35 @@ describeIntegration('Multi-vehicle migrations against real PostgreSQL', () => {
   });
 
   describe('★ rerunning the three files changes nothing', () => {
-    it('applies each file a second time without error', async () => {
+    it('applies each file a second time without error, and the schema is exactly what one run left', async () => {
       await rerun('0027_dispatch_assignment_vehicle.sql');
       await rerun('0028_completion_per_assignment.sql');
       await rerun('0029_backfill_assignment_vehicle.sql');
+
+      // Idempotent means "the same schema", not merely "no exception": one
+      // CHECK, still NOT VALID; every new index exactly once; the four
+      // trip-scoped ones gone and not resurrected.
+      const [after] = (
+        await pool.query<{ checks: number; validated: boolean; new_indexes: number; old_indexes: number }>(
+          `SELECT
+             (SELECT count(*)::int FROM pg_constraint
+               WHERE conname = 'trip_driver_assignments_active_has_vehicle'
+                 AND conrelid = 'trip_driver_assignments'::regclass)            AS checks,
+             (SELECT convalidated FROM pg_constraint
+               WHERE conname = 'trip_driver_assignments_active_has_vehicle'
+                 AND conrelid = 'trip_driver_assignments'::regclass)            AS validated,
+             (SELECT count(*)::int FROM pg_indexes
+               WHERE schemaname = current_schema()
+                 AND indexname IN ('uq_trip_active_vehicle_assignment', 'idx_trip_driver_assignment_vehicle',
+                                   'uq_assignment_completion_pending', 'uq_assignment_completion_approved',
+                                   'uq_assignment_completion_attempt', 'idx_trip_completion_trip_attempt')) AS new_indexes,
+             (SELECT count(*)::int FROM pg_indexes
+               WHERE schemaname = current_schema()
+                 AND indexname IN ('uq_trip_active_driver_assignment', 'uq_trip_completion_pending',
+                                   'uq_trip_completion_approved', 'uq_trip_completion_attempt'))            AS old_indexes`,
+        )
+      ).rows;
+      expect(after).toEqual({ checks: 1, validated: false, new_indexes: 6, old_indexes: 0 });
     });
 
     it('and rewrites no lorry the first run set — or that a person set since', async () => {

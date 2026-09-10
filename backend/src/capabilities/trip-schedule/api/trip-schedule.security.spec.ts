@@ -760,15 +760,19 @@ describe('trip-schedule HTTP security', () => {
       it('refuses a figure NUMERIC(14,2) cannot hold exactly, and not as a 403', async () => {
         // A third decimal place is refused rather than rounded — 422 from the
         // schema, not 403 from the tier, because this caller IS allowed.
-        await authed('post', '/trip-schedules')
+        const response = await authed('post', '/trip-schedules')
           .send({ scheduledOn: '2026-08-04', sellPrice: '4500000.005' })
           .expect(422);
+        expect(response.body.error.code).toBe('VALIDATION_FAILED');
+        expect(trips.create).not.toHaveBeenCalled();
       });
 
       it('refuses a zero, which is not the same fact as unpriced', async () => {
-        await authed('post', '/trip-schedules')
+        const response = await authed('post', '/trip-schedules')
           .send({ scheduledOn: '2026-08-04', sellPrice: '0' })
           .expect(422);
+        expect(response.body.error.code).toBe('VALIDATION_FAILED');
+        expect(trips.create).not.toHaveBeenCalled();
       });
     });
 
@@ -784,7 +788,11 @@ describe('trip-schedule HTTP security', () => {
       });
 
       it('is held to the compulsory selling price just as a head is', async () => {
-        await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04' }).expect(422);
+        const response = await authed('post', '/trip-schedules')
+          .send({ scheduledOn: '2026-08-04' })
+          .expect(422);
+        expect(response.body.error.code).toBe('VALIDATION_FAILED');
+        expect(trips.create).not.toHaveBeenCalled();
       });
     });
   });

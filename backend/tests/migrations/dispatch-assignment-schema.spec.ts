@@ -142,7 +142,7 @@ describe('0028 — completion belongs to the assignment', () => {
 describe('0029 — the backfill', () => {
   it('★ guards every UPDATE with `vehicle_id IS NULL`, so a rerun rewrites nothing', () => {
     const updates = code('backfill').match(/UPDATE trip_driver_assignments[^;]*;/g) ?? [];
-    expect(updates.length).toBe(3);
+    expect(updates).toHaveLength(3);
     for (const update of updates) expect(update).toContain('a.vehicle_id IS NULL');
   });
 
