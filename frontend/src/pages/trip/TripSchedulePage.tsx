@@ -468,6 +468,12 @@ export default function TripSchedulePage() {
         isOpen={formOpen}
         trip={editing}
         customers={catalogue.customers.items}
+        // The same active lorries the dispatch panel offers, for the crew rows
+        // on the create form. Dispatching is `trip.write`, which the create
+        // permission does not imply — so the section is offered only to
+        // somebody the server would actually accept the assignments from.
+        vehicles={catalogue.vehicles.items}
+        mayDispatch={can('trip.write')}
         // `data` is null until the read lands; `items` defaults to [], which
         // cannot tell an empty catalogue from an unread one.
         cataloguesLoaded={catalogue.customers.data !== null}

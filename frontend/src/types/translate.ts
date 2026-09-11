@@ -286,6 +286,22 @@ const PHRASES = {
   dispatchAdd: { vi: 'Thêm phương tiện', en: 'Add vehicle' },
   dispatchSelectVehicle: { vi: 'Chọn xe', en: 'Choose a vehicle' },
   dispatchRemove: { vi: 'Gỡ', en: 'Remove' },
+  // ★ THE CREW TYPED ON THE "THÊM CHUYẾN" FORM. Scoped to a ROW, because that
+  // is where the mistake is and where the reader is looking.
+  crewIncomplete: {
+    vi: 'Chọn cả xe và tài xế cho dòng này.',
+    en: 'Choose both a vehicle and a driver for this row.',
+  },
+  crewDuplicateVehicle: {
+    vi: 'Xe này đã có ở một dòng khác.',
+    en: 'This vehicle is already on another row.',
+  },
+  // ★ SAYS THE TRIP EXISTS, because it does — and pressing save again sends
+  // only the rows still listed, never a second trip.
+  crewPartlyAssigned: {
+    vi: 'Đã tạo chuyến, nhưng còn phương tiện chưa gán được. Sửa các dòng bên dưới rồi lưu lại, hoặc hoàn tất trong Điều độ.',
+    en: 'The trip was created, but some vehicles could not be dispatched. Fix the rows below and save again, or finish in the dispatch panel.',
+  },
   dispatchEndReason: { vi: 'Lý do gỡ', en: 'Reason for removal' },
   dispatchStarted: { vi: 'Đang thực hiện', en: 'In progress' },
   dispatchHistory: { vi: 'Lịch sử điều độ', en: 'Dispatch history' },

@@ -537,6 +537,194 @@ describe('TripSchedulePage', () => {
     expect(await screen.findByText(/Tổng số dòng: 1/)).toBeTruthy();
   });
 
+  /**
+   * ★ "PHƯƠNG TIỆN ĐIỀU ĐỘ" ON THE CREATE FORM — AN INPUT SURFACE, NOT A SECOND
+   * MODEL. Operations books a trip and its crew on one screen again, the way
+   * they did before dispatch became a pair. Underneath nothing moved: each row
+   * is still ONE assignment created through the canonical dispatch endpoint,
+   * and the trip body still carries no lorry.
+   */
+  describe('★ crewing a trip from the create form (ADR-0004 input layer)', () => {
+    const dispatcher = () =>
+      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+
+    const openForm = async () => {
+      fetchTripVehicles.mockResolvedValue([
+        { id: 'v1', plate: '50H-49266', note: null, status: 'active' },
+        { id: 'v2', plate: '51D-65233', note: null, status: 'active' },
+      ]);
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Thêm chuyến' }));
+      fireEvent.change(await screen.findByLabelText('Ngày chạy'), {
+        target: { value: '2026-09-01' },
+      });
+    };
+
+    /** Adds a row and fills it; `''` leaves that half of the pair empty. */
+    const addRow = async (vehicleId: string, driverUserId: string) => {
+      fireEvent.click(screen.getByRole('button', { name: /thêm phương tiện/i }));
+      await screen.findAllByRole('option', { name: 'Tài Xế A' });
+      const lorries = screen.getAllByLabelText('Xe');
+      const drivers = screen.getAllByLabelText('Chọn tài xế');
+      const row = lorries.length - 1;
+      if (vehicleId !== '') fireEvent.change(lorries[row]!, { target: { value: vehicleId } });
+      if (driverUserId !== '') fireEvent.change(drivers[row]!, { target: { value: driverUserId } });
+    };
+
+    const save = () => {
+      const buttons = screen.getAllByRole('button', { name: 'Lưu' });
+      fireEvent.click(buttons[buttons.length - 1]!);
+    };
+
+    it('tạo chuyến KHÔNG có phương tiện nào — vẫn là một chuyến hợp lệ', async () => {
+      dispatcher();
+      await openForm();
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+      expect(assignDriver).not.toHaveBeenCalled();
+    });
+
+    it('tạo chuyến với MỘT cặp xe + tài xế', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      save();
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(1));
+      expect(assignDriver).toHaveBeenCalledWith('t1', { vehicleId: 'v1', driverUserId: 'd1' });
+    });
+
+    it('★ tạo chuyến với NHIỀU cặp — mỗi cặp là một assignment riêng', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      await addRow('v2', 'd2');
+      save();
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(2));
+      expect(assignDriver.mock.calls.map((call) => call[1])).toEqual([
+        { vehicleId: 'v1', driverUserId: 'd1' },
+        { vehicleId: 'v2', driverUserId: 'd2' },
+      ]);
+      // One trip, N assignments — never one trip per lorry.
+      expect(createTripSchedule).toHaveBeenCalledTimes(1);
+    });
+
+    it('★ mỗi dòng phải có CẢ xe và tài xế — báo tại dòng, và không tạo gì cả', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', '');
+      save();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/chọn cả xe và tài xế/i);
+      // ★ NOTHING IS WRITTEN. The trip is not created and then left crewless —
+      // the form refuses before the first request.
+      expect(createTripSchedule).not.toHaveBeenCalled();
+      expect(assignDriver).not.toHaveBeenCalled();
+    });
+
+    it('★ từ chối cùng một XE ở hai dòng, trước khi hỏi server', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      await addRow('v1', 'd2');
+      save();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/xe này đã có ở một dòng khác/i);
+      expect(createTripSchedule).not.toHaveBeenCalled();
+    });
+
+    it('★ CHO PHÉP cùng một tài xế trên hai xe — điều độ bình thường, không phải lỗi', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      await addRow('v2', 'd1');
+      save();
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('★ body tạo chuyến KHÔNG mang vehicleId — cột legacy không bao giờ là input', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      for (const key of ['vehicleId', 'vehicle', 'driverUserId', 'assignments']) {
+        expect(body).not.toHaveProperty(key);
+      }
+    });
+
+    it('★ sau khi tạo, bảng hiển thị đúng các lượt vừa gán', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v2', 'd2');
+      // What the board answers once the crew is on the trip.
+      fetchTripSchedules.mockResolvedValue({
+        items: [
+          trip({
+            assignments: [
+              turn(),
+              turn({
+                id: 'a2',
+                vehicle: { id: 'v2', plate: '51D-65233' },
+                driver: { id: 'd2', displayName: 'Tài Xế B' },
+              }),
+            ],
+          }),
+        ],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      save();
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalled());
+      expect(await screen.findByText('51D-65233')).toBeInTheDocument();
+      expect(screen.getByText('2 xe · 2 tài xế')).toBeInTheDocument();
+    });
+
+    it('không mời điều độ một người chỉ có trip.create', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.create']));
+      await openForm();
+
+      // The dispatch endpoint is `trip.write`; offering rows the server would
+      // refuse on save is worse than not offering them.
+      expect(screen.queryByRole('button', { name: /thêm phương tiện/i })).toBeNull();
+      expect(screen.queryByText('Phương tiện điều độ')).toBeNull();
+    });
+
+    /**
+     * ★ THE ONE THING THIS FLOW COULD GET WRONG. There is no endpoint that
+     * writes a trip and its assignments together, so a refused lorry leaves a
+     * real trip on the board with part of its crew. Saving again must finish
+     * that trip — never book a second one.
+     */
+    it('★ một lượt bị từ chối: chuyến vẫn được tạo, và lưu lại KHÔNG tạo chuyến thứ hai', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      await addRow('v2', 'd2');
+      assignDriver
+        .mockResolvedValueOnce({ id: 'a1' })
+        .mockRejectedValueOnce(new Error('lorry refused'));
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText(/đã tạo chuyến/i)).toBeInTheDocument();
+
+      assignDriver.mockResolvedValue({ id: 'a2' });
+      save();
+
+      // Only the row that failed is re-sent, and no second trip is booked.
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(3));
+      expect(assignDriver.mock.calls[2]![1]).toEqual({ vehicleId: 'v2', driverUserId: 'd2' });
+      expect(createTripSchedule).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('what each caller is offered', () => {
     it('offers "add" to anybody holding trip.create', async () => {
       renderPage();

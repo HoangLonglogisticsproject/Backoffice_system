@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MapPin } from 'lucide-react';
+import { MapPin, Plus } from 'lucide-react';
 import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { createTripCustomer } from '@/api/tripCatalogue';
+import { assignDriver } from '@/api/tripAssignment';
 import {
   createTripSchedule,
   updateTripSchedule,
@@ -15,20 +16,25 @@ import {
   type UpdateTripInput,
 } from '@/api/tripSchedule';
 import { isApiError } from '@/utils/errors';
+import { formatPlate } from '@/utils/format';
 import {
   fromDateTimeLocalValue,
   todayAsCalendarDay,
   toDateTimeLocalValue,
 } from '@/utils/format/datetime';
 import { useTripLocations } from '@/hooks/trip';
+import { useEligibleDrivers } from '@/hooks/trip/useTripAssignment';
 import {
   DISPATCH_SELECTABLE_STATUSES,
   type TripCustomer,
   type TripLocation,
+  type TripSchedule,
   type TripScheduleWithRefs,
   type TripStatus,
+  type TripVehicle,
 } from '@/types/trip';
 import { CatalogueSelect } from './CatalogueSelect';
+import { DriverSelect } from './DriverSelect';
 import { LocationFormModal } from './LocationFormModal';
 import { TRIP_STATUS_STYLES } from './tripStatus';
 
@@ -36,11 +42,23 @@ interface TripFormModalProps {
   isOpen: boolean;
   /** Absent means "add". Present means "correct this row" — GLOBAL only. */
   trip?: TripScheduleWithRefs | null;
-  /**
-   * ★ NO LORRY HERE (ADR-0004). A trip is booked without one; the lorries and
-   * their drivers are put on it afterwards, as pairs, from the dispatch panel.
-   */
   customers: TripCustomer[];
+  /**
+   * The active lorries, for the crew rows below.
+   *
+   * ★ STILL NO LORRY FIELD ON THE TRIP (ADR-0004). These feed
+   * "Phương tiện điều độ", where each row is one ASSIGNMENT — a lorry AND its
+   * driver — and every row is sent to the dispatch endpoint after the trip
+   * exists. Nothing here reads or writes `trip_schedules.vehicle_id`.
+   */
+  vehicles: TripVehicle[];
+  /**
+   * May the caller dispatch? `trip.create` and `trip.write` are separate
+   * permissions and the dispatch endpoint demands the second, so somebody who
+   * may book a trip but not crew one is offered no rows to fill in rather than
+   * a section that answers 403 on save.
+   */
+  mayDispatch: boolean;
   /**
    * Has the customer catalogue read come back?
    *
@@ -357,7 +375,63 @@ const tripPayload = (
 const saveTrip = (
   trip: TripScheduleWithRefs | null,
   payload: CreateTripInput & UpdateTripInput,
-): Promise<unknown> => (trip ? updateTripSchedule(trip.id, payload) : createTripSchedule(payload));
+): Promise<TripSchedule> =>
+  trip ? updateTripSchedule(trip.id, payload) : createTripSchedule(payload);
+
+/**
+ * One row of "Phương tiện điều độ" while it is being typed.
+ *
+ * ★ THIS IS AN INPUT SHAPE, NOT A DOMAIN ONE. It becomes a DispatchAssignment
+ * the moment it is sent, and until then it is allowed to be half-filled —
+ * which is the whole reason it carries its own `error`: the refusal belongs
+ * beside the row that caused it, not at the bottom of the form.
+ */
+interface CrewRow {
+  key: string;
+  vehicleId: string;
+  driverUserId: string;
+  error: string | null;
+}
+
+// A counter rather than `crypto.randomUUID()`: this only has to be unique
+// within one open form, and the key never leaves the browser.
+let crewKeySeq = 0;
+const newCrewRow = (): CrewRow => ({
+  key: `crew-${(crewKeySeq += 1)}`,
+  vehicleId: '',
+  driverUserId: '',
+  error: null,
+});
+
+/**
+ * Sends each pair to the dispatch endpoint and returns the rows that did NOT
+ * land, each carrying the server's own words.
+ *
+ * ★ ONE AT A TIME, NOT `Promise.all`. `TripExecutionService.assign` locks the
+ * trip row, so parallel calls would queue on the server anyway — and
+ * sequentially each refusal can be attributed to the row that caused it
+ * instead of arriving as one rejected batch.
+ *
+ * ★ AND THE SERVER IS THE AUTHORITY ON THE RULES. The duplicate-lorry check in
+ * the form is a courtesy that saves a round trip; `requireVehicleFree` and the
+ * partial unique index from 0027 are what actually enforce it, including
+ * against a second dispatcher working at the same moment.
+ */
+const dispatchCrew = async (
+  tripId: string,
+  rows: CrewRow[],
+  refusal: (error: unknown) => string,
+): Promise<CrewRow[]> => {
+  const failed: CrewRow[] = [];
+  for (const row of rows) {
+    try {
+      await assignDriver(tripId, { vehicleId: row.vehicleId, driverUserId: row.driverUserId });
+    } catch (error_) {
+      failed.push({ ...row, error: refusal(error_) });
+    }
+  }
+  return failed;
+};
 
 /**
  * Entering or correcting one row of the dispatch board.
@@ -378,6 +452,8 @@ export function TripFormModal({
   isOpen,
   trip = null,
   customers,
+  vehicles,
+  mayDispatch,
   cataloguesLoaded,
   onClose,
   onSaved,
@@ -420,6 +496,8 @@ export function TripFormModal({
     setForm(initialForm(trip));
     setRefreshed(NO_REFRESH);
     setError(null);
+    setCrew([]);
+    setCreatedTripId(null);
   }, [isOpen, trip?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
@@ -457,6 +535,28 @@ export function TripFormModal({
   const [placeDialog, setPlaceDialog] = useState<{ end: End; editing: TripLocation | null } | null>(null);
 
   /**
+   * "Phương tiện điều độ" — the pairs typed alongside the trip.
+   *
+   * ★ EMPTY IS A PERFECTLY ORDINARY TRIP. Booking without a crew is still
+   * supported and is still what happens when nobody has decided yet; these
+   * rows only spare the dispatcher a second screen when they HAVE.
+   */
+  const [crew, setCrew] = useState<CrewRow[]>([]);
+  /**
+   * ★ THE TRIP IS CREATED ONCE, EVEN IF SAVE IS PRESSED TWICE.
+   *
+   * There is no endpoint that writes a trip and its assignments together, so a
+   * save that creates the trip and then has a lorry refused leaves a real trip
+   * on the board with some of its crew. Remembering the id is what makes the
+   * retry send only the rows that are left instead of booking a second trip —
+   * the one failure this flow could cause that nobody could undo from the UI.
+   */
+  const [createdTripId, setCreatedTripId] = useState<string | null>(null);
+
+  // Read once the form is open and only for somebody who may actually dispatch.
+  const drivers = useEligibleDrivers(isOpen && mayDispatch && trip === null);
+
+  /**
    * After the place dialog saved. A NEW place is selected where it was asked
    * for — AFTER the list has been re-read, so the effect that drops unknown
    * places never sees the new id before the list that contains it. A place
@@ -477,14 +577,58 @@ export function TripFormModal({
     onClose();
   };
 
+  const addCrew = () => setCrew((rows) => [...rows, newCrewRow()]);
+  const removeCrew = (key: string) => setCrew((rows) => rows.filter((row) => row.key !== key));
+  /** Editing a row clears its refusal — the message described the old value. */
+  const setCrewAt = (key: string, patch: Partial<CrewRow>) =>
+    setCrew((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch, error: null } : row)));
+
+  /**
+   * The two rules that can be answered without asking the server.
+   *
+   * A pair needs both halves — there is no lorry-only assignment — and one
+   * lorry cannot be on the trip twice. The same DRIVER twice is left alone:
+   * that is ordinary dispatch and the server accepts it.
+   */
+  const checkCrew = (rows: CrewRow[]): CrewRow[] => {
+    const seen = new Set<string>();
+    return rows.map((row) => {
+      if (row.vehicleId === '' || row.driverUserId === '') {
+        return { ...row, error: t('crewIncomplete') };
+      }
+      if (seen.has(row.vehicleId)) return { ...row, error: t('crewDuplicateVehicle') };
+      seen.add(row.vehicleId);
+      return { ...row, error: null };
+    });
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
-    setBusy(true);
 
+    const checked = checkCrew(crew);
+    setCrew(checked);
+    if (checked.some((row) => row.error !== null)) return;
+
+    setBusy(true);
     try {
-      await saveTrip(trip, tripPayload(form, trip, mayPrice, refreshed));
+      const tripId =
+        createdTripId ?? (await saveTrip(trip, tripPayload(form, trip, mayPrice, refreshed))).id;
+      if (trip === null) setCreatedTripId(tripId);
+
+      const failed = await dispatchCrew(tripId, checked, (error_) =>
+        failureMessage(error_, t('saveFailed')),
+      );
+
+      // The trip is on the board whether or not every lorry landed, so the
+      // list is re-read either way; hiding it until the crew is complete would
+      // be hiding a row that exists.
       onSaved();
+      setCrew(failed);
+      if (failed.length > 0) {
+        setError(t('crewPartlyAssigned'));
+        return;
+      }
       onClose();
     } catch (error_) {
       setError(failureMessage(error_, t('saveFailed')));
@@ -581,8 +725,8 @@ export function TripFormModal({
             </select>
           </div>
 
-          {/* ★ NO LORRY PICKER. The lorries go on the trip from the dispatch
-              panel, each with its driver (ADR-0004). */}
+          {/* ★ STILL NO LORRY FIELD ON THE TRIP (ADR-0004) — the crew is typed
+              in "Phương tiện điều độ" below, one row per PAIR. */}
           <CatalogueSelect
             id="trip-customer"
             label={t('fieldCustomer')}
@@ -757,6 +901,87 @@ export function TripFormModal({
             </p>
           </div>
         </div>
+
+        {/* ★ THE CREW, TYPED WITH THE TRIP — AND STILL ONE ASSIGNMENT PER PAIR.
+            This section is an INPUT SURFACE and nothing else: on save each row
+            becomes its own `POST /trip-schedules/:id/driver-assignments`, which
+            is the same canonical path the dispatch panel uses. The trip body
+            carries no lorry, `trip_schedules.vehicle_id` is neither read nor
+            written, and a trip saved with no rows is ordinary rather than
+            incomplete.
+
+            Only when CREATING: correcting an existing trip's crew is the
+            dispatch panel's job, where a change can be ended with a reason and
+            keep its history. */}
+        {!editing && mayDispatch && (
+          <fieldset className="space-y-3 rounded-lg border border-gray-200 p-3">
+            <legend className="px-1 text-sm font-medium text-gray-700">{t('dispatchTitle')}</legend>
+
+            {crew.map((row, index) => (
+              <div key={row.key} className="space-y-1">
+                <div className="flex items-end gap-2">
+                  <div className="grid flex-1 gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <label
+                        htmlFor={`trip-crew-vehicle-${index}`}
+                        className="text-sm font-medium text-gray-700"
+                      >
+                        {t('fieldVehicle')}
+                      </label>
+                      <select
+                        id={`trip-crew-vehicle-${index}`}
+                        value={row.vehicleId}
+                        onChange={(event) => setCrewAt(row.key, { vehicleId: event.target.value })}
+                        className="h-9 w-full rounded-lg border border-input bg-white px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        <option value="">{t('dispatchSelectVehicle')}</option>
+                        {vehicles.map((vehicle) => (
+                          <option key={vehicle.id} value={vehicle.id}>
+                            {formatPlate(vehicle.plate)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <DriverSelect
+                      id={`trip-crew-driver-${index}`}
+                      value={row.driverUserId}
+                      onChange={(value) => setCrewAt(row.key, { driverUserId: value })}
+                      options={drivers.data ?? []}
+                      loading={drivers.isLoading}
+                      // The row says what is wrong, in its own words — see `checkCrew`.
+                      required={false}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => removeCrew(row.key)}
+                  >
+                    {t('dispatchRemove')}
+                  </Button>
+                </div>
+                {row.error && (
+                  <p role="alert" className="text-sm text-red-600">
+                    {row.error}
+                  </p>
+                )}
+              </div>
+            ))}
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={addCrew}
+              disabled={vehicles.length === 0}
+            >
+              <Plus className="h-4 w-4" />
+              {t('dispatchAdd')}
+            </Button>
+          </fieldset>
+        )}
 
         <TextArea
           id="trip-note"

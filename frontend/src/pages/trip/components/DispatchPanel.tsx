@@ -11,6 +11,7 @@ import {
 import { isApiError } from '@/utils/errors';
 import { formatDateTime } from '@/utils/format/datetime';
 import { formatPlate } from '@/utils/format';
+import { DriverSelect } from './DriverSelect';
 import type { DriverAssignment } from '@/api/tripAssignment';
 import type { UserSummary } from '@/types/organization';
 import type { TripAssignmentRef, TripScheduleWithRefs, TripVehicle } from '@/types/trip';
@@ -385,43 +386,6 @@ function AddAssignmentForm({
         </Button>
       </div>
     </form>
-  );
-}
-
-function DriverSelect({
-  id,
-  value,
-  onChange,
-  options,
-  loading,
-}: Readonly<{
-  id: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: UserSummary[];
-  loading: boolean;
-}>) {
-  const { t } = useLanguage();
-  return (
-    <div className="space-y-1">
-      <label htmlFor={id} className="text-sm font-medium text-gray-700">
-        {t('selectDriver')}
-      </label>
-      <select
-        id={id}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        required
-        className="h-9 w-full rounded-lg border border-input bg-white px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-      >
-        <option value="">{loading ? t('loading') : t('selectDriver')}</option>
-        {options.map((driver) => (
-          <option key={driver.id} value={driver.id}>
-            {driver.displayName}
-          </option>
-        ))}
-      </select>
-    </div>
   );
 }
 
