@@ -92,10 +92,34 @@ export interface TripScheduleQuery extends OffsetPageRequest {
   assignment?: TripAssignmentFilter;
 }
 
+/**
+ * A trip exactly as the server sends it.
+ *
+ * ★ THE LEGACY COLUMN KEEPS ITS LEGACY NAME ON THE WIRE. `vehicle_id` has had
+ * no writer since 0027, but the endpoint still returns it and this client still
+ * needs it for a trip booked with a lorry and never crewed. Renaming it HERE
+ * rather than asking for an API change keeps the two compatible and gives every
+ * line above this boundary a name that says what the value is.
+ */
+type Wire<T> = Omit<T, 'legacyVehicleId'> & { vehicleId: string | null };
+
+/**
+ * The ONE place `vehicle_id` is read. Above it the field is `legacyVehicleId`
+ * and nothing else; below it is the server's vocabulary, not ours.
+ *
+ * The cast is the one TypeScript cannot prove: `Omit<T, k> & { k2 }` is
+ * structurally T for every trip shape we have, but the compiler will not derive
+ * that for an unresolved generic.
+ */
+const fromWire = <T extends { legacyVehicleId: string | null }>(row: Wire<T>): T => {
+  const { vehicleId, ...rest } = row;
+  return { ...rest, legacyVehicleId: vehicleId } as unknown as T;
+};
+
 export async function fetchTripSchedules(
   request: TripScheduleQuery = {},
 ): Promise<OffsetPage<TripScheduleWithRefs>> {
-  const { data } = await httpClient.get<OffsetPage<TripScheduleWithRefs>>('/trip-schedules', {
+  const { data } = await httpClient.get<OffsetPage<Wire<TripScheduleWithRefs>>>('/trip-schedules', {
     // axios drops `undefined` params, so an unset filter simply is not sent and
     // the server applies its own default — the current month, and the whole
     // board rather than one of its halves.
@@ -107,7 +131,7 @@ export async function fetchTripSchedules(
       assignment: request.assignment,
     },
   });
-  return data;
+  return { ...data, items: data.items.map(fromWire) };
 }
 
 /**
@@ -162,10 +186,10 @@ export async function fetchAllTripSchedules(
 }
 
 export async function fetchTripSchedule(tripId: string): Promise<TripScheduleWithRefs> {
-  const { data } = await httpClient.get<TripScheduleWithRefs>(
+  const { data } = await httpClient.get<Wire<TripScheduleWithRefs>>(
     `/trip-schedules/${encodeURIComponent(tripId)}`,
   );
-  return data;
+  return fromWire(data);
 }
 
 /**
@@ -176,8 +200,8 @@ export async function fetchTripSchedule(tripId: string): Promise<TripScheduleWit
  * the server ignores — which reads like it does something.
  */
 export async function createTripSchedule(input: CreateTripInput): Promise<TripSchedule> {
-  const { data } = await httpClient.post<TripSchedule>('/trip-schedules', input);
-  return data;
+  const { data } = await httpClient.post<Wire<TripSchedule>>('/trip-schedules', input);
+  return fromWire(data);
 }
 
 /** Corrects a row. GLOBAL only — an ordinary member gets 403 here. */
@@ -185,11 +209,11 @@ export async function updateTripSchedule(
   tripId: string,
   input: UpdateTripInput,
 ): Promise<TripSchedule> {
-  const { data } = await httpClient.patch<TripSchedule>(
+  const { data } = await httpClient.patch<Wire<TripSchedule>>(
     `/trip-schedules/${encodeURIComponent(tripId)}`,
     input,
   );
-  return data;
+  return fromWire(data);
 }
 
 /** Moves a row along the board. Its own endpoint, its own permission. */
@@ -197,11 +221,11 @@ export async function updateTripStatus(
   tripId: string,
   status: TripStatus,
 ): Promise<TripSchedule> {
-  const { data } = await httpClient.patch<TripSchedule>(
+  const { data } = await httpClient.patch<Wire<TripSchedule>>(
     `/trip-schedules/${encodeURIComponent(tripId)}/status`,
     { status },
   );
-  return data;
+  return fromWire(data);
 }
 
 /**
@@ -212,8 +236,8 @@ export async function updateTripStatus(
  * an operation that preserves the record is a description of something else.
  */
 export async function archiveTripSchedule(tripId: string): Promise<TripSchedule> {
-  const { data } = await httpClient.post<TripSchedule>(
+  const { data } = await httpClient.post<Wire<TripSchedule>>(
     `/trip-schedules/${encodeURIComponent(tripId)}/archive`,
   );
-  return data;
+  return fromWire(data);
 }

@@ -85,7 +85,7 @@ const turn = (over: Record<string, unknown> = {}) => ({
 const trip = (over: Record<string, unknown> = {}) => ({
   id: 't1',
   scheduledOn: '2026-08-04',
-  vehicleId: null,
+  legacyVehicleId: null,
   assignments: [turn()],
   customerId: 'c1',
   customer: { id: 'c1', name: 'WWL' },
@@ -365,7 +365,7 @@ describe('TripSchedulePage', () => {
         {
           id: 'a0',
           tripId: 't1',
-          vehicleId: 'v9',
+          legacyVehicleId: 'v9',
           vehicle: { id: 'v9', plate: '51D-00009' },
           driverUserId: 'd2',
           driverUser: { id: 'd2', displayName: 'Tài Xế B' },
@@ -480,7 +480,7 @@ describe('TripSchedulePage', () => {
 
     it('names a legacy planned lorry as such — a trip booked before dispatch became a pair', async () => {
       fetchTripSchedules.mockResolvedValue({
-        items: [trip({ assignments: [], vehicleId: 'legacy-v' })],
+        items: [trip({ assignments: [], legacyVehicleId: 'legacy-v' })],
         page: 1, limit: 20, total: 1, totalPages: 1,
       });
       renderPage();
@@ -624,15 +624,29 @@ describe('TripSchedulePage', () => {
       expect(assignDriver).not.toHaveBeenCalled();
     });
 
-    it('★ từ chối cùng một XE ở hai dòng, trước khi hỏi server', async () => {
+    /**
+     * ★ THE DUPLICATE IS PREVENTED AT SELECTION, NOT AT SUBMIT. A lorry taken
+     * by a sibling row is not offered again, so the refusal the form used to
+     * show on save is now unreachable through the UI — `checkCrew` keeps the
+     * rule as the last word before the network, and the server keeps it as the
+     * actual one.
+     */
+    it('★ mỗi dòng chỉ mời xe chưa được chọn ở dòng khác — trùng xe không tạo được bằng UI', async () => {
       dispatcher();
       await openForm();
       await addRow('v1', 'd1');
-      await addRow('v1', 'd2');
-      save();
+      await addRow('v2', 'd2');
 
-      expect(await screen.findByRole('alert')).toHaveTextContent(/xe này đã có ở một dòng khác/i);
-      expect(createTripSchedule).not.toHaveBeenCalled();
+      const [first, second] = screen.getAllByLabelText('Xe');
+      // Row 2 is no longer offered the lorry row 1 took...
+      expect(within(second!).queryByRole('option', { name: '50H-49266' })).toBeNull();
+      // ...but keeps its OWN, or the select could not display what it holds.
+      expect(within(second!).getByRole('option', { name: '51D-65233' })).toBeInTheDocument();
+      // And the same, mirrored, for row 1.
+      expect(within(first!).getByRole('option', { name: '50H-49266' })).toBeInTheDocument();
+      expect(within(first!).queryByRole('option', { name: '51D-65233' })).toBeNull();
+      // The placeholder survives on both.
+      expect(within(second!).getByRole('option', { name: 'Chọn xe' })).toBeInTheDocument();
     });
 
     it('★ CHO PHÉP cùng một tài xế trên hai xe — điều độ bình thường, không phải lỗi', async () => {
@@ -721,6 +735,51 @@ describe('TripSchedulePage', () => {
       // Only the row that failed is re-sent, and no second trip is booked.
       await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(3));
       expect(assignDriver.mock.calls[2]![1]).toEqual({ vehicleId: 'v2', driverUserId: 'd2' });
+      expect(createTripSchedule).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * ★ THE RETRY IS A SAVE, NOT JUST A RE-SEND OF THE CREW.
+     *
+     * The first press is exactly when a wrong date gets noticed, because that
+     * is the moment the row appears on the board. Remembering the created id
+     * so a second trip is never booked must not also mean the second press
+     * discards everything typed since — which is what skipping the trip write
+     * entirely did.
+     */
+    it('★ retry gửi payload MỚI của chuyến, và chỉ retry dòng chưa gán được', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      await addRow('v2', 'd2');
+      assignDriver
+        .mockResolvedValueOnce({ id: 'a1' })
+        .mockRejectedValueOnce(new Error('lorry refused'));
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+      await screen.findByText(/đã tạo chuyến/i);
+
+      // The dispatcher corrects the trip itself while they are here...
+      fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-15' } });
+      // ...and puts a different driver on the lorry that was refused.
+      const drivers = screen.getAllByLabelText('Chọn tài xế');
+      expect(drivers).toHaveLength(1); // the row that landed is gone
+      fireEvent.change(drivers[0]!, { target: { value: 'd1' } });
+
+      assignDriver.mockResolvedValue({ id: 'a2' });
+      save();
+
+      // The trip is UPDATED with what the form now holds — not left as booked.
+      await waitFor(() => expect(updateTripSchedule).toHaveBeenCalledTimes(1));
+      const [id, body] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+      expect(id).toBe('t1');
+      expect(body).toMatchObject({ scheduledOn: '2026-09-15' });
+
+      // Only the unassigned row is retried, carrying the correction.
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(3));
+      expect(assignDriver.mock.calls[2]![1]).toEqual({ vehicleId: 'v2', driverUserId: 'd1' });
+      // And still exactly one trip.
       expect(createTripSchedule).toHaveBeenCalledTimes(1);
     });
   });

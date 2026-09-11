@@ -114,12 +114,29 @@ export interface TripSchedule {
   scheduledOn: string;
 
   /**
-   * @deprecated LEGACY (ADR-0004). Lorries are dispatched as assignments —
-   * see `TripScheduleWithRefs.assignments` — and the server no longer writes
-   * this column. Still sent for a trip booked with a lorry before the change
-   * and never crewed, so the board can say "re-dispatch this one".
+   * The lorry a trip was BOOKED with before dispatch became a pair, and never
+   * crewed — `trip_schedules.vehicle_id`, renamed at the API boundary.
+   *
+   * ★ NOT THE TRIP'S CURRENT LORRY, AND NEVER A STAND-IN FOR ONE. Which
+   * lorries a trip is running is answered by `TripScheduleWithRefs.assignments`
+   * and nothing else, each carrying its own `vehicle`. This value is meaningful
+   * only where `assignments` is EMPTY: migration 0029 case F leaves exactly
+   * those rows uncrewed on purpose — "there is no driver to pair it with, and a
+   * lorry-only assignment is not a thing" — so the board can say "re-dispatch
+   * this one" instead of a flat "not assigned".
+   *
+   * ★ READ-ONLY IN EVERY SENSE. The server has stopped writing the column
+   * (0027) and no request this client makes can carry it: the field is absent
+   * from `CreateTripInput` and from `UpdateTripInput`, so there is no shape
+   * through which it could be set.
+   *
+   * ★ THE NAME IS THE DOCUMENTATION. It was `vehicleId` carrying a deprecation
+   * tag, which put a warning on every legitimate read of a value the board
+   * genuinely needs — and told a reader at the call site nothing about WHY the
+   * field was there. `legacyVehicleId` cannot be mistaken for the lorry that is
+   * running, which is the only mistake the tag was guarding against.
    */
-  vehicleId: string | null;
+  legacyVehicleId: string | null;
   customerId: string | null;
 
   cargoInfo: string | null;

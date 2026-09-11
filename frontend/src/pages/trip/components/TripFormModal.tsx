@@ -396,12 +396,10 @@ interface CrewRow {
 // A counter rather than `crypto.randomUUID()`: this only has to be unique
 // within one open form, and the key never leaves the browser.
 let crewKeySeq = 0;
-const newCrewRow = (): CrewRow => ({
-  key: `crew-${(crewKeySeq += 1)}`,
-  vehicleId: '',
-  driverUserId: '',
-  error: null,
-});
+const newCrewRow = (): CrewRow => {
+  crewKeySeq += 1;
+  return { key: `crew-${crewKeySeq}`, vehicleId: '', driverUserId: '', error: null };
+};
 
 /**
  * Sends each pair to the dispatch endpoint and returns the rows that did NOT
@@ -577,6 +575,21 @@ export function TripFormModal({
     onClose();
   };
 
+  /**
+   * The lorries already spoken for by ANOTHER row of this form.
+   *
+   * ★ THE SAME PATTERN THE DISPATCH PANEL USES — it hides the lorries already
+   * on the trip — and for the same reason: one lorry cannot be on one trip
+   * twice, so offering it again only invites a refusal the user cannot see
+   * coming. `checkCrew` still holds the rule, because a rule the UI merely
+   * makes hard to break is not a rule.
+   *
+   * ⚠ It knows only about THIS form. A lorry already assigned on the server —
+   * one that landed before a partial failure, say — is not in `crew` and is
+   * still offered; that one is the server's to refuse, and it does.
+   */
+  const takenVehicleIds = new Set(crew.map((row) => row.vehicleId).filter((id) => id !== ''));
+
   const addCrew = () => setCrew((rows) => [...rows, newCrewRow()]);
   const removeCrew = (key: string) => setCrew((rows) => rows.filter((row) => row.key !== key));
   /** Editing a row clears its refusal — the message described the old value. */
@@ -612,9 +625,27 @@ export function TripFormModal({
 
     setBusy(true);
     try {
-      const tripId =
-        createdTripId ?? (await saveTrip(trip, tripPayload(form, trip, mayPrice, refreshed))).id;
-      if (trip === null) setCreatedTripId(tripId);
+      // ★ BUILT FROM THE FORM ON EVERY SAVE, AND ON A RETRY IT IS SENT.
+      // Remembering the id stops a second trip being booked; it must not also
+      // mean the second press throws away what was typed in between. A
+      // dispatcher who fixes a refused lorry AND corrects the date in the same
+      // breath expects both to land — and the first press is exactly when a
+      // wrong date gets noticed, because that is when the row appears.
+      const payload = tripPayload(form, trip, mayPrice, refreshed);
+
+      let tripId: string;
+      if (createdTripId === null) {
+        const saved = await saveTrip(trip, payload);
+        tripId = saved.id;
+        if (trip === null) setCreatedTripId(saved.id);
+      } else {
+        // The trip this form created moments ago, corrected rather than
+        // recreated. PATCH is `trip.write`, the same permission the crew
+        // section already required to be drawn, so this cannot 403 for anyone
+        // who could reach a partial failure in the first place.
+        await updateTripSchedule(createdTripId, payload);
+        tripId = createdTripId;
+      }
 
       const failed = await dispatchCrew(tripId, checked, (error_) =>
         failureMessage(error_, t('saveFailed')),
@@ -935,11 +966,18 @@ export function TripFormModal({
                         className="h-9 w-full rounded-lg border border-input bg-white px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                       >
                         <option value="">{t('dispatchSelectVehicle')}</option>
-                        {vehicles.map((vehicle) => (
-                          <option key={vehicle.id} value={vehicle.id}>
-                            {formatPlate(vehicle.plate)}
-                          </option>
-                        ))}
+                        {vehicles
+                          // Its OWN choice always stays: a select cannot show a
+                          // value it has no option for.
+                          .filter(
+                            (vehicle) =>
+                              vehicle.id === row.vehicleId || !takenVehicleIds.has(vehicle.id),
+                          )
+                          .map((vehicle) => (
+                            <option key={vehicle.id} value={vehicle.id}>
+                              {formatPlate(vehicle.plate)}
+                            </option>
+                          ))}
                       </select>
                     </div>
                     <DriverSelect
