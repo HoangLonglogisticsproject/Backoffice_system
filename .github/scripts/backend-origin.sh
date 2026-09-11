@@ -100,49 +100,65 @@ read_origin() {
 # throwaway file and asserts what the reader does with it.
 
 self_test() {
-  local dir rc out failures=0
+  local dir out rc failures=0
 
   dir="$(mktemp -d)"
   # shellcheck disable=SC2064
   trap "rm -rf '$dir'" EXIT
 
-  # `check <expectation> <label> <file-contents...>` where expectation is the
-  # origin that must be printed, or the literal REJECT.
+  # ★ THE ONLY PLACE THAT RUNS THE READER, AND IT MUST STAY INSIDE `$(...)`.
+  # `die` ends with `exit`. Called directly, the first refusal would tear down
+  # the whole self-test — every later assertion skipped, and a non-zero exit
+  # after printing nothing but passes. The command substitution keeps that exit
+  # inside a subshell.
+  try_read() {
+    local file="$1"
+    set +e
+    out="$(read_origin "$file" 2>&1)"
+    rc=$?
+    set -e
+  }
+
+  pass() { local msg="$1"; echo "  ✔ $msg"; }
+  fail() { local msg="$1"; echo "  ✘ $msg" >&2; failures=$((failures + 1)); }
+
+  # `verify <expectation> <label> <path>` — the single assertion primitive.
+  # Expectation is REJECT, ACCEPT (succeeds, value unimportant), or the exact
+  # origin that must be printed.
+  verify() {
+    local expect="$1" label="$2" file="$3"
+    try_read "$file"
+
+    if [[ "$expect" == REJECT ]]; then
+      if [[ "$rc" -eq 0 ]]; then
+        fail "$label — accepted, should have been refused"
+      else
+        pass "$label — refused"
+      fi
+    elif [[ "$rc" -ne 0 ]]; then
+      fail "$label — refused, should have been accepted: $out"
+    elif [[ "$expect" != ACCEPT && "$out" != "$expect" ]]; then
+      fail "$label — printed '$out', expected '$expect'"
+    else
+      pass "$label — '$out'"
+    fi
+  }
+
+  # `check <expectation> <label> <file-contents...>` — write a fixture, verify it.
   check() {
     local expect="$1" label="$2" file="$dir/case.ts"
     shift 2
     printf '%s\n' "$@" > "$file"
-
-    set +e
-    out="$(read_origin "$file" 2>/dev/null)"
-    rc=$?
-    set -e
-
-    if [[ "$expect" == REJECT ]]; then
-      if [[ "$rc" -eq 0 ]]; then
-        echo "  ✘ $label — accepted, should have been refused" >&2
-        failures=$((failures + 1))
-      else
-        echo "  ✔ $label — refused"
-      fi
-    elif [[ "$rc" -ne 0 ]]; then
-      echo "  ✘ $label — refused, should have been accepted" >&2
-      failures=$((failures + 1))
-    elif [[ "$out" != "$expect" ]]; then
-      echo "  ✘ $label — printed '$out', expected '$expect'" >&2
-      failures=$((failures + 1))
-    else
-      echo "  ✔ $label — '$out'"
-    fi
+    verify "$expect" "$label" "$file"
   }
 
   # `accepts <origin> <label>` / `refuses <origin> <label>` — the common shape,
   # where only the VALUE differs. Writing the declaration once here rather than
-  # eleven times below is the difference between a table of cases and eleven
-  # copies of one string with a word changed.
-  decl() { printf "export const PRODUCTION_BACKEND_ORIGIN = '%s';" "$1"; }
-  accepts() { check "$1" "$2" "$(decl "$1")"; }
-  refuses() { check REJECT "$2" "$(decl "$1")"; }
+  # around every case is the difference between a table and ten copies of one
+  # string with a word changed.
+  decl() { local value="$1"; printf "export const PRODUCTION_BACKEND_ORIGIN = '%s';" "$value"; }
+  accepts() { local value="$1" label="$2"; check "$value" "$label" "$(decl "$value")"; }
+  refuses() { local value="$1" label="$2"; check REJECT "$label" "$(decl "$value")"; }
 
   echo "backend-origin.sh --self-test"
 
@@ -150,8 +166,8 @@ self_test() {
   accepts 'https://bo-api.hoanglonglti.com' 'an https origin'
   accepts 'https://api.example.com:8443'    'an explicit port'
 
-  # The one accepted case whose FILE, not value, is unusual: the declaration
-  # has to be found among other lines.
+  # The one accepted case whose FILE is unusual rather than its value: the
+  # declaration has to be found among other lines.
   check 'https://bo-api.hoanglonglti.com' 'surrounding comments and code' \
     '/** doc comment */' \
     "$(decl 'https://bo-api.hoanglonglti.com')" \
@@ -159,58 +175,35 @@ self_test() {
 
   # -- refused -------------------------------------------------------------
   #
-  # ⚠ THE TWO `NOSONAR`S BELOW ARE THE POINT OF THE TEST, NOT AN EXCEPTION TO IT.
-  # shell:S5332 flags clear-text URLs. These two are the fixtures that prove a
-  # clear-text origin is REFUSED, so the rule is firing on the assertion that
-  # enforces it. Suppressed explicitly and in the open — an earlier attempt to
-  # assemble the scheme from a variable was worse: the analyser resolved it
-  # anyway, and it left the test harder to read for nothing.
+  # ⚠ THE TWO `NOSONAR`S ARE THE POINT OF THE TEST, NOT AN EXCEPTION TO IT.
+  # shell:S5332 flags clear-text URLs. These two fixtures ARE clear-text URLs,
+  # because they are what proves a clear-text origin gets refused — the rule is
+  # firing on the assertion that enforces it. Suppressed in the open with the
+  # reason beside it. An earlier attempt to assemble the scheme from a variable
+  # was worse: the analyser resolved it anyway, and the test read worse for it.
   refuses 'http://bo-api.hoanglonglti.com' 'a plaintext origin'  # NOSONAR
   refuses 'http://127.0.0.1:3000' 'plaintext loopback, never for a release'  # NOSONAR
 
-  refuses ''                                'an empty value'
-  refuses 'https://api.example.com/base'    'a path that would be silently discarded'
-  refuses 'ftp://api.example.com'           'a scheme that is neither'
-  refuses 'api.example.com'                 'no scheme at all'
+  refuses ''                             'an empty value'
+  refuses 'https://api.example.com/base' 'a path that would be silently discarded'
+  refuses 'ftp://api.example.com'        'a scheme that is neither'
+  refuses 'api.example.com'              'no scheme at all'
 
-  check REJECT 'no declaration at all'     'export const SOMETHING_ELSE = 1;'
+  check REJECT 'no declaration at all' 'export const SOMETHING_ELSE = 1;'
 
   check REJECT 'two declarations that disagree' \
     "$(decl 'https://a.example.com')" \
     "$(decl 'https://b.example.com')"
 
-  # A missing file is the one case that needs no fixture.
-  #
-  # ⚠ CALLED INSIDE `$(...)`, LIKE EVERY OTHER CASE, AND THAT IS LOAD-BEARING.
-  # `die` ends with `exit`, so invoking `read_origin` directly here would tear
-  # down the whole self-test on its first refusal — the remaining assertions
-  # would never run and the script would exit non-zero having printed only
-  # passes. The command substitution keeps the exit inside a subshell.
-  set +e
-  out="$(read_origin "$dir/absent.ts" 2>&1)"
-  rc=$?
-  set -e
-  if [[ "$rc" -eq 0 ]]; then
-    echo "  ✘ a missing file — accepted, should have been refused" >&2
-    failures=$((failures + 1))
-  else
-    echo "  ✔ a missing file — refused"
-  fi
+  verify REJECT 'a missing file' "$dir/absent.ts"
 
-  # ★ AND THE REAL FILE, because every case above is a fixture. This is the one
-  # assertion that would have caught the actual regression: the committed origin
-  # must itself pass the rules this script enforces.
+  # ★ AND THE REAL FILE, because everything above is a fixture. This is the
+  # assertion that catches the regression that actually matters: the COMMITTED
+  # origin must itself pass the rules this script enforces. ACCEPT rather than a
+  # literal — asserting the value here would just re-read it and compare it to
+  # itself; the proxy's own spec pins what it has to be.
   if [[ -r "$DEFAULT_FILE" ]]; then
-    set +e
-    out="$(read_origin "$DEFAULT_FILE" 2>&1)"
-    rc=$?
-    set -e
-    if [[ "$rc" -ne 0 ]]; then
-      echo "  ✘ the committed $DEFAULT_FILE — $out" >&2
-      failures=$((failures + 1))
-    else
-      echo "  ✔ the committed $DEFAULT_FILE — '$out'"
-    fi
+    verify ACCEPT "the committed $DEFAULT_FILE" "$DEFAULT_FILE"
   fi
 
   if [[ "$failures" -ne 0 ]]; then
