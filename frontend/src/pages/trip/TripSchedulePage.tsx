@@ -603,6 +603,16 @@ const platesOf = (trip: TripScheduleWithRefs): string =>
  * pair may still carry `vehicleId` with no assignment behind it; the board
  * says "planned vehicle (legacy)" rather than a plate it does not have, so
  * Operations knows to dispatch the trip again as a pair.
+ *
+ * ★ SONAR S1874 ("'vehicleId' is deprecated") IS EXPECTED HERE AND MUST NOT BE
+ * "FIXED" BY DELETING THE READ. `assignment.vehicle_id` is the canonical source
+ * and it cannot answer this one: the read happens only where
+ * `assignments.length === 0`, and migration 0029 case F leaves precisely those
+ * rows uncrewed by design — a lorry with no driver is not an assignment. The
+ * legacy column is therefore the only record that a lorry was ever planned, and
+ * removing the read would render those trips as an ordinary `Unset`, losing the
+ * signal that they need re-dispatching. Deprecated means no new WRITER — nothing
+ * has written the column since 0027 — not that the existing rows went away.
  */
 function Plates({ trip }: Readonly<{ trip: TripScheduleWithRefs }>) {
   const { t } = useLanguage();

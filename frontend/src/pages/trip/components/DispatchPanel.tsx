@@ -82,7 +82,19 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
         <div className="space-y-4">
           {/* ★ A LEGACY LORRY, NEVER CREWED. Trips booked with a lorry before
               dispatch became a pair still carry it on the row; it is shown so
-              Operations knows what was planned and re-dispatches it as a pair. */}
+              Operations knows what was planned and re-dispatches it as a pair.
+
+              ★ SONAR S1874 ("'vehicleId' is deprecated") IS EXPECTED HERE AND
+              MUST NOT BE "FIXED" BY DELETING THE READ. The canonical source,
+              `assignment.vehicle_id`, cannot answer this: the branch runs only
+              when `active.length === 0`, and migration 0029 case F leaves
+              exactly those rows alone on purpose — "trip has a legacy lorry, no
+              assignment → nothing. There is no driver to pair it with, and a
+              lorry-only assignment is not a thing." So the legacy column is the
+              only place the fact exists, and dropping the read would silently
+              turn a re-dispatch prompt into a plain "not assigned". Deprecated
+              means no new WRITER — nothing has written it since 0027 — not that
+              the old rows stopped existing. */}
           {showLegacyVehicle && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {t('dispatchLegacyVehicle')}

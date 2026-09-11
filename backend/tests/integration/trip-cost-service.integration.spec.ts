@@ -480,15 +480,24 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
         .filter((name) => name !== 'constructor')
         .sort();
 
-      // `ownershipOf` and `requireTrip` are `private` in TypeScript, which is a
-      // COMPILE-TIME idea — the prototype carries them at runtime like any other
-      // method. Listed rather than filtered out, so the list stays a literal
-      // description of what is actually there.
+      // `existingDeclaration`, `ownershipOf` and `requireTrip` are `private` in
+      // TypeScript, which is a COMPILE-TIME idea — the prototype carries them at
+      // runtime like any other method. Listed rather than filtered out, so the
+      // list stays a literal description of what is actually there.
+      //
+      // ★ `existingDeclaration` IS AN IMPLEMENTATION DETAIL, AND IT BROKE THIS
+      // TEST ON PURPOSE — which is the test working. It is the one lookup that
+      // answers a repeated declaration, taken twice: unlocked for the ordinary
+      // retry, then again under the trip lock where a simultaneous twin has
+      // committed. It is NOT an edit path and NOT a second way to write a
+      // figure; it only ever returns a row `declareCost` had already written,
+      // or raises the ConflictError for a key reused on another assignment.
       expect(surface).toEqual([
         'createCost',
         'createHire',
         'declareCost',
         'editCost',
+        'existingDeclaration',
         'listCostEdits',
         'listCosts',
         'listHires',
