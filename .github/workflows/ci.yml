@@ -84,6 +84,7 @@ jobs:
         run: |
           bash .github/scripts/affected.sh --self-test
           bash .github/scripts/pending-migrations.sh --self-test
+          bash .github/scripts/backend-origin.sh --self-test
 
       - name: Classify the changed paths
         id: matrix
@@ -776,26 +777,36 @@ jobs:
       # request after a swap is the one most likely to be a 502. Five tries over
       # ~20s, then it is a real failure. Not a `||true` — an unreachable backend
       # MUST stop the release.
+      #
+      # ★ AND EVERY WAY THIS STEP CANNOT ANSWER ITS QUESTION IS A FAILURE. A
+      # missing origin file, no declaration, an empty value, a plaintext scheme:
+      # each one exits 1. There is deliberately no path through this step that
+      # reports success without having reached the backend.
       - name: Verify the backend on its public HTTPS endpoint
         id: verify_be
         if: steps.deploy_be.outcome == 'success'
         timeout-minutes: 3
-        env:
-          # The same origin the Vercel project points BACKEND_ORIGIN at, so the
-          # thing being verified is the thing the frontend will actually call.
-          BACKEND_ORIGIN: ${{ vars.BACKEND_ORIGIN }}
         run: |
           set -euo pipefail
 
-          # ★ UNSET IS A WARNING, NOT A FAILURE — the same rule the rest of this
-          # job follows. The direct path is configured after this lands, and
-          # until it is, `bo-release`'s own loopback health check is what the
-          # release has. Once BACKEND_ORIGIN is set, this becomes binding.
-          if [ -z "${BACKEND_ORIGIN:-}" ]; then
-            echo "::warning::BACKEND_ORIGIN is not set - the backend was verified only from inside the VPS, over loopback."
-            exit 0
-          fi
+          # ★ ONE SOURCE OF TRUTH, AND IT IS THE FILE THE DEPLOYED FUNCTION
+          # IMPORTS. This used to read a GitHub Environment variable while
+          # production read a Vercel Project variable of the same name. Two
+          # copies, nothing comparing them: this gate could verify one host,
+          # promote a frontend that calls another, and go green — measuring a
+          # backend no user reaches.
+          #
+          # `backend-origin.sh` reads the constant that
+          # `frontend/api/[...path].ts` imports, so the origin verified here and
+          # the origin production calls are the same string by construction. It
+          # refuses a missing file, a missing or duplicated declaration, an empty
+          # value, a non-https scheme and a path — each as a non-zero exit, which
+          # `set -e` turns into a failed release. `detect` runs its `--self-test`
+          # on every pull request, so those rules are proven before a release
+          # leans on them.
+          BACKEND_ORIGIN="$(bash .github/scripts/backend-origin.sh)"
 
+          echo "origin (committed, from frontend/api/backend-origin.ts): ${BACKEND_ORIGIN}"
           echo "GET ${BACKEND_ORIGIN}/api/health"
           for attempt in 1 2 3 4 5; do
             if curl -fsS --max-time 10 "${BACKEND_ORIGIN}/api/health"; then

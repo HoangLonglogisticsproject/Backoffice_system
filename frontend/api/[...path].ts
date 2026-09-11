@@ -8,23 +8,25 @@
  * next request. Proxying keeps every request on the Vercel origin, so the
  * cookie is same-site by construction and CORS never enters the picture.
  *
- * ★ AND IT IS A FUNCTION RATHER THAN A `vercel.json` REWRITE because the
- * destination has to come from an environment variable. Vercel does not
- * interpolate environment variables inside `vercel.json` — a rewrite
- * destination is a literal — so the backend origin would have to be committed.
- * It changes (a quick tunnel today, a domain later), and a URL in git that
- * moves every restart is a redeploy waiting to be forgotten.
+ * ★ AND IT IS A FUNCTION RATHER THAN A `vercel.json` REWRITE because a rewrite
+ * destination is a literal and this one has to be validated before it is used —
+ * an origin carrying a path silently becomes a routing bug, and a plaintext one
+ * would put the session cookie on the wire. A rewrite can express neither
+ * check. (`vercel.json` also has no `env` key to read a value from; it is not
+ * among the properties Vercel supports there.)
  *
  * ★ THE `/api` PREFIX IS FORWARDED, NOT STRIPPED. nginx on the VPS is what
  * removes it (`proxy_pass http://upstream/`), and the app underneath has no
  * global prefix. Strip it here as well and every request arrives as `//health`.
  *
- * ⚠ `BACKEND_ORIGIN` IS READ ONCE, AT MODULE LOAD. That is how a serverless
- * runtime works — the value is fixed for the life of the isolate — so changing
- * it in the Vercel project requires a REDEPLOY, not just a save. Left as is on
- * purpose: reading it per request would suggest a liveness this platform does
- * not offer.
+ * ★ THE ORIGIN IS COMMITTED, NOT CONFIGURED. It comes from
+ * `./backend-origin.ts`, which that file explains at length: an environment
+ * variable was a second place the value could be set, and a second place is how
+ * the release gate and production came to be able to disagree. Changing it is a
+ * commit and a deploy.
  */
+
+import { PRODUCTION_BACKEND_ORIGIN } from './backend-origin';
 
 export const config = { runtime: 'edge' };
 
@@ -75,6 +77,35 @@ const FORWARDING_IDENTITY = [
 type Resolved = { origin: string } | { configError: string };
 
 /**
+ * ★ THE ONE EXCEPTION TO HTTPS, AND WHY IT IS NOT A HOLE.
+ *
+ * Loopback cannot be intercepted: there is no network segment between the two
+ * ends to sit on, so TLS would be protecting a conversation that never leaves
+ * the machine. This is the same line browsers draw — W3C "Secure Contexts"
+ * treats `127.0.0.0/8`, `::1` and `localhost` as potentially trustworthy for
+ * exactly this reason — and it is what lets `proxy.spec.ts` exercise real
+ * forwarding against a stub `node:http` server instead of inventing a
+ * certificate authority for a unit test.
+ *
+ * It cannot widen into production: the origin is no longer configurable at
+ * runtime, it is `PRODUCTION_BACKEND_ORIGIN`, and loopback on a Vercel edge
+ * node is not the VPS — it is nothing at all.
+ *
+ * ⚠ `URL.hostname` keeps the brackets on an IPv6 literal, so `[::1]` is the
+ * form that actually arrives here. Both spellings are listed rather than
+ * stripping brackets, because a comparison that quietly normalises is one more
+ * thing to be wrong about.
+ */
+function isLoopback(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname === '::1' ||
+    hostname === '[::1]' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+  );
+}
+
+/**
  * ★ AN ORIGIN, NOT A URL. `new URL('/api/health', base)` resolves against the
  * base's ORIGIN — any path on the base is silently discarded, so
  * `https://host/base` would quietly become `https://host/api/health` and the
@@ -85,7 +116,7 @@ type Resolved = { origin: string } | { configError: string };
  * value: this text reaches a browser, and the backend address is not something
  * to hand out in an error body.
  */
-function resolveOrigin(raw: string | undefined): Resolved {
+export function resolveOrigin(raw: string | undefined): Resolved {
   if (!raw || raw.trim() === '') {
     return { configError: 'BACKEND_ORIGIN is not set.' };
   }
@@ -98,7 +129,23 @@ function resolveOrigin(raw: string | undefined): Resolved {
   }
 
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    return { configError: 'BACKEND_ORIGIN must be an http(s) URL.' };
+    return { configError: 'BACKEND_ORIGIN must be an https URL.' };
+  }
+
+  /**
+   * ★ REFUSED HERE, BEFORE ANYTHING IS SENT. This runs while the module is
+   * still loading — before a request is built, before headers are copied, and
+   * before `fetch` is called — so a plaintext origin never carries the session
+   * cookie, the CSRF header or a request body anywhere.
+   *
+   * The cookie is the reason this matters rather than being a lint rule.
+   * `bo_session` travels on every proxied request; over `http://` it would
+   * cross the public internet in clear text between Vercel and the VPS, and
+   * `Secure` does not help — that attribute constrains the BROWSER's leg, which
+   * is Vercel's TLS, and says nothing about this second hop.
+   */
+  if (parsed.protocol === 'http:' && !isLoopback(parsed.hostname)) {
+    return { configError: 'BACKEND_ORIGIN must use https.' };
   }
   if (parsed.pathname !== '/') {
     return { configError: 'BACKEND_ORIGIN must be an origin only, with no path.' };
@@ -112,69 +159,86 @@ function resolveOrigin(raw: string | undefined): Resolved {
   return { origin: parsed.origin };
 }
 
-const BACKEND = resolveOrigin(process.env.BACKEND_ORIGIN);
 
 /** The shape `toApiError` on the client already parses: `{ error: { code, message } }`. */
 const fail = (code: string, message: string): Response =>
   Response.json({ error: { code, message } }, { status: 502 });
 
-export default async function handler(request: Request): Promise<Response> {
-  if ('configError' in BACKEND) {
-    // Distinct from an outage on purpose: this one is fixed in the Vercel
-    // project, not on the VPS, and they are different people at 3am.
-    return fail('BACKEND_MISCONFIGURED', BACKEND.configError);
-  }
+/**
+ * ★ A FACTORY, SO THE ORIGIN IS AN ARGUMENT RATHER THAN AN AMBIENT READ.
+ *
+ * The default export below binds it to `PRODUCTION_BACKEND_ORIGIN` — the
+ * committed constant — which is what Vercel deploys. Nothing reads
+ * `process.env.BACKEND_ORIGIN` any more, and that is the whole point: an
+ * environment variable is a second place the origin can be set, and a second
+ * place is exactly how the release gate and production came to disagree.
+ *
+ * The seam is not only for tests. It is what makes the origin a value this
+ * repository states, rather than one the platform supplies at runtime.
+ */
+export function createProxyHandler(rawOrigin: string | undefined) {
+  const BACKEND = resolveOrigin(rawOrigin);
 
-  const incoming = new URL(request.url);
-  const target = new URL(incoming.pathname + incoming.search, BACKEND.origin);
+  return async function handler(request: Request): Promise<Response> {
+    if ('configError' in BACKEND) {
+      // Distinct from an outage on purpose: this one is fixed in the Vercel
+      // project, not on the VPS, and they are different people at 3am.
+      return fail('BACKEND_MISCONFIGURED', BACKEND.configError);
+    }
 
-  const headers = new Headers(request.headers);
+    const incoming = new URL(request.url);
+    const target = new URL(incoming.pathname + incoming.search, BACKEND.origin);
 
-  // ★ ORDER MATTERS: `Connection` names further headers as hop-by-hop, so its
-  // value has to be read before it is itself deleted. Read after, and every
-  // header it nominated travels on.
-  const nominated = (headers.get('connection') ?? '')
-    .split(',')
-    .map((token) => token.trim().toLowerCase())
-    .filter((token) => token !== '');
+    const headers = new Headers(request.headers);
 
-  for (const name of FORWARDING_IDENTITY) headers.delete(name);
-  for (const name of nominated) headers.delete(name);
-  for (const name of HOP_BY_HOP) headers.delete(name);
+    // ★ ORDER MATTERS: `Connection` names further headers as hop-by-hop, so its
+    // value has to be read before it is itself deleted. Read after, and every
+    // header it nominated travels on.
+    const nominated = (headers.get('connection') ?? '')
+      .split(',')
+      .map((token) => token.trim().toLowerCase())
+      .filter((token) => token !== '');
 
-  // Buffered rather than streamed: a streaming body needs `duplex: 'half'`,
-  // which is not in the fetch types here and would cost a suppression. Bodies
-  // on this API are small JSON — nginx caps them at 2 MB.
-  const body =
-    request.method === 'GET' || request.method === 'HEAD'
-      ? undefined
-      : await request.arrayBuffer();
+    for (const name of FORWARDING_IDENTITY) headers.delete(name);
+    for (const name of nominated) headers.delete(name);
+    for (const name of HOP_BY_HOP) headers.delete(name);
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(target, {
-      method: request.method,
-      headers,
-      body,
-      // The backend answers 401/403/409 as data, and a redirect it does issue is
-      // the caller's to see. Following one here would hide it.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+    // Buffered rather than streamed: a streaming body needs `duplex: 'half'`,
+    // which is not in the fetch types here and would cost a suppression. Bodies
+    // on this API are small JSON — nginx caps them at 2 MB.
+    const body =
+      request.method === 'GET' || request.method === 'HEAD'
+        ? undefined
+        : await request.arrayBuffer();
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(target, {
+        method: request.method,
+        headers,
+        body,
+        // The backend answers 401/403/409 as data, and a redirect it does issue is
+        // the caller's to see. Following one here would hide it.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+    } catch {
+      // ★ EVERY failure mode, one answer. A refused connection is a `TypeError`, a
+      // timeout is a `TimeoutError` DOMException, DNS is another — and none of
+      // them is worth telling a browser about in detail, because the details are
+      // the backend's address and its network topology. Caught without inspecting
+      // so nothing from the error can escape into the response.
+      return fail('BACKEND_UNAVAILABLE', 'The API is not reachable right now.');
+    }
+
+    // Constructed from the upstream headers so `Set-Cookie` survives intact —
+    // including more than one of them, which a naive object copy flattens.
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: upstream.headers,
     });
-  } catch {
-    // ★ EVERY failure mode, one answer. A refused connection is a `TypeError`, a
-    // timeout is a `TimeoutError` DOMException, DNS is another — and none of
-    // them is worth telling a browser about in detail, because the details are
-    // the backend's address and its network topology. Caught without inspecting
-    // so nothing from the error can escape into the response.
-    return fail('BACKEND_UNAVAILABLE', 'The API is not reachable right now.');
-  }
-
-  // Constructed from the upstream headers so `Set-Cookie` survives intact —
-  // including more than one of them, which a naive object copy flattens.
-  return new Response(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers: upstream.headers,
-  });
+  };
 }
+
+export default createProxyHandler(PRODUCTION_BACKEND_ORIGIN);

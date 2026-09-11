@@ -563,31 +563,104 @@ throttle gets *more* granular, not less.
 bridge, which is the backend's immediate peer in both topologies because both
 arrive through the same nginx.
 
+### ★ Where the backend origin is written down — and the only place
+
+`frontend/api/backend-origin.ts`. One line, in git:
+
+```ts
+export const PRODUCTION_BACKEND_ORIGIN = 'https://bo-api.hoanglonglti.com';
+```
+
+**Not a Vercel environment variable, and not a GitHub one.** It used to be both
+at once, which is the bug: the Vercel project decided what production actually
+called, a GitHub Environment variable decided what the release gate checked, and
+nothing compared them. A release could verify one origin, promote a frontend
+pointing at another, and report success — the gate measuring a host no user
+reaches. Keeping two copies in agreement is a process; having one copy is a
+property.
+
+Both consumers now read that same file:
+
+```
+frontend/api/backend-origin.ts        ← the only declaration
+   │
+   ├─ frontend/api/[...path].ts       imports it; this is what Vercel deploys
+   │     └─ resolveOrigin() refuses non-https, a path, a query, an empty value
+   │
+   └─ .github/scripts/backend-origin.sh
+         ├─ detect  → --self-test on every pull request
+         └─ release → verify_be reads it, then curls THAT host's /api/health
+```
+
+⚠ **Delete `BACKEND_ORIGIN` from the Vercel project.** `[...path].ts` no longer
+reads `process.env.BACKEND_ORIGIN` at all, so the dashboard variable now changes
+nothing. Leaving it in place is worse than removing it: the next person to need
+a failover will edit it, redeploy, and watch production keep calling the old
+host with no indication why. The same goes for the `BACKEND_ORIGIN` variable on
+the GitHub `staging` environment — the workflow stopped reading it.
+
+#### What is enforced, and where
+
+| | refuses | when |
+|---|---|---|
+| `resolveOrigin` (`[...path].ts`) | non-https for a non-loopback host, a path, a query or fragment, an empty value | at module load, **before** any request is built or header forwarded |
+| `backend-origin.sh` | the same set, plus a missing file and a missing or **duplicated** declaration | `detect`, every pull request |
+| `verify_be` | the same, then a backend that will not answer `/api/health` in five tries | every release, before the frontend is promoted |
+
+Three checks over one value. They are deliberately allowed to disagree — if they
+ever do, the release stops, which is the point. A single trusted check is one
+typo away from being no check.
+
+★ **Loopback `http://` is accepted by the proxy and refused by the release.**
+That is not an inconsistency, it is the difference between the two questions.
+`proxy.spec.ts` exercises real forwarding against a stub `node:http` server on
+`127.0.0.1`, and loopback has no network segment to intercept — the same line
+the W3C draws for secure contexts. A *release*, by contrast, is never talking to
+its own loopback, so `backend-origin.sh` refuses it outright.
+
+#### Failing over to the tunnel
+
+Now a commit rather than a dashboard toggle:
+
+```bash
+# edit the one line
+sed -i "s|'https://bo-api.hoanglonglti.com'|'https://<the tunnel hostname>'|" \
+  frontend/api/backend-origin.ts
+
+bash .github/scripts/backend-origin.sh      # must print the new origin
+cd frontend && npm test -- api/proxy.spec.ts
+# commit, push, merge — the pipeline verifies the new origin before promoting
+```
+
+★ **Slower than a dashboard edit, and that is the trade being made on purpose.**
+The failover becomes reviewable, attributable and visible in `git log` instead
+of a change nobody can find afterwards — and the release gate verifies the host
+you are failing over *to* before any user is sent at it. If the tunnel hostname
+is not already recorded somewhere, record it now: this procedure needs it, and
+an outage is a poor time to go looking.
+
+⚠ For a genuine emergency where a commit is too slow, the honest lever is
+Vercel's **instant rollback** to the last deployment built against the tunnel —
+not an environment variable, which no longer does anything.
+
 ### Cutover, and going back
 
-The change is one variable in the Vercel project, and reverting is the same
-variable. Neither is in this repository, on purpose — see the header comment in
-`frontend/api/[...path].ts` for why the origin is configuration rather than code.
+★ **This used to say "one variable in the Vercel project". It no longer is, and
+the change is the whole point of the section above.** The origin lives in
+`frontend/api/backend-origin.ts`; the Vercel and GitHub variables that once held
+it are inert and should be deleted. Both directions — onto `bo-api`, or back to
+the tunnel — are the same one-line commit, described under **Failing over to the
+tunnel** above.
 
-```
-Vercel → Project → Settings → Environment Variables → BACKEND_ORIGIN (Production)
-   now       https://bo-api.hoanglonglti.com
-   fallback  https://<the tunnel hostname>   ← keep this recorded somewhere
-then: Deployments → ⋯ → Redeploy       (the redeploy is what applies it)
-```
-
-Then set the same value on the GitHub `staging` environment so the pipeline
-gates on the same endpoint the frontend actually calls:
-
-```
-staging environment → Variables → BACKEND_ORIGIN = https://bo-api.hoanglonglti.com
-```
+The release then verifies the new origin *before* promoting a frontend at it,
+which the dashboard flow could not do: a variable saved in one system was never
+checked against the host the other system was testing.
 
 ⚠ **Keep `cloudflared` running.** It costs nothing idle and it is the route that
 survives a DNS problem, an expired certificate, or a Matbao outage — none of
-which the direct path can ride out on its own. Reverting is a two-minute
-dashboard change *only* while the tunnel is still up; if it has been torn down,
-it is a two-hour one.
+which the direct path can ride out on its own. Reverting is a one-line commit
+*only* while the tunnel is still up; if it has been torn down, it is a much
+longer afternoon.
 
 ### DNS
 
