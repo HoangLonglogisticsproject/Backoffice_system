@@ -468,6 +468,12 @@ export default function TripSchedulePage() {
         isOpen={formOpen}
         trip={editing}
         customers={catalogue.customers.items}
+        // The same active lorries the dispatch panel offers, for the crew rows
+        // on the create form. Dispatching is `trip.write`, which the create
+        // permission does not imply — so the section is offered only to
+        // somebody the server would actually accept the assignments from.
+        vehicles={catalogue.vehicles.items}
+        mayDispatch={can('trip.write')}
         // `data` is null until the read lands; `items` defaults to [], which
         // cannot tell an empty catalogue from an unread one.
         cataloguesLoaded={catalogue.customers.data !== null}
@@ -604,20 +610,18 @@ const platesOf = (trip: TripScheduleWithRefs): string =>
  * says "planned vehicle (legacy)" rather than a plate it does not have, so
  * Operations knows to dispatch the trip again as a pair.
  *
- * ★ SONAR S1874 ("'vehicleId' is deprecated") IS EXPECTED HERE AND MUST NOT BE
- * "FIXED" BY DELETING THE READ. `assignment.vehicle_id` is the canonical source
- * and it cannot answer this one: the read happens only where
- * `assignments.length === 0`, and migration 0029 case F leaves precisely those
- * rows uncrewed by design — a lorry with no driver is not an assignment. The
- * legacy column is therefore the only record that a lorry was ever planned, and
- * removing the read would render those trips as an ordinary `Unset`, losing the
- * signal that they need re-dispatching. Deprecated means no new WRITER — nothing
- * has written the column since 0027 — not that the existing rows went away.
+ * ★ IT READS `legacyVehicleId`, AND ONLY WHERE THERE IS NO CREW.
+ * `assignment.vehicle` is the canonical source and cannot answer this one: the
+ * read happens only where `assignments.length === 0`, and migration 0029 case F
+ * leaves precisely those rows uncrewed by design — a lorry with no driver is not
+ * an assignment. The legacy column is therefore the only record that a lorry was
+ * ever planned, and removing the read would render those trips as an ordinary
+ * `Unset`, losing the signal that they need re-dispatching.
  */
 function Plates({ trip }: Readonly<{ trip: TripScheduleWithRefs }>) {
   const { t } = useLanguage();
   if (trip.assignments.length === 0) {
-    return trip.vehicleId ? (
+    return trip.legacyVehicleId ? (
       <span className="text-xs font-normal text-amber-700">{t('dispatchLegacyBadge')}</span>
     ) : (
       <Unset />

@@ -28,7 +28,7 @@ const trip = (over: Partial<TripScheduleWithRefs> = {}): TripScheduleWithRefs =>
   ({
     id: 't1',
     scheduledOn: '2026-08-04',
-    vehicleId: null,
+    legacyVehicleId: null,
     assignments: [turn()],
     customerId: 'c1',
     customer: { id: 'c1', name: 'WWL' },
