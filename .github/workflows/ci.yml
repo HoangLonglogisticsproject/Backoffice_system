@@ -78,8 +78,17 @@ jobs:
       # ★ AND `pending-migrations.sh` EARNS ITS PLACE HERE TOO, even though
       # `detect` never calls it. It decides whether a database is backed up
       # before a forward-only migration, and the only other thing that runs it is
-      # the release — which is far too late to discover it is broken. Both are
-      # pure bash: no Docker, no database, about a second for the pair.
+      # the release — which is far too late to discover it is broken.
+      #
+      # ★ `backend-origin.sh` IS HERE FOR THE SAME REASON, AND ONE MORE. The
+      # release reads the backend origin through it and refuses to promote a
+      # frontend past a host it could not verify; a broken reader would be
+      # discovered mid-release. But it also checks the COMMITTED origin itself on
+      # every pull request, so a commit that downgrades it to http, empties it or
+      # duplicates its declaration fails here rather than at deploy time.
+      #
+      # All three are pure bash: no Docker, no database, about a second for the
+      # set.
       - name: Prove the scripts still mean what they say
         run: |
           bash .github/scripts/affected.sh --self-test
