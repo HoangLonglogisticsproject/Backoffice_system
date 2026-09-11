@@ -24,7 +24,8 @@ import { DriverPortalController } from './driver-portal.controller';
  *
  * ★ THE ONE PROPERTY THIS FILE EXISTS TO PIN DOWN:
  *
- *   Driver A cannot touch Trip B, EVEN KNOWING ITS ID.
+ *   Driver A cannot touch Assignment B, EVEN KNOWING ITS ID — and even when
+ *   assignment B is on the same trip as one of A's own.
  *
  * Every other guarantee in this capability is enforced by a database
  * constraint that a test can be written against later. This one is enforced by
@@ -32,12 +33,17 @@ import { DriverPortalController } from './driver-portal.controller';
  * route is asserted for every caller shape, including the shapes that ought
  * obviously to fail.
  *
+ * ★ THE ROUTE NAMES AN ASSIGNMENT, NOT A TRIP (ADR-0004). One driver may hold
+ * several turns on one trip — one per lorry — so a trip id cannot say which
+ * lorry's progress is being reported. No driver route accepts a trip id at all.
+ *
  * ⚠ NO ROUTE HERE DECLARES A PERMISSION, and that is not an omission — it is
- * the finding. No tier the system has can express "the driver assigned to this
- * trip"; the available keys would either say nothing (`trip.read` is `'any'`)
- * or say far too much (`trip.write` is `head-anywhere`, `cost.*` is `global`).
- * `ActiveAssignmentGuard` asks the only question that matters, and these cases
- * are what stop it being quietly replaced by a decorator that looks tidier.
+ * the finding. No tier the system has can express "the driver on this
+ * assignment"; the available keys would either say nothing (`trip.read` is
+ * `'any'`) or say far too much (`trip.write` is `head-anywhere`, `cost.*` is
+ * `global`). `ActiveAssignmentGuard` asks the only question that matters, and
+ * these cases are what stop it being quietly replaced by a decorator that
+ * looks tidier.
  */
 describe('driver-portal HTTP security', () => {
   const TOKEN = 'a-session-token-value';
@@ -47,23 +53,27 @@ describe('driver-portal HTTP security', () => {
   /** Somebody else, driving something else. */
   const DRIVER_B = '44444444-4444-4444-4444-444444444444';
 
-  /** Assigned to driver A. */
-  const TRIP_A = '55555555-5555-5555-5555-555555555555';
-  /** Assigned to driver B. A knows this id — that is the premise. */
-  const TRIP_B = '66666666-6666-6666-6666-666666666666';
-  /** Real, on the board, and nobody is driving it. */
-  const TRIP_UNASSIGNED = '77777777-7777-7777-7777-777777777777';
+  /** One trip; both drivers are on it, each on their own lorry. */
+  const TRIP = '55555555-5555-5555-5555-555555555555';
+  /** Driver A's turn. */
+  const ASSIGNMENT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  /** Driver B's turn, on the SAME trip. A knows this id — that is the premise. */
+  const ASSIGNMENT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  /** A turn driver A once held, ended before it started. */
+  const ASSIGNMENT_ENDED = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  /** Never existed. */
+  const ASSIGNMENT_MISSING = '77777777-7777-4777-8777-777777777777';
 
   const COST = '88888888-8888-8888-8888-888888888888';
 
   let app: INestApplication;
   let context: AuthorizationContext;
 
-  let portal: { listMyTrips: jest.Mock; findMyTrip: jest.Mock };
+  let portal: { listMyAssignments: jest.Mock; findMyAssignment: jest.Mock };
   let execution: { recordEvent: jest.Mock };
   let money: { declareCost: jest.Mock; editCost: jest.Mock };
   let completion: { submit: jest.Mock };
-  let assignments: { findActive: jest.Mock };
+  let assignments: { findActiveById: jest.Mock };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: DRIVER_A,
@@ -78,8 +88,8 @@ describe('driver-portal HTTP security', () => {
     context = asContext();
 
     portal = {
-      listMyTrips: jest.fn().mockResolvedValue([]),
-      findMyTrip: jest.fn().mockResolvedValue({ tripId: TRIP_A }),
+      listMyAssignments: jest.fn().mockResolvedValue([]),
+      findMyAssignment: jest.fn().mockResolvedValue({ tripId: TRIP, assignment: { id: ASSIGNMENT_A } }),
     };
     execution = { recordEvent: jest.fn().mockResolvedValue({ id: 'event-1' }) };
     money = {
@@ -88,12 +98,13 @@ describe('driver-portal HTTP security', () => {
     };
     completion = { submit: jest.fn().mockResolvedValue({ id: 'request-1', attemptNo: 1 }) };
 
-    // The real assignment table, faked at its edge: TRIP_A belongs to driver A,
-    // TRIP_B to driver B, and TRIP_UNASSIGNED to nobody.
+    // The real assignment table, faked at its edge: A and B each hold an ACTIVE
+    // turn on the same trip; the ended turn and the missing id answer `null`,
+    // exactly as `findActiveById` (which filters `state = 'active'`) does.
     assignments = {
-      findActive: jest.fn().mockImplementation(async (tripId: string) => {
-        if (tripId === TRIP_A) return { id: 'assignment-a', tripId, driverUserId: DRIVER_A };
-        if (tripId === TRIP_B) return { id: 'assignment-b', tripId, driverUserId: DRIVER_B };
+      findActiveById: jest.fn().mockImplementation(async (id: string) => {
+        if (id === ASSIGNMENT_A) return { id, tripId: TRIP, driverUserId: DRIVER_A, state: 'active' };
+        if (id === ASSIGNMENT_B) return { id, tripId: TRIP, driverUserId: DRIVER_B, state: 'active' };
         return null;
       }),
     };
@@ -144,14 +155,14 @@ describe('driver-portal HTTP security', () => {
 
   type Route = [method: 'get' | 'post' | 'patch', path: string];
 
-  /** Every route that names a trip, parameterised by which trip. */
-  const scopedRoutes = (trip: string): Route[] =>
+  /** Every route that names an assignment, parameterised by which one. */
+  const scopedRoutes = (assignment: string): Route[] =>
     [
-      ['get', `/driver/trips/${trip}`],
-      ['post', `/driver/trips/${trip}/execution-events`],
-      ['post', `/driver/trips/${trip}/expenses`],
-      ['patch', `/driver/trips/${trip}/expenses/${COST}`],
-      ['post', `/driver/trips/${trip}/completion-requests`],
+      ['get', `/driver/assignments/${assignment}`],
+      ['post', `/driver/assignments/${assignment}/execution-events`],
+      ['post', `/driver/assignments/${assignment}/expenses`],
+      ['patch', `/driver/assignments/${assignment}/expenses/${COST}`],
+      ['post', `/driver/assignments/${assignment}/completion-requests`],
     ];
 
   /** A body valid enough for every route, so a 422 never masks a 403. */
@@ -177,7 +188,7 @@ describe('driver-portal HTTP security', () => {
   // ------------------------------------------------------------- anonymous --
 
   describe('without authentication', () => {
-    it.each<Route>([['get', '/driver/trips'], ...scopedRoutes(TRIP_A)])(
+    it.each<Route>([['get', '/driver/assignments'], ...scopedRoutes(ASSIGNMENT_A)])(
       'refuses %s %s with 401, and reaches no service at all',
       async (method, path) => {
         const response = await request(app.getHttpServer())
@@ -199,11 +210,13 @@ describe('driver-portal HTTP security', () => {
     );
   });
 
-  // ------------------------------------------- ★ ANOTHER DRIVER'S TRIP --
+  // ------------------------------------- ★ ANOTHER DRIVER'S ASSIGNMENT --
 
-  describe("★ driver A, holding driver B's trip id", () => {
-    it.each<Route>(scopedRoutes(TRIP_B))('refuses %s %s with 403', async (method, path) => {
-      // The premise is that A KNOWS the id. Knowing it must buy nothing.
+  describe("★ driver A, holding driver B's assignment id — on the SAME trip", () => {
+    it.each<Route>(scopedRoutes(ASSIGNMENT_B))('refuses %s %s with 403', async (method, path) => {
+      // The premise is that A KNOWS the id, and that A is genuinely on this
+      // trip too (on another lorry). Neither buys anything: the boundary is the
+      // assignment, not the trip.
       const response = await authed(method, path).send(anyBody);
 
       expect(response.status).toBe(403);
@@ -211,27 +224,30 @@ describe('driver-portal HTTP security', () => {
     });
 
     it('reaches no service, so nothing is written and nothing is read', async () => {
-      for (const [method, path] of scopedRoutes(TRIP_B)) {
+      for (const [method, path] of scopedRoutes(ASSIGNMENT_B)) {
         await authed(method, path).send(anyBody);
       }
 
       noWriteHappened();
     });
 
-    it('★ answers the same way as a trip that does not exist', async () => {
-      // Distinguishing "not yours" from "no such trip" would let a caller
-      // holding only an id learn whether it exists and whether it is crewed —
+    it('★ answers the same way as an assignment that does not exist', async () => {
+      // Distinguishing "not yours" from "no such assignment" would let a caller
+      // holding only an id learn whether it exists and whether it is live —
       // information about work that is not theirs.
-      const foreign = await authed('get', `/driver/trips/${TRIP_B}`).send();
-      const missing = await authed('get', `/driver/trips/${TRIP_UNASSIGNED}`).send();
+      const foreign = await authed('get', `/driver/assignments/${ASSIGNMENT_B}`).send();
+      const missing = await authed('get', `/driver/assignments/${ASSIGNMENT_MISSING}`).send();
 
       expect(foreign.status).toBe(missing.status);
       expect(foreign.body.error.code).toBe(missing.body.error.code);
     });
   });
 
-  describe('a trip nobody is driving', () => {
-    it.each<Route>(scopedRoutes(TRIP_UNASSIGNED))('refuses %s %s with 403', async (method, path) => {
+  describe('★ an assignment that has ended — even the caller’s own', () => {
+    it.each<Route>(scopedRoutes(ASSIGNMENT_ENDED))('refuses %s %s with 403', async (method, path) => {
+      // ADR-0004: nothing may be reported, declared or asked against a turn
+      // that is over. The guard reads only ACTIVE rows, so an ended one is
+      // indistinguishable from a missing one.
       const response = await authed(method, path).send(anyBody);
       expect(response.status).toBe(403);
     });
@@ -244,7 +260,7 @@ describe('driver-portal HTTP security', () => {
       context = asContext({ global: true });
     });
 
-    it.each<Route>(scopedRoutes(TRIP_B))('is refused %s %s like anybody else', async (method, path) => {
+    it.each<Route>(scopedRoutes(ASSIGNMENT_B))('is refused %s %s like anybody else', async (method, path) => {
       // Not under-privileged — the WRONG ACTOR. The contract says an execution
       // event is raised by the driver and by nobody on their behalf, so there
       // is deliberately no `if (global)` escape in the guard.
@@ -260,8 +276,8 @@ describe('driver-portal HTTP security', () => {
       context = asContext({ global: true, mustChangeSecret: true });
     });
 
-    it.each<Route>(scopedRoutes(TRIP_A))(
-      '★ refuses %s %s even on their OWN trip',
+    it.each<Route>(scopedRoutes(ASSIGNMENT_A))(
+      '★ refuses %s %s even on their OWN assignment',
       async (method, path) => {
         // The reason the guard repeats this gate rather than assuming
         // PermissionGuard ran: on these routes it did not, and a
@@ -277,7 +293,7 @@ describe('driver-portal HTTP security', () => {
   // ------------------------------------------------------------ CSRF --
 
   describe('without the CSRF header', () => {
-    it.each<Route>(scopedRoutes(TRIP_A).filter(([method]) => method !== 'get'))(
+    it.each<Route>(scopedRoutes(ASSIGNMENT_A).filter(([method]) => method !== 'get'))(
       'refuses %s %s',
       async (method, path) => {
         const response = await request(app.getHttpServer())
@@ -292,44 +308,44 @@ describe('driver-portal HTTP security', () => {
 
   // ------------------------------------------------------ the driver's own --
 
-  describe('driver A on driver A’s trip', () => {
-    it('reads the trip', async () => {
-      await authed('get', `/driver/trips/${TRIP_A}`).expect(200);
-      expect(portal.findMyTrip).toHaveBeenCalledWith(TRIP_A, DRIVER_A);
+  describe('driver A on driver A’s assignment', () => {
+    it('reads the assignment', async () => {
+      await authed('get', `/driver/assignments/${ASSIGNMENT_A}`).expect(200);
+      expect(portal.findMyAssignment).toHaveBeenCalledWith(ASSIGNMENT_A, DRIVER_A);
     });
 
-    it('lists their own trips from the session, with no parameter to widen it', async () => {
-      await authed('get', '/driver/trips').expect(200);
-      expect(portal.listMyTrips).toHaveBeenCalledWith(DRIVER_A);
+    it('lists their own assignments from the session, with no parameter to widen it', async () => {
+      await authed('get', '/driver/assignments').expect(200);
+      expect(portal.listMyAssignments).toHaveBeenCalledWith(DRIVER_A);
     });
 
-    it('records an execution event against the session user', async () => {
-      await authed('post', `/driver/trips/${TRIP_A}/execution-events`)
+    it('records an execution event against the session user and the route’s assignment', async () => {
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`)
         .send({ type: 'ARRIVED_PICKUP', clientEventId: 'tap-1' })
         .expect(201);
 
       expect(execution.recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ tripId: TRIP_A, recordedBy: DRIVER_A }),
+        expect.objectContaining({ assignmentId: ASSIGNMENT_A, recordedBy: DRIVER_A }),
       );
     });
 
-    it('declares an expense against the session user', async () => {
-      await authed('post', `/driver/trips/${TRIP_A}/expenses`)
+    it('declares an expense against the session user and the route’s assignment', async () => {
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/expenses`)
         .send({ category: 'fuel', amount: '1500000.00' })
         .expect(201);
 
       expect(money.declareCost).toHaveBeenCalledWith(
-        expect.objectContaining({ tripId: TRIP_A, declaredBy: DRIVER_A }),
+        expect.objectContaining({ assignmentId: ASSIGNMENT_A, declaredBy: DRIVER_A }),
       );
     });
 
     it('corrects an expense', async () => {
-      await authed('patch', `/driver/trips/${TRIP_A}/expenses/${COST}`)
+      await authed('patch', `/driver/assignments/${ASSIGNMENT_A}/expenses/${COST}`)
         .send({ amount: '1550000.00' })
         .expect(200);
 
       expect(money.editCost).toHaveBeenCalledWith(
-        TRIP_A,
+        ASSIGNMENT_A,
         COST,
         { amount: '1550000.00' },
         DRIVER_A,
@@ -337,36 +353,39 @@ describe('driver-portal HTTP security', () => {
     });
 
     it('submits a completion carrying an explicit declaration', async () => {
-      await authed('post', `/driver/trips/${TRIP_A}/completion-requests`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/completion-requests`)
         .send({ expenseDeclaration: 'none' })
         .expect(201);
 
-      expect(completion.submit).toHaveBeenCalledWith(TRIP_A, DRIVER_A, 'none');
+      expect(completion.submit).toHaveBeenCalledWith(ASSIGNMENT_A, DRIVER_A, 'none');
     });
   });
 
   // ---------------------------------------------------------- body vs route --
 
   describe('★ the body cannot widen what the route scoped', () => {
-    it('ignores a tripId in the body of an execution event', async () => {
+    it('ignores an assignmentId and a tripId in the body of an execution event', async () => {
       // The guard checked the ROUTE. If the handler read the body instead, a
-      // driver assigned to one trip could act on any other and the guard would
+      // driver holding one turn could act on any other and the guard would
       // have checked something irrelevant.
-      await authed('post', `/driver/trips/${TRIP_A}/execution-events`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`)
         .send({
-          tripId: TRIP_B,
+          assignmentId: ASSIGNMENT_B,
+          tripId: TRIP,
           type: 'ARRIVED_PICKUP',
           clientEventId: 'tap-1',
         })
         .expect(201);
 
       expect(execution.recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ tripId: TRIP_A }),
+        expect.objectContaining({ assignmentId: ASSIGNMENT_A }),
       );
+      const [input] = execution.recordEvent.mock.calls[0] as [Record<string, unknown>];
+      expect(input).not.toHaveProperty('tripId');
     });
 
     it('ignores a declaredBy in the body of an expense', async () => {
-      await authed('post', `/driver/trips/${TRIP_A}/expenses`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/expenses`)
         .send({ category: 'fuel', amount: '1500000.00', declaredBy: DRIVER_B })
         .expect(201);
 
@@ -376,7 +395,7 @@ describe('driver-portal HTTP security', () => {
     });
 
     it('ignores a recordedBy in the body of an execution event', async () => {
-      await authed('post', `/driver/trips/${TRIP_A}/execution-events`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`)
         .send({
           type: 'ARRIVED_PICKUP',
           clientEventId: 'tap-1',
@@ -390,12 +409,11 @@ describe('driver-portal HTTP security', () => {
     });
   });
 
-
   // --------------------------------------------- ★ the browser is a sensor --
 
   describe('★ a location reading is forwarded; a location VERDICT is stripped', () => {
     const post = (body: Record<string, unknown>) =>
-      authed('post', `/driver/trips/${TRIP_A}/execution-events`).send({
+      authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`).send({
         type: 'PICKUP_CONFIRMED',
         clientEventId: 'tap-2',
         ...body,
@@ -481,7 +499,7 @@ describe('driver-portal HTTP security', () => {
      * suite proves the service refuses the invalid ones.
      */
     const post = (type: string, clientEventId: string) =>
-      authed('post', `/driver/trips/${TRIP_A}/execution-events`).send({ type, clientEventId });
+      authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`).send({ type, clientEventId });
 
     it('forwards PICKUP_CONFIRMED before ARRIVED_PICKUP, leaving the refusal to the service', async () => {
       await post('PICKUP_CONFIRMED', 'a').expect(201);
@@ -511,9 +529,9 @@ describe('driver-portal HTTP security', () => {
       expect(execution.recordEvent).toHaveBeenCalledTimes(4);
     });
 
-    it('★ still refuses another driver’s trip, whatever the order', async () => {
+    it('★ still refuses another driver’s assignment, whatever the order', async () => {
       // The ordering question changes nothing about the resource boundary.
-      await authed('post', `/driver/trips/${TRIP_B}/execution-events`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_B}/execution-events`)
         .send({ type: 'DELIVERY_CONFIRMED', clientEventId: 'a' })
         .expect(403);
 
@@ -554,39 +572,44 @@ describe('driver-portal HTTP security', () => {
     it('refuses a completion with no declaration, rather than assuming one', async () => {
       // ★ Contract §9.7: zero cost lines is not an answer. A default here would
       // be the system answering on the driver's behalf.
-      const response = await authed('post', `/driver/trips/${TRIP_A}/completion-requests`).send({});
+      const response = await authed(
+        'post',
+        `/driver/assignments/${ASSIGNMENT_A}/completion-requests`,
+      ).send({});
 
       expect(response.status).toBe(422);
       expect(completion.submit).not.toHaveBeenCalled();
     });
 
     it('refuses a declaration value the contract does not have', async () => {
-      const response = await authed('post', `/driver/trips/${TRIP_A}/completion-requests`).send({
-        expenseDeclaration: 'maybe',
-      });
+      const response = await authed(
+        'post',
+        `/driver/assignments/${ASSIGNMENT_A}/completion-requests`,
+      ).send({ expenseDeclaration: 'maybe' });
 
       expect(response.status).toBe(422);
     });
 
     it('refuses an event type outside the four canonical ones', async () => {
-      const response = await authed('post', `/driver/trips/${TRIP_A}/execution-events`).send({
-        type: 'LUNCH',
-        clientEventId: 'tap-1',
-      });
+      const response = await authed(
+        'post',
+        `/driver/assignments/${ASSIGNMENT_A}/execution-events`,
+      ).send({ type: 'LUNCH', clientEventId: 'tap-1' });
 
       expect(response.status).toBe(422);
     });
 
     it('refuses an event with no client id, which would defeat retry protection', async () => {
-      const response = await authed('post', `/driver/trips/${TRIP_A}/execution-events`).send({
-        type: 'ARRIVED_PICKUP',
-      });
+      const response = await authed(
+        'post',
+        `/driver/assignments/${ASSIGNMENT_A}/execution-events`,
+      ).send({ type: 'ARRIVED_PICKUP' });
 
       expect(response.status).toBe(422);
     });
 
     it('refuses an amount NUMERIC(14,2) cannot hold exactly', async () => {
-      const response = await authed('post', `/driver/trips/${TRIP_A}/expenses`).send({
+      const response = await authed('post', `/driver/assignments/${ASSIGNMENT_A}/expenses`).send({
         category: 'fuel',
         amount: '10.005',
       });
@@ -599,7 +622,7 @@ describe('driver-portal HTTP security', () => {
       // in the system is measured from. A handset whose clock is an hour out
       // would otherwise write an hour of lateness nobody caused — or erase an
       // hour somebody did.
-      await authed('post', `/driver/trips/${TRIP_A}/execution-events`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`)
         .send({
           type: 'ARRIVED_PICKUP',
           clientEventId: 'tap-1',
@@ -612,7 +635,7 @@ describe('driver-portal HTTP security', () => {
     });
 
     it('records an event with no time in the body at all', async () => {
-      await authed('post', `/driver/trips/${TRIP_A}/execution-events`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`)
         .send({ type: 'ARRIVED_PICKUP', clientEventId: 'tap-1' })
         .expect(201);
 
@@ -621,7 +644,7 @@ describe('driver-portal HTTP security', () => {
 
     it('keeps the handset clock as a DIAGNOSTIC field, clearly separate', async () => {
       // Recorded so a disagreement can be investigated. Nothing computes from it.
-      await authed('post', `/driver/trips/${TRIP_A}/execution-events`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`)
         .send({
           type: 'ARRIVED_PICKUP',
           clientEventId: 'tap-1',
@@ -635,7 +658,7 @@ describe('driver-portal HTTP security', () => {
     });
 
     it('★ accepts no recordedAt from a client — the server owns its own clock', async () => {
-      await authed('post', `/driver/trips/${TRIP_A}/execution-events`)
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/execution-events`)
         .send({
           type: 'ARRIVED_PICKUP',
           clientEventId: 'tap-1',
@@ -647,17 +670,32 @@ describe('driver-portal HTTP security', () => {
       expect(passed).not.toHaveProperty('recordedAt');
     });
 
-    it('★ answers a malformed trip id with 403, not 422', async () => {
+    it('★ answers a malformed assignment id with 403, not 422', async () => {
       // Guards run BEFORE pipes in Nest, so `ActiveAssignmentGuard` sees the
       // raw string, finds no assignment for it and refuses. That ordering is
       // the better one and worth pinning: a 422 would tell an unauthorized
       // caller that their id was merely misspelt, which is one bit more than
       // they are entitled to. Every unauthorized shape answers identically.
-      const malformed = await authed('get', '/driver/trips/not-a-uuid').send();
-      const foreign = await authed('get', `/driver/trips/${TRIP_B}`).send();
+      const malformed = await authed('get', '/driver/assignments/not-a-uuid').send();
+      const foreign = await authed('get', `/driver/assignments/${ASSIGNMENT_B}`).send();
 
       expect(malformed.status).toBe(403);
       expect(malformed.body.error.code).toBe(foreign.body.error.code);
+    });
+
+    it('★ has no trip-scoped route left — a trip id says nothing about which lorry', async () => {
+      // ADR-0004. Driver A on two lorries of one trip cannot report "the
+      // trip's" progress; the old `/driver/trips/:tripId/*` family is gone.
+      for (const [method, path] of [
+        ['get', `/driver/trips/${TRIP}`],
+        ['post', `/driver/trips/${TRIP}/execution-events`],
+        ['post', `/driver/trips/${TRIP}/expenses`],
+        ['post', `/driver/trips/${TRIP}/completion-requests`],
+      ] as Route[]) {
+        const response = await authed(method, path).send(anyBody);
+        expect([response.status, path]).toEqual([404, path]);
+      }
+      noWriteHappened();
     });
   });
 });

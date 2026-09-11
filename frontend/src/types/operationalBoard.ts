@@ -2,7 +2,13 @@ import type { UserSummary } from './organization';
 import type { ExpenseAccountability, ExpenseDeclaration } from './driver';
 
 /**
- * Where every trip actually stands, as the server derives it.
+ * Where every dispatched lorry actually stands, as the server derives it.
+ *
+ * ★ ONE ROW = ONE ACTIVE DISPATCH ASSIGNMENT (ADR-0004 §2.3). A trip running
+ * three lorries is three rows sharing `tripId`; `assignmentId` is the row's
+ * identity and the key to use for React lists. `null` only on a trip with
+ * nobody dispatched. The trip-centric dispatch board uses `TripScheduleWithRefs`
+ * (one row per trip, `assignments[]` inside), not this type.
  *
  * ★ NOTHING HERE IS STORED, AND NOTHING HERE IS COMPUTED IN THE BROWSER. The
  * stage and both delay figures are decided on the server from the execution
@@ -39,6 +45,15 @@ export type OperationalStage =
 export interface OperationalBoardRow {
   tripId: string;
   scheduledOn: string;
+
+  /**
+   * ★ THE ASSIGNMENT THIS ROW IS ABOUT (ADR-0004). A trip with three lorries
+   * is three rows, each with its own timeline and its own review. `null` only
+   * on a trip with nobody on it.
+   */
+  assignmentId: string | null;
+  /** The latest completion request on this assignment — what a reviewer decides. */
+  completionRequestId: string | null;
 
   vehicle: { id: string; plate: string } | null;
   customer: { id: string; name: string } | null;

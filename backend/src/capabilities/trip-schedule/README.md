@@ -165,6 +165,31 @@ chưa có toạ độ vẫn dùng được; tài xế bị từ chối `DESTINAT
 Địa điểm phải **cùng khách với chuyến**, kiểm ở server; gửi kèm toạ độ bên
 cạnh một địa điểm bị từ chối (địa điểm là nguồn).
 
+## Điều độ nhiều xe — ADR-0004
+
+Một chuyến có **0..N** assignment; mỗi assignment là **một xe + một tài xế** trên
+chính `trip_driver_assignments` (`0027` thêm `vehicle_id`). Cùng một tài xế được
+giữ nhiều xe; một xe chỉ ở trên chuyến một lần khi còn active. Execution event,
+chi phí và completion request **thuộc assignment** — chuyến chỉ *finished* khi
+mọi assignment active đã được duyệt, quyết định trong chính transaction approve.
+
+Ba điều dễ làm sai:
+
+1. **Không bao giờ** thêm `UNIQUE(trip_id, driver_user_id)`. Test kiến trúc
+   `tests/architecture/trip-write-paths.spec.ts` fail nếu migration nào thêm.
+2. `trip_schedules.vehicle_id` là **legacy**: đọc để hiển thị, **không ghi**, không
+   DROP. Cùng test kiến trúc cấm mọi write path chạm cột này.
+3. *Started* là **có event chưa void** trên assignment — không có `started_at`.
+   Đổi tài xế / gỡ chỉ trước lúc đó; sau đó cặp bất biến, không takeover.
+
+Hai grain đọc, cố ý: `GET /trip-schedules` là **một dòng/trip** (crew gộp trong
+`assignments[]`); `GET /trip-schedules/operational-board` là **một dòng/assignment
+active** — Operations theo dõi từng xe đang chạy, không gộp về trip (ADR-0004 §2.3).
+
+Thứ tự khoá luôn là **trip → assignment → request/cost**. Xem
+[`docs/architecture/adr-0004-dispatch-assignment-multi-vehicle.md`](../../../../docs/architecture/adr-0004-dispatch-assignment-multi-vehicle.md)
+để biết vì sao không có bảng mới, không có lineage và không có transfer.
+
 ## Những gì cố ý KHÔNG có
 
 **Khối CHI PHÍ.** Bảng tính có nhóm cột thứ hai (DẦU · CẦU TRẠM · PHÍ KHO · BỐC
@@ -188,5 +213,8 @@ persistence/trip-schedule.repository.ts   SQL, COUNT(*) OVER(), ::text
 persistence/trip-catalogue.repository.ts  hai class song sinh — xem comment đầu file
 api/trip-schedule.controller.ts      zod DTO khai ngay trong file
 api/trip-catalogue.controller.ts
+application/trip-execution.service.ts   assign / replace / end theo assignment; requireNotStarted → 409
+application/trip-completion.service.ts  approve / reject theo request; finishTrip khi assignment ACTIVE cuối cùng
+api/active-assignment.guard.ts          tài xế chỉ vào assignment của mình, theo :assignmentId
 api/trip-schedule.security.spec.ts   61 case: ai được gì, trên từng route
 ```

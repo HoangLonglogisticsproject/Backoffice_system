@@ -66,53 +66,62 @@ export class TripCompletionController {
   }
 
   /**
-   * Confirms the trip is finished.
+   * Confirms one assignment's turn is finished — and closes the trip if it was
+   * the last one open.
    *
-   * ★ ONE TRANSACTION DOES FOUR THINGS, AND THE ORDER MATTERS:
+   * ★ THE REQUEST IS NAMED IN THE ROUTE (ADR-0004). A trip carries one pending
+   * request per active assignment, so "approve the trip's request" has no
+   * single answer any more. The service proves the request is on this trip and
+   * still pending before deciding it.
+   *
+   * ★ ONE TRANSACTION, AND THE ORDER MATTERS:
    *
    *   1. the request becomes `approved`
-   *   2. every live cost line becomes `immutable`
-   *   3. the trip's status becomes `done` — which 0017's trigger makes final
-   *   4. the move is recorded, and the trip stamped with who closed it
+   *   2. THIS assignment's live cost lines become `immutable` — nobody else's
+   *   3. if no active assignment is left unapproved: the trip's status becomes
+   *      `finished` (0025 makes it final), the move is recorded, and the trip
+   *      is stamped with who closed it
    *
    * The money is frozen BEFORE the trip closes, so there is no instant in which
-   * a closed trip still carries an editable figure. There is no compensating
-   * action afterwards: `done` cannot be undone by anything.
+   * a closed trip still carries an editable figure on an approved turn. There
+   * is no compensating action afterwards: `finished` cannot be undone.
    *
    * POST rather than PATCH, 200 rather than 201: this decides an existing
    * request rather than creating a resource, and the decided record comes back.
    */
-  @Post('trip-schedules/:tripId/completion-requests/approve')
+  @Post('trip-schedules/:tripId/completion-requests/:requestId/approve')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.complete.review')
   @HttpCode(HttpStatus.OK)
   async approve(
     @Param('tripId', UuidParam) tripId: string,
+    @Param('requestId', UuidParam) requestId: string,
     @CurrentUser() actor: SessionUser,
   ): Promise<CompletionRequest> {
     // The decider comes from the session, never the body. A body that named its
     // own approver is a body that can name somebody else's.
-    return this.completion.approve(tripId, actor.id);
+    return this.completion.approve(tripId, requestId, actor.id);
   }
 
   /**
-   * Sends it back for correction.
+   * Sends one assignment's turn back for correction.
    *
-   * ★ REJECTION REOPENS THE MONEY AND LEAVES THE TRIP WHERE IT WAS. The lines
-   * were frozen FOR the review, not BY it — the driver has to be able to
-   * correct whatever caused the rejection. The trip's status is untouched
-   * because it never moved: a trip awaiting review was never `done`, so there
-   * is nothing to reopen.
+   * ★ REJECTION REOPENS THAT ASSIGNMENT'S MONEY AND LEAVES THE TRIP WHERE IT
+   * WAS. The lines were frozen FOR the review, not BY it — the driver has to be
+   * able to correct whatever caused the rejection. The trip's status is
+   * untouched because it never moved, and the other turns on the trip are
+   * untouched because they were never this request's.
    */
-  @Post('trip-schedules/:tripId/completion-requests/reject')
+  @Post('trip-schedules/:tripId/completion-requests/:requestId/reject')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('trip.complete.review')
   @HttpCode(HttpStatus.OK)
   async reject(
     @Param('tripId', UuidParam) tripId: string,
+    @Param('requestId', UuidParam) requestId: string,
     @Body(new ZodValidationPipe(rejectSchema)) body: RejectBody,
     @CurrentUser() actor: SessionUser,
   ): Promise<CompletionRequest> {
-    return this.completion.reject(tripId, { by: actor.id, reason: body.reason });
+    return this.completion.reject(tripId, requestId, { by: actor.id, reason: body.reason });
   }
 }

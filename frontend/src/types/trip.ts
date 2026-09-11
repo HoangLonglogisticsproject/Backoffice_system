@@ -113,7 +113,12 @@ export interface TripSchedule {
    */
   scheduledOn: string;
 
-  /** `null` until a truck is assigned — a real state, written `ĐIỀN SAU` in the sheet. */
+  /**
+   * @deprecated LEGACY (ADR-0004). Lorries are dispatched as assignments —
+   * see `TripScheduleWithRefs.assignments` — and the server no longer writes
+   * this column. Still sent for a trip booked with a lorry before the change
+   * and never crewed, so the board can say "re-dispatch this one".
+   */
   vehicleId: string | null;
   customerId: string | null;
 
@@ -198,17 +203,34 @@ export interface TripSchedule {
  * them everywhere would lie about what a POST returns.
  */
 export interface TripScheduleWithRefs extends TripSchedule {
-  /** `null` exactly when `vehicleId` is. */
-  vehicle: TripVehicleRef | null;
   /** `null` exactly when `customerId` is. */
   customer: TripCustomerRef | null;
   /** Who entered the row — the one question the spreadsheet could not answer. */
   createdByUser: UserSummary;
-  /** Who is driving it NOW — the active assignment. `null` while nobody is. */
-  driver: UserSummary | null;
+  /**
+   * ★ WHO IS ON IT NOW — every ACTIVE assignment, oldest first (ADR-0004).
+   * Empty while nobody is. A trip carries any number of lorries, each with its
+   * own driver, and the same driver may appear twice on two lorries.
+   */
+  assignments: TripAssignmentRef[];
   /** The master places behind the two snapshots, by name. */
   pickupLocation: TripLocationRef | null;
   deliveryLocation: TripLocationRef | null;
+}
+
+/** One active dispatch assignment as the board shows it: the pair, and when it was made. */
+export interface TripAssignmentRef {
+  id: string;
+  /** `null` only on a pre-multi-vehicle row the migration could not backfill; the board flags it. */
+  vehicle: TripVehicleRef | null;
+  driver: UserSummary;
+  assignedAt: string;
+  /**
+   * The driver has reported a milestone on this turn. From then on the pair is
+   * immutable (ADR-0004): no swap, no removal. The server refuses those anyway;
+   * this lets the panel not offer a button whose only outcome is a 409.
+   */
+  started: boolean;
 }
 
 export interface TripLocationRef {

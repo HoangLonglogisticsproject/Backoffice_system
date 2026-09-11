@@ -1,5 +1,13 @@
 # DRIVER PORTAL — BUSINESS CONTRACT
 
+> ### ⚠ BẢN 3 — 2026-09-10 — ĐIỀU ĐỘ NHIỀU XE (ADR-0004)
+>
+> Mô hình **1 Trip = 1 Vehicle + 1 Driver** ở §4.1, §4.2, §9.6 và §10.1 **đã bị thay thế**.
+> Từ nay **1 Trip → 0..N Dispatch Assignment**, mỗi assignment = **1 xe + 1 tài xế**,
+> và execution / expense / completion thuộc về **assignment**, không thuộc Trip.
+> Các mục đó giữ nguyên văn để đối chiếu, có banner SUPERSEDED ở đầu. Nguồn sự thật:
+> [`../../architecture/adr-0004-dispatch-assignment-multi-vehicle.md`](../../architecture/adr-0004-dispatch-assignment-multi-vehicle.md).
+
 > **Trạng thái: CONTRACT ĐÃ CHỐT — BẢN 2. ĐÃ IMPLEMENT PHASE 1–3.**
 >
 > Tài liệu này là **source of truth về nghiệp vụ** cho Driver Portal. Nó mô tả
@@ -178,6 +186,12 @@ tài khoản, và là người (hoặc uỷ quyền Operations) phân công.
 
 ### 4.1 Bản chất quan hệ
 
+> ⚠ **SUPERSEDED 2026-09-10 — ADR-0004.** Sơ đồ *"Trip — 1 Driver ACTIVE"* dưới đây không
+> còn đúng. Một Trip có **0..N assignment đang active**, mỗi assignment là **một xe + một
+> tài xế**; **cùng một tài xế được giữ nhiều xe** trên một Trip; **một xe chỉ được ở trên
+> Trip một lần** khi còn active. Vẫn đúng: Trip là nhiệm vụ được giao; không có driver
+> pool / marketplace / phụ xe; Driver không tự chọn Trip.
+
 **[CONFIRMED]** Driver **nhận booking từ công ty** và thực hiện booking đó ngoài
 thực tế. Trip là **nhiệm vụ được giao**, không phải đơn hàng Driver tự chọn.
 
@@ -230,7 +244,7 @@ Xe thuê ngoài   ─┘    nhận booking → thực hiện chuyến → khai c
 
 ★ **[CONFIRMED] KHÔNG tạo flow riêng cho xe thuê ngoài.** Driver của xe thuê ngoài
 vẫn là Driver, vẫn được phân công vào Trip, vẫn đi qua đúng các bước trên, và vẫn
-chịu ràng buộc "1 Trip = 1 Driver active".
+chịu ràng buộc "1 Trip = 1 Driver active". ⚠ **SUPERSEDED — ADR-0004: assignment-scoped, xem banner đầu mục / §0.8.1**
 
 ⚠ **Điều này KHÔNG nới lỏng ranh giới tiền — xem §8.1b.**
 
@@ -280,6 +294,12 @@ vì lý do điều độ, và điều đó **không tự động** nói lên xe 
 
 ### 4.2 Lịch sử phân công — bắt buộc
 
+> ⚠ **SUPERSEDED MỘT PHẦN 2026-09-10 — ADR-0004.** History vẫn bắt buộc và vẫn nằm trên
+> `trip_driver_assignments`. Thay đổi: history là **của từng assignment (xe + tài xế)**,
+> và **"đổi Driver" chỉ tồn tại TRƯỚC khi assignment bắt đầu** (chưa có execution event
+> sống). Sau khi bắt đầu, cặp xe + tài xế **bất biến** — không takeover, không chuyển
+> bằng chứng. Câu hỏi *"lúc đó ai đang chạy xe nào"* trả lời bằng chính dòng assignment.
+
 **[CONFIRMED]** Phân công **phải có history**. Đổi Driver **không được** ghi đè làm
 mất dấu người trước.
 
@@ -321,7 +341,7 @@ unassigned_at     kết thúc khi nào (nếu đã kết thúc)
 actor             ai thực hiện việc phân công / thay đổi
 ```
 
-**[CONFIRMED]** Không mở rộng thành multi-driver trong MVP. "Đúng 1 active Driver"
+⚠ **SUPERSEDED — ADR-0004: assignment-scoped, xem banner đầu mục / §0.8.1** ~~**[CONFIRMED]** Không mở rộng thành multi-driver trong MVP. "Đúng 1 active Driver"~~ *(non-normative: nhiều assignment active, mỗi assignment 1 xe + 1 tài xế)*
 là ràng buộc về **current assignment**, không phải giới hạn về số bản ghi lịch sử.
 
 ### 4.3 Ai được phân công
@@ -845,6 +865,11 @@ thay đổi khi vượt mốc là **quyền sửa**, không phải **bản chấ
 
 **[CONFIRMED]**
 
+> ⚠ **SUPERSEDED MỘT PHẦN 2026-09-10 — ADR-0004.** Chu trình dưới đây giữ nguyên, nhưng
+> phạm vi khoá là **assignment**, không phải Trip: *"toàn bộ expense của Trip khoá cùng
+> lúc"* đọc là *"toàn bộ expense của **assignment đó**"*. Hai xe trên một Trip khoá, mở
+> và duyệt độc lập.
+
 ```text
       Driver khai
            ↓
@@ -949,7 +974,7 @@ giấu đi đúng những chuyến cần đi đòi.
 | # | Chưa chốt |
 |---|---|
 | ~~E-1~~ | ✅ **CHỐT** — `EDITABLE` khi khai; `LOCKED` khi gửi Completion Request (§9.6) |
-| ~~E-2~~ | ✅ **CHỐT** — khoá **khi Driver gửi Completion Request**, toàn bộ expense của Trip cùng lúc |
+| ~~E-2~~ | ✅ **CHỐT** — khoá **khi Driver gửi Completion Request**, toàn bộ expense của **assignment đó** cùng lúc *(ADR-0004; trước đây: "của Trip")* |
 | ~~E-3~~ | ✅ **CHỐT** — không ai submit từng khoản; khoá là hệ quả của Completion Request do **Driver** gửi |
 | E-4 | Void / correct **sau khi đã DONE** — thuộc quy trình quản trị riêng (§9.6) |
 | E-5 | Hình dạng **audit history** cho các lần sửa trước khi khoá |
@@ -978,6 +1003,12 @@ mốc khoá quyết định là **từ thời điểm nào nó không còn sửa
 ### 10.1 Luồng bắt buộc
 
 **[CONFIRMED]**
+
+> ⚠ **SUPERSEDED MỘT PHẦN 2026-09-10 — ADR-0004.** Luồng dưới đây chạy **cho từng
+> assignment**: mỗi xe gửi Completion Request riêng, SuperAdmin duyệt riêng, notification
+> gửi cho **người đã gửi request đó**. Trip → DONE khi **mọi assignment ACTIVE** đã được
+> APPROVE — quyết định trong chính transaction approve cuối cùng, ghi tường minh
+> (`status`, history, `closed_at/by`), không suy ra lúc đọc.
 
 ```text
 Trip assigned
@@ -1301,7 +1332,7 @@ nghiệp vụ nào cho nó.
 [CONFIRMED]  MÔ HÌNH B — Vehicle trước Driver trước Execution (§4.1a)
 [CONFIRMED]  Driver khai 5 nhóm operating expense, CHỈ khi Trip đã có Vehicle
 [CONFIRMED]  Driver SỬA ĐƯỢC khoản của mình khi còn editable
-[CONFIRMED]  Khoá khi gửi Completion Request — toàn bộ expense của Trip cùng lúc
+[CONFIRMED]  Khoá khi gửi Completion Request — toàn bộ expense của ASSIGNMENT đó cùng lúc (ADR-0004; trước đây: của Trip)
 [CONFIRMED]  REJECT → mở lại EDITABLE; APPROVE → bất biến vĩnh viễn (§9.6)
 [CONFIRMED]  Driver thấy khoản của mình và trạng thái của nó
 [CONFIRMED]  Audit chi phí — gồm cả các lần sửa trước khi khoá

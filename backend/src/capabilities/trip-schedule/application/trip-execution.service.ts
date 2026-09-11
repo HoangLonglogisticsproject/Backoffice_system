@@ -40,17 +40,19 @@ import {
 } from '../../notification/domain/notification';
 
 /**
- * Who is driving a trip, and what they report.
+ * Who is driving what on a trip, and what they report.
  *
- * WHAT THIS OWNS: that a trip has at most one driver at a time, that a driver
- * change ends the previous turn rather than erasing it, and that an event is
- * recorded against the assignment that was live when it happened — with the
- * vehicle and the schedule copied beside it.
+ * WHAT THIS OWNS (ADR-0004): that a trip carries any number of dispatch
+ * assignments, each a lorry AND a driver; that one lorry is on a trip at most
+ * once at a time; that a change before execution ends the turn rather than
+ * erasing it, and that no change at all is possible once a turn has started;
+ * and that an event is recorded against the assignment it belongs to — with
+ * THAT assignment's lorry and the schedule copied beside it.
  *
  * It owns no authorization in the guard's sense: a permission was decided before
  * any method here ran. What it DOES own is the one rule the guard cannot
  * express, because it depends on data rather than on a role — that a driver
- * reports their OWN trip.
+ * reports their OWN assignment.
  */
 @Injectable()
 export class TripExecutionService {
@@ -67,35 +69,36 @@ export class TripExecutionService {
   // ------------------------------------------------------------ assignment ----
 
   /**
-   * Puts a driver on a trip.
+   * Puts a lorry and its driver on a trip.
    *
    * ★ THE TRIP IS LOCKED FIRST, AND NOT BECAUSE THIS WRITES TO IT. The lock
-   * serialises everything that changes a trip's operational shape — assigning,
-   * replacing, closing — against each other, so the "is this trip still open"
-   * check cannot be overtaken by a completion approving between the check and
-   * the insert.
+   * serialises everything that changes a trip's operational shape — adding,
+   * replacing, ending, closing — against each other, so the "is this trip
+   * still open" check cannot be overtaken by a completion approving between
+   * the check and the insert. Lock order everywhere: trip → assignment → the
+   * rest.
    *
-   * ★ AND THE ONE-ACTIVE-DRIVER RULE IS STILL LEFT TO THE INDEX. The check below
-   * exists to produce a readable 409; `uq_trip_active_driver_assignment` is what
-   * makes the rule true, including for two callers that both passed the check.
+   * ★ AND THE ONE-TURN-PER-LORRY RULE IS STILL LEFT TO THE INDEX. The check
+   * below exists to produce a readable 409; `uq_trip_active_vehicle_assignment`
+   * is what makes the rule true, including for two callers that both passed
+   * the check. There is no rule about the DRIVER: one person on three lorries
+   * of one trip is dispatch, not a conflict.
    */
   async assign(
     tripId: string,
-    driverUserId: string,
+    input: { vehicleId: string; driverUserId: string },
     assignedBy: string,
   ): Promise<DriverAssignment> {
     const { assignment, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
 
-      const current = await this.assignments.lockActive(tripId, tx);
-      if (current) {
-        throw new ConflictError(
-          'That trip already has a driver. Replace the current one instead of adding a second.',
-        );
-      }
+      await this.requireVehicleFree(tripId, input.vehicleId, tx);
+      await this.requireEligibleDriver(input.driverUserId, tx);
 
-      await this.requireEligibleDriver(driverUserId, tx);
-      const assignment = await this.assignments.assign({ tripId, driverUserId, assignedBy }, tx);
+      const assignment = await this.assignments.assign(
+        { tripId, vehicleId: input.vehicleId, driverUserId: input.driverUserId, assignedBy },
+        tx,
+      );
 
       // ★ THE NOTIFICATION IS PART OF THE SAME TRANSACTION, keyed by the
       // assignment row, so it exists exactly when the assignment does and
@@ -109,12 +112,17 @@ export class TripExecutionService {
   }
 
   /**
-   * Swaps the driver.
+   * Swaps the driver on one lorry, before that turn has started.
    *
    * ★ END THEN INSERT, IN ONE TRANSACTION, AND NEVER AN UPDATE OF THE OLD ROW.
    * Overwriting `driver_user_id` would be two lines shorter and would destroy
-   * the answer to "who was driving when this expense was recorded" — which is
-   * the question every event and every declared figure points back at.
+   * the answer to "who was on this lorry when" — the question every event and
+   * every declared figure points back at. The new turn keeps the lorry.
+   *
+   * ★ AND ONLY BEFORE EXECUTION. Once a driver has reported a milestone, the
+   * pair is what happened and nobody swaps it (ADR-0004): there is no takeover,
+   * no inherited timeline, no evidence recorded by one person under another's
+   * name. `requireNotStarted` says so with a 409.
    *
    * The reason is mandatory. A driver change with no explanation is the record
    * somebody comes back to and cannot account for, the same argument 0012 makes
@@ -122,6 +130,7 @@ export class TripExecutionService {
    */
   async replaceDriver(
     tripId: string,
+    assignmentId: string,
     driverUserId: string,
     input: { by: string; reason: string },
   ): Promise<DriverAssignment> {
@@ -130,22 +139,27 @@ export class TripExecutionService {
     const { assignment, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
 
-      const current = await this.assignments.lockActive(tripId, tx);
-      if (!current) throw new ConflictError('That trip has no driver to replace.');
-
+      const current = await this.lockActiveOnTrip(tripId, assignmentId, tx);
       if (current.driverUserId === driverUserId) {
-        throw new ConflictError('That driver is already assigned to this trip.');
+        throw new ConflictError('That driver is already on this lorry.');
+      }
+      if (!current.vehicleId) {
+        throw new ConflictError(
+          'This assignment names no lorry (a pre-multi-vehicle row). End it and add the lorry and driver afresh.',
+        );
       }
 
+      await this.requireNotStarted(current, tx);
       await this.requireEligibleDriver(driverUserId, tx);
+
       const ended = await this.assignments.end(
-        { tripId, endedBy: input.by, reason, now: new Date() },
+        { id: current.id, endedBy: input.by, reason, now: new Date() },
         tx,
       );
-      if (!ended) throw new ConflictError('That trip has no driver to replace.');
+      if (!ended) throw new ConflictError('That assignment has already ended.');
 
       const assignment = await this.assignments.assign(
-        { tripId, driverUserId, assignedBy: input.by },
+        { tripId, vehicleId: current.vehicleId, driverUserId, assignedBy: input.by },
         tx,
       );
 
@@ -162,18 +176,25 @@ export class TripExecutionService {
     return assignment;
   }
 
-  /** Takes the driver off without naming a replacement. */
-  async endAssignment(tripId: string, input: { by: string; reason: string }): Promise<DriverAssignment> {
+  /** Takes one lorry (and its driver) off the trip, before that turn has started. */
+  async endAssignment(
+    tripId: string,
+    assignmentId: string,
+    input: { by: string; reason: string },
+  ): Promise<DriverAssignment> {
     const reason = requireReason(input.reason);
 
     const { ended, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
 
+      const current = await this.lockActiveOnTrip(tripId, assignmentId, tx);
+      await this.requireNotStarted(current, tx);
+
       const ended = await this.assignments.end(
-        { tripId, endedBy: input.by, reason, now: new Date() },
+        { id: current.id, endedBy: input.by, reason, now: new Date() },
         tx,
       );
-      if (!ended) throw new ConflictError('That trip has no driver to remove.');
+      if (!ended) throw new ConflictError('That assignment has already ended.');
 
       const told = [await this.notifications.record(tell('TRIP_UNASSIGNED', trip, ended), tx)];
       return { ended, told };
@@ -181,6 +202,64 @@ export class TripExecutionService {
 
     this.notifications.deliver(told);
     return ended;
+  }
+
+  /**
+   * The assignment named in the route, locked, and PROVEN to be on the trip
+   * named in the route. A caller holding one trip's id must not reach another
+   * trip's assignment by pairing it with a foreign assignment id — so a row on
+   * the wrong trip answers exactly as a row that does not exist.
+   */
+  private async lockActiveOnTrip(
+    tripId: string,
+    assignmentId: string,
+    tx: DatabaseQuery,
+  ): Promise<DriverAssignment> {
+    const current = await this.assignments.lockActiveById(assignmentId, tx);
+    if (current?.tripId !== tripId) {
+      throw new NotFoundError('Assignment not found.');
+    }
+    return current;
+  }
+
+  /**
+   * ★ "STARTED" IS ONE LIVE EXECUTION EVENT, AND NOTHING ELSE (ADR-0004). Not
+   * an expense, not a completion request, not a column: the first milestone a
+   * driver reports is the moment the pair of lorry and driver becomes what
+   * happened, and dispatch can no longer rewrite it. Read under the trip lock,
+   * so a tap landing between this check and the end cannot slip through — the
+   * tap queues on the same lock.
+   */
+  private async requireNotStarted(assignment: DriverAssignment, tx: DatabaseQuery): Promise<void> {
+    if (await this.events.hasLiveEvents(assignment.id, tx)) {
+      throw new ConflictError(
+        'That assignment has started execution, so its lorry and driver can no longer be changed.',
+      );
+    }
+  }
+
+  /**
+   * A readable 409 for a lorry already on this trip. The lock on the existing
+   * row is deliberate: it serialises two operators adding the same lorry, and
+   * `uq_trip_active_vehicle_assignment` catches the pair that still collide.
+   */
+  private async requireVehicleFree(
+    tripId: string,
+    vehicleId: string,
+    tx: DatabaseQuery,
+  ): Promise<void> {
+    const vehicle = await this.vehicles.findById(vehicleId, tx);
+    if (!vehicle) throw new NotFoundError('Vehicle not found.');
+    if (vehicle.status !== 'active') {
+      throw new ConflictError('That vehicle has been retired from the catalogue.');
+    }
+
+    const onTrip = await this.assignments.lockActiveByVehicle(tripId, vehicleId, tx);
+    if (onTrip) {
+      throw new ConflictError(
+        'That vehicle is already dispatched on this trip. Replace its driver or end that assignment instead.',
+      );
+    }
   }
 
   /**
@@ -254,7 +333,7 @@ export class TripExecutionService {
   // ----------------------------------------------------------------- events ----
 
   /**
-   * Records something that happened on the road.
+   * Records something that happened on the road, against one assignment.
    *
    * ★ THE RETRY IS ANSWERED, NOT REFUSED. A driver on a bad connection taps once
    * and the request arrives three times. Two of those find the event already
@@ -262,12 +341,12 @@ export class TripExecutionService {
    * DIFFERENT event reusing the same `clientEventId` is a conflict, and the
    * unique index catches the pair that slip past this check simultaneously.
    *
-   * ★ AND THE THREE SNAPSHOTS ARE TAKEN UNDER THE LOCK. Reading the trip's
-   * vehicle after the lock is released would store what the trip says a moment
-   * later, which is not what was validated.
+   * ★ AND THE SNAPSHOTS ARE TAKEN UNDER THE LOCK, FROM THE ASSIGNMENT. The
+   * lorry written beside the event is the assignment's, never the trip's
+   * legacy column; the schedule is the trip's, read under `FOR UPDATE`.
    */
   async recordEvent(input: {
-    tripId: string;
+    assignmentId: string;
     type: ExecutionEventType;
     /**
      * ★ OPTIONAL, AND NO HTTP CALLER SUPPLIES IT.
@@ -311,6 +390,16 @@ export class TripExecutionService {
     // carrying a DIFFERENT one is a caller contradicting itself, and it is
     // refused rather than absorbed.
     //
+    // ★ THE ASSIGNMENT NAMES THE TRIP; THE CLIENT DOES NOT. An unlocked read is
+    // enough here — it only supplies the trip id for the two look-ups that
+    // follow, and everything that decides is re-read under the locks below.
+    // An assignment that is not active answers as not found: the guard already
+    // refused it, and this reasoning holds either way — nothing may be
+    // reported against a turn that has ended.
+    const named = await this.assignments.findActiveById(input.assignmentId);
+    if (!named) throw new NotFoundError('Assignment not found.');
+    const tripId = named.tripId;
+
     // ⚠ CEILING: this read is outside the transaction, so two simultaneous
     // requests sharing a key can both miss it and the second meets the
     // `uq_trip_execution_event_client` unique index instead. No duplicate is
@@ -318,8 +407,8 @@ export class TripExecutionService {
     // in front of it. It is deliberately not moved inside the lock: a retry
     // that arrives after the trip closed still has to be able to read back the
     // event it already wrote, and `lockOpenTrip` would refuse it first.
-    const already = await this.events.findByClientEventId(input.tripId, clientEventId);
-    if (already) return sameIntent(already, input.type);
+    const already = await this.events.findByClientEventId(tripId, clientEventId);
+    if (already) return sameIntent(already, input);
 
     return this.db.transaction(async (tx) => {
       // ★ LOCKED WHATEVER ITS STATUS, AND THE KEY IS LOOKED UP BEFORE THE
@@ -329,7 +418,7 @@ export class TripExecutionService {
       // is owed — refusing it as "closed" would tell a driver their pickup
       // was never recorded when it was. Only a key that matches NOTHING is
       // then measured against the status, and on a closed trip refused.
-      const trip = await this.trips.lockActive(input.tripId, tx);
+      const trip = await this.trips.lockActive(tripId, tx);
       if (!trip) throw new NotFoundError('Trip not found.');
 
       // ★ AND CHECKED AGAIN UNDER THE LOCK — THIS IS WHAT MAKES A RETRY SAFE.
@@ -343,29 +432,35 @@ export class TripExecutionService {
       // rather than driven into `uq_trip_execution_event_client`. The lock
       // is what serialises them; the index stays as the last line for any
       // writer that bypasses this service.
-      const written = await this.events.findByClientEventId(input.tripId, clientEventId, tx);
-      if (written) return sameIntent(written, input.type);
+      const written = await this.events.findByClientEventId(tripId, clientEventId, tx);
+      if (written) return sameIntent(written, input);
 
       // Nothing to answer with, so this is a NEW milestone — and a closed trip
       // takes none. Same rule `lockOpenTrip` applies everywhere else.
       if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
 
-      const assignment = await this.assignments.lockActive(input.tripId, tx);
-      if (!assignment) {
-        throw new ConflictError('That trip has no driver, so there is nothing to report against.');
+      // Re-read under its own lock (trip → assignment, the order everywhere):
+      // the turn could have ended between the unlocked read and here.
+      const assignment = await this.assignments.lockActiveById(input.assignmentId, tx);
+      if (!assignment) throw new ConflictError('That assignment is no longer active.');
+      if (!assignment.vehicleId) {
+        throw new ConflictError('That assignment names no lorry, so nothing can be reported on it.');
       }
 
-      // ★ A DRIVER REPORTS THEIR OWN TRIP, AND NOBODY REPORTS IT FOR THEM.
+      // ★ A DRIVER REPORTS THEIR OWN ASSIGNMENT, AND NOBODY REPORTS IT FOR THEM.
       //
-      // This is a rule about DATA — which trip this person is on — so no
+      // This is a rule about DATA — which turn this person holds — so no
       // permission tier can express it: the guard knows roles and departments,
       // not assignments. It lives here, at the only point where both the actor
       // and the assignment are in hand.
       if (assignment.driverUserId !== input.recordedBy) {
-        throw new ForbiddenError('Only the driver assigned to a trip may report its progress.');
+        throw new ForbiddenError('Only the driver on an assignment may report its progress.');
       }
 
-      // ★ THE JOURNEY CANNOT BE SKIPPED, AND THIS IS WHERE THAT HOLDS.
+      // ★ THE JOURNEY CANNOT BE SKIPPED, AND THIS IS WHERE THAT HOLDS — PER
+      // ASSIGNMENT. What another lorry on the same trip has reported is not
+      // this lorry's progress (ADR-0004): assignment A's pickup does not let
+      // assignment B confirm one.
       //
       // Checked INSIDE the transaction, after the trip row is locked, so two
       // taps arriving together cannot both read the same incomplete state and
@@ -375,7 +470,7 @@ export class TripExecutionService {
       //
       // Repeats are still allowed — a driver who leaves and comes back reports
       // an arrival twice, and that is a real fact rather than an error.
-      const reported = await this.events.listByTrip(input.tripId, false, tx);
+      const reported = await this.events.listByAssignment(assignment.id, false, tx);
       const missing = missingPrerequisite(
         input.type,
         reported.map((event) => event.type),
@@ -425,11 +520,12 @@ export class TripExecutionService {
 
       return this.events.record(
         {
-          tripId: input.tripId,
+          tripId,
           driverAssignmentId: assignment.id,
           type: input.type,
-          vehicleId: trip.vehicleId,
-          vehicleOwnership: await this.ownershipOf(trip.vehicleId, tx),
+          // ★ THE ASSIGNMENT'S LORRY, never `trip.vehicleId` (legacy, ADR-0004).
+          vehicleId: assignment.vehicleId,
+          vehicleOwnership: await this.ownershipOf(assignment.vehicleId, tx),
           // Pickup events are late against the pickup time and delivery events
           // against the delivery time. Comparing either with the other produces
           // a delay wrong by the length of the journey.
@@ -500,17 +596,12 @@ export class TripExecutionService {
   /**
    * The lorry's ownership at the moment of writing.
    *
-   * ★ RETURNS `null` FREELY, AND NOTHING DOWNSTREAM SUBSTITUTES A VALUE. A trip
-   * may have no vehicle yet, and a vehicle may not have been classified yet —
-   * 0013 leaves every existing lorry unclassified on purpose. Both are honest
-   * absences, and turning either into `company` would be the system asserting
-   * something nobody said.
+   * ★ RETURNS `null` FREELY, AND NOTHING DOWNSTREAM SUBSTITUTES A VALUE. A
+   * vehicle may not have been classified yet — 0013 leaves every existing
+   * lorry unclassified on purpose. That is an honest absence, and turning it
+   * into `company` would be the system asserting something nobody said.
    */
-  private async ownershipOf(
-    vehicleId: string | null,
-    tx: DatabaseQuery,
-  ): Promise<VehicleOwnership | null> {
-    if (!vehicleId) return null;
+  private async ownershipOf(vehicleId: string, tx: DatabaseQuery): Promise<VehicleOwnership | null> {
     const vehicle = await this.vehicles.findById(vehicleId, tx);
     return vehicle?.ownership ?? null;
   }
@@ -531,10 +622,26 @@ const requireReason = (value: string): string => {
  * A stored event answers a retry of the SAME milestone; the same key carrying
  * a DIFFERENT one is a caller contradicting itself, and is refused.
  */
-const sameIntent = (stored: ExecutionEvent, type: ExecutionEventType): ExecutionEvent => {
-  if (stored.type !== type) {
+/**
+ * ★ A STORED EVENT IS REUSED ONLY FOR THE ASSIGNMENT IT WAS WRITTEN FOR. The
+ * key is unique per TRIP in the database (0015), but the caller was authorised
+ * per ASSIGNMENT; answering assignment B's tap with assignment A's event would
+ * hand one driver another driver's record and silently drop B's milestone.
+ * Reuse the key on the same turn: the original. On another turn of the same
+ * trip: refused, with nothing of the other turn disclosed.
+ */
+const sameIntent = (
+  stored: ExecutionEvent,
+  input: { assignmentId: string; type: ExecutionEventType },
+): ExecutionEvent => {
+  if (stored.driverAssignmentId !== input.assignmentId) {
     throw new ConflictError(
-      `That client event id was already used to report ${stored.type}, so it cannot now report ${type}. Use a new id for a new milestone.`,
+      'That client event id was already used on another assignment of this trip. Use a new id for each assignment.',
+    );
+  }
+  if (stored.type !== input.type) {
+    throw new ConflictError(
+      `That client event id was already used to report ${stored.type}, so it cannot now report ${input.type}. Use a new id for a new milestone.`,
     );
   }
   return stored;
@@ -560,7 +667,11 @@ const geofencedPointOf = (
   return undefined;
 };
 
-/** A notification about one turn on one trip, addressed to the driver of that turn. */
+/**
+ * A notification about one turn on one trip, addressed to the driver of that
+ * turn. The plate rides in `detail`: a driver put on three lorries of one trip
+ * gets three of these, and "which one" has to be readable from the row.
+ */
 const tell = (
   type: NotificationType,
   trip: TripSchedule,
@@ -570,6 +681,7 @@ const tell = (
   type,
   tripId: trip.id,
   tripScheduledOn: trip.scheduledOn,
+  detail: assignment.vehicle?.plate ?? null,
   eventKey:
     type === 'TRIP_ASSIGNED' ? eventKeys.assigned(assignment.id) : eventKeys.unassigned(assignment.id),
 });

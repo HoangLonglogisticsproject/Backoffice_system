@@ -148,14 +148,17 @@ export function useCompletionEvidence(tripId: string | null): {
 }
 
 /**
- * Approve and reject.
+ * Approve and reject ONE assignment's request.
  *
- * ★ BOTH INVALIDATE EVERYTHING THE DECISION MOVES. Approving freezes every
- * figure, closes the trip and writes its history in one server transaction, so
- * refreshing only the request would leave the queue, the timeline and the money
- * all contradicting it.
+ * ★ THE REQUEST IS NAMED (ADR-0004). A trip carries one pending request per
+ * active assignment; the row the reviewer opened says which.
+ *
+ * ★ BOTH INVALIDATE EVERYTHING THE DECISION MOVES. Approving freezes that
+ * assignment's figures and — when it was the last one open — closes the trip
+ * and writes its history in one server transaction, so refreshing only the
+ * request would leave the queue, the timeline and the money all contradicting it.
  */
-export function useCompletionDecision(tripId: string) {
+export function useCompletionDecision(tripId: string, requestId: string) {
   const client = useQueryClient();
 
   const refresh = async () => {
@@ -177,7 +180,7 @@ export function useCompletionDecision(tripId: string) {
   const approve = useMutation({
     // No argument at all: there is nothing a caller could add to an approval
     // that the server would accept.
-    mutationFn: () => approveCompletion(tripId),
+    mutationFn: () => approveCompletion(tripId, requestId),
     onSuccess: () => {
       notifySuccess('toastCompletionApproved');
       return refresh();
@@ -191,7 +194,7 @@ export function useCompletionDecision(tripId: string) {
   });
 
   const reject = useMutation({
-    mutationFn: (reason: string) => rejectCompletion(tripId, reason),
+    mutationFn: (reason: string) => rejectCompletion(tripId, requestId, reason),
     onSuccess: () => {
       notifySuccess('toastCompletionRejected');
       return refresh();

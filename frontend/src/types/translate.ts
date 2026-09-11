@@ -48,7 +48,7 @@ const PHRASES = {
   reviewQueueEmpty: { vi: 'Không có chuyến nào chờ duyệt', en: 'Nothing waiting for review' },
   reviewOpen: { vi: 'Xem hồ sơ', en: 'Inspect' },
   reviewClose: { vi: 'Đóng', en: 'Close' },
-  reviewApprove: { vi: 'Duyệt — đóng chuyến', en: 'Approve — close the trip' },
+  reviewApprove: { vi: 'Duyệt lượt xe này', en: 'Approve this assignment' },
   reviewReject: { vi: 'Từ chối', en: 'Send back' },
   reviewRejectReasonLabel: {
     vi: 'Lý do từ chối (bắt buộc — tài xế sẽ đọc)',
@@ -58,9 +58,15 @@ const PHRASES = {
   reviewReasonRequired: { vi: 'Phải nhập lý do', en: 'A reason is required' },
   // ★ APPROVAL IS IRREVERSIBLE. The wording says so before the click, because
   // there is no screen after it that can undo anything.
+  //
+  // ★ AND IT IS SCOPED TO THE ASSIGNMENT (ADR-0004). Approving finalises the
+  // figures on the assignment being reviewed — not every figure on the trip,
+  // and it does not close the trip: that happens only once every active
+  // assignment has been approved. Promising trip closure here would be a
+  // promise the button cannot keep while another lorry is still running.
   reviewApproveWarning: {
-    vi: 'Duyệt sẽ đóng chuyến vĩnh viễn và khoá toàn bộ chi phí. Không thể mở lại.',
-    en: 'Approving closes the trip permanently and freezes every figure. It cannot be undone.',
+    vi: 'Duyệt sẽ khoá vĩnh viễn chi phí của lượt xe này. Không thể mở lại. Chuyến chỉ đóng khi mọi lượt xe đang chạy đều được duyệt.',
+    en: 'Approving permanently freezes the figures on this assignment. It cannot be undone. The trip closes only once every active assignment is approved.',
   },
   reviewTimeline: { vi: 'Tiến trình tài xế báo', en: 'What the driver reported' },
   reviewRecordedAt: { vi: 'Máy chủ ghi', en: 'Server recorded' },
@@ -90,6 +96,13 @@ const PHRASES = {
   reviewAttempts: { vi: 'Số lần gửi', en: 'Attempts' },
   reviewSubmittedAt: { vi: 'Gửi lúc', en: 'Submitted' },
   reviewDecidedAt: { vi: 'Quyết định lúc', en: 'Decided' },
+  // ★ Per assignment, never "trip completed": the trip closes only when every
+  // active assignment is approved (ADR-0004).
+  reviewAssignmentApproved: { vi: 'Lượt xe này đã được duyệt', en: 'This assignment is approved' },
+  reviewAssignmentApprovedHint: {
+    vi: 'Chi phí của lượt xe này là cuối cùng. Chuyến chỉ đóng khi mọi lượt xe đang chạy đều được duyệt.',
+    en: 'Its figures are final. The trip closes only once every active assignment is approved.',
+  },
   reviewNothingPending: {
     vi: 'Chuyến này không có yêu cầu nào đang chờ duyệt',
     en: 'This trip has no request waiting for a decision',
@@ -137,6 +150,7 @@ const PHRASES = {
   // status code, a table or a state machine.
   driverPortal: { vi: 'Cổng tài xế', en: 'Driver Portal' },
   driverMyTrips: { vi: 'Chuyến của tôi', en: 'My trips' },
+  driverMyAssignments: { vi: 'Xe của tôi trên chuyến này', en: 'My vehicles on this trip' },
   driverNoTrips: { vi: 'Bạn chưa được phân công chuyến nào', en: 'You have no assigned trips' },
   driverBackToTrips: { vi: 'Về danh sách chuyến', en: 'Back to trips' },
   driverRetry: { vi: 'Thử lại', en: 'Try again' },
@@ -261,10 +275,30 @@ const PHRASES = {
   colDriver: { vi: 'Tài xế', en: 'Driver' },
   driverUnassigned: { vi: 'Chưa phân công', en: 'Not assigned' },
   assignDriver: { vi: 'Phân công', en: 'Assign' },
-  changeDriver: { vi: 'Thay đổi', en: 'Change' },
+  changeDriver: { vi: 'Đổi tài xế', en: 'Change driver' },
   assignDriverTitle: { vi: 'Phân công tài xế', en: 'Assign driver' },
   currentDriver: { vi: 'Tài xế hiện tại', en: 'Current driver' },
   selectDriver: { vi: 'Chọn tài xế', en: 'Choose a driver' },
+  // ★ Multi-vehicle dispatch (ADR-0004): a trip carries any number of lorries,
+  // each with its own driver. The panel, its rows and its counts.
+  dispatchTitle: { vi: 'Phương tiện điều độ', en: 'Dispatched vehicles' },
+  dispatchEmpty: { vi: 'Chưa điều độ xe nào cho chuyến này.', en: 'No vehicle dispatched on this trip yet.' },
+  dispatchAdd: { vi: 'Thêm phương tiện', en: 'Add vehicle' },
+  dispatchSelectVehicle: { vi: 'Chọn xe', en: 'Choose a vehicle' },
+  dispatchRemove: { vi: 'Gỡ', en: 'Remove' },
+  dispatchEndReason: { vi: 'Lý do gỡ', en: 'Reason for removal' },
+  dispatchStarted: { vi: 'Đang thực hiện', en: 'In progress' },
+  dispatchHistory: { vi: 'Lịch sử điều độ', en: 'Dispatch history' },
+  dispatchHistoryFailed: { vi: 'Không tải được lịch sử điều độ.', en: 'Could not load the dispatch history.' },
+  dispatchMissingVehicle: { vi: 'Thiếu xe (dữ liệu cũ)', en: 'No vehicle (legacy row)' },
+  dispatchLegacyVehicle: {
+    vi: 'Chuyến này có xe dự kiến từ dữ liệu cũ nhưng chưa có cặp xe + tài xế. Hãy điều độ lại.',
+    en: 'This trip carries a planned vehicle from legacy data but no vehicle + driver pair. Dispatch it again.',
+  },
+  dispatchVehicleUnit: { vi: 'xe', en: 'vehicles' },
+  dispatchDriverUnit: { vi: 'tài xế', en: 'drivers' },
+  dispatchManage: { vi: 'Điều độ', en: 'Dispatch' },
+  dispatchLegacyBadge: { vi: 'Xe dự kiến (dữ liệu cũ)', en: 'Planned vehicle (legacy)' },
   assignReason: { vi: 'Lý do thay đổi', en: 'Reason for the change' },
   noEligibleDrivers: {
     vi: 'Chưa có tài khoản tài xế nào đang hoạt động để phân công.',
@@ -321,10 +355,13 @@ const PHRASES = {
   driverCompletionRejected: { vi: 'Yêu cầu bị từ chối', en: 'Sent back' },
   driverRejectReason: { vi: 'Lý do từ chối', en: 'Reason' },
   driverFixAndResubmit: { vi: 'Chỉnh sửa và gửi lại', en: 'Correct and send again' },
-  driverCompletionApproved: { vi: 'Chuyến đã hoàn tất', en: 'Trip completed' },
+  // ★ THE DRIVER'S OWN TURN, NEVER "THE TRIP" (ADR-0004). The driver read
+  // model carries no trip status, and the trip closes only when every active
+  // assignment is approved — so nothing here may claim the trip is done.
+  driverCompletionApproved: { vi: 'Lượt xe của bạn đã được duyệt', en: 'Your assignment is approved' },
   driverCompletionApprovedHint: {
-    vi: 'Chuyến đã đóng. Chi phí không thay đổi được nữa.',
-    en: 'This trip is closed. Its figures are final.',
+    vi: 'Chi phí của lượt xe này không thay đổi được nữa.',
+    en: 'Its figures are final.',
   },
   driverAttempt: { vi: 'Lần gửi', en: 'Attempt' },
   driverDeclaredNone: { vi: 'Đã khai: không phát sinh', en: 'Declared: no expenses' },
@@ -1215,11 +1252,13 @@ const PHRASES = {
   toastDriverAssigned: { vi: 'Đã phân công tài xế', en: 'Driver assigned' },
   toastDriverReplaced: { vi: 'Đã đổi tài xế', en: 'Driver replaced' },
   toastAssignmentEnded: { vi: 'Đã kết thúc phân công', en: 'Assignment ended' },
-  // ★ "KHÓA SỔ", NOT "ĐÃ DUYỆT". Approving closes the trip permanently, and the
-  // receipt is the last chance to say so.
+  // ★ "KHÓA SỔ", NOT "ĐÃ DUYỆT". Approving is irreversible and the receipt is
+  // the last chance to say so — but what it closes is THIS ASSIGNMENT's books,
+  // not the trip's (ADR-0004). The trip closes only once every active
+  // assignment has been approved, which this click cannot know it has done.
   toastCompletionApproved: {
-    vi: 'Đã duyệt hoàn tất — chuyến đã khóa sổ',
-    en: 'Completion approved — the trip is closed',
+    vi: 'Đã duyệt — chi phí lượt xe này đã khóa sổ',
+    en: 'Approved — this assignment is closed',
   },
   toastCompletionRejected: {
     vi: 'Đã trả lại cho tài xế khai lại',

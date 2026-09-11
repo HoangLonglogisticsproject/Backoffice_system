@@ -12,7 +12,13 @@ import { REQUEST_AUTHORIZATION } from '../../../core/authorization/api/permissio
 import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
 
 /**
- * Is this caller the driver currently assigned to the trip on the route?
+ * Is this caller the driver of the ACTIVE assignment on the route?
+ *
+ * ★ THE ROUTE NAMES AN ASSIGNMENT, NOT A TRIP (ADR-0004). One driver may hold
+ * several turns on one trip — one per lorry — so "the caller's assignment on
+ * this trip" has no single answer. The assignment id does: load it, compare
+ * its driver with the session, and let the services derive the trip from it.
+ * A client never supplies a trip id on a driver route.
  *
  * ★ WHY THIS IS A GUARD AND NOT A NEW PERMISSION TIER.
  *
@@ -77,19 +83,20 @@ export class ActiveAssignmentGuard implements CanActivate {
       );
     }
 
-    // ★ FROM THE ROUTE, NEVER FROM THE BODY. A body that named its own trip
-    // would let a caller assigned to one trip act on any other by sending a
-    // different id — the whole class of bug the permission guard's route-scope
-    // rule exists to prevent, arriving through a different door.
-    const tripId = (request.params as Record<string, string | undefined>)['tripId'];
-    if (!tripId) throw new ForbiddenError('You are not allowed to do that.');
+    // ★ FROM THE ROUTE, NEVER FROM THE BODY. A body that named its own
+    // assignment would let a caller holding one turn act on any other by
+    // sending a different id — the whole class of bug the permission guard's
+    // route-scope rule exists to prevent, arriving through a different door.
+    const assignmentId = (request.params as Record<string, string | undefined>)['assignmentId'];
+    if (!assignmentId) throw new ForbiddenError('You are not allowed to do that.');
 
-    const assignment = await this.assignments.findActive(tripId);
+    const assignment = await this.assignments.findActiveById(assignmentId);
 
-    // ★ ONE MESSAGE FOR THREE CASES: no such trip, a trip with no driver, and
-    // somebody else's trip. Distinguishing them would let a caller holding only
-    // a trip id learn whether it exists and whether it is crewed — which is
-    // information about work that is not theirs.
+    // ★ ONE MESSAGE FOR THREE CASES: no such assignment, one that has ended,
+    // and somebody else's. Distinguishing them would let a caller holding only
+    // an id learn whether it exists and whether it is live — which is
+    // information about work that is not theirs. An ended turn is refused
+    // outright: nothing may be reported, declared or asked against it.
     if (assignment?.driverUserId !== user.id) {
       throw new ForbiddenError('You are not allowed to do that.');
     }

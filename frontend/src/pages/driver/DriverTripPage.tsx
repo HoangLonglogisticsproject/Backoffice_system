@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusPill } from '@/components/common/StatusPill';
 import { Stepper } from '@/components/common/Stepper';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useDriverActions, useMyTrip } from '@/hooks/driver';
+import { useDriverActions, useMyAssignment } from '@/hooks/driver';
 import { driverErrorKey, shouldReloadAfter } from '@/utils/driverErrors';
 import { currentStage, workflowStages, type WorkflowStage } from '@/utils/driverExecution';
 import { captureLocation } from '@/utils/driverLocation';
@@ -42,14 +42,17 @@ const STAGE_LABEL: Record<WorkflowStage, TranslationKey> = {
 };
 
 export default function DriverTripPage() {
-  const { tripId } = useParams<{ tripId: string }>();
+  // ★ THE ROUTE NAMES AN ASSIGNMENT, NOT A TRIP (ADR-0004). A driver on two
+  // lorries of one trip opens two of these screens, one per turn; everything
+  // below — timeline, figures, completion — is that turn's alone.
+  const { assignmentId } = useParams<{ assignmentId: string }>();
   const { t, language } = useLanguage();
 
   // ★ `loadError`, not `error`: this file already calls the WRITE failure
   // `actionError`, and the read failure had no name of its own — so it took
   // the generic one and every `catch` below had to avoid it.
-  const { trip, loading, error: loadError, reload } = useMyTrip(tripId);
-  const { report, declare, correct, complete } = useDriverActions(tripId ?? '');
+  const { trip, loading, error: loadError, reload } = useMyAssignment(assignmentId);
+  const { report, declare, correct, complete } = useDriverActions(assignmentId ?? '');
 
   const [actionError, setActionError] = useState<unknown>(null);
   /** The handset is being asked where it is. Separate from the request in flight. */

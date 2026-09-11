@@ -53,6 +53,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   let catalogue: TripCatalogueService;
   let author: string;
   let driver: string;
+  let driverB: string;
 
   /**
    * Parses a query string exactly as the controller's pipe would.
@@ -66,13 +67,23 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     assignment: (raw['assignment'] as TripAssignmentFilter | undefined) ?? 'all',
   });
 
-  /** Puts `driver` on a trip, the way the assignment service does. */
-  const crew = async (tripId: string): Promise<void> => {
-    await pool.query(
-      `INSERT INTO trip_driver_assignments (trip_id, driver_user_id, assigned_by)
-       VALUES ($1, $2, $3)`,
-      [tripId, driver, author],
+  /**
+   * Dispatches a lorry and `driver` onto a trip, the way the assignment service
+   * does. A fresh lorry each time — a lorry may be on a trip once, a driver as
+   * often as dispatch likes (ADR-0004).
+   */
+  let plateNo = 0;
+  const crew = async (tripId: string, driverUserId = driver): Promise<string> => {
+    const { rows } = await pool.query<{ id: string }>(
+      `INSERT INTO trip_vehicles (plate, created_by) VALUES ($1, $2) RETURNING id`,
+      [`51D-${String(10000 + plateNo++)}`, author],
     );
+    const { rows: assigned } = await pool.query<{ id: string }>(
+      `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [tripId, rows[0]!.id, driverUserId, author],
+    );
+    return assigned[0]!.id;
   };
 
   beforeAll(async () => {
@@ -109,7 +120,6 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     trips = new TripScheduleService(
       database,
       new TripScheduleRepository(database),
-      vehicles,
       customers,
       new TripStatusHistoryRepository(database),
       new TripLocationRepository(database),
@@ -119,6 +129,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     const users = new UserRepository(database);
     author = (await users.insertUser({ displayName: 'Điều Độ' })).id;
     driver = (await users.insertUser({ displayName: 'Tài Xế A', accountType: 'driver' })).id;
+    driverB = (await users.insertUser({ displayName: 'Tài Xế B', accountType: 'driver' })).id;
   });
 
   afterAll(async () => {
@@ -242,15 +253,42 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       expect(page.total).toBe(2);
       expect(page.items.map((trip) => trip.id)).not.toContain(crewed);
-      expect(page.items.every((trip) => trip.driver === null)).toBe(true);
+      expect(page.items.every((trip) => trip.assignments.length === 0)).toBe(true);
     });
 
-    it('returns only the crewed trips, with the driver named', async () => {
+    it('returns only the crewed trips, with every pair named', async () => {
       const page = await trips.list(asQuery({ assignment: 'assigned' }));
 
       expect(page.total).toBe(1);
       expect(page.items[0]?.id).toBe(crewed);
-      expect(page.items[0]?.driver).toEqual({ id: driver, displayName: 'Tài Xế A' });
+      expect(page.items[0]?.assignments).toHaveLength(1);
+      expect(page.items[0]?.assignments[0]).toMatchObject({
+        driver: { id: driver, displayName: 'Tài Xế A' },
+        vehicle: { plate: expect.stringMatching(/^51D-/) },
+      });
+    });
+
+    it('★ counts a trip with THREE lorries once, and pages it once (ADR-0004)', async () => {
+      // The old read LEFT JOINed the active assignment, which was safe only
+      // while a trip had at most one. Three active turns must not become three
+      // rows, three in the total, or a page that skips the neighbour.
+      await crew(crewed);
+      await crew(crewed, driverB);
+
+      const all = await trips.list(asQuery({}));
+      expect(all.total).toBe(3);
+      expect(all.items.filter((trip) => trip.id === crewed)).toHaveLength(1);
+
+      const assigned = await trips.list(asQuery({ assignment: 'assigned' }));
+      expect(assigned.total).toBe(1);
+      expect(assigned.items[0]?.assignments).toHaveLength(3);
+      // Oldest dispatch first; the same driver twice is two turns, not one.
+      expect(assigned.items[0]?.assignments.map((a) => a.driver.id)).toEqual([driver, driver, driverB]);
+      expect(new Set(assigned.items[0]?.assignments.map((a) => a.vehicle?.id)).size).toBe(3);
+
+      const page = await trips.list(asQuery({ page: '1', limit: '2' }));
+      expect(page.items).toHaveLength(2);
+      expect(page.totalPages).toBe(2);
     });
 
     it('★ moves a trip out of the queue the moment a driver is put on it', async () => {
@@ -273,6 +311,21 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       expect(queue.total).toBe(3);
       expect(queue.items.map((trip) => trip.id)).toContain(crewed);
+    });
+
+    it('keeps a trip OUT of the queue while any one of its lorries is still on it', async () => {
+      const second = await crew(crewed, driverB);
+      await pool.query(
+        `UPDATE trip_driver_assignments
+            SET state = 'ended', ended_at = now(), ended_by = $2, end_reason = 'đổi xe'
+          WHERE id = $1`,
+        [second, author],
+      );
+
+      const queue = await trips.list(asQuery({ assignment: 'unassigned' }));
+
+      expect(queue.total).toBe(2);
+      expect(queue.items.map((trip) => trip.id)).not.toContain(crewed);
     });
 
     it('★ counts the FILTERED set on a page past the end, not the whole range', async () => {
@@ -346,46 +399,66 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   // ------------------------------------------------------------ the joins ----
 
   describe('what a read carries', () => {
-    it('spells out the vehicle, the customer and the author', async () => {
-      const vehicle = await catalogue.createVehicle({ plate: '50H-49266', createdBy: author });
+    it('spells out the crew, the customer and the author', async () => {
       const customer = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
 
-      await trips.create({
+      const created = await trips.create({
         scheduledOn: '2026-08-04',
-        vehicleId: vehicle.id,
         customerId: customer.id,
         createdBy: author,
       });
+      const assignment = await crew(created.id);
 
       const [row] = (await trips.list(asQuery({}))).items;
-      expect(row?.vehicle).toEqual({ id: vehicle.id, plate: '50H-49266' });
+      expect(row?.assignments).toEqual([
+        {
+          id: assignment,
+          started: false,
+          vehicle: { id: expect.any(String), plate: expect.stringMatching(/^51D-/) },
+          driver: { id: driver, displayName: 'Tài Xế A' },
+          assignedAt: expect.any(Date),
+        },
+      ]);
       expect(row?.customer).toEqual({ id: customer.id, name: 'WWL' });
       expect(row?.createdByUser).toEqual({ id: author, displayName: 'Điều Độ' });
     });
 
-    it('★ still returns a trip with no vehicle assigned — the sheet’s `ĐIỀN SAU` row', async () => {
-      // An INNER JOIN to the catalogue would make this row vanish from the
-      // board, which is the opposite of what dispatch needs from it.
+    it('★ still returns a trip with nobody dispatched — the sheet’s `ĐIỀN SAU` row', async () => {
+      // A trip is booked before it is crewed (ADR-0004): an empty crew is a
+      // real state, not a row to drop.
       await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
 
       const [row] = (await trips.list(asQuery({}))).items;
-      expect(row?.vehicle).toBeNull();
+      expect(row?.assignments).toEqual([]);
       expect(row?.customer).toBeNull();
       expect(row?.createdByUser.displayName).toBe('Điều Độ');
     });
 
-    it('★ returns a trip with a truck but NO customer — an internal move', async () => {
+    it('★ returns a trip with a crew but NO customer — an internal move', async () => {
       // 0011 makes `customer_id` nullable for its own reason, separate from
       // `ĐIỀN SAU`: a move between the company's own sites has no customer
-      // behind it. The row above happens to have neither reference, so it
-      // would still pass if the customer join were made INNER.
-      const vehicle = await catalogue.createVehicle({ plate: '51C-123.45', createdBy: author });
-      await trips.create({ scheduledOn: '2026-08-04', vehicleId: vehicle.id, createdBy: author });
+      // behind it. The row above happens to have neither, so it would still
+      // pass if the customer join were made INNER.
+      const created = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
+      await crew(created.id);
 
       const [row] = (await trips.list(asQuery({}))).items;
-      expect(row?.vehicle).toEqual({ id: vehicle.id, plate: '51C-123.45' });
+      expect(row?.assignments).toHaveLength(1);
       expect(row?.customer).toBeNull();
       expect(row?.customerId).toBeNull();
+    });
+
+    it('★ never writes the legacy lorry column — dispatch is an assignment (ADR-0004)', async () => {
+      const created = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
+      await crew(created.id);
+      await trips.update(created.id, { note: 'sau' }, author);
+
+      const { rows } = await pool.query<{ vehicle_id: string | null }>(
+        `SELECT vehicle_id FROM trip_schedules WHERE id = $1`,
+        [created.id],
+      );
+      expect(rows[0]?.vehicle_id).toBeNull();
+      expect((await trips.findById(created.id))?.vehicleId).toBeNull();
     });
 
     it('does not let the joined user clobber the trip’s own id', async () => {
@@ -434,19 +507,9 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       expect(created.deliveryAddress).toBe(address);
     });
 
-    it('refuses a trip pointing at a retired vehicle', async () => {
-      const vehicle = await catalogue.createVehicle({ plate: '51D-60088', createdBy: author });
-      await catalogue.archiveVehicle(vehicle.id);
-
-      await expect(
-        trips.create({ scheduledOn: '2026-08-04', vehicleId: vehicle.id, createdBy: author }),
-      ).rejects.toBeInstanceOf(ConflictError);
-    });
-
     it('refuses a trip pointing at a retired customer', async () => {
-      // The twin of the case above, and it is NOT covered by it: `resolve()`
-      // checks the two catalogues in two separate branches, so a regression
-      // that dropped the customer half would leave the vehicle test green.
+      // The lorry's twin of this check moved with the lorry: a retired vehicle
+      // is refused where it is dispatched, in the assignment service.
       const customer = await catalogue.createCustomer({ name: 'VIỄN ĐẠT', createdBy: author });
       await catalogue.archiveCustomer(customer.id);
 
@@ -455,11 +518,11 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       ).rejects.toBeInstanceOf(ConflictError);
     });
 
-    it('refuses a vehicle id that names nothing', async () => {
+    it('refuses a customer id that names nothing', async () => {
       await expect(
         trips.create({
           scheduledOn: '2026-08-04',
-          vehicleId: '00000000-0000-4000-8000-000000000000',
+          customerId: '00000000-0000-4000-8000-000000000000',
           createdBy: author,
         }),
       ).rejects.toBeInstanceOf(NotFoundError);
@@ -467,36 +530,19 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   });
 
   /**
-   * ★ RETIRING A TRUCK MUST NOT FREEZE THE TRIPS THAT USED IT.
+   * ★ RETIRING A CUSTOMER MUST NOT FREEZE THE TRIPS THAT NAMED THEM.
    *
    * Archiving is chosen over deleting precisely so the record survives, and a
-   * record that can no longer be corrected is only half a record. `update()`
-   * merges the patch onto the stored row, so the merged row still names the
-   * retired truck — and re-checking it against the catalogue turned every
+   * record that can no longer be corrected is only half a record.    * merges the patch onto the stored row, so the merged row still names the
+   * retired customer — and re-checking it against the catalogue turned every
    * historical trip into a 409 on any edit at all, including a typo in a note.
    *
    * The line these cases hold: an UNCHANGED reference is kept, a CHANGED one is
-   * still checked (F-002).
+   * still checked (F-002). The lorry's half of this rule left the trip row with
+   * the lorry itself (ADR-0004): a retired vehicle is refused where it is
+   * dispatched, in the assignment service.
    */
   describe('★ a reference already on the row survives its catalogue row being retired', () => {
-    it('edits a trip whose vehicle has since been retired, and keeps the vehicle', async () => {
-      const vehicle = await catalogue.createVehicle({ plate: '50H-49266', createdBy: author });
-      const trip = await trips.create({
-        scheduledOn: '2026-08-04',
-        vehicleId: vehicle.id,
-        note: 'trước',
-        createdBy: author,
-      });
-
-      await catalogue.archiveVehicle(vehicle.id);
-
-      const updated = await trips.update(trip.id, { note: 'sau' }, author);
-
-      expect(updated.note).toBe('sau');
-      // The historical assignment is intact — not cleared, not swapped.
-      expect(updated.vehicleId).toBe(vehicle.id);
-    });
-
     it('edits a trip whose customer has since been retired, and keeps the customer', async () => {
       const customer = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
       const trip = await trips.create({
@@ -513,69 +559,38 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       expect(updated.customerId).toBe(customer.id);
     });
 
-    it('keeps BOTH retired references through an edit that mentions neither', async () => {
-      const vehicle = await catalogue.createVehicle({ plate: '51D.65233', createdBy: author });
+    it('keeps the retired reference through an edit that moves the status', async () => {
       const customer = await catalogue.createCustomer({ name: 'VIỄN ĐẠT', createdBy: author });
       const trip = await trips.create({
         scheduledOn: '2026-08-04',
-        vehicleId: vehicle.id,
         customerId: customer.id,
         createdBy: author,
       });
 
-      await catalogue.archiveVehicle(vehicle.id);
       await catalogue.archiveCustomer(customer.id);
 
-      // `external_booking` rather than `done`: this case is about RETIRED
-      // REFERENCES surviving an edit, and any status change demonstrates that
-      // equally well. `done` is no longer reachable from the edit path at all —
-      // 0017 makes it permanent, so completing a trip belongs to the completion
-      // approval and to nothing else.
       const updated = await trips.update(trip.id, { status: 'confirmed' }, author);
 
       expect(updated.status).toBe('confirmed');
-      expect(updated.vehicleId).toBe(vehicle.id);
       expect(updated.customerId).toBe(customer.id);
     });
 
     it('re-sending the SAME retired id explicitly is still not a change', async () => {
       // The form sends every field on every save, so the retired id arrives in
       // the body rather than being absent. That has to read as "unchanged", not
-      // as "assign this retired truck".
-      const vehicle = await catalogue.createVehicle({ plate: '50H-27314', createdBy: author });
+      // as "assign this retired customer".
+      const customer = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
       const trip = await trips.create({
         scheduledOn: '2026-08-04',
-        vehicleId: vehicle.id,
+        customerId: customer.id,
         createdBy: author,
       });
-      await catalogue.archiveVehicle(vehicle.id);
+      await catalogue.archiveCustomer(customer.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: vehicle.id, note: 'sau' }, author);
+      const updated = await trips.update(trip.id, { customerId: customer.id, note: 'sau' }, author);
 
-      expect(updated.vehicleId).toBe(vehicle.id);
+      expect(updated.customerId).toBe(customer.id);
       expect(updated.note).toBe('sau');
-    });
-
-    it('★ still refuses assigning a DIFFERENT retired vehicle — F-002 is intact', async () => {
-      const inUse = await catalogue.createVehicle({ plate: '50H-49266', createdBy: author });
-      const retired = await catalogue.createVehicle({ plate: '51C-123.45', createdBy: author });
-      await catalogue.archiveVehicle(retired.id);
-
-      const trip = await trips.create({
-        scheduledOn: '2026-08-04',
-        vehicleId: inUse.id,
-        note: 'trước',
-        createdBy: author,
-      });
-
-      await expect(
-        trips.update(trip.id, { vehicleId: retired.id }, author),
-      ).rejects.toBeInstanceOf(ConflictError);
-
-      // The refusal is a refusal: the transaction rolled back and nothing moved.
-      const after = await trips.findById(trip.id);
-      expect(after?.vehicleId).toBe(inUse.id);
-      expect(after?.note).toBe('trước');
     });
 
     it('★ still refuses assigning a DIFFERENT retired customer — F-002 is intact', async () => {
@@ -586,6 +601,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const trip = await trips.create({
         scheduledOn: '2026-08-04',
         customerId: inUse.id,
+        note: 'trước',
         createdBy: author,
       });
 
@@ -593,52 +609,54 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         trips.update(trip.id, { customerId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
 
+      // The refusal is a refusal: the transaction rolled back and nothing moved.
       const after = await trips.findById(trip.id);
       expect(after?.customerId).toBe(inUse.id);
+      expect(after?.note).toBe('trước');
     });
 
-    it('refuses a retired vehicle on a trip that had none — nothing to preserve', async () => {
+    it('refuses a retired customer on a trip that had none — nothing to preserve', async () => {
       // The exemption is about a reference the row ALREADY held. Going from
-      // null to a retired truck is a new assignment like any other.
-      const retired = await catalogue.createVehicle({ plate: '51D-60088', createdBy: author });
-      await catalogue.archiveVehicle(retired.id);
+      // null to a retired customer is a new reference like any other.
+      const retired = await catalogue.createCustomer({ name: 'BLUE WATER', createdBy: author });
+      await catalogue.archiveCustomer(retired.id);
 
       const trip = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
 
       await expect(
-        trips.update(trip.id, { vehicleId: retired.id }, author),
+        trips.update(trip.id, { customerId: retired.id }, author),
       ).rejects.toBeInstanceOf(ConflictError);
     });
 
     it('lets a retired reference be CLEARED, which was always legal', async () => {
       // Null semantics are untouched by the fix: the catalogue is never
       // consulted for a reference that is being removed.
-      const vehicle = await catalogue.createVehicle({ plate: '50H44266', createdBy: author });
+      const customer = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
       const trip = await trips.create({
         scheduledOn: '2026-08-04',
-        vehicleId: vehicle.id,
+        customerId: customer.id,
         createdBy: author,
       });
-      await catalogue.archiveVehicle(vehicle.id);
+      await catalogue.archiveCustomer(customer.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: null }, author);
+      const updated = await trips.update(trip.id, { customerId: null }, author);
 
-      expect(updated.vehicleId).toBeNull();
+      expect(updated.customerId).toBeNull();
     });
 
     it('lets the retired reference be replaced by an ACTIVE one', async () => {
-      const retired = await catalogue.createVehicle({ plate: '50H44266', createdBy: author });
-      const replacement = await catalogue.createVehicle({ plate: '50H49266', createdBy: author });
+      const retired = await catalogue.createCustomer({ name: 'WWL', createdBy: author });
+      const replacement = await catalogue.createCustomer({ name: 'BLUE WATER', createdBy: author });
       const trip = await trips.create({
         scheduledOn: '2026-08-04',
-        vehicleId: retired.id,
+        customerId: retired.id,
         createdBy: author,
       });
-      await catalogue.archiveVehicle(retired.id);
+      await catalogue.archiveCustomer(retired.id);
 
-      const updated = await trips.update(trip.id, { vehicleId: replacement.id }, author);
+      const updated = await trips.update(trip.id, { customerId: replacement.id }, author);
 
-      expect(updated.vehicleId).toBe(replacement.id);
+      expect(updated.customerId).toBe(replacement.id);
     });
   });
 

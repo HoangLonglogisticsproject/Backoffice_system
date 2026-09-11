@@ -145,11 +145,14 @@ export class TripCostService {
    *
    * ★ THE RETRY IS ANSWERED, NOT REFUSED. A phone on a bad connection sends the
    * same declaration three times; the second and third find it already written
-   * and get the original back. Only the pair that arrive simultaneously reach
-   * `uq_trip_cost_client_request`, and one of them loses there.
+   * and get the original back. The pair that arrive SIMULTANEOUSLY both miss
+   * that first unlocked look, so it is taken again under the trip lock — see
+   * `existingDeclaration`. Neither reaches `uq_trip_cost_client_request` any
+   * more, which is the point: that index raises a unique violation, and a
+   * violation is a 500 on a request the driver is entitled to have answered.
    */
   async declareCost(input: {
-    tripId: string;
+    assignmentId: string;
     category: TripCostCategory;
     amount: string;
     note?: string | null;
@@ -159,35 +162,60 @@ export class TripCostService {
     requireCategory(input.category);
     requireAmount(input.amount);
 
+    // Unlocked, and only for the trip id: everything that decides is re-read
+    // under the locks below, in the order trip → assignment → cost.
+    const named = await this.assignments.findActiveById(input.assignmentId);
+    if (!named) throw new NotFoundError('Assignment not found.');
+    const tripId = named.tripId;
+
     const clientRequestId = blankToNull(input.clientRequestId);
     if (clientRequestId) {
-      const already = await this.costs.findByClientRequestId(input.tripId, clientRequestId);
+      // Unlocked: answers the ordinary retry without opening a transaction.
+      const already = await this.existingDeclaration(tripId, clientRequestId, input.assignmentId);
       if (already) return already;
     }
 
     return this.db.transaction(async (tx) => {
-      const trip = await this.trips.lockActive(input.tripId, tx);
+      const trip = await this.trips.lockActive(tripId, tx);
       if (!trip) throw new NotFoundError('Trip not found.');
+
+      // ★ ASKED AGAIN, NOW THAT THE TRIP ROW IS OURS. The twin that beat us
+      // here committed before releasing the lock, so its line is visible to
+      // this second look and was invisible to the first. Answering with it is
+      // the same idempotent answer the unlocked path gives, reached the only
+      // way that is safe when two requests arrive together.
+      if (clientRequestId) {
+        const already = await this.existingDeclaration(
+          tripId,
+          clientRequestId,
+          input.assignmentId,
+          tx,
+        );
+        if (already) return already;
+      }
+
       if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
 
-      // ★ NO VEHICLE, NO EXPENSE — contract §4.1a, the operational ordering.
-      // A figure declared before a lorry is assigned has nothing to attribute
-      // itself to: the snapshot would be empty and the outsourced-category rule
-      // below would have nothing to read.
-      if (!trip.vehicleId) {
-        throw new ConflictError('That trip has no vehicle yet, so there is nothing to spend on.');
-      }
+      const assignment = await this.assignments.lockActiveById(input.assignmentId, tx);
+      if (!assignment) throw new ConflictError('That assignment is no longer active.');
 
-      const assignment = await this.assignments.lockActive(input.tripId, tx);
-      if (!assignment) throw new ConflictError('That trip has no driver.');
+      // ★ NO LORRY, NO EXPENSE — contract §4.1a, the operational ordering. An
+      // assignment written since 0027 always names one; this is the pre-0027
+      // row 0029 could not backfill. A figure with no lorry has nothing to
+      // attribute itself to: the snapshot would be empty and the
+      // outsourced-category rule below would have nothing to read.
+      if (!assignment.vehicleId) {
+        throw new ConflictError('That assignment names no lorry yet, so there is nothing to spend on.');
+      }
 
       // A rule about DATA rather than about a role, so no permission tier can
-      // express it: the guard knows who somebody IS, not which trip they are on.
+      // express it: the guard knows who somebody IS, not which turn they hold.
       if (assignment.driverUserId !== input.declaredBy) {
-        throw new ForbiddenError('Only the driver assigned to a trip may declare its expenses.');
+        throw new ForbiddenError('Only the driver on an assignment may declare its expenses.');
       }
 
-      const vehicleOwnership = await this.ownershipOf(trip.vehicleId, tx);
+      // ★ THE ASSIGNMENT'S LORRY, never `trip.vehicleId` (legacy, ADR-0004).
+      const vehicleOwnership = await this.ownershipOf(assignment.vehicleId, tx);
 
       // ★ SAID HERE AS WELL AS IN THE DATABASE, AND FOR A DIFFERENT AUDIENCE.
       // `trip_costs_outsourced_category` refuses the same row, but a CHECK
@@ -202,12 +230,12 @@ export class TripCostService {
 
       return this.costs.declare(
         {
-          tripId: input.tripId,
+          tripId,
           driverAssignmentId: assignment.id,
           category: input.category,
           amount: input.amount,
           note: blankToNull(input.note),
-          vehicleId: trip.vehicleId,
+          vehicleId: assignment.vehicleId,
           vehicleOwnership,
           clientRequestId,
           createdBy: input.declaredBy,
@@ -232,7 +260,7 @@ export class TripCostService {
    * worse than not allowing the edit at all.
    */
   async editCost(
-    tripId: string,
+    assignmentId: string,
     costId: string,
     patch: { category?: TripCostCategory; amount?: string; note?: string | null },
     editedBy: string,
@@ -242,10 +270,13 @@ export class TripCostService {
 
     return this.db.transaction(async (tx) => {
       const current = await this.costs.lockById(costId, tx);
-      // Belonging to the trip in the route is checked, not assumed: a caller
-      // holding one trip's id must not reach another trip's line by pairing it
-      // with a foreign cost id.
-      if (current?.tripId !== tripId) throw new NotFoundError('Cost line not found.');
+      // Belonging to the assignment in the route is checked, not assumed: a
+      // caller holding one assignment's id must not reach another turn's line
+      // — even their own, on another lorry — by pairing it with a foreign cost
+      // id.
+      if (current?.driverAssignmentId !== assignmentId) {
+        throw new NotFoundError('Cost line not found.');
+      }
       if (current.voidedAt) throw new ConflictError('That cost line has been voided.');
 
       if (current.source !== 'driver_portal') {
@@ -254,8 +285,8 @@ export class TripCostService {
       if (current.state !== 'editable') {
         throw new ConflictError(
           current.state === 'locked'
-            ? 'That trip has been submitted for completion, so its figures are frozen.'
-            : 'That trip is closed and its figures are final.',
+            ? 'That assignment has been submitted for completion, so its figures are frozen.'
+            : 'That assignment is closed and its figures are final.',
         );
       }
       if (current.createdBy !== editedBy) {
@@ -283,7 +314,7 @@ export class TripCostService {
       // The row was locked two statements ago, so an empty result means a
       // concurrent submit froze it — which is a conflict, not a missing row.
       if (!updated) {
-        throw new ConflictError('That trip was submitted for completion while you were editing.');
+        throw new ConflictError('That assignment was submitted for completion while you were editing.');
       }
 
       await this.costs.recordEdits(costId, edits, editedBy, tx);
@@ -384,6 +415,35 @@ export class TripCostService {
    */
   private async requireTrip(tripId: string): Promise<void> {
     if (!(await this.trips.exists(tripId))) throw new NotFoundError('Trip not found.');
+  }
+
+  /**
+   * The line this declaration has already written, if it wrote one.
+   *
+   * ★ ASKED TWICE, AND THE SECOND TIME IS THE ONE THAT MATTERS. `tx` is what
+   * separates them: without it the read is unlocked and answers the ordinary
+   * retry cheaply; with it the read happens while this transaction holds the
+   * trip row, so a simultaneous twin has necessarily committed and is visible.
+   *
+   * ★ REUSED ONLY FOR THE ASSIGNMENT IT WAS DECLARED ON. The key is unique per
+   * trip (0016); the caller was authorised per assignment. Answering turn B's
+   * declaration with turn A's line would hand a driver another turn's figure
+   * and silently drop their own.
+   */
+  private async existingDeclaration(
+    tripId: string,
+    clientRequestId: string,
+    assignmentId: string,
+    tx?: DatabaseQuery,
+  ): Promise<TripCost | null> {
+    const already = await this.costs.findByClientRequestId(tripId, clientRequestId, tx);
+    if (!already) return null;
+    if (already.driverAssignmentId !== assignmentId) {
+      throw new ConflictError(
+        'That client request id was already used on another assignment of this trip. Use a new id for each assignment.',
+      );
+    }
+    return already;
   }
 
   /**

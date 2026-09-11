@@ -13,37 +13,44 @@ import type { TripCost, TripCostCategory } from '@/types/tripCost';
 /**
  * The Driver Portal's whole API surface, and nothing else.
  *
+ * ★ EVERY ROUTE IS SCOPED BY AN ASSIGNMENT, NEVER BY A TRIP (ADR-0004). One
+ * driver may hold several turns on one trip — one per lorry — so a trip id
+ * cannot say which lorry's progress is being reported. The assignment id can,
+ * and the server derives the trip from it; no route here takes a trip id.
+ *
  * ★ THESE ROUTES ARE NOT THE BACKOFFICE'S. `/trip-schedules/...` serves the
- * dispatch board and returns the WHOLE trip row; `/driver/trips/...` returns a
- * server-side whitelist with no money in it at all. Reading the board from the
- * portal would hand a driver every column the trip has, which is exactly the
- * boundary the separate endpoints exist to draw.
+ * dispatch board and returns the WHOLE trip row; `/driver/assignments/...`
+ * returns a server-side whitelist with no money in it at all. Reading the
+ * board from the portal would hand a driver every column the trip has, which
+ * is exactly the boundary the separate endpoints exist to draw.
  *
  * ⚠ DO NOT ADD A COST OR HIRE READ HERE. A trip's total includes the price
  * agreed with a hired carrier — the one commercial figure a driver must never
- * see. The detail response already carries the driver's OWN declared lines, and
- * carries no total by design.
+ * see. The detail response already carries the driver's OWN declared lines on
+ * THIS assignment, and carries no total by design.
  *
  * ★ WHAT IS DELIBERATELY ABSENT FROM EVERY BODY BELOW:
  *
- *   tripId        it is in the PATH. A body that named its own trip would let a
- *                 driver assigned to one act on another, and the server's guard
- *                 would have checked something irrelevant.
+ *   assignmentId  it is in the PATH. A body that named its own assignment
+ *   tripId        would let a driver holding one turn act on another, and the
+ *                 server's guard would have checked something irrelevant.
  *   recordedBy    the actor is the SESSION. A body that names its own author is
  *   declaredBy    a body that can name somebody else's.
  *   recordedAt    the server owns its own clock; no request may pre-date its
  *                 own arrival.
  */
 
-const tripPath = (tripId: string) => `/driver/trips/${encodeURIComponent(tripId)}`;
+const assignmentPath = (assignmentId: string) =>
+  `/driver/assignments/${encodeURIComponent(assignmentId)}`;
 
-export async function fetchMyTrips(): Promise<DriverTrip[]> {
-  const { data } = await httpClient.get<DriverTrip[]>('/driver/trips');
+/** Every turn this driver holds right now — one per lorry, grouped by trip on screen. */
+export async function fetchMyAssignments(): Promise<DriverTrip[]> {
+  const { data } = await httpClient.get<DriverTrip[]>('/driver/assignments');
   return data;
 }
 
-export async function fetchMyTrip(tripId: string): Promise<DriverTripDetail> {
-  const { data } = await httpClient.get<DriverTripDetail>(tripPath(tripId));
+export async function fetchMyAssignment(assignmentId: string): Promise<DriverTripDetail> {
+  const { data } = await httpClient.get<DriverTripDetail>(assignmentPath(assignmentId));
   return data;
 }
 
@@ -83,11 +90,11 @@ export interface RecordEventInput {
 }
 
 export async function recordExecutionEvent(
-  tripId: string,
+  assignmentId: string,
   input: RecordEventInput,
 ): Promise<ExecutionEvent> {
   const { data } = await httpClient.post<ExecutionEvent>(
-    `${tripPath(tripId)}/execution-events`,
+    `${assignmentPath(assignmentId)}/execution-events`,
     input,
   );
   return data;
@@ -109,49 +116,50 @@ export interface DeclareExpenseInput {
 }
 
 export async function declareExpense(
-  tripId: string,
+  assignmentId: string,
   input: DeclareExpenseInput,
 ): Promise<TripCost> {
-  const { data } = await httpClient.post<TripCost>(`${tripPath(tripId)}/expenses`, input);
+  const { data } = await httpClient.post<TripCost>(`${assignmentPath(assignmentId)}/expenses`, input);
   return data;
 }
 
 /**
  * Corrects a figure that has not been locked yet.
  *
- * ★ PATCH, AND ONLY FOR A DRIVER-DECLARED LINE. A mistyped digit at a fuel
- * station should not leave two rows and a void reason reading "typo". A
- * backoffice line keeps the older rule and the server refuses this on one.
+ * ★ PATCH, AND ONLY FOR A DRIVER-DECLARED LINE ON THIS ASSIGNMENT. A mistyped
+ * digit at a fuel station should not leave two rows and a void reason reading
+ * "typo". A backoffice line keeps the older rule, and a line on the driver's
+ * OTHER lorry is not reachable through this one.
  */
 export async function editExpense(
-  tripId: string,
+  assignmentId: string,
   costId: string,
   input: { category?: TripCostCategory; amount?: string; note?: string | null },
 ): Promise<TripCost> {
   const { data } = await httpClient.patch<TripCost>(
-    `${tripPath(tripId)}/expenses/${encodeURIComponent(costId)}`,
+    `${assignmentPath(assignmentId)}/expenses/${encodeURIComponent(costId)}`,
     input,
   );
   return data;
 }
 
 /**
- * Asks for the trip to be closed.
+ * Asks for THIS assignment's turn to be closed.
  *
  * ★ THE DECLARATION IS REQUIRED AND HAS NO DEFAULT. Zero expense rows is not an
- * answer — it is either a trip that cost nothing or a driver who forgot, and
+ * answer — it is either a turn that cost nothing or a driver who forgot, and
  * only the driver can say which. The server refuses a declaration that
- * contradicts the lines on the trip.
+ * contradicts the lines on the assignment.
  *
  * Resubmitting after a rejection is this same call: the server writes a NEW
  * request with the next attempt number, carrying a NEW declaration.
  */
 export async function submitCompletion(
-  tripId: string,
+  assignmentId: string,
   expenseDeclaration: ExpenseDeclaration,
 ): Promise<CompletionRequest> {
   const { data } = await httpClient.post<CompletionRequest>(
-    `${tripPath(tripId)}/completion-requests`,
+    `${assignmentPath(assignmentId)}/completion-requests`,
     { expenseDeclaration },
   );
   return data;

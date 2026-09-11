@@ -48,6 +48,12 @@ import type { Coordinates } from './trip-location';
  * rather than by everybody remembering.
  */
 export interface DriverTrip {
+  /**
+   * ★ THE ASSIGNMENT IS THE UNIT (ADR-0004). One driver may hold several turns
+   * on one trip — one per lorry — and everything they report, declare or ask
+   * for hangs off `assignment.id`, never off `tripId`. The trip fields below
+   * are the same on every turn of the same trip; the plate is what differs.
+   */
   tripId: string;
 
   /** The board day, as text. Never a `Date`: `new Date('2026-08-30')` is the
@@ -55,7 +61,8 @@ export interface DriverTrip {
   scheduledOn: string;
 
   /** ★ THE PLATE, NOT THE VEHICLE ROW. No ownership, no carrier, no note — a
-   * driver needs to know which lorry, not who we bought it from. */
+   * driver needs to know which lorry, not who we bought it from. The
+   * ASSIGNMENT'S lorry; `null` cannot occur on a turn the portal lists. */
   vehicle: { id: string; plate: string } | null;
 
   /** ★ THE NAME ONLY. Who to deliver to is operational; what they pay is not,
@@ -94,25 +101,28 @@ export interface DriverTrip {
  * have reported, what they have declared, and where the completion stands.
  */
 export interface DriverTripDetail extends DriverTrip {
-  /** The driver's own timeline. Voided events excluded. */
+  /** THIS ASSIGNMENT's timeline — not the trip's. Voided events excluded. */
   events: ExecutionEvent[];
 
   /**
-   * ★ ONLY THE LINES THIS DRIVER DECLARED, AND NO TOTAL.
+   * ★ ONLY THE LINES THIS DRIVER DECLARED ON THIS ASSIGNMENT, AND NO TOTAL.
    *
-   * Two separate rules, and both matter. A backoffice cost line is internal
-   * accounting the contract keeps from the driver, so the query filters on
-   * `source` AND on the author. And there is no total anywhere in this type,
-   * because a trip's total INCLUDES the price agreed with a hired carrier —
-   * which is exactly the commercial figure a driver must never see.
+   * Three separate rules, and all matter. The assignment is the boundary, so
+   * the same driver's other lorry on the same trip is another list. A
+   * backoffice cost line is internal accounting the contract keeps from the
+   * driver, so the query filters on `source` AND on the author. And there is
+   * no total anywhere in this type, because a trip's total INCLUDES the price
+   * agreed with a hired carrier — which is exactly the commercial figure a
+   * driver must never see.
    */
   expenses: TripCost[];
 
-  /** Derived, never stored. `NOT_DECLARED` ≠ `DECLARED_NO_EXPENSE`. */
+  /** Derived, never stored, for THIS assignment. `NOT_DECLARED` ≠ `DECLARED_NO_EXPENSE`. */
   accountability: ExpenseAccountability;
 
   /**
-   * The latest attempt, so the driver can see a rejection and act on it.
+   * This assignment's latest attempt, so the driver can see a rejection and
+   * act on it.
    *
    * `decisionReason` is included ON PURPOSE and is the point of showing this at
    * all: a driver told only "rejected" has nothing to correct.

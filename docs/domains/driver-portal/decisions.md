@@ -501,3 +501,28 @@ expense), rồi **DL-68** và **DL-04**. Sau đó vùng C mới review được 
 *Tài liệu này là DECISION LEDGER. Không có SQL, migration, code, API hay UI. Mọi
 **[CEO DECISION]** phải được chốt và mọi **[WORKIK]** phải được review trước khi bắt
 đầu implementation.*
+
+---
+
+# 10. ★ Bổ sung 2026-09-10 — Điều độ nhiều xe (ADR-0004)
+
+Các quyết định dưới đây **thay thế** mọi DL nói `1 Trip = 1 Driver` / `1 Trip = 1 Vehicle`.
+Nguồn: [`../../architecture/adr-0004-dispatch-assignment-multi-vehicle.md`](../../architecture/adr-0004-dispatch-assignment-multi-vehicle.md).
+
+| # | Quyết định | Trạng thái | Enforce |
+|---|---|---|---|
+| **DL-90** | 1 Trip → **0..N** Dispatch Assignment; mỗi assignment = **1 xe + 1 tài xế**, luôn là cặp | **[CONFIRMED]** CEO | CHECK `active_has_vehicle` (NOT VALID → `0030`) + application |
+| **DL-91** | **Cùng một tài xế được giữ nhiều xe** trên một Trip. **Không bao giờ** tạo `UNIQUE(trip_id, driver_user_id)` | **[CONFIRMED]** CEO | architecture test `trip-write-paths.spec.ts` fail nếu migration nào thêm |
+| **DL-92** | Một xe **chỉ một lần** trên một Trip khi còn active | **[CONFIRMED]** | `uq_trip_active_vehicle_assignment (trip_id, vehicle_id) WHERE state='active'` |
+| **DL-93** | Trip tạo **không cần** xe; điều độ sau. `trip_schedules.vehicle_id` legacy — không ghi, không DROP | **[CONFIRMED]** | form không có field; architecture test cấm ghi cột |
+| **DL-94** | *Started* = có ≥ 1 execution event **chưa void** trên assignment. Không có `started_at`, không có `execution_state` | **[CONFIRMED]** | `hasLiveEvents(assignmentId)` |
+| **DL-95** | Đổi tài xế / gỡ assignment **chỉ trước khi started**. Sau đó cặp xe + tài xế **bất biến**: không takeover, không lineage, không chuyển bằng chứng / completion | **[CONFIRMED]** CEO | application → 409; không có endpoint nào làm được |
+| **DL-96** | Execution / expense / completion **thuộc assignment**. Mỗi assignment: tối đa 1 pending, 1 approved, `attempt_no` riêng | **[CONFIRMED]** | `uq_assignment_completion_pending/approved/attempt` |
+| **DL-97** | Trip → **finished** khi **mọi assignment ACTIVE** đã APPROVE, quyết định trong transaction approve cuối, **ghi tường minh** (`status`, history, `closed_at/by`) — không derive lúc đọc. Assignment đã gỡ trước khi started **không chặn** | **[CONFIRMED]** | `TripCompletionService.approve` → `hasUnapprovedActiveAssignment` |
+| **DL-98** | Notification quyết định gửi cho **`submitted_by` của request đó** | **[CONFIRMED]** | `TripCompletionService` |
+| **DL-99** | Driver routes chỉ theo **`assignmentId`** (`/driver/assignments/:assignmentId/...`); guard so `driver_user_id` | **[CONFIRMED]** | `ActiveAssignmentGuard` |
+| **DL-100** | **Không** làm: TripLeg / segment / multi-stop / route planning / live GPS / driver pool / phụ xe / bảng mới | **[CONFIRMED]** CEO | — |
+
+**Legacy conflict mới:** **L-12** — assignment active cũ mà Trip không có `vehicle_id`
+(Case B của `0029`). `0027` để CHECK ở `NOT VALID` nên không chặn deploy; `0030` VALIDATE
+chỉ chạy khi audit production cho Case B = 0 — xem `deploy/README.md`.

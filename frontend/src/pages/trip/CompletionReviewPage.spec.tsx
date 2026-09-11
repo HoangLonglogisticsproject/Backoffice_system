@@ -48,6 +48,9 @@ const session = (permissions: string[]) => ({
 
 const row = (over: Record<string, unknown> = {}) => ({
   tripId: TRIP,
+  // ★ ONE ROW PER LORRY (ADR-0004): the turn and its pending request.
+  assignmentId: 'a1',
+  completionRequestId: 'r1',
   scheduledOn: '2026-08-30',
   vehicle: { id: 'v1', plate: '51D-65233' },
   customer: { id: 'c1', name: 'VIỄN ĐẠT' },
@@ -138,7 +141,7 @@ beforeEach(() => {
     event('DELIVERY_CONFIRMED'),
   ]);
   fetchTripCosts.mockResolvedValue({
-    items: [{ id: 'c1', category: 'fuel', amount: '1500000.00', state: 'locked' }],
+    items: [{ id: 'c1', driverAssignmentId: 'a1', category: 'fuel', amount: '1500000.00', state: 'locked' }],
     total: '1500000.00',
   });
   approveCompletion.mockResolvedValue(request({ state: 'approved' }));
@@ -272,11 +275,11 @@ describe('★ approve', () => {
   it('sends no body the server could take an opinion from', async () => {
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
 
-    await waitFor(() => expect(approveCompletion).toHaveBeenCalledWith(TRIP));
+    await waitFor(() => expect(approveCompletion).toHaveBeenCalledWith(TRIP, 'r1'));
     // ★ The trip id and nothing else. No decidedBy, no decidedAt, no state.
-    expect(approveCompletion.mock.calls[0]).toEqual([TRIP]);
+    expect(approveCompletion.mock.calls[0]).toEqual([TRIP, 'r1']);
   });
 
   it('★ warns that it cannot be undone, before the click', async () => {
@@ -291,7 +294,7 @@ describe('★ approve', () => {
     approveCompletion.mockReturnValue(new Promise(() => {}));
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
 
     await waitFor(() => expect(approveCompletion).toHaveBeenCalled());
     expect(screen.queryByText(/chuyến đã hoàn tất/i)).not.toBeInTheDocument();
@@ -300,7 +303,7 @@ describe('★ approve', () => {
   it('refetches the queue once the server has agreed', async () => {
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
 
     await waitFor(() => expect(fetchCompletionReviewQueue.mock.calls.length).toBeGreaterThan(1));
   });
@@ -334,9 +337,9 @@ describe('★ reject', () => {
     fireEvent.click(screen.getByRole('button', { name: /^từ chối$/i }));
 
     await waitFor(() =>
-      expect(rejectCompletion).toHaveBeenCalledWith(TRIP, 'Số tiền dầu sai.'),
+      expect(rejectCompletion).toHaveBeenCalledWith(TRIP, 'r1', 'Số tiền dầu sai.'),
     );
-    expect(rejectCompletion.mock.calls[0]).toHaveLength(2);
+    expect(rejectCompletion.mock.calls[0]).toHaveLength(3);
   });
 });
 
@@ -348,10 +351,41 @@ describe('★ a decided trip offers nothing further', () => {
     ]);
     await openReview();
 
-    expect(screen.getByText(/chuyến đã hoàn tất/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /duyệt — đóng chuyến/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/lượt xe này đã được duyệt/i)).toBeInTheDocument();
+    expect(screen.queryByText(/chuyến đã hoàn tất/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /duyệt lượt xe này/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /mở lại|reopen/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * ★ ONE LORRY APPROVED, THE OTHER STILL WAITING (ADR-0004). The trip is not
+   * finished — the server's status says so, and this screen must not claim
+   * otherwise on the strength of one assignment's approval. Opening A says A is
+   * approved; opening B still offers the decision.
+   */
+  it('★ never calls the trip completed while a second assignment is still pending', async () => {
+    const rowA = row({ assignmentId: 'a1', completionRequestId: 'r1', stage: 'DONE', driver: { id: 'd1', displayName: 'Tài Xế A' } });
+    const rowB = row({ assignmentId: 'a2', completionRequestId: 'r2', stage: 'COMPLETION_PENDING', driver: { id: 'd2', displayName: 'Tài Xế B' } });
+    fetchCompletionReviewQueue.mockResolvedValue([rowA, rowB]);
+    fetchCompletionRequests.mockResolvedValue([
+      request({ id: 'r2', driverAssignmentId: 'a2', submittedBy: 'd2', state: 'pending' }),
+      request({ id: 'r1', driverAssignmentId: 'a1', state: 'approved', decidedAt: SERVER_TIME }),
+    ]);
+    renderPage();
+
+    const [openA, openB] = await screen.findAllByRole('button', { name: /xem hồ sơ/i });
+    fireEvent.click(openA!);
+    await screen.findByText(/tiến trình tài xế báo/i);
+    expect(screen.getByText(/lượt xe này đã được duyệt/i)).toBeInTheDocument();
+    expect(screen.queryByText(/chuyến đã hoàn tất|trip completed/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /đóng/i }));
+    fireEvent.click(openB!);
+    await screen.findByText(/tiến trình tài xế báo/i);
+    expect(screen.queryByText(/lượt xe này đã được duyệt/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^từ chối$/i })).toBeInTheDocument();
   });
 
   it('offers no decision when nothing is pending', async () => {
@@ -362,7 +396,7 @@ describe('★ a decided trip offers nothing further', () => {
     await openReview();
 
     expect(screen.getByText(/không có yêu cầu nào đang chờ duyệt/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /duyệt — đóng chuyến/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /duyệt lượt xe này/i })).not.toBeInTheDocument();
   });
 });
 
@@ -374,7 +408,7 @@ describe('★ permission', () => {
     await openReview();
 
     expect(screen.getAllByText(/không có quyền duyệt hoàn tất/i).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: /duyệt — đóng chuyến/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /duyệt lượt xe này/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^từ chối$/i })).not.toBeInTheDocument();
   });
 
@@ -394,7 +428,7 @@ describe('★ two reviewers at once', () => {
     approveCompletion.mockRejectedValue(new ApiError(409, 'CONFLICT', 'Already decided.'));
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/vừa được xử lý ở nơi khác/i);
     // Not closed on a decision that did not land.
@@ -415,7 +449,7 @@ describe('★ two reviewers at once', () => {
     approveCompletion.mockRejectedValue(new ApiError(409, 'CONFLICT', 'Already decided.'));
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
     await screen.findByRole('alert');
 
     expect(screen.queryByText(/chuyến đã hoàn tất/i)).not.toBeInTheDocument();
@@ -427,7 +461,7 @@ describe('other failures', () => {
     approveCompletion.mockRejectedValue(new ApiError(0, undefined, 'Network error'));
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/không kết nối được/i);
   });
@@ -436,7 +470,7 @@ describe('other failures', () => {
     approveCompletion.mockRejectedValue(new ApiError(401, 'UNAUTHORIZED', 'Authentication required.'));
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/hết hạn/i);
   });
@@ -445,7 +479,7 @@ describe('other failures', () => {
     approveCompletion.mockRejectedValue(new ApiError(403, 'FORBIDDEN', 'You are not allowed.'));
     await openReview();
 
-    fireEvent.click(screen.getByRole('button', { name: /duyệt — đóng chuyến/i }));
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/không có quyền thực hiện/i);
   });

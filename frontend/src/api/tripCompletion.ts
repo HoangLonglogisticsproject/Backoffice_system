@@ -93,17 +93,25 @@ export async function fetchExecutionEvents(
 }
 
 /**
- * Closes the trip.
+ * Approves ONE assignment's completion request — and closes the trip if it was
+ * the last active assignment still open.
  *
- * ★ ONE SERVER TRANSACTION DOES FOUR THINGS, AND THE CLIENT DOES NONE OF THEM:
- * the request becomes approved, every live figure becomes immutable, the trip
- * becomes `done`, and it is stamped with who closed it and when. There is no
- * undo — a database trigger makes `done` terminal — so nothing here may
- * optimistically render the outcome before the server has confirmed it.
+ * ★ THE REQUEST IS NAMED (ADR-0004). A trip carries one pending request per
+ * active assignment, so "approve the trip's request" has no single answer.
+ *
+ * ★ ONE SERVER TRANSACTION, AND THE CLIENT DOES NONE OF IT: the request
+ * becomes approved, THAT assignment's live figures become immutable, and — only
+ * when no active assignment is left unapproved — the trip becomes `finished`
+ * and is stamped with who closed it and when. There is no undo — a database
+ * trigger makes `finished` terminal — so nothing here may optimistically render
+ * the outcome before the server has confirmed it.
  */
-export async function approveCompletion(tripId: string): Promise<CompletionRequest> {
+export async function approveCompletion(
+  tripId: string,
+  requestId: string,
+): Promise<CompletionRequest> {
   const { data } = await httpClient.post<CompletionRequest>(
-    `${tripPath(tripId)}/completion-requests/approve`,
+    `${tripPath(tripId)}/completion-requests/${encodeURIComponent(requestId)}/approve`,
     // No body at all. The decider and the moment are both the server's.
     {},
   );
@@ -111,19 +119,20 @@ export async function approveCompletion(tripId: string): Promise<CompletionReque
 }
 
 /**
- * Sends it back for correction.
+ * Sends ONE assignment's request back for correction.
  *
  * ★ THE REASON IS THE POINT OF THE CALL. A driver told only "rejected" has
  * nothing to act on; the server refuses a blank one with a CHECK the row cannot
- * exist without. Rejection also reopens every frozen figure so the driver can
- * correct what caused it.
+ * exist without. Rejection also reopens that assignment's frozen figures — and
+ * only those — so the driver can correct what caused it.
  */
 export async function rejectCompletion(
   tripId: string,
+  requestId: string,
   reason: string,
 ): Promise<CompletionRequest> {
   const { data } = await httpClient.post<CompletionRequest>(
-    `${tripPath(tripId)}/completion-requests/reject`,
+    `${tripPath(tripId)}/completion-requests/${encodeURIComponent(requestId)}/reject`,
     { reason },
   );
   return data;

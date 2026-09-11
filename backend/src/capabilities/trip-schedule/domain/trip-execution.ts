@@ -1,6 +1,6 @@
 import type { UserSummary } from '../../../common/types/user-summary';
 import type { LocationEvidence } from './trip-location';
-import type { TripStatus } from './trip-schedule';
+import type { TripStatus, TripVehicleRef } from './trip-schedule';
 
 /**
  * The operational half of a trip: who drove it, what happened, and how it ended.
@@ -86,10 +86,25 @@ export const missingPrerequisite = (
 export const isPickupEvent = (type: ExecutionEventType): boolean =>
   type === 'ARRIVED_PICKUP' || type === 'PICKUP_CONFIRMED';
 
-/** A driver's turn on a trip. Ended, never overwritten. */
+/**
+ * A dispatch assignment: one lorry and one driver on one trip. Ended, never
+ * overwritten.
+ *
+ * ★ THE ASSIGNMENT IS THE EXECUTION UNIT (ADR-0004). A trip carries 0..N of
+ * these at once; every event, expense and completion request hangs off one of
+ * them, never off the trip. The same driver may hold several on one trip; the
+ * same lorry may not be active twice on one trip.
+ */
 export interface DriverAssignment {
   id: string;
   tripId: string;
+
+  /**
+   * The lorry this turn is on. `null` ONLY on rows written before 0027 that
+   * 0029 could not backfill with certainty — never on a row written since.
+   */
+  vehicleId: string | null;
+  vehicle: TripVehicleRef | null;
 
   driverUserId: string;
   /** The driver, spelled out — a UUID cannot be shown to anybody. */

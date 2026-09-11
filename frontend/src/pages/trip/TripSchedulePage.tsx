@@ -32,7 +32,7 @@ import { TripFormModal } from './components/TripFormModal';
 import { TripStatusBadge } from './components/TripStatusBadge';
 import { TripStatusSelect } from './components/TripStatusSelect';
 import { TripCostModal } from './components/TripCostModal';
-import { DriverAssignModal } from './components/DriverAssignModal';
+import { DispatchPanel } from './components/DispatchPanel';
 
 /**
  * The dispatch board — the screen that replaces `LỊCH XE - CHI PHÍ XE.xlsx`.
@@ -70,12 +70,32 @@ export default function TripSchedulePage() {
   // holds, so the columns are dropped rather than drawn full of em dashes.
   const mayPrice = can('trip.price.read');
   const [costFor, setCostFor] = useState<string | null>(null);
-  /** The trip whose driver is being chosen. `trip.write`, like every other correction. */
-  const [assigning, setAssigning] = useState<TripScheduleWithRefs | null>(null);
+  /**
+   * The trip whose crew is being dispatched. `trip.write`, like every other correction.
+   *
+   * ★ THE ROW IS RE-DERIVED FROM THE LIST ON EVERY RENDER, by id. The panel
+   * shows `trip.assignments`, and every dispatch mutation re-reads the list;
+   * holding the object clicked would keep showing the crew as it was before
+   * the add until the panel was closed and reopened.
+   *
+   * ★ AND WHEN THE ROW LEAVES THE LIST, THE PANEL CLOSES — it does NOT fall
+   * back to the object clicked. Crewing a trip from the "chờ phân công" tab
+   * moves it out of that filter, so the clicked object is the one state the
+   * dispatcher has just made untrue: the panel would sit there showing a trip
+   * with no crew, over a list that no longer contains it. `useOffsetPages`
+   * keeps the previous page's items across a refetch (`keepPreviousData`), so
+   * an empty find here means the row really has gone, not that it is reloading.
+   */
+  const [assigningRow, setAssigningRow] = useState<TripScheduleWithRefs | null>(null);
 
   // The list, its date range and its page walk — see `useTripSchedules` for why
   // those three are one hook and not three pieces of page state.
   const trips = useTripSchedules();
+
+  const assigning =
+    assigningRow === null
+      ? null
+      : (trips.items.find((row) => row.id === assigningRow.id) ?? null);
 
   // The catalogues, for the form's two dropdowns. Read once per page rather
   // than per modal open: they are small, bounded lists, and re-reading them
@@ -238,37 +258,29 @@ export default function TripSchedulePage() {
                   </TableCell>
                   <TableCell className="whitespace-nowrap font-medium text-gray-900">
                     {/*
-                      ★ FORMATTED FOR READING, NOT NORMALISED. The catalogue
-                      stores the plate as somebody typed it; this only decides
-                      how it is drawn, so `50H49266` and `50H-49266` stop looking
-                      like two lorries down one column.
+                      ★ ONE LINE PER LORRY (ADR-0004). A trip carries any
+                      number of them, each with its own driver; the row stays
+                      one row and the cell grows. Formatted for reading, not
+                      normalised: the catalogue stores the plate as somebody
+                      typed it, so `50H49266` and `50H-49266` stop looking like
+                      two lorries down one column.
                     */}
-                    {trip.vehicle ? formatPlate(trip.vehicle.plate) : <Unset />}
+                    <Plates trip={trip} />
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
                     {/*
                       ★ WHO IS DRIVING, AND THE ONE CONTROL THAT CHANGES IT.
-                      Operations assigns; the driver never does — the portal
+                      Operations dispatches; the driver never does — the portal
                       has no such button and the server refuses a driver
                       account the route. Hidden on a finished trip for the
                       same reason the status dropdown is: the server refuses
                       every assignment write once a trip is finished.
                     */}
-                    <div className="flex items-center gap-2">
-                      <span className={trip.driver ? 'text-gray-900' : 'text-gray-400'}>
-                        {trip.driver?.displayName ?? t('driverUnassigned')}
-                      </span>
-                      {canManage && trip.status !== 'finished' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 px-2 text-xs text-gray-600"
-                          onClick={() => setAssigning(trip)}
-                        >
-                          {trip.driver ? t('changeDriver') : t('assignDriver')}
-                        </Button>
-                      )}
-                    </div>
+                    <Crew
+                      trip={trip}
+                      canDispatch={canManage && trip.status !== 'finished'}
+                      onDispatch={() => setAssigningRow(trip)}
+                    />
                   </TableCell>
                   <TableCell className="text-gray-900">{trip.customer?.name ?? <Unset />}</TableCell>
                   <TableCell>
@@ -455,18 +467,23 @@ export default function TripSchedulePage() {
       <TripFormModal
         isOpen={formOpen}
         trip={editing}
-        vehicles={catalogue.vehicles.items}
         customers={catalogue.customers.items}
         // `data` is null until the read lands; `items` defaults to [], which
         // cannot tell an empty catalogue from an unread one.
-        cataloguesLoaded={catalogue.vehicles.data !== null && catalogue.customers.data !== null}
+        cataloguesLoaded={catalogue.customers.data !== null}
         onClose={() => setFormOpen(false)}
         onSaved={trips.reload}
         onCatalogueChanged={catalogue.reload}
       />
 
       <TripCostModal tripId={costFor} onClose={() => setCostFor(null)} />
-      <DriverAssignModal trip={assigning} onClose={() => setAssigning(null)} />
+      {/* The lorries and their drivers — the catalogue's active lorries are
+          what may be added; the panel leaves out the ones already on the trip. */}
+      <DispatchPanel
+        trip={assigning}
+        vehicles={catalogue.vehicles.items}
+        onClose={() => setAssigningRow(null)}
+      />
 
       <ArchiveTripDialog
         trip={archiving}
@@ -572,6 +589,105 @@ function Unset() {
   return <span className="text-gray-400">{t('notSelected')}</span>;
 }
 
+/** Every plate on the trip on one line, for a sentence that names the row. */
+const platesOf = (trip: TripScheduleWithRefs): string =>
+  trip.assignments
+    .map((turn) => (turn.vehicle ? formatPlate(turn.vehicle.plate) : ''))
+    .filter(Boolean)
+    .join('; ');
+
+/**
+ * The lorries on the trip, one per line.
+ *
+ * ★ A LEGACY LORRY IS NAMED AS SUCH. A trip booked before dispatch became a
+ * pair may still carry `vehicleId` with no assignment behind it; the board
+ * says "planned vehicle (legacy)" rather than a plate it does not have, so
+ * Operations knows to dispatch the trip again as a pair.
+ *
+ * ★ SONAR S1874 ("'vehicleId' is deprecated") IS EXPECTED HERE AND MUST NOT BE
+ * "FIXED" BY DELETING THE READ. `assignment.vehicle_id` is the canonical source
+ * and it cannot answer this one: the read happens only where
+ * `assignments.length === 0`, and migration 0029 case F leaves precisely those
+ * rows uncrewed by design — a lorry with no driver is not an assignment. The
+ * legacy column is therefore the only record that a lorry was ever planned, and
+ * removing the read would render those trips as an ordinary `Unset`, losing the
+ * signal that they need re-dispatching. Deprecated means no new WRITER — nothing
+ * has written the column since 0027 — not that the existing rows went away.
+ */
+function Plates({ trip }: Readonly<{ trip: TripScheduleWithRefs }>) {
+  const { t } = useLanguage();
+  if (trip.assignments.length === 0) {
+    return trip.vehicleId ? (
+      <span className="text-xs font-normal text-amber-700">{t('dispatchLegacyBadge')}</span>
+    ) : (
+      <Unset />
+    );
+  }
+  return (
+    <ul className="space-y-0.5">
+      {trip.assignments.map((turn) => (
+        <li key={turn.id}>
+          {turn.vehicle ? (
+            formatPlate(turn.vehicle.plate)
+          ) : (
+            <span className="text-xs font-normal text-amber-700">{t('dispatchMissingVehicle')}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The drivers on the trip — each named once, however many lorries they hold —
+ * with the count when there is more than one lorry, and the one control that
+ * changes the crew.
+ */
+function Crew({
+  trip,
+  canDispatch,
+  onDispatch,
+}: Readonly<{ trip: TripScheduleWithRefs; canDispatch: boolean; onDispatch: () => void }>) {
+  const { t } = useLanguage();
+  // ★ DEDUPED BY ID, KEYED BY ID, SHOWN BY NAME. Two different drivers may
+  // share a display name; folding them by name would show one person.
+  const drivers = [
+    ...new Map(trip.assignments.map((turn) => [turn.driver.id, turn.driver] as const)).values(),
+  ];
+  const lorries = trip.assignments.length;
+
+  return (
+    <div className="flex items-start gap-2">
+      <div>
+        {drivers.length === 0 ? (
+          <span className="text-gray-400">{t('driverUnassigned')}</span>
+        ) : (
+          <ul className="space-y-0.5 text-gray-900">
+            {drivers.map((driver) => (
+              <li key={driver.id}>{driver.displayName}</li>
+            ))}
+          </ul>
+        )}
+        {lorries > 1 ? (
+          <span className="block text-xs text-gray-500">
+            {`${lorries} ${t('dispatchVehicleUnit')} · ${drivers.length} ${t('dispatchDriverUnit')}`}
+          </span>
+        ) : null}
+      </div>
+      {canDispatch && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-xs text-gray-600"
+          onClick={onDispatch}
+        >
+          {lorries > 0 ? t('dispatchManage') : t('assignDriver')}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /**
  * A multi-line cell from the workbook.
  *
@@ -667,7 +783,7 @@ function ArchiveTripDialog({
         <p className="text-sm text-gray-600">{t('confirmArchiveTripBody')}</p>
         {trip && (
           <p className="text-sm font-medium text-gray-900">
-            {`${formatCalendarDay(trip.scheduledOn, language)} · ${formatPlate(trip.vehicle?.plate) || '—'} · ${trip.customer?.name ?? '—'}`}
+            {`${formatCalendarDay(trip.scheduledOn, language)} · ${platesOf(trip) || '—'} · ${trip.customer?.name ?? '—'}`}
           </p>
         )}
         {error && (

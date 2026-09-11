@@ -49,14 +49,15 @@ export class OperationalBoardService {
   }
 
   /**
-   * The completion review queue: every trip whose completion is still open.
+   * The completion review queue: every assignment whose completion is still
+   * open — one row per request.
    *
    * ★ DELIBERATELY NOT DATE-FILTERED. A request submitted on the 30th and
    * undecided on the 1st is today's work, not last month's — the trip's
    * schedule and the reviewer's workload are different axes, and filtering one
    * by the other made outstanding reviews vanish at a month boundary.
    *
-   * Oldest first: the trip that has waited longest is the one to decide next.
+   * Oldest first: the turn that has waited longest is the one to decide next.
    */
   async listUnresolvedCompletions(now = new Date()): Promise<OperationalBoardRow[]> {
     const rows = await this.board.listUnresolvedCompletions();
@@ -79,6 +80,8 @@ const toBoardRow = (row: OperationalBoardRecord, now: Date): OperationalBoardRow
   return {
     tripId: row.trip_id,
     scheduledOn: row.scheduled_on,
+    assignmentId: row.assignment_id,
+    completionRequestId: row.completion_request_id,
     vehicle:
       row.vehicle_id && row.vehicle_plate ? { id: row.vehicle_id, plate: row.vehicle_plate } : null,
     customer:

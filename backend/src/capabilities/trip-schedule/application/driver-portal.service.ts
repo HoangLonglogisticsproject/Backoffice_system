@@ -34,13 +34,17 @@ export class DriverPortalService {
     private readonly requests: CompletionRequestRepository,
   ) {}
 
-  /** The trips this driver is on right now. */
-  async listMyTrips(driverUserId: string): Promise<DriverTrip[]> {
+  /** The assignments this driver holds right now — one per lorry. */
+  async listMyAssignments(driverUserId: string): Promise<DriverTrip[]> {
     return this.trips.listForDriver(driverUserId);
   }
 
   /**
-   * One trip, with everything the driver needs to work on it.
+   * One assignment, with everything the driver needs to work on it.
+   *
+   * ★ SCOPED TO THE ASSIGNMENT, NOT THE TRIP (ADR-0004). The events, the
+   * expenses and the completion are this turn's alone. A driver on two lorries
+   * of one trip opens two of these, and neither shows the other's progress.
    *
    * ★ FOUR READS RATHER THAN ONE JOIN. A single statement would need three
    * `LEFT JOIN`s onto rows that are one-to-many, and the result would be a
@@ -53,19 +57,19 @@ export class DriverPortalService {
    * driver would have seen change a second later anyway. Every write path that
    * DOES depend on consistency takes its own lock.
    */
-  async findMyTrip(tripId: string, driverUserId: string): Promise<DriverTripDetail> {
-    const trip = await this.trips.findForDriver(tripId, driverUserId);
-    // A trip that exists but belongs to somebody else answers exactly as a trip
-    // that does not exist. The guard has already refused this caller, so
-    // reaching here means the assignment ended between the two — but the
-    // reasoning holds either way: "not found" tells them nothing about work
-    // that is not theirs.
-    if (!trip) throw new NotFoundError('Trip not found.');
+  async findMyAssignment(assignmentId: string, driverUserId: string): Promise<DriverTripDetail> {
+    const trip = await this.trips.findForDriver(assignmentId, driverUserId);
+    // An assignment that exists but belongs to somebody else answers exactly as
+    // one that does not exist. The guard has already refused this caller, so
+    // reaching here means the turn ended between the two — but the reasoning
+    // holds either way: "not found" tells them nothing about work that is not
+    // theirs.
+    if (!trip) throw new NotFoundError('Assignment not found.');
 
     const [events, expenses, requests] = await Promise.all([
-      this.events.listByTrip(tripId),
-      this.costs.listDeclaredByDriver(tripId, driverUserId),
-      this.requests.listByTrip(tripId),
+      this.events.listByAssignment(assignmentId),
+      this.costs.listDeclaredByDriver(assignmentId, driverUserId),
+      this.requests.listByAssignment(assignmentId),
     ]);
 
     return {

@@ -1121,3 +1121,34 @@ Hai chi tiết dễ đọc nhầm khỏi bảng:
   `PermissionGuard` đòi; cột `Scope` mới nói key đó được kiểm trên phạm vi nào
   (§15).
 
+
+---
+
+## 21. Điều độ nhiều xe — ADR-0004 (2026-09-10)
+
+Các endpoint của capability `trip-schedule` **không** nằm trong ma trận §20 (chúng là
+project-owned); mục này chỉ ghi **những gì đổi** so với trước. Nguồn sự thật:
+[`../architecture/adr-0004-dispatch-assignment-multi-vehicle.md`](../architecture/adr-0004-dispatch-assignment-multi-vehicle.md).
+
+| Method | Path | Đổi gì | Lỗi hay gặp |
+|---|---|---|---|
+| `POST` | `/trip-schedules` | body **không còn** `vehicleId` (schema strict — gửi vào là 422) | 422 |
+| `PATCH` | `/trip-schedules/:tripId` | như trên | 422 |
+| `GET` | `/trip-schedules` | mỗi item có `assignments[]: { id, vehicle, driver, assignedAt, started }`; **không còn** `vehicle`/`driver` ở cấp trip; `vehicleId` giữ, `@deprecated` | — |
+| `POST` | `/trip-schedules/:tripId/driver-assignments` | body `{ vehicleId, driverUserId }` — **cả hai bắt buộc** | 404 xe/tài xế · **409** xe đã ở trên trip / trip đã finished |
+| `POST` | `/trip-schedules/:tripId/driver-assignments/:assignmentId/replace` | body `{ driverUserId, reason }` | **409** assignment đã started / không active |
+| `POST` | `/trip-schedules/:tripId/driver-assignments/:assignmentId/end` | body `{ reason }` | **409** đã started |
+| `POST` | `/trip-schedules/:tripId/completion-requests/:requestId/approve` | thay `…/completion/approve`; trip finished khi đây là assignment ACTIVE cuối cùng chưa duyệt | **409** không còn pending / đã quyết |
+| `POST` | `/trip-schedules/:tripId/completion-requests/:requestId/reject` | body `{ reason }` | 409 · 422 thiếu reason |
+| `GET` | `/trip-schedules/operational-board` | **ASSIGNMENT-GRAIN (ADR-0004 §2.3)**: một phần tử = một dispatch assignment ACTIVE; trip 3 xe = 3 phần tử cùng `tripId`. Trip chưa có ai → một phần tử `assignmentId: null`. Không bao giờ gộp về trip — muốn một dòng/trip dùng `GET /trip-schedules`. Mỗi phần tử: `assignmentId`, `completionRequestId`, `tripId`, `scheduledOn`, `customer`, `vehicle`, `driver`, `scheduledPickupAt/DeliveryAt`, 4 mốc thực tế, `stage`, 2 delay, `expenseDeclaration`, `accountability`, `completionAttempts`, `completionRejectionReason`. Key React theo `assignmentId ?? tripId` | 403 · 422 range |
+| `GET` | `/trip-schedules/completion-review-queue` | cùng hình dạng phần tử; một phần tử cho mỗi request còn chờ (`pending` / `rejected`) — tức theo assignment | 403 |
+| `GET` | `/driver/assignments` | thay `/driver/trips` — mọi lượt của tài xế đang đăng nhập, mỗi lượt có `assignment.id`, `vehicle` | 401 |
+| `GET` | `/driver/assignments/:assignmentId` | thay `/driver/trips/:tripId` | **403** không phải của mình / đã ended · 404 |
+| `POST` | `/driver/assignments/:assignmentId/execution-events` · `…/expenses` · `PATCH …/expenses/:costId` · `POST …/completion-requests` | thay các route `/driver/trips/:tripId/...` | như trên |
+
+Ba điều frontend **không được** giả định:
+
+* **Không có** route nào nhận `tripId` từ tài xế. Tài xế chỉ biết `assignmentId`.
+* `clientEventId` vẫn là `${assignmentId}:${type}` — idempotency **không đổi**.
+* Notification signal vẫn mang `tripId`; deep link về danh sách `/driver`, vì một Trip
+  có thể chứa hai lượt của cùng một tài xế.

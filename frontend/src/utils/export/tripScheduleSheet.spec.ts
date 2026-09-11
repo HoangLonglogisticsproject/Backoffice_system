@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { translate, type TranslationKey } from '@/types/translate';
-import type { TripScheduleWithRefs } from '@/types/trip';
+import type { TripAssignmentRef, TripScheduleWithRefs } from '@/types/trip';
 import { toTripSheetRows } from './tripScheduleSheet';
 
 /**
@@ -14,12 +14,22 @@ import { toTripSheetRows } from './tripScheduleSheet';
 
 const t = (key: TranslationKey) => translate('vi', key);
 
+/** One lorry with its driver, as the board carries it. */
+const turn = (over: Partial<TripAssignmentRef> = {}): TripAssignmentRef => ({
+  id: 'a1',
+  vehicle: { id: 'v1', plate: '50H49266' },
+  driver: { id: 'd1', displayName: 'Tài Xế A' },
+  assignedAt: '2026-08-04T01:00:00.000Z',
+  started: false,
+  ...over,
+});
+
 const trip = (over: Partial<TripScheduleWithRefs> = {}): TripScheduleWithRefs =>
   ({
     id: 't1',
     scheduledOn: '2026-08-04',
-    vehicleId: 'v1',
-    vehicle: { id: 'v1', plate: '50H49266' },
+    vehicleId: null,
+    assignments: [turn()],
     customerId: 'c1',
     customer: { id: 'c1', name: 'WWL' },
     cargoInfo: '17CTN / 1.22CBM',
@@ -34,7 +44,6 @@ const trip = (over: Partial<TripScheduleWithRefs> = {}): TripScheduleWithRefs =>
     status: 'confirmed',
     createdBy: 'u9',
     createdByUser: { id: 'u9', displayName: 'Điều Độ' },
-    driver: null,
     pickupLocationId: null,
     deliveryLocationId: null,
     pickupLocation: null,
@@ -170,7 +179,7 @@ describe('toTripSheetRows', () => {
    */
   it('leaves a missing vehicle, driver or customer as an empty cell', () => {
     const [row] = toTripSheetRows(
-      [trip({ vehicle: null, driver: null, customer: null })],
+      [trip({ assignments: [], customer: null })],
       t,
       'vi',
     );
@@ -185,6 +194,34 @@ describe('toTripSheetRows', () => {
 
     // Stored as somebody typed it, drawn for reading — one lorry down one column.
     expect(row[t('colVehicle')]).toBe('50H-49266');
+  });
+
+  /**
+   * ★ ONE ROW PER TRIP, HOWEVER MANY LORRIES (ADR-0004). The plates and the
+   * drivers are joined with ';' — and a driver on two lorries is named once,
+   * because the column answers 'who drove', not 'how many turns'.
+   */
+  it('keeps a multi-lorry trip on one row, plates and drivers joined', () => {
+    const [row] = toTripSheetRows(
+      [
+        trip({
+          assignments: [
+            turn(),
+            turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D12345' } }),
+            turn({
+              id: 'a3',
+              vehicle: { id: 'v3', plate: '51D67890' },
+              driver: { id: 'd2', displayName: 'Tài Xế B' },
+            }),
+          ],
+        }),
+      ],
+      t,
+      'vi',
+    );
+
+    expect(row[t('colVehicle')]).toBe('50H-49266; 51D-12345; 51D-67890');
+    expect(row[t('colDriver')]).toBe('Tài Xế A; Tài Xế B');
   });
 
   it('follows the interface language, so the headings match the screen', () => {

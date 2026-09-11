@@ -71,7 +71,6 @@ describeIfDatabase('Customer locations against real PostgreSQL', () => {
     board = new TripScheduleService(
       database,
       new TripScheduleRepository(database),
-      vehicles,
       customers,
       new TripStatusHistoryRepository(database),
       locations,
@@ -88,7 +87,7 @@ describeIfDatabase('Customer locations against real PostgreSQL', () => {
   beforeEach(async () => {
     await pool.query(
       `TRUNCATE trip_locations, trip_status_history, trip_driver_assignments, trip_schedules,
-                trip_customers RESTART IDENTITY CASCADE`,
+                trip_vehicles, trip_customers RESTART IDENTITY CASCADE`,
     );
     customerA = (await catalogue.createCustomer({ name: 'Customer A', createdBy: operator })).id;
     customerB = (await catalogue.createCustomer({ name: 'Customer B', createdBy: operator })).id;
@@ -313,9 +312,20 @@ describeIfDatabase('Customer locations against real PostgreSQL', () => {
         createdBy: operator,
       });
       const driver = (await new UserRepository(database).insertUser({ displayName: 'Tài Xế', accountType: 'driver' })).id;
-      await sql(`INSERT INTO trip_driver_assignments (trip_id, driver_user_id, assigned_by) VALUES ($1, $2, $3)`, [trip.id, driver, operator]);
+      // A dispatch assignment is a lorry AND a driver (ADR-0004); the driver's
+      // view is opened by the assignment, not by the trip.
+      const [lorry] = (await sql(
+        `INSERT INTO trip_vehicles (plate, created_by) VALUES ('51D-00001', $1) RETURNING id`,
+        [operator],
+      )) as { id: string }[];
+      const [assignment] = (await sql(
+        `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [trip.id, lorry!.id, driver, operator],
+      )) as { id: string }[];
 
-      const seen = await driverView.findForDriver(trip.id, driver);
+      const seen = await driverView.findForDriver(assignment!.id, driver);
+      expect(seen?.vehicle).toEqual({ id: lorry!.id, plate: '51D-00001' });
       expect(seen?.pickupLocation).toEqual(OSC);
       expect(seen?.deliveryLocation).toBeNull();
       expect(seen?.pickupAddress).toBe('Kho OSC, Bình Dương');

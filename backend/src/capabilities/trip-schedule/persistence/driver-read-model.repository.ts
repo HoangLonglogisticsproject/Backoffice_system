@@ -64,12 +64,15 @@ const DRIVER_TRIP_COLUMNS = `
  * filtering afterwards would give the same answer today and would be one
  * mistaken `OR` away from giving a different one.
  *
- * LEFT JOIN on both catalogues: a trip may have no lorry and no customer yet.
+ * ★ THE LORRY IS THE ASSIGNMENT'S (`a.vehicle_id`), never the trip's legacy
+ * column: a driver holding two lorries on one trip sees each turn with its own
+ * plate. Both joins LEFT: a trip may have no customer yet, and the WHERE clauses
+ * below exclude the pre-0027 turns that still name no lorry.
  */
 const FROM_ASSIGNMENT = `
     FROM trip_driver_assignments a
     JOIN trip_schedules t   ON t.id = a.trip_id
-    LEFT JOIN trip_vehicles v  ON v.id = t.vehicle_id
+    LEFT JOIN trip_vehicles v  ON v.id = a.vehicle_id
     LEFT JOIN trip_customers c ON c.id = t.customer_id`;
 
 interface DriverTripRow {
@@ -125,13 +128,15 @@ export class DriverTripReadModelRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * The trips this driver is on right now.
+   * The assignments this driver holds right now — one row per lorry, so a
+   * driver on two lorries of one trip gets that trip twice, each with its plate.
    *
    * Not paginated, for the reason ADR-0002 §4 gives for the short lists: a
-   * driver has one lorry and a handful of live trips, and a cursor on a list
-   * that never exceeds a screen is machinery with nothing to do.
+   * driver holds a handful of live turns, and a cursor on a list that never
+   * exceeds a screen is machinery with nothing to do.
    *
-   * Archived trips are excluded — a row taken off the board is not work.
+   * Archived trips are excluded — a row taken off the board is not work. So
+   * are the pre-0027 turns with no lorry: there is nothing to drive.
    */
   async listForDriver(
     driverUserId: string,
@@ -142,34 +147,36 @@ export class DriverTripReadModelRepository {
        ${FROM_ASSIGNMENT}
         WHERE a.driver_user_id = $1
           AND a.state = 'active'
+          AND a.vehicle_id IS NOT NULL
           AND t.archived_at IS NULL
-        ORDER BY t.scheduled_on DESC, t.id DESC`,
+        ORDER BY t.scheduled_on DESC, t.id DESC, a.assigned_at ASC, a.id ASC`,
       [driverUserId],
     );
     return rows.map(toDriverTrip);
   }
 
   /**
-   * One trip, if it is this driver's.
+   * One assignment, if it is this driver's and still active.
    *
-   * Returns `null` for a trip that exists but belongs to somebody else, which
-   * the service turns into the same 404 a missing trip gets: telling a caller
-   * that a trip exists but is not theirs is telling them something about
+   * Returns `null` for an assignment that exists but belongs to somebody else,
+   * which the service turns into the same 404 a missing one gets: telling a
+   * caller that it exists but is not theirs is telling them something about
    * somebody else's work.
    */
   async findForDriver(
-    tripId: string,
+    assignmentId: string,
     driverUserId: string,
     executor: DatabaseQuery = this.db,
   ): Promise<DriverTrip | null> {
     const rows = await executor.query<DriverTripRow>(
       `SELECT ${DRIVER_TRIP_COLUMNS}
        ${FROM_ASSIGNMENT}
-        WHERE a.trip_id = $1
+        WHERE a.id = $1
           AND a.driver_user_id = $2
           AND a.state = 'active'
+          AND a.vehicle_id IS NOT NULL
           AND t.archived_at IS NULL`,
-      [tripId, driverUserId],
+      [assignmentId, driverUserId],
     );
     return rows[0] ? toDriverTrip(rows[0]) : null;
   }

@@ -91,7 +91,6 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     board = new TripScheduleService(
       database,
       trips,
-      vehicles,
       new TripCustomerRepository(database),
       new TripStatusHistoryRepository(database),
       new TripLocationRepository(database),
@@ -481,15 +480,24 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
         .filter((name) => name !== 'constructor')
         .sort();
 
-      // `ownershipOf` and `requireTrip` are `private` in TypeScript, which is a
-      // COMPILE-TIME idea — the prototype carries them at runtime like any other
-      // method. Listed rather than filtered out, so the list stays a literal
-      // description of what is actually there.
+      // `existingDeclaration`, `ownershipOf` and `requireTrip` are `private` in
+      // TypeScript, which is a COMPILE-TIME idea — the prototype carries them at
+      // runtime like any other method. Listed rather than filtered out, so the
+      // list stays a literal description of what is actually there.
+      //
+      // ★ `existingDeclaration` IS AN IMPLEMENTATION DETAIL, AND IT BROKE THIS
+      // TEST ON PURPOSE — which is the test working. It is the one lookup that
+      // answers a repeated declaration, taken twice: unlocked for the ordinary
+      // retry, then again under the trip lock where a simultaneous twin has
+      // committed. It is NOT an edit path and NOT a second way to write a
+      // figure; it only ever returns a row `declareCost` had already written,
+      // or raises the ConflictError for a key reused on another assignment.
       expect(surface).toEqual([
         'createCost',
         'createHire',
         'declareCost',
         'editCost',
+        'existingDeclaration',
         'listCostEdits',
         'listCosts',
         'listHires',
@@ -509,6 +517,10 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
     it('★ refuses to edit a BACKOFFICE line, which is still corrected by voiding', async () => {
       // The half of 0012's rule that did NOT change. A clerk's invoice line is
       // born `immutable`, so the only correction is a void plus a new row.
+      //
+      // The edit route is scoped by a driver's ASSIGNMENT (ADR-0004), and a
+      // backoffice line belongs to none — so from any assignment it simply is
+      // not there, before its state is ever looked at.
       const line = await money.createCost({
         tripId: trip,
         category: 'overtime',
@@ -517,8 +529,8 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       });
 
       await expect(
-        money.editCost(trip, line.id, { amount: '400000' }, author),
-      ).rejects.toThrow(ConflictError);
+        money.editCost('00000000-0000-4000-8000-000000000000', line.id, { amount: '400000' }, author),
+      ).rejects.toThrow(NotFoundError);
 
       // And the figure really did not move.
       expect((await money.listCosts(trip)).items.find((row) => row.id === line.id)?.amount).toBe(
@@ -596,9 +608,10 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   // -------------------------------------------------- independence of trip ----
 
   describe('★ cost does not care where the trip is', () => {
+    // One row per status, each exactly once: 'pending' and 'confirmed' were
+    // listed twice, which ran the same case again under the same name rather
+    // than covering anything further (Sonar S9078).
     it.each([
-      'pending',
-      'confirmed',
       'pending',
       'confirmed',
       'finished',

@@ -29,12 +29,17 @@ vi.mock('@/api/tripSchedule', () => ({
 const fetchEligibleDrivers = vi.fn();
 const assignDriver = vi.fn();
 const replaceDriver = vi.fn();
+const endDriverAssignment = vi.fn();
+const fetchDriverAssignments = vi.fn();
 vi.mock('@/api/tripAssignment', () => ({
   fetchEligibleDrivers: (...a: unknown[]) => fetchEligibleDrivers(...a),
-  fetchDriverAssignments: vi.fn(),
+  // ★ RESOLVES `[]` BY DEFAULT (see beforeEach). A bare `vi.fn()` resolves
+  // `undefined`, which TanStack Query treats as a failed query — every panel
+  // test would then be exercising the error path without saying so.
+  fetchDriverAssignments: (...a: unknown[]) => fetchDriverAssignments(...a),
   assignDriver: (...a: unknown[]) => assignDriver(...a),
   replaceDriver: (...a: unknown[]) => replaceDriver(...a),
-  endDriverAssignment: vi.fn(),
+  endDriverAssignment: (...a: unknown[]) => endDriverAssignment(...a),
 }));
 const fetchTripLocations = vi.fn();
 const createTripLocation = vi.fn();
@@ -67,11 +72,21 @@ const session = (permissions: string[]) => ({
   loading: false,
 });
 
+/** One lorry with its driver on the board's row (ADR-0004). */
+const turn = (over: Record<string, unknown> = {}) => ({
+  id: 'a1',
+  vehicle: { id: 'v1', plate: '50H-49266' },
+  driver: { id: 'd1', displayName: 'Tài Xế A' },
+  assignedAt: '2026-08-01T00:00:00.000Z',
+  started: false,
+  ...over,
+});
+
 const trip = (over: Record<string, unknown> = {}) => ({
   id: 't1',
   scheduledOn: '2026-08-04',
-  vehicleId: 'v1',
-  vehicle: { id: 'v1', plate: '50H-49266' },
+  vehicleId: null,
+  assignments: [turn()],
   customerId: 'c1',
   customer: { id: 'c1', name: 'WWL' },
   cargoInfo: '17CTN / 1.22CBM',
@@ -86,7 +101,6 @@ const trip = (over: Record<string, unknown> = {}) => ({
   status: 'confirmed',
   createdBy: 'u9',
   createdByUser: { id: 'u9', displayName: 'Điều Độ' },
-  driver: null,
   pickupLocationId: null,
   deliveryLocationId: null,
   pickupLocation: null,
@@ -157,6 +171,8 @@ describe('TripSchedulePage', () => {
     ]);
     assignDriver.mockReset().mockResolvedValue({ id: 'a1', driverUserId: 'd1' });
     replaceDriver.mockReset().mockResolvedValue({ id: 'a2', driverUserId: 'd2' });
+    endDriverAssignment.mockReset().mockResolvedValue({ id: 'a1', state: 'ended' });
+    fetchDriverAssignments.mockReset().mockResolvedValue([]);
     useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create']));
   });
 
@@ -182,85 +198,294 @@ describe('TripSchedulePage', () => {
       ([request]) => (request as { limit?: number }).limit !== 1,
     );
 
-  describe('driver assignment', () => {
+  describe('★ dispatch — the lorries and their drivers (ADR-0004)', () => {
+    const write = () => useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+    const board = (...turns: unknown[]) =>
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ assignments: turns })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+    const fleet = () =>
+      fetchTripVehicles.mockResolvedValue([
+        { id: 'v1', plate: '50H-49266', note: null, status: 'active' },
+        { id: 'v2', plate: '51D-65233', note: null, status: 'active' },
+      ]);
+    /**
+     * Opens the panel from the row and scopes every query to it. The dialog
+     * carries the title as its label; so does the list of turns inside it,
+     * and the dialog comes first in document order.
+     */
+    const openPanel = async (name: RegExp) => {
+      fireEvent.click(await screen.findByRole('button', { name }));
+      const [dialog] = await screen.findAllByLabelText('Phương tiện điều độ');
+      return within(dialog!);
+    };
+    const addForm = async (panel: ReturnType<typeof within>) => {
+      fireEvent.click(panel.getByRole('button', { name: /thêm phương tiện/i }));
+      await waitFor(() => expect(fetchEligibleDrivers).toHaveBeenCalled());
+      await panel.findByRole('option', { name: 'Tài Xế B' });
+      return () => last(panel.getAllByRole('button', { name: /thêm phương tiện/i }));
+    };
+
     it('shows "not assigned" and no control to a reader', async () => {
+      board();
       renderPage();
 
       expect(await screen.findByText(/chưa phân công/i)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^phân công$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^điều độ$/i })).not.toBeInTheDocument();
     });
 
-    it('shows the driver on the row', async () => {
-      fetchTripSchedules.mockResolvedValue({
-        items: [trip({ driver: { id: 'd1', displayName: 'Tài Xế A' } })],
-        page: 1, limit: 20, total: 1, totalPages: 1,
-      });
+    it('★ shows every lorry and every driver on the row — each driver once, with the count', async () => {
+      board(
+        turn(),
+        turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } }),
+        turn({ id: 'a3', vehicle: { id: 'v3', plate: '51D-00003' }, driver: { id: 'd2', displayName: 'Tài Xế B' } }),
+      );
       renderPage();
 
-      expect(await screen.findByText('Tài Xế A')).toBeInTheDocument();
+      expect(await screen.findByText('50H-49266')).toBeInTheDocument();
+      expect(screen.getByText('51D-65233')).toBeInTheDocument();
+      expect(screen.getByText('51D-00003')).toBeInTheDocument();
+      expect(screen.getAllByText('Tài Xế A')).toHaveLength(1);
+      expect(screen.getByText('Tài Xế B')).toBeInTheDocument();
+      expect(screen.getByText('3 xe · 2 tài xế')).toBeInTheDocument();
     });
 
-    it('★ assigns from the eligible list, sending the id and nothing else', async () => {
-      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+    it('★ adds a lorry WITH its driver, sending the pair and nothing else', async () => {
+      write();
+      fleet();
+      board();
       renderPage();
 
-      fireEvent.click(await screen.findByRole('button', { name: /^phân công$/i }));
-      const select = await screen.findByLabelText(/chọn tài xế/i);
-      await waitFor(() => expect(fetchEligibleDrivers).toHaveBeenCalled());
-      await screen.findByRole('option', { name: 'Tài Xế B' });
-      fireEvent.change(select, { target: { value: 'd2' } });
-      fireEvent.click(last(screen.getAllByRole('button', { name: /^phân công$/i })));
+      const panel = await openPanel(/^phân công$/i);
+      const submit = await addForm(panel);
+      // ★ NOTHING TO SEND UNTIL BOTH ARE CHOSEN — there is no lorry-only assignment.
+      fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
+      expect(submit()).toBeDisabled();
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.click(submit());
 
-      await waitFor(() => expect(assignDriver).toHaveBeenCalledWith('t1', 'd2'));
+      await waitFor(() =>
+        expect(assignDriver).toHaveBeenCalledWith('t1', { vehicleId: 'v1', driverUserId: 'd2' }),
+      );
       // The board is re-read; the server's row is what the screen shows next.
       await waitFor(() => expect(listCalls().length).toBeGreaterThan(1));
     });
 
-    it('★ replaces with a reason, and offers only the OTHER drivers', async () => {
-      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
-      fetchTripSchedules.mockResolvedValue({
-        items: [trip({ driver: { id: 'd1', displayName: 'Tài Xế A' } })],
-        page: 1, limit: 20, total: 1, totalPages: 1,
-      });
+    /**
+     * ★ THE PANEL SHOWS THE CREW THE LIST NOW HOLDS, NOT THE ROW THAT WAS
+     * CLICKED. The add re-reads the board; the row on screen must be the
+     * re-read one, or the new lorry only appears after close and reopen.
+     */
+    it('★ shows a freshly added lorry in the open panel without closing it', async () => {
+      write();
+      fleet();
+      board();
       renderPage();
 
-      fireEvent.click(await screen.findByRole('button', { name: /thay đổi/i }));
-      await screen.findByRole('option', { name: 'Tài Xế B' });
-      expect(screen.queryByRole('option', { name: 'Tài Xế A' })).not.toBeInTheDocument();
+      const panel = await openPanel(/^phân công$/i);
+      expect(panel.queryByText('50H-49266')).toBeNull();
+      const submit = await addForm(panel);
+      // The board the re-read will return: the pair is on it now.
+      board(turn());
+      fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.click(submit());
 
-      fireEvent.change(screen.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
-      fireEvent.change(screen.getByLabelText(/lý do/i), { target: { value: 'đổi ca' } });
-      fireEvent.click(last(screen.getAllByRole('button', { name: /thay đổi/i })));
+      await waitFor(() => expect(assignDriver).toHaveBeenCalled());
+      expect(await panel.findByText('50H-49266')).toBeInTheDocument();
+      expect(panel.getByText('Tài Xế A')).toBeInTheDocument();
+    });
 
+    /**
+     * ★ AND WHEN THE ROW LEAVES THE LIST, THE PANEL CLOSES — the counterpart of
+     * the test above. Crewing a trip from the "chờ phân công" tab moves it out
+     * of that filter, so the re-read comes back without it. Falling back to the
+     * object that was clicked left the panel open over a trip the list no
+     * longer holds, still describing it as uncrewed — the one state the
+     * dispatcher had just made untrue.
+     */
+    it('★ closes the panel when the trip leaves the filtered list after assigning', async () => {
+      write();
+      fleet();
+      board();
+      renderPage();
+
+      const panel = await openPanel(/^phân công$/i);
+      const submit = await addForm(panel);
+      // What the "chờ phân công" read returns once the trip has a crew: nothing.
+      fetchTripSchedules.mockResolvedValue({
+        items: [],
+        page: 1, limit: 20, total: 0, totalPages: 0,
+      });
+      fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.click(submit());
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalled());
       await waitFor(() =>
-        expect(replaceDriver).toHaveBeenCalledWith('t1', { driverUserId: 'd2', reason: 'đổi ca' }),
+        expect(screen.queryAllByLabelText('Phương tiện điều độ')).toHaveLength(0),
       );
     });
 
-    it('★ tells the dispatcher the board moved on a 409, and re-reads it', async () => {
-      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
-      assignDriver.mockRejectedValue(new ApiError(409, 'CONFLICT', 'That trip already has a driver.'));
+    /**
+     * ★ EMPTY HISTORY, FAILED HISTORY AND REAL HISTORY ARE THREE DIFFERENT
+     * SCREENS. An empty read shows no history section; a failed read says so
+     * rather than passing as "nobody was ever taken off"; a real one lists the
+     * ended turn with its reason.
+     */
+    it('shows no history section when the history read comes back empty', async () => {
+      write();
+      board(turn());
       renderPage();
 
-      fireEvent.click(await screen.findByRole('button', { name: /^phân công$/i }));
-      await screen.findByRole('option', { name: 'Tài Xế B' });
-      fireEvent.change(screen.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
-      fireEvent.click(last(screen.getAllByRole('button', { name: /^phân công$/i })));
+      const panel = await openPanel(/^điều độ$/i);
+      await waitFor(() => expect(fetchDriverAssignments).toHaveBeenCalledWith('t1'));
+      expect(panel.queryByText(/lịch sử điều độ/i)).toBeNull();
+      expect(panel.queryByRole('alert')).toBeNull();
+    });
 
-      expect(await screen.findByRole('alert')).toHaveTextContent(/vừa thay đổi/i);
+    it('★ says so when the history read fails, instead of showing an empty history', async () => {
+      write();
+      board(turn());
+      fetchDriverAssignments.mockRejectedValue(new ApiError(0, undefined, 'down'));
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      expect(await panel.findByRole('alert')).toHaveTextContent(/không tải được lịch sử/i);
+      // No history SECTION — the alert sentence itself names the history, so ask for the heading.
+      expect(panel.queryByRole('heading', { name: /lịch sử điều độ/i })).toBeNull();
+    });
+
+    it('lists an ended turn with its reason when the history has one', async () => {
+      write();
+      board(turn());
+      fetchDriverAssignments.mockResolvedValue([
+        {
+          id: 'a0',
+          tripId: 't1',
+          vehicleId: 'v9',
+          vehicle: { id: 'v9', plate: '51D-00009' },
+          driverUserId: 'd2',
+          driverUser: { id: 'd2', displayName: 'Tài Xế B' },
+          state: 'ended',
+          assignedAt: '2026-08-01T00:00:00.000Z',
+          assignedBy: 'u1',
+          endedAt: '2026-08-02T00:00:00.000Z',
+          endedBy: 'u1',
+          endReason: 'xe hỏng',
+        },
+      ]);
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      expect(await panel.findByText(/lịch sử điều độ/i)).toBeInTheDocument();
+      expect(panel.getByText(/51D-00009/)).toBeInTheDocument();
+      expect(panel.getByText(/xe hỏng/)).toBeInTheDocument();
+      expect(panel.queryByRole('alert')).toBeNull();
+    });
+
+    it('★ offers a lorry already on the trip to nobody, and the same driver to a second lorry', async () => {
+      write();
+      fleet();
+      board(turn());
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      const submit = await addForm(panel);
+      expect(panel.queryByRole('option', { name: '50H-49266' })).toBeNull();
+      fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v2' } });
+      // Driver A already holds the first lorry and may hold this one too.
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd1' } });
+      fireEvent.click(submit());
+
+      await waitFor(() =>
+        expect(assignDriver).toHaveBeenCalledWith('t1', { vehicleId: 'v2', driverUserId: 'd1' }),
+      );
+    });
+
+    it('★ swaps the driver of a turn that has not started, with a reason, offering only the OTHER drivers', async () => {
+      write();
+      board(turn());
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      fireEvent.click(panel.getByRole('button', { name: /đổi tài xế/i }));
+      await panel.findByRole('option', { name: 'Tài Xế B' });
+      expect(panel.queryByRole('option', { name: 'Tài Xế A' })).not.toBeInTheDocument();
+
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.change(panel.getByLabelText(/lý do/i), { target: { value: 'đổi ca' } });
+      fireEvent.click(last(panel.getAllByRole('button', { name: /đổi tài xế/i })));
+
+      await waitFor(() =>
+        expect(replaceDriver).toHaveBeenCalledWith('t1', 'a1', { driverUserId: 'd2', reason: 'đổi ca' }),
+      );
+    });
+
+    it('★ removes a turn that has not started, with a reason', async () => {
+      write();
+      board(turn());
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      fireEvent.click(panel.getByRole('button', { name: /^gỡ$/i }));
+      fireEvent.change(panel.getByLabelText(/lý do/i), { target: { value: 'xe hỏng' } });
+      fireEvent.click(last(panel.getAllByRole('button', { name: /^gỡ$/i })));
+
+      await waitFor(() => expect(endDriverAssignment).toHaveBeenCalledWith('t1', 'a1', 'xe hỏng'));
+    });
+
+    it('★ a turn that has started can be neither swapped nor removed — the pair is what happened', async () => {
+      write();
+      board(turn({ started: true }), turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } }));
+      renderPage();
+
+      const panel = await openPanel(/^điều độ$/i);
+      expect(panel.getByText(/đang thực hiện/i)).toBeInTheDocument();
+      // One control pair, for the second turn only.
+      expect(panel.getAllByRole('button', { name: /đổi tài xế/i })).toHaveLength(1);
+      expect(panel.getAllByRole('button', { name: /^gỡ$/i })).toHaveLength(1);
+    });
+
+    it('★ tells the dispatcher the board moved on a 409, and re-reads it', async () => {
+      write();
+      fleet();
+      board();
+      assignDriver.mockRejectedValue(new ApiError(409, 'CONFLICT', 'That lorry is already on this trip.'));
+      renderPage();
+
+      const panel = await openPanel(/^phân công$/i);
+      const submit = await addForm(panel);
+      fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.click(submit());
+
+      expect(await panel.findByRole('alert')).toHaveTextContent(/vừa thay đổi/i);
       await waitFor(() => expect(listCalls().length).toBeGreaterThan(1));
     });
 
-    it('offers no assignment control on a finished trip', async () => {
-      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+    it('offers no dispatch control on a finished trip', async () => {
+      write();
       fetchTripSchedules.mockResolvedValue({
-        items: [trip({ status: 'finished', driver: { id: 'd1', displayName: 'Tài Xế A' } })],
+        items: [trip({ status: 'finished', assignments: [turn()] })],
         page: 1, limit: 20, total: 1, totalPages: 1,
       });
       renderPage();
 
       expect(await screen.findByText('Tài Xế A')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /thay đổi/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^điều độ$/i })).not.toBeInTheDocument();
+    });
+
+    it('names a legacy planned lorry as such — a trip booked before dispatch became a pair', async () => {
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ assignments: [], vehicleId: 'legacy-v' })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      renderPage();
+
+      expect(await screen.findByText(/dữ liệu cũ/i)).toBeInTheDocument();
     });
   });
 
@@ -1070,15 +1295,15 @@ describe('TripSchedulePage', () => {
     });
   });
 
-  describe('★ editing a trip whose vehicle or customer has been retired', () => {
+  describe('★ editing a trip whose customer has been retired', () => {
     const write = ['trip.read', 'trip.create', 'trip.write'];
 
-    // The board still joins the plate, because the read does not filter the
-    // catalogue by status — only the OPTIONS list does.
+    // The board still joins the name, because the read does not filter the
+    // catalogue by status — only the OPTIONS list does. The lorry is on the
+    // row through its assignment and is no longer a field of the form.
     const retiredRefs = () =>
       trip({
-        vehicleId: 'gone-v',
-        vehicle: { id: 'gone-v', plate: '51D.65233' },
+        assignments: [turn({ vehicle: { id: 'gone-v', plate: '51D.65233' } })],
         customerId: 'gone-c',
         customer: { id: 'gone-c', name: 'VIỄN ĐẠT' },
       });
@@ -1106,19 +1331,10 @@ describe('TripSchedulePage', () => {
       // purpose: the table formats for reading, the editor shows the record.
       await screen.findByText('51D-65233');
       fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
-      await screen.findByLabelText('Xe');
+      await screen.findByLabelText('Khách hàng');
     };
 
-    it('renders the retired vehicle as the selected value, not a blank box', async () => {
-      await openEditor();
-
-      const select = screen.getByLabelText('Xe') as HTMLSelectElement;
-      expect(select.value).toBe('gone-v');
-      // Marked, so nobody reads it as a truck still in service.
-      expect(screen.getByRole('option', { name: '51D.65233 (Đã lưu trữ)' })).toBeTruthy();
-    });
-
-    it('renders the retired customer the same way', async () => {
+    it('renders the retired customer as the selected value, not a blank box', async () => {
       await openEditor();
 
       const select = screen.getByLabelText('Khách hàng') as HTMLSelectElement;
@@ -1126,7 +1342,7 @@ describe('TripSchedulePage', () => {
       expect(screen.getByRole('option', { name: 'VIỄN ĐẠT (Đã lưu trữ)' })).toBeTruthy();
     });
 
-    it('★ keeps both references through a save that did not touch them', async () => {
+    it('★ keeps the reference through a save that did not touch it', async () => {
       await openEditor();
 
       fireEvent.change(screen.getByLabelText('Ghi chú'), { target: { value: 'sửa ghi chú' } });
@@ -1135,8 +1351,9 @@ describe('TripSchedulePage', () => {
       await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
 
       const [, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
-      expect(payload.vehicleId).toBe('gone-v');
       expect(payload.customerId).toBe('gone-c');
+      // ★ NO LORRY IN THE PAYLOAD AT ALL (ADR-0004): the form does not own it.
+      expect(payload).not.toHaveProperty('vehicleId');
       expect(payload.note).toBe('sửa ghi chú');
     });
 
@@ -1153,12 +1370,13 @@ describe('TripSchedulePage', () => {
 
       // "Add", so the form carries no current reference of its own.
       fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
-      await screen.findByLabelText('Xe');
+      await screen.findByLabelText('Khách hàng');
 
-      expect(screen.queryByRole('option', { name: /51D\.65233/ })).toBeNull();
       expect(screen.queryByRole('option', { name: /VIỄN ĐẠT/ })).toBeNull();
-      // The active fleet is still offered.
-      expect(screen.getByRole('option', { name: '50H-49266' })).toBeTruthy();
+      // The active customers are still offered.
+      expect(screen.getByRole('option', { name: 'WWL' })).toBeTruthy();
+      // And no lorry is offered here at all — dispatch is the panel's job.
+      expect(screen.queryByLabelText('Xe')).toBeNull();
     });
 
     it('does not call an unread catalogue "retired" while it is still loading', async () => {
@@ -1178,12 +1396,12 @@ describe('TripSchedulePage', () => {
       // Formatted in the table; the option below keeps the stored spelling.
       await screen.findByText('51D-65233');
       fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
-      await screen.findByLabelText('Xe');
+      await screen.findByLabelText('Khách hàng');
 
       // Selectable, so nothing is lost — but not labelled with a status the
       // client has not been told yet.
-      expect((screen.getByLabelText('Xe') as HTMLSelectElement).value).toBe('gone-v');
-      expect(screen.getByRole('option', { name: '51D.65233' })).toBeTruthy();
+      expect((screen.getByLabelText('Khách hàng') as HTMLSelectElement).value).toBe('gone-c');
+      expect(screen.getByRole('option', { name: 'VIỄN ĐẠT' })).toBeTruthy();
       expect(screen.queryByRole('option', { name: /Đã lưu trữ/ })).toBeNull();
     });
   });
