@@ -84,6 +84,10 @@ read_origin() {
   case "$rest" in
     */*) die "PRODUCTION_BACKEND_ORIGIN must be an origin only, with no path." ;;
     '')  die "PRODUCTION_BACKEND_ORIGIN has no host." ;;
+    # A bare host, which is the whole point. Spelled out rather than left as a
+    # fall-through: "accepted" and "nobody thought about this input" look
+    # identical in a case with no default, and only one of them is intended.
+    *)   ;;
   esac
 
   printf '%s\n' "$origin"
@@ -132,58 +136,48 @@ self_test() {
     fi
   }
 
+  # `accepts <origin> <label>` / `refuses <origin> <label>` — the common shape,
+  # where only the VALUE differs. Writing the declaration once here rather than
+  # eleven times below is the difference between a table of cases and eleven
+  # copies of one string with a word changed.
+  decl() { printf "export const PRODUCTION_BACKEND_ORIGIN = '%s';" "$1"; }
+  accepts() { check "$1" "$2" "$(decl "$1")"; }
+  refuses() { check REJECT "$2" "$(decl "$1")"; }
+
   echo "backend-origin.sh --self-test"
 
   # -- accepted ------------------------------------------------------------
-  check 'https://bo-api.hoanglonglti.com' 'an https origin' \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'https://bo-api.hoanglonglti.com';"
+  accepts 'https://bo-api.hoanglonglti.com' 'an https origin'
+  accepts 'https://api.example.com:8443'    'an explicit port'
 
+  # The one accepted case whose FILE, not value, is unusual: the declaration
+  # has to be found among other lines.
   check 'https://bo-api.hoanglonglti.com' 'surrounding comments and code' \
     '/** doc comment */' \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'https://bo-api.hoanglonglti.com';" \
+    "$(decl 'https://bo-api.hoanglonglti.com')" \
     'export const OTHER = 1;'
-
-  check 'https://api.example.com:8443' 'an explicit port' \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'https://api.example.com:8443';"
 
   # -- refused -------------------------------------------------------------
   #
-  # ★ THE PLAINTEXT SCHEME IS ASSEMBLED, NOT SPELT OUT. These two fixtures exist
-  # precisely to prove that plaintext is REFUSED — but Sonar's clear-text
-  # protocol rule (shell:S5332) flags the literal wherever it occurs, including
-  # inside the assertion that rejects it. Building the string keeps the test
-  # identical and removes a finding that would otherwise need dismissing by hand
-  # on every analysis.
-  #
-  # The glob in `read_origin` is deliberately left literal: it is a case pattern
-  # rather than a URL, Sonar does not flag it, and the message beside it is worth
-  # reading exactly as written.
-  local plain='http'
+  # ⚠ THE TWO `NOSONAR`S BELOW ARE THE POINT OF THE TEST, NOT AN EXCEPTION TO IT.
+  # shell:S5332 flags clear-text URLs. These two are the fixtures that prove a
+  # clear-text origin is REFUSED, so the rule is firing on the assertion that
+  # enforces it. Suppressed explicitly and in the open — an earlier attempt to
+  # assemble the scheme from a variable was worse: the analyser resolved it
+  # anyway, and it left the test harder to read for nothing.
+  refuses 'http://bo-api.hoanglonglti.com' 'a plaintext origin'  # NOSONAR
+  refuses 'http://127.0.0.1:3000' 'plaintext loopback, never for a release'  # NOSONAR
 
-  check REJECT 'a plaintext origin' \
-    "export const PRODUCTION_BACKEND_ORIGIN = '${plain}://bo-api.hoanglonglti.com';"
+  refuses ''                                'an empty value'
+  refuses 'https://api.example.com/base'    'a path that would be silently discarded'
+  refuses 'ftp://api.example.com'           'a scheme that is neither'
+  refuses 'api.example.com'                 'no scheme at all'
 
-  check REJECT 'plaintext loopback — fine for the proxy in a test, never for a release' \
-    "export const PRODUCTION_BACKEND_ORIGIN = '${plain}://127.0.0.1:3000';"
-
-  check REJECT 'an empty value' \
-    "export const PRODUCTION_BACKEND_ORIGIN = '';"
-
-  check REJECT 'no declaration at all' \
-    'export const SOMETHING_ELSE = 1;'
+  check REJECT 'no declaration at all'     'export const SOMETHING_ELSE = 1;'
 
   check REJECT 'two declarations that disagree' \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'https://a.example.com';" \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'https://b.example.com';"
-
-  check REJECT 'a path that would be silently discarded' \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'https://api.example.com/base';"
-
-  check REJECT 'a scheme that is neither' \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'ftp://api.example.com';"
-
-  check REJECT 'no scheme at all' \
-    "export const PRODUCTION_BACKEND_ORIGIN = 'api.example.com';"
+    "$(decl 'https://a.example.com')" \
+    "$(decl 'https://b.example.com')"
 
   # A missing file is the one case that needs no fixture.
   #
