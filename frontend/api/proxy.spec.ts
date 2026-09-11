@@ -91,19 +91,26 @@ afterAll(() => {
   blackhole.close();
 });
 
+/**
+ * The origin under test. Injected per-case rather than read from the
+ * environment, because the proxy no longer reads the environment at all:
+ * production binds the committed `PRODUCTION_BACKEND_ORIGIN`, a test binds this.
+ */
+let stubOrigin: string | undefined;
+
 beforeEach(() => {
-  process.env.BACKEND_ORIGIN = origin;
+  stubOrigin = origin;
   delete process.env.BACKEND_TIMEOUT_MS;
 });
 
 /**
- * Imported AFTER the environment is set: the module reads it once, at load time.
- * `resetModules` is what makes a second import see a different environment — a
- * cache-busting query string would work at runtime and fail `tsc`.
+ * `resetModules` is still here and still earns its place: `TIMEOUT_MS` IS read
+ * from the environment at module load, so the timeout case needs a fresh module
+ * to see its override. The origin no longer does — it is an argument.
  */
 const load = async () => {
   vi.resetModules();
-  return (await import('./[...path]')).default;
+  return (await import('./[...path]')).createProxyHandler(stubOrigin);
 };
 
 const errorOf = async (response: Response) =>
@@ -352,7 +359,7 @@ describe('the Vercel API proxy', () => {
      * unexplained failure rather than as an error with a code.
      */
     it('answers 502 BACKEND_UNAVAILABLE when the connection is refused', async () => {
-      process.env.BACKEND_ORIGIN = DEAD_ORIGIN;
+      stubOrigin = DEAD_ORIGIN;
       const handler = await load();
 
       const response = await handler(new Request('https://demo.vercel.app/api/health'));
@@ -364,7 +371,7 @@ describe('the Vercel API proxy', () => {
     it('answers 502 BACKEND_UNAVAILABLE when the backend never replies', async () => {
       // A tunnel that accepted the connection and then went away. Without the
       // timeout this holds the function open until the platform kills it.
-      process.env.BACKEND_ORIGIN = blackholeOrigin;
+      stubOrigin = blackholeOrigin;
       process.env.BACKEND_TIMEOUT_MS = '250';
       const handler = await load();
 
@@ -381,7 +388,7 @@ describe('the Vercel API proxy', () => {
     it('★ says nothing about WHERE the backend is', async () => {
       // The message reaches a browser. The backend's address is not something
       // to hand out in an error body, and neither is the underlying cause.
-      process.env.BACKEND_ORIGIN = DEAD_ORIGIN;
+      stubOrigin = DEAD_ORIGIN;
       const handler = await load();
 
       const body = JSON.stringify(await (await handler(
@@ -396,19 +403,34 @@ describe('the Vercel API proxy', () => {
 
   // ------------------------------------------------- the configuration path --
 
-  describe('★ BACKEND_ORIGIN must be an origin', () => {
+  describe('★ BACKEND_ORIGIN must be an https origin', () => {
     /**
-     * `new URL('/api/health', base)` resolves against the base's ORIGIN, so any
-     * path on the base is silently discarded — `https://host/base` would become
-     * `https://host/api/health` and look like a routing bug for as long as it
-     * took somebody to read the proxy. Refused up front instead.
+     * Two tables, one assertion each. They were four tables briefly — the https
+     * cases arrived as their own pair of `it.each` blocks whose bodies were
+     * line-for-line copies of these, which SonarCloud counted as duplication and
+     * was right to. A rule about what an origin may be belongs in the list of
+     * what an origin may be, not in a parallel list beside it.
      */
     it.each([
+      // Shape: the things an origin is allowed to look like.
       ['https://api.example.com', 'scheme and host'],
       ['https://api.example.com/', 'a bare trailing slash'],
       ['https://api.example.com:8443', 'an explicit port'],
+
+      /**
+       * ★ LOOPBACK OVER http, AND IT IS NOT A HOLE. There is no network segment
+       * between the two ends to intercept, which is the same line browsers draw
+       * for secure contexts. It is also what lets the forwarding specs above run
+       * against a stub `node:http` server rather than inventing a certificate
+       * authority for a unit test — and it cannot widen into production, where
+       * the origin is the committed constant and loopback on a Vercel edge node
+       * is nothing at all.
+       */
+      ['http://127.0.0.1:3000', 'IPv4 loopback'],
+      ['http://localhost:3000', 'localhost by name'],
+      ['http://[::1]:3000', 'IPv6 loopback'],
     ])('accepts %s — %s', async (value) => {
-      process.env.BACKEND_ORIGIN = value;
+      stubOrigin = value;
       const handler = await load();
 
       // Reaching the network at all means configuration was accepted; the
@@ -418,15 +440,34 @@ describe('the Vercel API proxy', () => {
     });
 
     it.each([
+      /**
+       * `new URL('/api/health', base)` resolves against the base's ORIGIN, so
+       * any path on the base is silently discarded — `https://host/base` would
+       * become `https://host/api/health` and look like a routing bug for as long
+       * as it took somebody to read the proxy. Refused up front instead.
+       */
       ['https://api.example.com/api', 'a path that would double the prefix'],
       ['https://api.example.com/base', 'an arbitrary path'],
       ['https://api.example.com/?x=1', 'a query string'],
       ['https://api.example.com/#frag', 'a fragment'],
       ['api.example.com', 'no scheme at all'],
-      ['ftp://api.example.com', 'a scheme that is not http(s)'],
+      ['ftp://api.example.com', 'a scheme that is neither'],
       ['', 'an empty value'],
+
+      /**
+       * ★ https, NOT "http(s)". The second hop carries `bo_session` on every
+       * proxied request, and `Secure` on that cookie constrains the BROWSER's
+       * leg — Vercel's TLS — while saying nothing about Vercel→VPS. Over
+       * `http://` the session would cross the public internet in clear text
+       * while the padlock in the address bar told the truth about a different
+       * hop entirely.
+       */
+      ['http://api.example.com', 'a plaintext origin'],
+      ['http://bo-api.hoanglonglti.com', 'the real host, downgraded'],
+      ['http://192.168.1.10:3000', 'a private address that is still off-box'],
+      ['http://127.0.0.1.example.com', 'a host that merely BEGINS like loopback'],
     ])('REFUSES %s — %s', async (value) => {
-      process.env.BACKEND_ORIGIN = value;
+      stubOrigin = value;
       const handler = await load();
 
       const response = await handler(new Request('https://demo.vercel.app/api/health'));
@@ -436,7 +477,7 @@ describe('the Vercel API proxy', () => {
     });
 
     it('reports a missing variable as configuration, not as an outage', async () => {
-      delete process.env.BACKEND_ORIGIN;
+      stubOrigin = undefined;
       const handler = await load();
 
       const response = await handler(new Request('https://demo.vercel.app/api/health'));
@@ -446,6 +487,65 @@ describe('the Vercel API proxy', () => {
       expect(error.code).toBe('BACKEND_MISCONFIGURED');
       // Fixed in the Vercel project, not on the VPS — different people.
       expect(error.message).toContain('BACKEND_ORIGIN');
+    });
+  });
+
+  // ------------------------------------------- the committed source of truth --
+
+  describe('★ the origin production actually uses', () => {
+    /**
+     * ★ THIS IS THE ANTI-DIVERGENCE TEST. `.github/workflows/ci.yml` reads the
+     * same constant out of `backend-origin.ts` and verifies THAT host before it
+     * promotes a frontend. If the two could differ, the release gate would be
+     * measuring a backend no user reaches — which is exactly the state this
+     * whole arrangement replaced.
+     *
+     * So the value is asserted here rather than merely imported: a commit that
+     * downgrades it to http, points it at a path, or empties it fails the suite
+     * before it can reach a deployment.
+     */
+    it('is the committed constant, and it survives its own validation', async () => {
+      const { PRODUCTION_BACKEND_ORIGIN } = await import('./backend-origin');
+      const { resolveOrigin } = await import('./[...path]');
+
+      expect(PRODUCTION_BACKEND_ORIGIN).toMatch(/^https:\/\//);
+      expect(resolveOrigin(PRODUCTION_BACKEND_ORIGIN)).toEqual({
+        origin: PRODUCTION_BACKEND_ORIGIN,
+      });
+    });
+
+    /**
+     * ★ INTERCEPTED, NOT DIALLED. An earlier version of this let the default
+     * export make a real request and inferred the binding from the failure —
+     * which passed alone and failed in the full suite, because the committed
+     * host is genuinely reachable from a developer machine and answered 200.
+     * A unit test that depends on production being down is not a test.
+     *
+     * Stubbing `fetch` asserts the thing that actually matters and nothing
+     * else: the handler Vercel deploys aims at the committed origin, and
+     * forwards the `/api` prefix while doing it.
+     */
+    it('★ is what the default export is bound to, not something read at runtime', async () => {
+      const { PRODUCTION_BACKEND_ORIGIN } = await import('./backend-origin');
+      vi.resetModules();
+      const handler = (await import('./[...path]')).default;
+
+      const attempted: string[] = [];
+      vi.stubGlobal('fetch', async (input: unknown) => {
+        attempted.push(String(input));
+        return new Response('{}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+
+      try {
+        await handler(new Request('https://demo.vercel.app/api/health'));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      expect(attempted).toEqual([`${PRODUCTION_BACKEND_ORIGIN}/api/health`]);
     });
   });
 });

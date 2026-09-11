@@ -8,6 +8,7 @@ import { Toaster } from './components/ui/sonner'
 import { SessionProvider } from './contexts/SessionProvider'
 import { LanguageProvider } from './contexts/LanguageContext'
 import { queryClient } from './config/query-client'
+import { registerStaleChunkReload } from './utils/staleChunkReload'
 /**
  * ★ IMPORTED FROM JS, NOT `@import`ed IN index.css.
  *
@@ -25,6 +26,10 @@ import { queryClient } from './config/query-client'
  */
 import '@fontsource-variable/geist'
 import './index.css'
+
+// A tab left open across a deploy asks for a chunk filename the new build no
+// longer emits. Registered before anything can trigger it. See the module.
+registerStaleChunkReload()
 
 const rootElement = document.getElementById('root')
 

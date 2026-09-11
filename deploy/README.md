@@ -3,11 +3,24 @@
 Runtime only. Nothing here builds on the VPS if it can be avoided: 1 CPU / 2 GB.
 
 ```
-Cloudflare (DNS, proxy, TLS)  →  nginx :443 (host)  →  /        static files
-                                                     →  /api/   127.0.0.1:3000
-                                                                   ↓ compose network
-                                                                postgres (no port)
+THE FRONTEND USERS ACTUALLY LOAD IS ON VERCEL, not on this box:
+
+  browser → Vercel (static + /api edge function)
+                        │
+                        ├─ PRIMARY   bo-api.hoanglonglti.com ─┐
+                        └─ FALLBACK  Cloudflare Tunnel ──────┤
+                                                             ↓
+                                              nginx :443 (host) → /api/ → 127.0.0.1:3000
+                                                                              ↓ compose network
+                                                                          postgres (no port)
+
+THE SECOND INGRESS, opsystem.hoanglonglti.com, is unchanged and still serves the
+static build from /var/www/opsystem behind Cloudflare. Keep it: it is the route
+that survives Vercel, the same way the tunnel is the route that survives DNS.
 ```
+
+Which backend route is live is decided by one Vercel environment variable —
+see **bo-api.hoanglonglti.com** below for both directions.
 
 ## Layout on the VPS
 
@@ -470,6 +483,362 @@ docker compose --env-file "$ENV_FILE" exec -T postgres   pg_restore -U backoffic
 
 `postgres-data/` is a bind mount, so `docker compose down` does not lose data;
 only `rm -rf postgres-data` does. Take a dump before anything that migrates.
+
+## bo-api.hoanglonglti.com — the direct HTTPS path to the API
+
+### Why it exists
+
+The frontend on Vercel does not talk to the backend directly; it calls its own
+`/api/*` route, which is an edge function (`frontend/api/[...path].ts`) that
+forwards to `BACKEND_ORIGIN`. That indirection is not a convenience — `bo_session`
+is `SameSite=Strict`, so a browser calling the VPS directly would send no cookie
+and every user would log in and be anonymous on the next request. The proxy is
+what keeps every browser request same-origin.
+
+**`BACKEND_ORIGIN` used to be a Cloudflare Tunnel hostname**, which made
+`cloudflared` a single point of failure for the whole frontend: the tunnel
+restarts, and every request becomes `BACKEND_UNAVAILABLE`.
+`bo-api.hoanglonglti.com` is a second, independent route to the same nginx, and
+is now the one in use:
+
+```
+                        ┌─ PRIMARY ─────────────────────────────────────────────┐
+browser ──HTTPS──> Vercel ──> edge fn ──> bo-api.hoanglonglti.com ──> nginx :443 ──> 127.0.0.1:3000
+                        │                (Matbao A record → VPS, Let's Encrypt)      │
+                        └─ FALLBACK ────────────────────────────────────────────┘    │
+                                         Cloudflare Tunnel ──> cloudflared ──────────┘
+                                         (kept, unchanged, still running)
+```
+
+Failing over is one variable and a redeploy, in either direction — see
+**Cutover, and going back** below.
+
+⚠ **`hoanglonglti.com`, with the `l`.** `hoanglongti.com` is a *former* company
+domain and is explicitly not ours any more —
+`utils/validation/companyEmail.spec.ts` asserts that an address there is NOT
+unwrapped as a company address. Typing the API hostname without the `l` points
+it at a domain this company does not control. The certificate would simply fail
+to issue, which is the good outcome; the bad one is a DNS record sitting in the
+wrong zone while somebody debugs nginx.
+
+### Why the cutover cannot affect login, cookies or CORS
+
+Worth writing down, because "we changed where the API lives" sounds like exactly
+the kind of change that breaks a session, and the reason it does not is the same
+reason the edge function exists at all.
+
+**The browser is never told.** `VITE_API_URL=/api` is relative, so the bundle
+asks its own origin and nothing in it names a backend — grep it and the only
+absolute URLs are in test fixtures. `BACKEND_ORIGIN` is read server-side, inside
+the edge function. Swapping it changes the *second* hop of a two-hop path; the
+first hop, the only one a browser participates in, is byte-for-byte identical
+before and after.
+
+Each of the four things that could plausibly break, and why it does not:
+
+| | why the cutover is neutral |
+|---|---|
+| **Cookie scope** | `sessionCookieOptions` sets no `Domain`, so `bo_session` is host-only. The browser attributes it to the host in the URL bar — the Vercel origin — because that is the response it sees. The backend's own hostname has never been part of the cookie's identity, tunnel or not. |
+| **`SameSite=Strict`** | About *site*, and the site is Vercel's. Every request the browser makes is same-origin to it. The hop from the edge function to `bo-api` is a server-side `fetch` with no browser and no SameSite to enforce. |
+| **`Secure`** | Was HTTPS through the tunnel, is HTTPS through `bo-api`. No mixed content either way, and the browser-facing leg was always Vercel's TLS. |
+| **CORS** | `CORS_ORIGINS` stays empty and stays unused. The browser issues no cross-origin request, so there is no preflight to answer. A server-side `fetch` is not subject to CORS at all. |
+
+**CSRF survives because the guard does not look at the origin.** `CsrfGuard`
+requires the `x-requested-with` header on unsafe methods and nothing else — it
+never inspects `Origin` or `Referer`. The client sets that header in an axios
+interceptor, and the edge function's header filtering removes only hop-by-hop
+headers and the forwarding-identity set (`x-forwarded-*`, `forwarded`,
+`x-real-ip`). `x-requested-with` is in neither list, so it arrives intact.
+
+★ **One thing genuinely does change, and it is an improvement.** The login
+throttle keys on `req.ip`, which resolves through `TRUSTED_PROXIES` to the
+leftmost `X-Forwarded-For` entry nginx wrote from its own socket. Through the
+tunnel that socket was `cloudflared` on loopback, so every caller in the world
+collapsed onto one address and the per-IP throttle was effectively a single
+global bucket. Through `bo-api` the peer is the Vercel POP that forwarded the
+request — still shared, but by far fewer callers, and it varies by region. The
+throttle gets *more* granular, not less.
+
+`TRUSTED_PROXIES` itself needs no change: it names `172.16.0.0/12`, the Docker
+bridge, which is the backend's immediate peer in both topologies because both
+arrive through the same nginx.
+
+### ★ Where the backend origin is written down — and the only place
+
+`frontend/api/backend-origin.ts`. One line, in git:
+
+```ts
+export const PRODUCTION_BACKEND_ORIGIN = 'https://bo-api.hoanglonglti.com';
+```
+
+**Not a Vercel environment variable, and not a GitHub one.** It used to be both
+at once, which is the bug: the Vercel project decided what production actually
+called, a GitHub Environment variable decided what the release gate checked, and
+nothing compared them. A release could verify one origin, promote a frontend
+pointing at another, and report success — the gate measuring a host no user
+reaches. Keeping two copies in agreement is a process; having one copy is a
+property.
+
+Both consumers now read that same file:
+
+```
+frontend/api/backend-origin.ts        ← the only declaration
+   │
+   ├─ frontend/api/[...path].ts       imports it; this is what Vercel deploys
+   │     └─ resolveOrigin() refuses non-https, a path, a query, an empty value
+   │
+   └─ .github/scripts/backend-origin.sh
+         ├─ detect  → --self-test on every pull request
+         └─ release → verify_be reads it, then curls THAT host's /api/health
+```
+
+⚠ **Delete `BACKEND_ORIGIN` from the Vercel project.** `[...path].ts` no longer
+reads `process.env.BACKEND_ORIGIN` at all, so the dashboard variable now changes
+nothing. Leaving it in place is worse than removing it: the next person to need
+a failover will edit it, redeploy, and watch production keep calling the old
+host with no indication why. The same goes for the `BACKEND_ORIGIN` variable on
+the GitHub `staging` environment — the workflow stopped reading it.
+
+#### What is enforced, and where
+
+| | refuses | when |
+|---|---|---|
+| `resolveOrigin` (`[...path].ts`) | non-https for a non-loopback host, a path, a query or fragment, an empty value | at module load, **before** any request is built or header forwarded |
+| `backend-origin.sh` | the same set, plus a missing file and a missing or **duplicated** declaration | `detect`, every pull request |
+| `verify_be` | the same, then a backend that will not answer `/api/health` in five tries | every release, before the frontend is promoted |
+
+Three checks over one value. They are deliberately allowed to disagree — if they
+ever do, the release stops, which is the point. A single trusted check is one
+typo away from being no check.
+
+★ **Loopback `http://` is accepted by the proxy and refused by the release.**
+That is not an inconsistency, it is the difference between the two questions.
+`proxy.spec.ts` exercises real forwarding against a stub `node:http` server on
+`127.0.0.1`, and loopback has no network segment to intercept — the same line
+the W3C draws for secure contexts. A *release*, by contrast, is never talking to
+its own loopback, so `backend-origin.sh` refuses it outright.
+
+#### Failing over to the tunnel
+
+Now a commit rather than a dashboard toggle:
+
+```bash
+# edit the one line
+sed -i "s|'https://bo-api.hoanglonglti.com'|'https://<the tunnel hostname>'|" \
+  frontend/api/backend-origin.ts
+
+bash .github/scripts/backend-origin.sh      # must print the new origin
+cd frontend && npm test -- api/proxy.spec.ts
+# commit, push, merge — the pipeline verifies the new origin before promoting
+```
+
+★ **Slower than a dashboard edit, and that is the trade being made on purpose.**
+The failover becomes reviewable, attributable and visible in `git log` instead
+of a change nobody can find afterwards — and the release gate verifies the host
+you are failing over *to* before any user is sent at it. If the tunnel hostname
+is not already recorded somewhere, record it now: this procedure needs it, and
+an outage is a poor time to go looking.
+
+⚠ For a genuine emergency where a commit is too slow, the honest lever is
+Vercel's **instant rollback** to the last deployment built against the tunnel —
+not an environment variable, which no longer does anything.
+
+### Cutover, and going back
+
+★ **This used to say "one variable in the Vercel project". It no longer is, and
+the change is the whole point of the section above.** The origin lives in
+`frontend/api/backend-origin.ts`; the Vercel and GitHub variables that once held
+it are inert and should be deleted. Both directions — onto `bo-api`, or back to
+the tunnel — are the same one-line commit, described under **Failing over to the
+tunnel** above.
+
+The release then verifies the new origin *before* promoting a frontend at it,
+which the dashboard flow could not do: a variable saved in one system was never
+checked against the host the other system was testing.
+
+⚠ **Keep `cloudflared` running.** It costs nothing idle and it is the route that
+survives a DNS problem, an expired certificate, or a Matbao outage — none of
+which the direct path can ride out on its own. Reverting is a one-line commit
+*only* while the tunnel is still up; if it has been torn down, it is a much
+longer afternoon.
+
+### DNS
+
+One A record at Matbao, **unproxied and unrelated to Cloudflare** — that
+independence is the whole point:
+
+```
+bo-api    A    162.4.177.62    TTL 300
+```
+
+Verify from somewhere that is not the VPS before going further:
+
+```bash
+dig +short bo-api.hoanglonglti.com A          # MUST be the VPS address
+```
+
+### Certificate
+
+★ **HTTP-01, not DNS-01, and this is a deliberate deviation worth reading.**
+DNS-01 was the requested flow. Matbao has no certbot DNS plugin, so DNS-01 here
+means `--manual --preferred-challenges dns`, which **cannot renew unattended** —
+certbot refuses to run a manual authenticator from the renewal timer. The
+requirement was a certificate that renews automatically; HTTP-01 delivers that
+with no extra moving parts, because the A record already points straight at this
+box and this hostname is not behind Cloudflare. Use DNS-01 only if `:80` cannot
+be opened — and then accept a diary entry every 60 days.
+
+```bash
+apt-get install -y certbot                      # no DNS plugin needed; webroot only
+install -d -m 755 /var/www/certbot
+
+# the :80 block must be live first — it is what answers the challenge
+cp deploy/nginx-bo-api.conf /etc/nginx/sites-available/bo-api
+ln -sf /etc/nginx/sites-available/bo-api /etc/nginx/sites-enabled/bo-api
+```
+
+⚠ `nginx -t` **will fail at this point**, because the `:443` block names
+certificate files that do not exist yet. That is expected. Comment out the
+`listen 443` server block, reload, get the certificate, then put it back:
+
+```bash
+nginx -t && systemctl reload nginx              # with :443 commented out
+
+certbot certonly --webroot -w /var/www/certbot \
+  -d bo-api.hoanglonglti.com \
+  --non-interactive --agree-tos -m ops@hoanglonglti.com
+
+# restore the :443 block, then
+nginx -t && systemctl reload nginx
+```
+
+**Renewal is already automatic** — the `certbot` package installs
+`certbot.timer`, which runs twice a day and renews inside 30 days of expiry. It
+needs exactly one thing added: nginx must be told to pick up the new file.
+
+```bash
+printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+
+systemctl list-timers certbot.timer             # MUST be listed and active
+certbot renew --dry-run                         # MUST succeed — this is the test
+```
+
+⚠ `certbot renew --dry-run` is the only proof that renewal works. A certificate
+that issues once and can never renew looks identical to a working one for 89
+days.
+
+### Firewall
+
+`:80` must be open for the ACME challenge and stay open — HTTP-01 renews the
+same way it issued.
+
+```bash
+ufw allow 80/tcp && ufw allow 443/tcp
+ufw status verbose
+```
+
+### ⚠ Is the deployed vhost actually this file?
+
+The box was configured by hand before `nginx-bo-api.conf` existed, so the two
+are not automatically the same thing. Measured at cutover: the live host answers
+`/api/health` 200 and `/` 404 exactly as this file specifies, but sends **no
+`Strict-Transport-Security` header** — so the deployed vhost is the hand-written
+one, not this.
+
+That particular gap is harmless today (the only client is a server-side `fetch`,
+which ignores HSTS), which is precisely why it will sit there unnoticed. This
+file is the version to converge on; it is a superset, so applying it is safe:
+
+```bash
+curl -sI https://bo-api.hoanglonglti.com/api/health | grep -i strict-transport \
+  || echo "repo config NOT applied"
+
+# converge, when you next have a window
+cp deploy/nginx-bo-api.conf /etc/nginx/sites-available/bo-api
+nginx -t && systemctl reload nginx
+```
+
+### Verify the whole path
+
+From a machine that is **not** the VPS, so the answer includes DNS, TLS, nginx
+and the app:
+
+```bash
+curl -fsS https://bo-api.hoanglonglti.com/api/health          # {"status":"ok",…}
+curl -sI https://bo-api.hoanglonglti.com/ | head -1           # MUST be 404 — no site here
+openssl s_client -connect bo-api.hoanglonglti.com:443 -servername bo-api.hoanglonglti.com </dev/null 2>/dev/null | openssl x509 -noout -issuer -dates
+```
+
+The pipeline asks the first of those on every release, through the `staging`
+environment variable set under **Cutover, and going back**. Leave it unset and
+the release only warns — but then the frontend is promoted on
+the strength of a loopback health check, which is the skew this whole
+arrangement exists to prevent.
+
+### The authenticated check, done by a person, once
+
+CI verifies everything that can be verified without a credential: `/api/health`
+answers, and a guarded endpoint refuses an anonymous caller in JSON. It stops
+there on purpose — a standing production password in GitHub Secrets is a worse
+risk than the one an automated login smoke retires.
+
+So the authenticated leg is checked by hand at cutover, in a browser, against
+the **production frontend origin** — not against `bo-api`, because the point is
+to prove the cookie works where the browser actually sets it.
+
+1. Open the production site in a **private window** (no cached session, and an
+   old cookie cannot mask a broken login).
+2. Open DevTools → Network before logging in. Log in.
+3. Check, in order:
+
+| what | expected | what it would mean otherwise |
+|---|---|---|
+| `POST /api/auth/login` | `200`, and a `Set-Cookie: bo_session=…` on the **site's own origin** | If the cookie names any other domain, the edge function is rewriting it — it is not, but that is the thing to look at. |
+| the cookie's attributes | `HttpOnly`, `Secure`, `SameSite=Strict`, **no `Domain`** | A `Domain` attribute appearing would mean the backend started setting one; host-only is what makes this cutover invisible to the browser. |
+| `GET /api/authorization/me` | `200` with the permission set | `401` here, right after a `200` login, is the cookie not coming back — the one genuine cutover-shaped failure. |
+| any one real read, e.g. open the trip schedule | rows load | Proves an authenticated, non-trivial query traverses Vercel → `bo-api` → nginx → app → PostgreSQL. |
+| a write, e.g. edit something harmless and save | `200`, not `403` | `403` with "must send the x-requested-with header" means the header was stripped in transit. It is not in the proxy's strip lists, so this should not happen — but it is the one CSRF failure mode worth a deliberate look. |
+
+4. Leave the tab open for a minute and confirm the notification stream stays
+   connected (`GET /api/notifications/stream`, status `200`, pending). SSE is
+   the one long-lived connection, and a proxy that buffers it looks fine for
+   exactly as long as nobody waits.
+
+If any of these fail, revert `BACKEND_ORIGIN` to the tunnel and redeploy —
+**Cutover, and going back**, above. Two minutes, while the tunnel is still up.
+
+## Frontend cache semantics
+
+`frontend/vercel.json` carries two `headers` rules, and the reasoning does not
+fit in JSON:
+
+| path | header | why |
+|---|---|---|
+| `/((?!assets/\|api/).*)` | `public, max-age=0, must-revalidate` | Every SPA route serves `index.html`, and `index.html` names the hashed bundle. Cache it and a deploy stays invisible until the browser decides otherwise — the "clear your cache" ticket. Revalidating costs a 304. |
+| `/assets/(.*)` | `public, max-age=31536000, immutable` | Content-addressed filenames. The name changes when the bytes do, so there is nothing to revalidate. |
+
+The two sources do not overlap, on purpose: Vercel applies **every** matching
+rule and the last one wins per header name, so overlapping sources would make
+the order load-bearing and invisible.
+
+★ **There is no service worker and never has been** — no `vite-plugin-pwa`, no
+`navigator.serviceWorker.register` anywhere in `frontend/src`. Verified rather
+than assumed, because a stale service worker is the one cache a header cannot
+reach, and it is the usual reason "clear your cache" is the only advice that
+works. If one is ever added, the unregister path has to be added with it.
+
+★ **One lazy chunk exists**: `utils/export/tripScheduleWorkbook.ts` imports
+`xlsx` on demand. A tab open across a deploy asks for a chunk filename the new
+build no longer emits, and the export button then silently does nothing.
+`frontend/src/main.tsx` handles `vite:preloadError` and reloads once, keyed to
+the URL so a genuinely broken deploy surfaces instead of looping.
+
+★ **Vercel Skew Protection is a project setting, not a repository one.** It is
+worth turning on (Settings → Advanced), and it is not what makes the above safe:
+it pins a *client* to the deployment it loaded, which helps the API function and
+does nothing about a hashed asset the production alias no longer serves. The two
+are complementary; neither replaces the other.
 
 <!-- ponytail: no image registry, no automated backup cron. Releases now run
      from .github/workflows/ci.yml, but the image is still built on the VPS and
