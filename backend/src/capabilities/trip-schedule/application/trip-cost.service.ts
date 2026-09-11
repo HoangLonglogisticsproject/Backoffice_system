@@ -145,8 +145,11 @@ export class TripCostService {
    *
    * ★ THE RETRY IS ANSWERED, NOT REFUSED. A phone on a bad connection sends the
    * same declaration three times; the second and third find it already written
-   * and get the original back. Only the pair that arrive simultaneously reach
-   * `uq_trip_cost_client_request`, and one of them loses there.
+   * and get the original back. The pair that arrive SIMULTANEOUSLY both miss
+   * that first unlocked look, so it is taken again under the trip lock — see
+   * `existingDeclaration`. Neither reaches `uq_trip_cost_client_request` any
+   * more, which is the point: that index raises a unique violation, and a
+   * violation is a 500 on a request the driver is entitled to have answered.
    */
   async declareCost(input: {
     assignmentId: string;
@@ -167,22 +170,30 @@ export class TripCostService {
 
     const clientRequestId = blankToNull(input.clientRequestId);
     if (clientRequestId) {
-      const already = await this.costs.findByClientRequestId(tripId, clientRequestId);
-      // ★ REUSED ONLY FOR THE ASSIGNMENT IT WAS DECLARED ON. The key is unique
-      // per trip (0016); the caller was authorised per assignment. Answering
-      // turn B's declaration with turn A's line would hand a driver another
-      // turn's figure and silently drop their own.
-      if (already && already.driverAssignmentId !== input.assignmentId) {
-        throw new ConflictError(
-          'That client request id was already used on another assignment of this trip. Use a new id for each assignment.',
-        );
-      }
+      // Unlocked: answers the ordinary retry without opening a transaction.
+      const already = await this.existingDeclaration(tripId, clientRequestId, input.assignmentId);
       if (already) return already;
     }
 
     return this.db.transaction(async (tx) => {
       const trip = await this.trips.lockActive(tripId, tx);
       if (!trip) throw new NotFoundError('Trip not found.');
+
+      // ★ ASKED AGAIN, NOW THAT THE TRIP ROW IS OURS. The twin that beat us
+      // here committed before releasing the lock, so its line is visible to
+      // this second look and was invisible to the first. Answering with it is
+      // the same idempotent answer the unlocked path gives, reached the only
+      // way that is safe when two requests arrive together.
+      if (clientRequestId) {
+        const already = await this.existingDeclaration(
+          tripId,
+          clientRequestId,
+          input.assignmentId,
+          tx,
+        );
+        if (already) return already;
+      }
+
       if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
 
       const assignment = await this.assignments.lockActiveById(input.assignmentId, tx);
@@ -404,6 +415,35 @@ export class TripCostService {
    */
   private async requireTrip(tripId: string): Promise<void> {
     if (!(await this.trips.exists(tripId))) throw new NotFoundError('Trip not found.');
+  }
+
+  /**
+   * The line this declaration has already written, if it wrote one.
+   *
+   * ★ ASKED TWICE, AND THE SECOND TIME IS THE ONE THAT MATTERS. `tx` is what
+   * separates them: without it the read is unlocked and answers the ordinary
+   * retry cheaply; with it the read happens while this transaction holds the
+   * trip row, so a simultaneous twin has necessarily committed and is visible.
+   *
+   * ★ REUSED ONLY FOR THE ASSIGNMENT IT WAS DECLARED ON. The key is unique per
+   * trip (0016); the caller was authorised per assignment. Answering turn B's
+   * declaration with turn A's line would hand a driver another turn's figure
+   * and silently drop their own.
+   */
+  private async existingDeclaration(
+    tripId: string,
+    clientRequestId: string,
+    assignmentId: string,
+    tx?: DatabaseQuery,
+  ): Promise<TripCost | null> {
+    const already = await this.costs.findByClientRequestId(tripId, clientRequestId, tx);
+    if (!already) return null;
+    if (already.driverAssignmentId !== assignmentId) {
+      throw new ConflictError(
+        'That client request id was already used on another assignment of this trip. Use a new id for each assignment.',
+      );
+    }
+    return already;
   }
 
   /**

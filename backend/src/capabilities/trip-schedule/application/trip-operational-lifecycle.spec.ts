@@ -1172,7 +1172,11 @@ describe('a driver’s declared expense', () => {
     const result = await service.declareCost({ ...declaring, clientRequestId: 'tap-1' });
 
     expect(result).toEqual({ id: 'cost-1', amount: '1500000.00', driverAssignmentId: ASSIGNMENT });
-    expect(costs.findByClientRequestId).toHaveBeenCalledWith(TRIP, 'tap-1');
+    // Third argument is the executor: `undefined` is the UNLOCKED read, which
+    // is the one that answers an ordinary retry without opening a transaction.
+    // The locked repeat under the trip row is exercised by the integration
+    // spec, where two of these can actually arrive together.
+    expect(costs.findByClientRequestId).toHaveBeenCalledWith(TRIP, 'tap-1', undefined);
     expect(costs.declare).not.toHaveBeenCalled();
   });
 

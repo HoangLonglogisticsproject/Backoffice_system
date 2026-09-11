@@ -599,9 +599,10 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
   // -------------------------------------------------- independence of trip ----
 
   describe('★ cost does not care where the trip is', () => {
+    // One row per status, each exactly once: 'pending' and 'confirmed' were
+    // listed twice, which ran the same case again under the same name rather
+    // than covering anything further (Sonar S9078).
     it.each([
-      'pending',
-      'confirmed',
       'pending',
       'confirmed',
       'finished',

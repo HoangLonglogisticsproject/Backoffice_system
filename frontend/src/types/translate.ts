@@ -48,7 +48,7 @@ const PHRASES = {
   reviewQueueEmpty: { vi: 'Không có chuyến nào chờ duyệt', en: 'Nothing waiting for review' },
   reviewOpen: { vi: 'Xem hồ sơ', en: 'Inspect' },
   reviewClose: { vi: 'Đóng', en: 'Close' },
-  reviewApprove: { vi: 'Duyệt — đóng chuyến', en: 'Approve — close the trip' },
+  reviewApprove: { vi: 'Duyệt lượt xe này', en: 'Approve this assignment' },
   reviewReject: { vi: 'Từ chối', en: 'Send back' },
   reviewRejectReasonLabel: {
     vi: 'Lý do từ chối (bắt buộc — tài xế sẽ đọc)',
@@ -58,9 +58,15 @@ const PHRASES = {
   reviewReasonRequired: { vi: 'Phải nhập lý do', en: 'A reason is required' },
   // ★ APPROVAL IS IRREVERSIBLE. The wording says so before the click, because
   // there is no screen after it that can undo anything.
+  //
+  // ★ AND IT IS SCOPED TO THE ASSIGNMENT (ADR-0004). Approving finalises the
+  // figures on the assignment being reviewed — not every figure on the trip,
+  // and it does not close the trip: that happens only once every active
+  // assignment has been approved. Promising trip closure here would be a
+  // promise the button cannot keep while another lorry is still running.
   reviewApproveWarning: {
-    vi: 'Duyệt sẽ đóng chuyến vĩnh viễn và khoá toàn bộ chi phí. Không thể mở lại.',
-    en: 'Approving closes the trip permanently and freezes every figure. It cannot be undone.',
+    vi: 'Duyệt sẽ khoá vĩnh viễn chi phí của lượt xe này. Không thể mở lại. Chuyến chỉ đóng khi mọi lượt xe đang chạy đều được duyệt.',
+    en: 'Approving permanently freezes the figures on this assignment. It cannot be undone. The trip closes only once every active assignment is approved.',
   },
   reviewTimeline: { vi: 'Tiến trình tài xế báo', en: 'What the driver reported' },
   reviewRecordedAt: { vi: 'Máy chủ ghi', en: 'Server recorded' },
@@ -1246,11 +1252,13 @@ const PHRASES = {
   toastDriverAssigned: { vi: 'Đã phân công tài xế', en: 'Driver assigned' },
   toastDriverReplaced: { vi: 'Đã đổi tài xế', en: 'Driver replaced' },
   toastAssignmentEnded: { vi: 'Đã kết thúc phân công', en: 'Assignment ended' },
-  // ★ "KHÓA SỔ", NOT "ĐÃ DUYỆT". Approving closes the trip permanently, and the
-  // receipt is the last chance to say so.
+  // ★ "KHÓA SỔ", NOT "ĐÃ DUYỆT". Approving is irreversible and the receipt is
+  // the last chance to say so — but what it closes is THIS ASSIGNMENT's books,
+  // not the trip's (ADR-0004). The trip closes only once every active
+  // assignment has been approved, which this click cannot know it has done.
   toastCompletionApproved: {
-    vi: 'Đã duyệt hoàn tất — chuyến đã khóa sổ',
-    en: 'Completion approved — the trip is closed',
+    vi: 'Đã duyệt — chi phí lượt xe này đã khóa sổ',
+    en: 'Approved — this assignment is closed',
   },
   toastCompletionRejected: {
     vi: 'Đã trả lại cho tài xế khai lại',

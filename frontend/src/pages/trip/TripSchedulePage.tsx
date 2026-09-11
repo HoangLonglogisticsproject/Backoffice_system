@@ -76,8 +76,15 @@ export default function TripSchedulePage() {
    * ★ THE ROW IS RE-DERIVED FROM THE LIST ON EVERY RENDER, by id. The panel
    * shows `trip.assignments`, and every dispatch mutation re-reads the list;
    * holding the object clicked would keep showing the crew as it was before
-   * the add until the panel was closed and reopened. The clicked object stays
-   * as the fallback for the moment the row leaves the current page or filter.
+   * the add until the panel was closed and reopened.
+   *
+   * ★ AND WHEN THE ROW LEAVES THE LIST, THE PANEL CLOSES — it does NOT fall
+   * back to the object clicked. Crewing a trip from the "chờ phân công" tab
+   * moves it out of that filter, so the clicked object is the one state the
+   * dispatcher has just made untrue: the panel would sit there showing a trip
+   * with no crew, over a list that no longer contains it. `useOffsetPages`
+   * keeps the previous page's items across a refetch (`keepPreviousData`), so
+   * an empty find here means the row really has gone, not that it is reloading.
    */
   const [assigningRow, setAssigningRow] = useState<TripScheduleWithRefs | null>(null);
 
@@ -88,7 +95,7 @@ export default function TripSchedulePage() {
   const assigning =
     assigningRow === null
       ? null
-      : (trips.items.find((row) => row.id === assigningRow.id) ?? assigningRow);
+      : (trips.items.find((row) => row.id === assigningRow.id) ?? null);
 
   // The catalogues, for the form's two dropdowns. Read once per page rather
   // than per modal open: they are small, bounded lists, and re-reading them

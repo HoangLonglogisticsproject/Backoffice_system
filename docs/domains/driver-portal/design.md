@@ -336,7 +336,7 @@ thêm việc.
 
 | Câu hỏi | Trả lời trong MVP |
 |---|---|
-| Trip này dùng xe nào | `Trip.vehicle_id` ✅ đã có |
+| Trip này dùng xe nào | ~~`Trip.vehicle_id`~~ ★ **ADR-0004:** `trip_driver_assignments.vehicle_id` — **0..N** xe mỗi Trip, mỗi xe một assignment. `trip_schedules.vehicle_id` là **legacy, chỉ đọc**: code mới **không** ghi vào nó |
 | Event/expense này thuộc xe nào | **Snapshot `vehicle_id`** trên chính dòng đó (X-2) |
 | Xe của Trip từng đổi chưa, ai đổi | ❌ **không lưu** — cùng loại GAP-29. **[FUTURE EXTENSION]** |
 
@@ -2274,12 +2274,17 @@ cáo kèm theo.
 Cấm tuyệt đối: một execution event hoặc expense mang `Driver A + Vehicle B` **nếu
 hai giá trị đó chưa từng cùng có hiệu lực trên Trip tại thời điểm ghi**.
 
-★ Trong MVP: `Driver` đến từ **Driver Assignment `active`**, `Vehicle` đến từ
-**`Trip.vehicle_id`** — cả hai đọc trong **cùng một câu lệnh ghi**.
+★ ~~Trong MVP: `Driver` đến từ **Driver Assignment `active`**, `Vehicle` đến từ
+**`Trip.vehicle_id`**~~ **ADR-0004: neo provenance là MỘT DÒNG `active` CỦA
+`trip_driver_assignments`.** Dòng đó mang **cả** `driver_user_id` **và**
+`vehicle_id`, nên Driver và Vehicle không còn là hai nguồn rời nhau có thể lệch
+nhau — chụp assignment là đã chụp đủ cặp. `ownership` phân giải từ **chính chiếc
+xe của assignment đó**, không phải từ `Trip`. Tất cả đọc trong **cùng một câu
+lệnh ghi**.
 
 | Yêu cầu | Nội dung | Nhãn |
 |---|---|---|
-| **Single-statement capture** | Mọi execution event / expense phải lấy `driver_assignment_id` (từ Driver Assignment `active`) **và** `vehicle_id` + `ownership` (từ `Trip`) **trong chính câu lệnh ghi** — `INSERT … SELECT`. ★ **Không** nhận chúng từ client, và **không** đọc trước rồi ghi sau | **[APPLICATION MUST ENFORCE]** |
+| **Single-statement capture** | Mọi execution event / expense phải lấy `driver_assignment_id` (từ Driver Assignment `active`) **và** `vehicle_id` + `ownership` (★ **ADR-0004:** từ **chính assignment đó**, `ownership` tra từ xe của assignment — ~~từ `Trip`~~) **trong chính câu lệnh ghi** — `INSERT … SELECT`. ★ **Không** nhận chúng từ client, và **không** đọc trước rồi ghi sau | **[APPLICATION MUST ENFORCE]** |
 | **Kết quả rỗng = không ghi** | Nếu một trong hai assignment không `active` tại thời điểm câu lệnh chạy, `SELECT` trả 0 dòng → **không có row nào được tạo**. Không cần kiểm tra trước | [APPLICATION] |
 | **Composite FK** | `(driver_assignment_id, trip_id)` phải tham chiếu khoá tổ hợp trên bảng Driver Assignment — để một event **không thể** trỏ tới assignment của Trip khác | **[DB MUST ENFORCE]** |
 | **Vehicle provenance** | ★ ~~Trong MVP không có Vehicle Assignment. Câu lệnh ghi chụp `Trip.vehicle_id`~~ **ADR-0004:** câu lệnh ghi chụp **`assignment.vehicle_id`** + `ownership` xuống dòng event/expense — §0.8.3 X-2 | **[APPLICATION MUST ENFORCE]** |
@@ -2361,7 +2366,9 @@ UI.
 
 ⚠ **Điều chỉnh cho MVP:** Workik mô tả dual-link trên `vehicle_assignment`. MVP
 **không có** thực thể đó (§0.8.4), nên liên kết nằm ở **cấp Trip**:
-`Trip.vehicle_id` (xe outsourced) ⟷ `trip_outsource_hires.trip_id` (hire).
+~~`Trip.vehicle_id` (xe outsourced)~~ ⟷ `trip_outsource_hires.trip_id` (hire).
+★ **ADR-0004:** xe thuê ngoài nằm trên **`trip_driver_assignments.vehicle_id`**;
+hire vẫn ở cấp Trip, nên liên kết đọc qua assignment của Trip đó.
 
 | Yêu cầu | Nội dung | Nhãn |
 |---|---|---|

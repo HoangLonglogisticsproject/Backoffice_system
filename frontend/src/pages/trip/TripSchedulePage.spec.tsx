@@ -299,6 +299,37 @@ describe('TripSchedulePage', () => {
     });
 
     /**
+     * ★ AND WHEN THE ROW LEAVES THE LIST, THE PANEL CLOSES — the counterpart of
+     * the test above. Crewing a trip from the "chờ phân công" tab moves it out
+     * of that filter, so the re-read comes back without it. Falling back to the
+     * object that was clicked left the panel open over a trip the list no
+     * longer holds, still describing it as uncrewed — the one state the
+     * dispatcher had just made untrue.
+     */
+    it('★ closes the panel when the trip leaves the filtered list after assigning', async () => {
+      write();
+      fleet();
+      board();
+      renderPage();
+
+      const panel = await openPanel(/^phân công$/i);
+      const submit = await addForm(panel);
+      // What the "chờ phân công" read returns once the trip has a crew: nothing.
+      fetchTripSchedules.mockResolvedValue({
+        items: [],
+        page: 1, limit: 20, total: 0, totalPages: 0,
+      });
+      fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
+      fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
+      fireEvent.click(submit());
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(screen.queryAllByLabelText('Phương tiện điều độ')).toHaveLength(0),
+      );
+    });
+
+    /**
      * ★ EMPTY HISTORY, FAILED HISTORY AND REAL HISTORY ARE THREE DIFFERENT
      * SCREENS. An empty read shows no history section; a failed read says so
      * rather than passing as "nobody was ever taken off"; a real one lists the

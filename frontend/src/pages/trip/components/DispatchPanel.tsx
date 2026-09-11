@@ -66,18 +66,28 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
   const offeredVehicles = vehicles.filter((vehicle) => !takenVehicleIds.has(vehicle.id));
   const closed = trip?.status === 'finished';
 
+  // ★ THE SECTION GUARDS ARE NAMED HERE, NOT SPELLED INLINE. Each
+  // `cond ? (…) : null` in the tree below is a conditional nested inside the
+  // outer one, and six of them is what put this component at a cognitive
+  // complexity of 17. Named booleans plus `&&` say the same thing without the
+  // nesting, and the tree reads as the list of sections it actually is.
+  const showLegacyVehicle = active.length === 0 && trip?.vehicleId != null;
+  const showAddButton = !closed && !adding;
+  const showAddForm = !closed && adding;
+  const showHistory = !history.error && ended.length > 0;
+
   return (
     <Modal isOpen={open} onClose={onClose} title={t('dispatchTitle')}>
-      {trip ? (
+      {trip && (
         <div className="space-y-4">
           {/* ★ A LEGACY LORRY, NEVER CREWED. Trips booked with a lorry before
               dispatch became a pair still carry it on the row; it is shown so
               Operations knows what was planned and re-dispatches it as a pair. */}
-          {active.length === 0 && trip.vehicleId ? (
+          {showLegacyVehicle && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {t('dispatchLegacyVehicle')}
             </p>
-          ) : null}
+          )}
 
           {active.length === 0 ? (
             <p className="text-sm text-gray-500">{t('dispatchEmpty')}</p>
@@ -96,7 +106,7 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
             </ol>
           )}
 
-          {!closed && !adding ? (
+          {showAddButton && (
             <Button
               type="button"
               variant="outline"
@@ -107,9 +117,9 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
               <Plus className="h-4 w-4" />
               {t('dispatchAdd')}
             </Button>
-          ) : null}
+          )}
 
-          {!closed && adding ? (
+          {showAddForm && (
             <AddAssignmentForm
               tripId={trip.id}
               vehicles={offeredVehicles}
@@ -117,18 +127,18 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
               driversLoading={drivers.isLoading}
               onDone={() => setAdding(false)}
             />
-          ) : null}
+          )}
 
           {/* ★ A FAILED HISTORY READ SAYS SO. Silence here would read as
               "no turn was ever ended", which is a claim about the record. */}
-          {history.error ? (
+          {history.error != null && (
             <p role="alert" className="text-xs text-red-600">
               {t('dispatchHistoryFailed')}
             </p>
-          ) : null}
-          {!history.error && ended.length > 0 ? <History turns={ended} /> : null}
+          )}
+          {showHistory && <History turns={ended} />}
         </div>
-      ) : null}
+      )}
     </Modal>
   );
 }

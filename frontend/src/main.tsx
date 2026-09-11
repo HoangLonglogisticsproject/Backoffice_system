@@ -8,6 +8,22 @@ import { Toaster } from './components/ui/sonner'
 import { SessionProvider } from './contexts/SessionProvider'
 import { LanguageProvider } from './contexts/LanguageContext'
 import { queryClient } from './config/query-client'
+/**
+ * ★ IMPORTED FROM JS, NOT `@import`ed IN index.css.
+ *
+ * Tailwind v4's PostCSS plugin resolves `@import` itself and inlines the
+ * package's CSS WITHOUT rebasing its relative `url()`s, so
+ * `url(./files/geist-*.woff2)` survived verbatim into the built stylesheet.
+ * The browser resolved it against the stylesheet's own directory —
+ * `/assets/files/...` — which no build ever emitted, and the SPA rewrite
+ * answered the 404 with `index.html`. The font parser read that HTML's first
+ * four bytes, `<!do`, as an sfntVersion of 1008821359 and refused it.
+ *
+ * Imported here, Vite processes the package's stylesheet as a module: the
+ * urls resolve against the file that wrote them, and the woff2 land in the
+ * build fingerprinted.
+ */
+import '@fontsource-variable/geist'
 import './index.css'
 
 const rootElement = document.getElementById('root')

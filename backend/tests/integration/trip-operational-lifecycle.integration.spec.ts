@@ -3907,6 +3907,38 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(theirs.driverAssignmentId).toBe(other.id);
     });
 
+    it('★ two declarations of one client request id ARRIVING TOGETHER answer with the same line, not a 500', async () => {
+      const trip = await newTrip();
+      const a = await assignTo(trip, driverA);
+      const claim = () =>
+        money.declareCost({
+          assignmentId: a.id,
+          category: 'fuel',
+          amount: '250000.00',
+          declaredBy: driverA,
+          clientRequestId: 'RACE',
+        });
+
+      // ★ THE PAIR THE SEQUENTIAL TEST ABOVE CANNOT REACH. A phone retrying
+      // over a bad connection sends these close enough together that BOTH miss
+      // the unlocked lookup. `transaction()` takes its own pooled client, so
+      // these are two real concurrent transactions: the trip row's FOR UPDATE
+      // is what orders them, and the loser repeats the lookup while holding it.
+      // Before that second lookup existed, the loser fell through to the INSERT
+      // and `uq_trip_cost_client_request` raised 23505 — which leaves the
+      // service as a 500 on a request the driver is entitled to have answered.
+      const [first, second] = await Promise.all([claim(), claim()]);
+
+      expect(second.id).toBe(first.id);
+      expect(second.amount).toBe(first.amount);
+
+      const rows = (await sql(
+        `SELECT id FROM trip_costs WHERE trip_id = $1 AND client_request_id = 'RACE'`,
+        [trip],
+      )) as { id: string }[];
+      expect(rows).toHaveLength(1);
+    });
+
     it('★ a finished trip takes no new lorry', async () => {
       const { trip, assignment: a } = await runningTrip();
       await completion.approve(trip, (await ask(a, driverA)).id, reviewer);
