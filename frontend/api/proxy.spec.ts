@@ -403,17 +403,32 @@ describe('the Vercel API proxy', () => {
 
   // ------------------------------------------------- the configuration path --
 
-  describe('★ BACKEND_ORIGIN must be an origin', () => {
+  describe('★ BACKEND_ORIGIN must be an https origin', () => {
     /**
-     * `new URL('/api/health', base)` resolves against the base's ORIGIN, so any
-     * path on the base is silently discarded — `https://host/base` would become
-     * `https://host/api/health` and look like a routing bug for as long as it
-     * took somebody to read the proxy. Refused up front instead.
+     * Two tables, one assertion each. They were four tables briefly — the https
+     * cases arrived as their own pair of `it.each` blocks whose bodies were
+     * line-for-line copies of these, which SonarCloud counted as duplication and
+     * was right to. A rule about what an origin may be belongs in the list of
+     * what an origin may be, not in a parallel list beside it.
      */
     it.each([
+      // Shape: the things an origin is allowed to look like.
       ['https://api.example.com', 'scheme and host'],
       ['https://api.example.com/', 'a bare trailing slash'],
       ['https://api.example.com:8443', 'an explicit port'],
+
+      /**
+       * ★ LOOPBACK OVER http, AND IT IS NOT A HOLE. There is no network segment
+       * between the two ends to intercept, which is the same line browsers draw
+       * for secure contexts. It is also what lets the forwarding specs above run
+       * against a stub `node:http` server rather than inventing a certificate
+       * authority for a unit test — and it cannot widen into production, where
+       * the origin is the committed constant and loopback on a Vercel edge node
+       * is nothing at all.
+       */
+      ['http://127.0.0.1:3000', 'IPv4 loopback'],
+      ['http://localhost:3000', 'localhost by name'],
+      ['http://[::1]:3000', 'IPv6 loopback'],
     ])('accepts %s — %s', async (value) => {
       stubOrigin = value;
       const handler = await load();
@@ -425,13 +440,32 @@ describe('the Vercel API proxy', () => {
     });
 
     it.each([
+      /**
+       * `new URL('/api/health', base)` resolves against the base's ORIGIN, so
+       * any path on the base is silently discarded — `https://host/base` would
+       * become `https://host/api/health` and look like a routing bug for as long
+       * as it took somebody to read the proxy. Refused up front instead.
+       */
       ['https://api.example.com/api', 'a path that would double the prefix'],
       ['https://api.example.com/base', 'an arbitrary path'],
       ['https://api.example.com/?x=1', 'a query string'],
       ['https://api.example.com/#frag', 'a fragment'],
       ['api.example.com', 'no scheme at all'],
-      ['ftp://api.example.com', 'a scheme that is not http(s)'],
+      ['ftp://api.example.com', 'a scheme that is neither'],
       ['', 'an empty value'],
+
+      /**
+       * ★ https, NOT "http(s)". The second hop carries `bo_session` on every
+       * proxied request, and `Secure` on that cookie constrains the BROWSER's
+       * leg — Vercel's TLS — while saying nothing about Vercel→VPS. Over
+       * `http://` the session would cross the public internet in clear text
+       * while the padlock in the address bar told the truth about a different
+       * hop entirely.
+       */
+      ['http://api.example.com', 'a plaintext origin'],
+      ['http://bo-api.hoanglonglti.com', 'the real host, downgraded'],
+      ['http://192.168.1.10:3000', 'a private address that is still off-box'],
+      ['http://127.0.0.1.example.com', 'a host that merely BEGINS like loopback'],
     ])('REFUSES %s — %s', async (value) => {
       stubOrigin = value;
       const handler = await load();
@@ -440,47 +474,6 @@ describe('the Vercel API proxy', () => {
 
       expect(response.status).toBe(502);
       expect((await errorOf(response)).error.code).toBe('BACKEND_MISCONFIGURED');
-    });
-
-    /**
-     * ★ https, NOT "http(s)". The second hop carries `bo_session` on every
-     * proxied request, and `Secure` on that cookie constrains the BROWSER's leg
-     * — Vercel's TLS — while saying nothing about Vercel→VPS. Over `http://`
-     * the session would cross the public internet in clear text, and the
-     * padlock in the user's address bar would be telling the truth about a
-     * different hop entirely.
-     */
-    it.each([
-      ['http://api.example.com', 'a plaintext origin'],
-      ['http://bo-api.hoanglonglti.com', 'the real host, downgraded'],
-      ['http://192.168.1.10:3000', 'a private address that is still off-box'],
-      ['http://127.0.0.1.example.com', 'a host that merely BEGINS like loopback'],
-    ])('★ REFUSES %s — %s', async (value) => {
-      stubOrigin = value;
-      const handler = await load();
-
-      const response = await handler(new Request('https://demo.vercel.app/api/health'));
-
-      expect(response.status).toBe(502);
-      expect((await errorOf(response)).error.code).toBe('BACKEND_MISCONFIGURED');
-    });
-
-    /**
-     * The one exception, and the reason the suite above can use a stub server.
-     * Loopback has no network segment to intercept, which is the same line the
-     * W3C draws for secure contexts. It cannot reach production: the origin is
-     * not configurable there.
-     */
-    it.each([
-      ['http://127.0.0.1:3000', 'IPv4 loopback'],
-      ['http://localhost:3000', 'localhost by name'],
-      ['http://[::1]:3000', 'IPv6 loopback'],
-    ])('accepts %s — %s', async (value) => {
-      stubOrigin = value;
-      const handler = await load();
-
-      const response = await handler(new Request('https://demo.vercel.app/api/health'));
-      expect((await errorOf(response)).error.code).not.toBe('BACKEND_MISCONFIGURED');
     });
 
     it('reports a missing variable as configuration, not as an outage', async () => {
