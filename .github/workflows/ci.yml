@@ -754,6 +754,62 @@ jobs:
           # disagree beat one that is trusted.
           "$HOME/vps" "sudo -n /usr/local/bin/bo-release '$RELEASE_SHA'"
 
+      # ★ THE GATE THAT MAKES THE PROMOTION ORDERED, AND THE ONLY ONE THAT
+      # ASKS FROM OUTSIDE. `bo-release` already curls `/health` — but it does so
+      # from inside the VPS, over loopback, which proves the container is up and
+      # nothing whatsoever about whether a browser can reach it. Between those
+      # two facts sit DNS, the certificate, nginx's :443 block and the firewall:
+      # every part of the direct path this release exists to establish.
+      #
+      # So this is the step the frontend waits on. A backend that is healthy on
+      # loopback and unreachable on bo-api is exactly the state where promoting
+      # the frontend gives every user a working page that cannot log in.
+      #
+      # ★ `/api/health`, NOT `/health`. The Vercel function forwards the /api
+      # prefix and nginx strips it, so `/api/health` is the path a real request
+      # takes. Probing `/health` would test a route the application never
+      # receives and would 404 through this ingress.
+      #
+      # ★ RETRIED, BECAUSE `up -d` RETURNING IS NOT THE APP LISTENING. The
+      # container is replaced moments earlier and nginx's keepalive pool may
+      # still hold a connection to the process that just went away; the first
+      # request after a swap is the one most likely to be a 502. Five tries over
+      # ~20s, then it is a real failure. Not a `||true` — an unreachable backend
+      # MUST stop the release.
+      - name: Verify the backend on its public HTTPS endpoint
+        id: verify_be
+        if: steps.deploy_be.outcome == 'success'
+        timeout-minutes: 3
+        env:
+          # The same origin the Vercel project points BACKEND_ORIGIN at, so the
+          # thing being verified is the thing the frontend will actually call.
+          BACKEND_ORIGIN: ${{ vars.BACKEND_ORIGIN }}
+        run: |
+          set -euo pipefail
+
+          # ★ UNSET IS A WARNING, NOT A FAILURE — the same rule the rest of this
+          # job follows. The direct path is configured after this lands, and
+          # until it is, `bo-release`'s own loopback health check is what the
+          # release has. Once BACKEND_ORIGIN is set, this becomes binding.
+          if [ -z "${BACKEND_ORIGIN:-}" ]; then
+            echo "::warning::BACKEND_ORIGIN is not set - the backend was verified only from inside the VPS, over loopback."
+            exit 0
+          fi
+
+          echo "GET ${BACKEND_ORIGIN}/api/health"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS --max-time 10 "${BACKEND_ORIGIN}/api/health"; then
+              echo
+              echo "backend answers on its public endpoint - the frontend may be promoted"
+              exit 0
+            fi
+            echo "attempt ${attempt}/5 failed"
+            [ "$attempt" = 5 ] || sleep 5
+          done
+
+          echo "::error::${BACKEND_ORIGIN}/api/health did not answer. Refusing to promote the frontend."
+          exit 1
+
 
       # ---------------------------------------------------------- frontend --
       - name: Deploy the frontend
@@ -767,6 +823,7 @@ jobs:
           steps.plan.outputs.frontend == 'true'
           && vars.RELEASE_FRONTEND_ENABLED == 'true'
           && steps.deploy_be.outcome == 'success'
+          && steps.verify_be.outcome == 'success'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -872,6 +929,51 @@ jobs:
           echo
           echo "GET ${PUBLIC_ORIGIN}/"
           curl -fsS --max-time 20 -o /dev/null -w 'status %{http_code}\n' "${PUBLIC_ORIGIN}/"
+
+          # ★ THE ONE ASSERTION THAT PROVES THE AUTHENTICATED PATH SURVIVED THE
+          # CUTOVER, AND IT NEEDS NO CREDENTIALS.
+          #
+          # `/health` is unguarded and sits at the very front of the app, so it
+          # answers 200 even when routing, the error filter and every guard
+          # behind it are broken. `/api/authorization/me` with NO cookie is the
+          # cheapest request that exercises the whole chain, and each way it can
+          # fail is a different diagnosis:
+          #
+          #   401  ✅  the edge function reached the VPS, nginx stripped /api, the
+          #            route resolved, AuthGuard ran, and DomainErrorFilter
+          #            rendered the JSON envelope the client parses.
+          #   502      the edge function could not reach BACKEND_ORIGIN - this
+          #            cutover's own failure mode. Wrong host, dead certificate,
+          #            closed firewall.
+          #   404      nginx is not stripping /api (a proxy_pass lost its
+          #            trailing slash), so the app saw //authorization/me.
+          #   200      a guarded endpoint answered an anonymous caller. Stop the
+          #            release - that is not a deployment problem.
+          #   HTML     the SPA rewrite swallowed /api, so every API call is now a
+          #            login page with a 200 on it.
+          #
+          # ⚠ NOT a login smoke. Logging in needs a real password in CI, and a
+          # standing production credential held by the pipeline is a worse risk
+          # than the one such a check retires. The authenticated leg is verified
+          # by a person once, at cutover - deploy/README.md says how.
+          echo "GET ${PUBLIC_ORIGIN}/api/authorization/me  (no cookie - expecting 401)"
+          me_status="$(curl -sS --max-time 20 -o me.json -w '%{http_code}' \
+            -H 'Accept: application/json' "${PUBLIC_ORIGIN}/api/authorization/me")"
+          echo "status ${me_status}"
+          head -c 200 me.json; echo
+
+          if [ "$me_status" != 401 ]; then
+            echo "::error::Expected 401 from /api/authorization/me without a session, got ${me_status}. The API path through ${PUBLIC_ORIGIN} is not healthy."
+            exit 1
+          fi
+
+          # A 401 that is not JSON means the SPA rewrite answered, not the API.
+          if ! jq -e '.error.code' me.json >/dev/null 2>&1; then
+            echo "::error::/api/authorization/me answered 401 but not with the JSON error envelope the client parses."
+            exit 1
+          fi
+          rm -f me.json
+          echo "authenticated path is wired: a guarded endpoint refuses anonymous callers, in JSON"
 
       # ★ THIS DELIBERATELY DOES NOT ROLL BACK. It tells a person exactly how to.
       #
