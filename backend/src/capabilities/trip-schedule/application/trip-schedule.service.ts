@@ -623,6 +623,11 @@ export class TripScheduleService {
 
     const location = await this.locations.findById(input.locationId, tx);
     if (!location) throw new NotFoundError(`${capitalise(end)} location not found.`);
+    // ⚠ A SHARED PLACE (0030, `customerId === null`) FAILS THIS, AND THAT IS THE
+    // CURRENT STATE RATHER THAN A DECISION. Shared places exist in the catalogue
+    // but are not offered on a trip yet — the trip form reads only the
+    // per-customer list, so nothing can reach here with one. Offering them means
+    // accepting `location.customerId === null` as well, and is its own change.
     if (customerId === null || location.customerId !== customerId) {
       throw new ValidationError(
         `The ${end} location does not belong to this trip's customer. Clear or replace it when changing the customer.`,

@@ -198,6 +198,29 @@ export const envSchema = z.object({
    */
   SSE_MAX_CONNECTIONS_PER_USER: z.coerce.number().int().min(1).default(5),
   SSE_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(1000),
+
+  /**
+   * Where Vietnam's administrative units are read from, for the location
+   * form's three dropdowns: tỉnh/thành → quận/huyện → phường/xã.
+   *
+   * ⚠ `/api/v1` IS THE PRE-2025 HIERARCHY, ON PURPOSE — 63 provinces with a
+   * district tier under them. `/api/v2` is the current two-tier one. The
+   * client explains why this deployment reads the older shape; switching is
+   * this value plus removing the district rung.
+   *
+   * ★ CONFIGURABLE BECAUSE THE SOURCE IS SOMEBODY ELSE'S. This is a free public
+   * service with no contract behind it. If it disappears, or a better one
+   * appears, this deployment should move without a code change and without a
+   * release — which is exactly what an environment variable is for.
+   *
+   * ⚠ SERVER-SIDE ONLY, AND THAT IS THE POINT. The browser never calls this
+   * host: the frontend asks `/api/vn-provinces`, the server asks upstream once
+   * and caches. It keeps the office's whole rate-limit allowance (200 requests
+   * per 15 minutes per IP) spent by ONE caller instead of by every dispatcher
+   * behind the office NAT, and it means an outage there is answered from cache
+   * rather than by an empty dropdown in front of somebody trying to work.
+   */
+  VN_ADMIN_API_URL: z.string().url().default('https://provinces.open-api.vn/api/v1'),
 });
 
 export type Env = z.infer<typeof envSchema>;

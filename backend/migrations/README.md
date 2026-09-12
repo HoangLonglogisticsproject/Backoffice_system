@@ -73,9 +73,14 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0027_dispatch_assignment_vehicle.sql` | project | ADR-0004: `trip_driver_assignments.vehicle_id` · bỏ unique 1 active/trip · `uq_trip_active_vehicle_assignment (trip_id, vehicle_id) WHERE active` · CHECK `active_has_vehicle` **NOT VALID** |
 | `0028_completion_per_assignment.sql` | project | completion unique theo `driver_assignment_id` (pending · approved · attempt) · `idx_trip_completion_trip_attempt` · audit RAISE trước khi đổi |
 | `0029_backfill_assignment_vehicle.sql` | project | backfill `vehicle_id`: active ← `trip_schedules.vehicle_id`; ended ← xe duy nhất trên event / cost · RAISE NOTICE đếm Case B/E/F · **không** VALIDATE |
+| `0030_shared_trip_locations.sql` | project | `trip_locations.customer_id` nullable = địa điểm **dùng chung** · `uq_trip_location_shared_name (name_key) WHERE active AND customer_id IS NULL` · `province`/`district`/`ward` · `idx_trip_location_catalogue` |
 
-`0030` (VALIDATE CONSTRAINT `active_has_vehicle`) **chưa commit** — chỉ viết khi audit
-production cho Case B = 0. Xem `deploy/README.md`.
+VALIDATE CONSTRAINT `active_has_vehicle` **chưa commit** — chỉ viết khi audit
+production cho Case B = 0, và nó lấy số kế tiếp còn trống. Xem `deploy/README.md`.
+
+⚠ **Số phải liên tục, không giữ chỗ.** `dispatch-assignment-schema.spec.ts` khẳng
+định dãy số là `1..N` không đứt. Để trống một số cho một file "sẽ viết sau" làm
+đỏ test đó — file viết sau lấy số kế tiếp tại thời điểm nó được viết.
 
 `0003` dùng lại hàm `set_updated_at()` mà `0002` tạo — hàm ở scope database, không
 gắn với bảng nào, nên mọi bảng có `updated_at` đều gắn trigger vào nó được. `0011`

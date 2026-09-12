@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { ConflictError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
 import { optionalPoint } from '../domain/trip-location';
-import type { TripCustomer, TripLocation, TripVehicle } from '../domain/trip-schedule';
+import type {
+  TripCustomer,
+  TripLocation,
+  TripLocationListing,
+  TripVehicle,
+} from '../domain/trip-schedule';
 import {
   TripCustomerRepository,
   TripLocationRepository,
@@ -155,11 +160,78 @@ export class TripCatalogueService {
   // ------------------------------------------------------------ locations ----
 
   /**
-   * ★ EVERY METHOD TAKES THE CUSTOMER FROM THE ROUTE AND HOLDS THE LOCATION TO
-   * IT. A location id under the wrong customer is answered "not found" —
-   * exactly as a missing one — so a caller holding an id learns nothing
-   * about another customer's places. There is no list that spans customers.
+   * ★ THE PER-CUSTOMER METHODS TAKE THE CUSTOMER FROM THE ROUTE AND HOLD THE
+   * LOCATION TO IT. A location id under the wrong customer is answered "not
+   * found" — exactly as a missing one — so a caller holding an id learns
+   * nothing about another customer's places through THAT path.
+   *
+   * ★ AND SINCE 0030 THERE IS A SECOND PATH, ON PURPOSE. The catalogue screen
+   * lists every place and edits the row it was shown, by id. That is not a hole
+   * in the rule above: both paths need the same permission (`trip.write`) over
+   * the same deployment-wide catalogue, and the customer in the older path was
+   * never an authorisation boundary — it is a routing one, which is why a
+   * mismatch there is 404 and not 403. What the id path must not do is let a
+   * customer's place be reached while PRETENDING to be under another customer,
+   * and it does not: it names no customer at all.
    */
+
+  /** Every place, the owner's name resolved. The catalogue screen's only read. */
+  async listAllLocations(includeArchived: boolean): Promise<TripLocationListing[]> {
+    return this.locations.listAll(includeArchived);
+  }
+
+  /**
+   * A place belonging to nobody: Cảng Cát Lái, a hired yard.
+   *
+   * The duplicate check runs over the SHARED rows only — a customer may have
+   * their own "Kho OSC" and the company may have one too, and neither shadows
+   * the other. The partial index from 0030 is what actually enforces it; this
+   * exists so the answer is a sentence rather than a constraint name.
+   */
+  async createSharedLocation(input: LocationInput & { createdBy: string }): Promise<TripLocation> {
+    const values = locationValues(input);
+    const clash = await this.findLocationByKey(null, values.name);
+    if (clash) {
+      throw new ConflictError(`There is already a shared place named “${clash.name}”.`);
+    }
+
+    return this.locations.create({ ...values, customerId: null, createdBy: input.createdBy });
+  }
+
+  /** Corrects a place — shared or a customer's — as the catalogue screen does. */
+  async updateLocationById(id: string, input: Partial<LocationInput>): Promise<TripLocation> {
+    const current = await this.locations.findById(id);
+    if (!current) throw new NotFoundError('Location not found.');
+    if (current.status !== 'active') {
+      throw new ConflictError('That location has been archived and cannot be edited.');
+    }
+
+    const values = locationValues(patchOnto(current, input));
+
+    // Against its OWN population: a shared row against the shared ones, a
+    // customer's against that customer's. Moving a place between the two is not
+    // something this offers, so the population never changes under the check.
+    const clash = await this.findLocationByKey(current.customerId, values.name);
+    if (clash && clash.id !== id) {
+      throw new ConflictError(
+        current.customerId === null
+          ? `There is already another shared place named “${clash.name}”.`
+          : `This customer already has another place named “${clash.name}”.`,
+      );
+    }
+
+    const updated = await this.locations.updateById(id, values);
+    if (!updated) throw new NotFoundError('Location not found.');
+    return updated;
+  }
+
+  async archiveLocationById(id: string): Promise<TripLocation> {
+    const current = await this.locations.findById(id);
+    if (!current) throw new NotFoundError('Location not found.');
+    const archived = await this.locations.archiveById(id);
+    if (!archived) throw new ConflictError('That location has already been archived.');
+    return archived;
+  }
 
   async listLocations(customerId: string, includeArchived: boolean): Promise<TripLocation[]> {
     await this.requireCustomer(customerId);
@@ -194,18 +266,7 @@ export class TripCatalogueService {
       throw new ConflictError('That location has been archived and cannot be edited.');
     }
 
-    // A patch: an absent key keeps the row's value, a present one replaces it
-    // — including `null` to clear a contact, a note, or the coordinates.
-    const values = locationValues({
-      // `??` is exact here: both fields are `string | undefined` on a patch,
-      // never null, so "absent" is the only case that falls through.
-      name: input.name ?? current.name,
-      address: input.address ?? current.address,
-      contact: 'contact' in input ? input.contact : current.contact,
-      note: 'note' in input ? input.note : current.note,
-      latitude: 'latitude' in input ? input.latitude : current.latitude,
-      longitude: 'longitude' in input ? input.longitude : current.longitude,
-    });
+    const values = locationValues(patchOnto(current, input));
 
     const clash = await this.findLocationByKey(customerId, values.name);
     if (clash && clash.id !== id) {
@@ -239,13 +300,23 @@ export class TripCatalogueService {
     return location;
   }
 
-  /** Same normalisation as `name_key` in 0022 — and, as for the plate, only for a better message. */
+  /**
+   * Same normalisation as `name_key` in 0022 — and, as for the plate, only for
+   * a better message. The index is what enforces uniqueness, never this.
+   *
+   * `customerId: null` searches the SHARED population, which 0030 gives its own
+   * partial unique index. Reading the whole catalogue to filter it in memory
+   * costs one list read, and the catalogue is a catalogue — not a ledger.
+   */
   private async findLocationByKey(
-    customerId: string,
+    customerId: string | null,
     name: string,
   ): Promise<TripLocation | undefined> {
     const key = nameKey(name);
-    const rows = await this.locations.listByCustomer(customerId, false);
+    const rows =
+      customerId === null
+        ? (await this.locations.listAll(false)).filter((row) => row.customerId === null)
+        : await this.locations.listByCustomer(customerId, false);
     return rows.find((row) => nameKey(row.name) === key);
   }
 
@@ -306,9 +377,43 @@ export interface LocationInput {
   address: string;
   contact?: string | null;
   note?: string | null;
+  provinceCode?: string | null;
+  province?: string | null;
+  districtCode?: string | null;
+  district?: string | null;
+  wardCode?: string | null;
+  ward?: string | null;
   latitude?: number | null;
   longitude?: number | null;
 }
+
+/**
+ * A patch laid over the row it is patching.
+ *
+ * An ABSENT key keeps the row's value; a PRESENT one replaces it, `null`
+ * included — that is how a contact, a note, a ward or the coordinates are
+ * cleared. `'x' in input` rather than `input.x !== undefined`, because the two
+ * differ exactly on the case that matters: an explicit `undefined`.
+ *
+ * Shared by both edit paths so a field added to one cannot go missing from the
+ * other — which is how a patch silently starts wiping a column.
+ */
+const patchOnto = (current: TripLocation, input: Partial<LocationInput>): LocationInput => ({
+  // `??` is exact for these two: both are `string | undefined` on a patch,
+  // never null, so "absent" is the only case that falls through.
+  name: input.name ?? current.name,
+  address: input.address ?? current.address,
+  contact: 'contact' in input ? input.contact : current.contact,
+  note: 'note' in input ? input.note : current.note,
+  provinceCode: 'provinceCode' in input ? input.provinceCode : current.provinceCode,
+  province: 'province' in input ? input.province : current.province,
+  districtCode: 'districtCode' in input ? input.districtCode : current.districtCode,
+  district: 'district' in input ? input.district : current.district,
+  wardCode: 'wardCode' in input ? input.wardCode : current.wardCode,
+  ward: 'ward' in input ? input.ward : current.ward,
+  latitude: 'latitude' in input ? input.latitude : current.latitude,
+  longitude: 'longitude' in input ? input.longitude : current.longitude,
+});
 
 /**
  * Trims, requires the two texts, and refuses half a point or one off the
@@ -329,6 +434,15 @@ const locationValues = (input: LocationInput): TripLocationValues => {
     address: requireText(input.address, 'A location needs an address.'),
     contact: trimOrNull(input.contact),
     note: trimOrNull(input.note),
+    // Descriptive, never required: a place with no province recorded is a place
+    // nobody has filled that in for, not an invalid one. Same treatment as the
+    // contact — blank and absent both land on `null`.
+    provinceCode: trimOrNull(input.provinceCode),
+    province: trimOrNull(input.province),
+    districtCode: trimOrNull(input.districtCode),
+    district: trimOrNull(input.district),
+    wardCode: trimOrNull(input.wardCode),
+    ward: trimOrNull(input.ward),
     latitude: point.latitude,
     longitude: point.longitude,
   };
