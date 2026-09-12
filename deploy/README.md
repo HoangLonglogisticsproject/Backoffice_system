@@ -48,23 +48,43 @@ push to main
        7. Smoke the public origin               the origin users load
 ```
 
-### The backend-first guarantee, and where it is actually enforced
+### What a frontend promotion requires, and where it is actually enforced
 
-Job ordering is not the mechanism — step conditions are. The frontend step
-carries:
+Job ordering is not the mechanism — explicit conditions are. The frontend step
+carries four of them:
 
 ```yaml
-if: steps.plan.outputs.frontend == 'true'
- && vars.RELEASE_FRONTEND_ENABLED == 'true'
- && steps.deploy_be.outcome == 'success'
- && steps.verify_be.outcome == 'success'
+if: steps.plan.outputs.frontend == 'true'        # something to promote
+ && vars.RELEASE_FRONTEND_ENABLED == 'true'      # armed
+ && needs.frontend.result == 'success'           # validated IN THIS RUN
+ && steps.deploy_be.outcome == 'success'         # backend deployed
+ && steps.verify_be.outcome == 'success'         # backend healthy on its public origin
 ```
 
-`outcome == 'success'` rather than `!failure()` is the whole point: a **skipped**
-backend step means the backend was disarmed, and a disarmed backend is one nobody
-has confirmed is at this commit. Shipping a frontend past it is the original
-skew. So the frontend cannot lead, cannot tie, and cannot proceed on a
-backend that was merely *not broken*.
+`== 'success'` rather than `!failure()` is the whole point, and it does two
+jobs here.
+
+**On the backend steps:** a **skipped** step means the backend was disarmed, and
+a disarmed backend is one nobody has confirmed is at this commit. Shipping a
+frontend past it is the original skew. So the frontend cannot lead, cannot tie,
+and cannot proceed on a backend that was merely *not broken*.
+
+**On `needs.frontend.result`:** that is the validation JOB's verdict — lint,
+types, build and unit tests, on the revision about to be promoted. It is a
+different fact from the `steps.*` outcomes beside it, and without it this step
+would accept *"some earlier commit was tested once"*, which says nothing about
+what is being deployed. Frontend drift is measured against the revision Vercel
+is serving, which can lag several commits, so a backend-only push can
+legitimately need a frontend promotion for earlier changes — and that is exactly
+the run on which a path-gated validation job would have been skipped.
+
+⚠ Which is why the `frontend` job runs **unconditionally on `main`** and stays
+path-gated on pull requests. Tightening the condition alone would have closed
+the hole by deadlocking it: drift says promote, the gate says skipped, and the
+frontend silently stays stale until somebody happens to touch a frontend path.
+Running the job removes that failure mode rather than hiding it. The cost is one
+validation cycle on documentation-only pushes to `main`; pull requests keep the
+saving untouched.
 
 ### The health gate — what it actually asserts
 

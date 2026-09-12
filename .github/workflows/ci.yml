@@ -286,7 +286,35 @@ jobs:
   frontend:
     name: frontend · lint, types, build, unit tests
     needs: detect
-    if: needs.detect.outputs.frontend == 'true'
+
+    # ★ PATH-GATED ON A PULL REQUEST, UNCONDITIONAL ON `main`. The asymmetry
+    # closes a release-gate hole; it is not a stylistic choice.
+    #
+    # Frontend drift is measured in `release` against the revision Vercel is
+    # actually SERVING, which can lag several commits behind `main` — a
+    # promotion that was disarmed, failed, or was refused by the backend gate
+    # leaves drift outstanding. So a push touching only backend paths can
+    # legitimately need a frontend promotion for changes made earlier. Gated on
+    # paths alone, that promotion would happen on a run where this job was
+    # SKIPPED: production frontend deployed without lint, types, build or unit
+    # tests having run for the commit being deployed.
+    #
+    # ⚠ REQUIRING `needs.frontend.result == 'success'` AT THE DEPLOY STEP ALONE
+    # WOULD CLOSE THE HOLE BY DEADLOCKING IT. Drift would say promote, the gate
+    # would say skipped, and the frontend would stay stale until somebody
+    # happened to touch a frontend path — silently, since neither is an error.
+    # Running this job on every `main` push removes that condition's only
+    # failure mode instead, so the gate below is a guarantee rather than a
+    # coin flip on which paths the last commit happened to touch.
+    #
+    # The cost is one lint/typecheck/build/test cycle on documentation-only
+    # pushes to `main`. Pull requests — the high-volume case — keep the saving
+    # exactly as it was, and `assert-tests-ran.mjs` still refuses a run that
+    # discovered no tests, so this cannot pass vacuously.
+    if: >-
+      needs.detect.outputs.frontend == 'true'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
     runs-on: ubuntu-latest
 
     steps:
@@ -895,9 +923,21 @@ jobs:
         # one nobody has confirmed is at this commit — shipping a frontend past
         # it is exactly how the original skew happened. Stricter than the
         # condition it replaces, and deliberately so: the frontend cannot lead.
+        #
+        # ★ AND THE FRONTEND MUST HAVE BEEN VALIDATED IN THIS RUN, FOR THIS
+        # COMMIT. `needs.frontend.result` is the JOB's verdict — a different
+        # fact from every `steps.*.outcome` beside it, and the one that says
+        # lint, types, build and unit tests passed on the revision about to be
+        # promoted. Without it this step would accept "an earlier commit was
+        # tested once", which is not a statement about what is being deployed.
+        #
+        # `== 'success'` admits neither `skipped` nor `failure`. The job is
+        # unconditional on `main` (see its own `if:`) precisely so this can be
+        # strict without ever deadlocking outstanding drift.
         if: >-
           steps.plan.outputs.frontend == 'true'
           && vars.RELEASE_FRONTEND_ENABLED == 'true'
+          && needs.frontend.result == 'success'
           && steps.deploy_be.outcome == 'success'
           && steps.verify_be.outcome == 'success'
         env:
