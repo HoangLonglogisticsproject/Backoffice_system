@@ -24,6 +24,7 @@ import { formatMoney } from '@/utils/format/money';
 import {
   TRIP_ASSIGNMENT_FILTERS,
   type TripAssignmentFilter,
+  type TripAssignmentRef,
   type TripScheduleWithRefs,
 } from '@/types/trip';
 import type { TranslationKey } from '@/types/translate';
@@ -49,7 +50,7 @@ import { DispatchPanel } from './components/DispatchPanel';
  * bounds the query (ADR-0003). Everything else uses `CursorPagination`.
  */
 export default function TripSchedulePage() {
-  const { t, language } = useLanguage();
+  const { t } = useLanguage();
   const { can } = useSession();
 
   const [formOpen, setFormOpen] = useState(false);
@@ -243,177 +244,18 @@ export default function TripSchedulePage() {
             </TableHeader>
             <TableBody>
               {trips.items.map((trip, index) => (
-                <TableRow key={trip.id} className="align-top transition-colors hover:bg-blue-50/30">
-                  {/*
-                    The `STT` column of the sheet, continued ACROSS pages: row 1
-                    of page 2 is 51, not 1. Restarting the count per page would
-                    make two different rows both "1" and break the one thing the
-                    column is for — saying which row somebody means out loud.
-                  */}
-                  <TableCell className="text-center font-medium text-gray-500">
-                    {trips.firstRowNumber + index}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-gray-900">
-                    {formatCalendarDay(trip.scheduledOn, language)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap font-medium text-gray-900">
-                    {/*
-                      ★ ONE LINE PER LORRY (ADR-0004). A trip carries any
-                      number of them, each with its own driver; the row stays
-                      one row and the cell grows. Formatted for reading, not
-                      normalised: the catalogue stores the plate as somebody
-                      typed it, so `50H49266` and `50H-49266` stop looking like
-                      two lorries down one column.
-                    */}
-                    <Plates trip={trip} />
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {/*
-                      ★ WHO IS DRIVING, AND THE ONE CONTROL THAT CHANGES IT.
-                      Operations dispatches; the driver never does — the portal
-                      has no such button and the server refuses a driver
-                      account the route. Hidden on a finished trip for the
-                      same reason the status dropdown is: the server refuses
-                      every assignment write once a trip is finished.
-                    */}
-                    <Crew
-                      trip={trip}
-                      canDispatch={canManage && trip.status !== 'finished'}
-                      onDispatch={() => setAssigningRow(trip)}
-                    />
-                  </TableCell>
-                  <TableCell className="text-gray-900">{trip.customer?.name ?? <Unset />}</TableCell>
-                  <TableCell>
-                    <Prose value={trip.cargoInfo} />
-                  </TableCell>
-                  <TableCell>
-                    <Leg
-                      address={trip.pickupAddress}
-                      contact={trip.pickupContact}
-                      at={trip.pickupAt}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Leg
-                      address={trip.deliveryAddress}
-                      contact={trip.deliveryContact}
-                      at={trip.deliveryAt}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    {/*
-                      The same badge either way. A reader without `trip.write`
-                      gets it as a label; a dispatcher gets it as the control
-                      that moves the trip along the board — one click, its own
-                      endpoint, no form.
-
-                      ★ AND A FINISHED TRIP IS A LABEL FOR EVERYBODY. `finished`
-                      is terminal (BD-01), so the server refuses every move away
-                      from it — offering the dropdown here would be offering a
-                      control whose only possible outcome is a 409. The server
-                      still decides; this just stops asking it a settled
-                      question.
-                    */}
-                    {canManage && trip.status !== 'finished' ? (
-                      <TripStatusSelect tripId={trip.id} status={trip.status} />
-                    ) : (
-                      <TripStatusBadge status={trip.status} />
-                    )}
-                  </TableCell>
-                  {/*
-                    ★ THE TWO AGREED CHARGES — what this run is sold for and what
-                    it is bought for. They are the only amounts on the board, and
-                    only for a head or the superadmin. The wallet button beside
-                    them opens what the run COST us: a different ledger behind
-                    `cost.read`, fetched when that dialog opens and never in this
-                    list's data.
-
-                    ★ FORMATTED, NEVER PARSED. `formatMoney` does string work —
-                    the values are `NUMERIC(14,2)` carried as text precisely so
-                    nothing rounds them, and `Number(...)` here would undo that
-                    for the sake of a thousands separator.
-
-                    ★ TESTED FOR TRUTHINESS RATHER THAN AGAINST `null`. A strict
-                    `=== null` reads correctly against the contract and still
-                    hands `undefined` to `formatMoney`, which unmounted the board
-                    on the first fixture that predated the field. A missing price
-                    and an empty one are the same fact, and neither is worth a
-                    crash.
-                  */}
-                  {mayPrice && (
-                    <>
-                      <TableCell className="whitespace-nowrap text-right font-medium tabular-nums text-gray-900">
-                        {trip.sellPrice ? formatMoney(trip.sellPrice) : <Unset />}
-                      </TableCell>
-                      {/*
-                        Lighter than the selling price on purpose: this is what
-                        the run cost to buy, and the column people scan down is
-                        the one they invoice from.
-                      */}
-                      <TableCell className="whitespace-nowrap text-right tabular-nums text-gray-600">
-                        {trip.purchasePrice ? formatMoney(trip.purchasePrice) : <Unset />}
-                      </TableCell>
-                    </>
-                  )}
-                  <TableCell>
-                    <Prose value={trip.note} />
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-gray-600">
-                    {trip.createdByUser.displayName}
-                  </TableCell>
-                  {(canManage || canViewCost) && (
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        {canManage && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 gap-1 px-2 text-gray-600"
-                          onClick={() => openEdit(trip)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                          <span className="sr-only">{t('edit')}</span>
-                        </Button>
-                        )}
-                        {canManage && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 gap-1 px-2 text-gray-600"
-                          onClick={() => setArchiving(trip)}
-                        >
-                          <Archive className="h-3.5 w-3.5" />
-                          {/*
-                            Labelled "Lưu trữ", never "Xoá": the row survives
-                            archiving, and a button that promises deletion over
-                            an operation that keeps the record describes
-                            something else.
-                          */}
-                          <span className="sr-only">{t('archive')}</span>
-                        </Button>
-                        )}
-                        {/*
-                          ★ ITS OWN PERMISSION, AND ITS OWN DIALOG. The amounts
-                          are never in the board's data — they are fetched only
-                          when this opens, and only for a caller holding
-                          `cost.read`. A column here would put the company's
-                          cost base in front of every signed-in account.
-                        */}
-                        {canViewCost && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1 px-2 text-gray-600"
-                            onClick={() => setCostFor(trip.id)}
-                          >
-                            <Wallet className="h-3.5 w-3.5" />
-                            <span className="sr-only">{t('tripCost')}</span>
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  )}
-                </TableRow>
+                <TripRows
+                  key={trip.id}
+                  trip={trip}
+                  rowNumber={trips.firstRowNumber + index}
+                  mayPrice={mayPrice}
+                  canManage={canManage}
+                  canViewCost={canViewCost}
+                  onEdit={() => openEdit(trip)}
+                  onArchive={() => setArchiving(trip)}
+                  onCost={() => setCostFor(trip.id)}
+                  onDispatch={() => setAssigningRow(trip)}
+                />
               ))}
             </TableBody>
           </Table>
@@ -603,92 +445,319 @@ const platesOf = (trip: TripScheduleWithRefs): string =>
     .join('; ');
 
 /**
- * The lorries on the trip, one per line.
+ * ★ ONE ROW PER DISPATCH ASSIGNMENT — the grain of this table (ADR-0004).
  *
- * ★ A LEGACY LORRY IS NAMED AS SUCH. A trip booked before dispatch became a
- * pair may still carry `vehicleId` with no assignment behind it; the board
- * says "planned vehicle (legacy)" rather than a plate it does not have, so
- * Operations knows to dispatch the trip again as a pair.
+ * A trip carrying three lorries is three rows, each naming exactly one lorry
+ * and exactly one driver. It used to be one row whose vehicle and driver cells
+ * each held a list, which read as a single operational unit and hid the pairing:
+ * nothing on screen said which driver was in which lorry.
  *
- * ★ IT READS `legacyVehicleId`, AND ONLY WHERE THERE IS NO CREW.
- * `assignment.vehicle` is the canonical source and cannot answer this one: the
- * read happens only where `assignments.length === 0`, and migration 0029 case F
- * leaves precisely those rows uncrewed by design — a lorry with no driver is not
- * an assignment. The legacy column is therefore the only record that a lorry was
- * ever planned, and removing the read would render those trips as an ordinary
- * `Unset`, losing the signal that they need re-dispatching.
+ * ★ AN UNCREWED TRIP IS STILL EXACTLY ONE ROW. `[null]` rather than `[]` is what
+ * guarantees that — a trip with nobody on it is a finding the board must show,
+ * not a trip that disappears. That is the same shape the server's own
+ * assignment-grain projection uses, where such a trip yields one row with a
+ * null assignment id.
+ *
+ * ★ THE TRIP'S OWN FACTS ARE SPANNED, NOT REPEATED. Date, customer, cargo, both
+ * legs, status, prices, note, author and every control carry `rowSpan`, so one
+ * booking still reads as one booking and Edit / Archive / Cost / Dispatch cannot
+ * be fired twice for the same trip. Only the vehicle and driver columns vary
+ * down the rows, which is precisely what differs between assignments.
+ *
+ * ★ AND THE `STT` COLUMN STAYS A TRIP COUNTER. It is the spreadsheet's own
+ * column and `firstRowNumber` computes a trip ordinal from the page size, so
+ * numbering assignments there would make "row 7" mean two different things
+ * depending on how many lorries the earlier trips happened to carry. It is
+ * spanned with the rest.
  */
-function Plates({ trip }: Readonly<{ trip: TripScheduleWithRefs }>) {
+function TripRows({
+  trip,
+  rowNumber,
+  mayPrice,
+  canManage,
+  canViewCost,
+  onEdit,
+  onArchive,
+  onCost,
+  onDispatch,
+}: Readonly<{
+  trip: TripScheduleWithRefs;
+  /** The trip's ordinal in the export, 1-based and continuous across pages. */
+  rowNumber: number;
+  mayPrice: boolean;
+  canManage: boolean;
+  canViewCost: boolean;
+  onEdit: () => void;
+  onArchive: () => void;
+  onCost: () => void;
+  onDispatch: () => void;
+}>) {
+  const { t, language } = useLanguage();
+
+  // `[null]` is the uncrewed trip: one row, no assignment. See the header.
+  const turns: readonly (TripAssignmentRef | null)[] =
+    trip.assignments.length > 0 ? trip.assignments : [null];
+  const span = turns.length;
+
+  // A finished trip takes no dispatch change — the server refuses every
+  // assignment write once it is closed, so offering the control would offer a
+  // guaranteed 409.
+  const canDispatch = canManage && trip.status !== 'finished';
+
+  return (
+    <>
+      {turns.map((turn, row) => (
+        <TableRow
+          // ★ THE ASSIGNMENT IS THE ROW'S IDENTITY. The trip id is the fallback
+          // for the uncrewed row, which is the only row that has no assignment.
+          key={turn?.id ?? trip.id}
+          className="align-top transition-colors hover:bg-blue-50/30"
+        >
+          {row === 0 && (
+            <>
+              {/*
+                The `STT` column of the sheet, continued ACROSS pages: trip 1
+                of page 2 is 51, not 1. Restarting the count per page would
+                make two different trips both "1" and break the one thing the
+                column is for — saying which row somebody means out loud.
+              */}
+              <TableCell rowSpan={span} className="text-center font-medium text-gray-500">
+                {rowNumber}
+              </TableCell>
+              <TableCell rowSpan={span} className="whitespace-nowrap text-gray-900">
+                {formatCalendarDay(trip.scheduledOn, language)}
+              </TableCell>
+            </>
+          )}
+
+          {/*
+            ★ EXACTLY ONE PLATE. Formatted for reading, not normalised: the
+            catalogue stores the plate as somebody typed it, so `50H49266` and
+            `50H-49266` stop looking like two lorries down one column.
+          */}
+          <TableCell className="whitespace-nowrap font-medium text-gray-900">
+            <Plate trip={trip} turn={turn} />
+          </TableCell>
+
+          {/*
+            ★ EXACTLY ONE DRIVER — the one in the lorry on this row. Who is
+            driving is decided by Operations; the driver never does, the portal
+            has no such control and the server refuses a driver account the
+            route.
+          */}
+          <TableCell className="whitespace-nowrap">
+            {turn ? (
+              <span className="text-gray-900">{turn.driver.displayName}</span>
+            ) : (
+              <span className="text-gray-400">{t('driverUnassigned')}</span>
+            )}
+          </TableCell>
+
+          {row === 0 && (
+            <>
+              <TableCell rowSpan={span} className="text-gray-900">
+                {trip.customer?.name ?? <Unset />}
+              </TableCell>
+              <TableCell rowSpan={span}>
+                <Prose value={trip.cargoInfo} />
+              </TableCell>
+              <TableCell rowSpan={span}>
+                <Leg address={trip.pickupAddress} contact={trip.pickupContact} at={trip.pickupAt} />
+              </TableCell>
+              <TableCell rowSpan={span}>
+                <Leg
+                  address={trip.deliveryAddress}
+                  contact={trip.deliveryContact}
+                  at={trip.deliveryAt}
+                />
+              </TableCell>
+              <TableCell rowSpan={span}>
+                {/*
+                  The same badge either way. A reader without `trip.write`
+                  gets it as a label; a dispatcher gets it as the control
+                  that moves the trip along the board — one click, its own
+                  endpoint, no form.
+
+                  ★ AND A FINISHED TRIP IS A LABEL FOR EVERYBODY. `finished`
+                  is terminal (BD-01), so the server refuses every move away
+                  from it — offering the dropdown here would be offering a
+                  control whose only possible outcome is a 409. The server
+                  still decides; this just stops asking it a settled
+                  question.
+                */}
+                {canManage && trip.status !== 'finished' ? (
+                  <TripStatusSelect tripId={trip.id} status={trip.status} />
+                ) : (
+                  <TripStatusBadge status={trip.status} />
+                )}
+              </TableCell>
+
+              {/*
+                ★ THE TWO AGREED CHARGES — what this run is sold for and what
+                it is bought for. They are the only amounts on the board, and
+                only for a head or the superadmin. The wallet button beside
+                them opens what the run COST us: a different ledger behind
+                `cost.read`, fetched when that dialog opens and never in this
+                list's data.
+
+                ★ FORMATTED, NEVER PARSED. `formatMoney` does string work —
+                the values are `NUMERIC(14,2)` carried as text precisely so
+                nothing rounds them, and `Number(...)` here would undo that
+                for the sake of a thousands separator.
+
+                ★ TESTED FOR TRUTHINESS RATHER THAN AGAINST `null`. A strict
+                `=== null` reads correctly against the contract and still
+                hands `undefined` to `formatMoney`, which unmounted the board
+                on the first fixture that predated the field. A missing price
+                and an empty one are the same fact, and neither is worth a
+                crash.
+
+                ★ AND THEY BELONG TO THE TRIP, NOT THE LORRY. One booking is
+                sold once however many lorries run it, so these are spanned
+                with the rest — repeating them per assignment would invite
+                somebody to add them up.
+              */}
+              {mayPrice && (
+                <>
+                  <TableCell
+                    rowSpan={span}
+                    className="whitespace-nowrap text-right font-medium tabular-nums text-gray-900"
+                  >
+                    {trip.sellPrice ? formatMoney(trip.sellPrice) : <Unset />}
+                  </TableCell>
+                  {/*
+                    Lighter than the selling price on purpose: this is what
+                    the run cost to buy, and the column people scan down is
+                    the one they invoice from.
+                  */}
+                  <TableCell
+                    rowSpan={span}
+                    className="whitespace-nowrap text-right tabular-nums text-gray-600"
+                  >
+                    {trip.purchasePrice ? formatMoney(trip.purchasePrice) : <Unset />}
+                  </TableCell>
+                </>
+              )}
+
+              <TableCell rowSpan={span}>
+                <Prose value={trip.note} />
+              </TableCell>
+              <TableCell rowSpan={span} className="whitespace-nowrap text-gray-600">
+                {trip.createdByUser.displayName}
+              </TableCell>
+
+              {(canManage || canViewCost) && (
+                <TableCell rowSpan={span}>
+                  <div className="flex items-center gap-1">
+                    {/*
+                      ★ ONCE PER TRIP, ALL FOUR. Every one of these acts on the
+                      trip rather than on a lorry — including Dispatch, which
+                      opens the panel where the whole crew is managed. They sit
+                      in a spanned cell so a three-lorry trip cannot offer three
+                      Archive buttons for the same booking.
+                    */}
+                    {canDispatch && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 px-2 text-xs text-gray-600"
+                        onClick={onDispatch}
+                      >
+                        {trip.assignments.length > 0 ? t('dispatchManage') : t('assignDriver')}
+                      </Button>
+                    )}
+                    {canManage && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 px-2 text-gray-600"
+                        onClick={onEdit}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        <span className="sr-only">{t('edit')}</span>
+                      </Button>
+                    )}
+                    {canManage && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 px-2 text-gray-600"
+                        onClick={onArchive}
+                      >
+                        <Archive className="h-3.5 w-3.5" />
+                        {/*
+                          Labelled "Lưu trữ", never "Xoá": the row survives
+                          archiving, and a button that promises deletion over
+                          an operation that keeps the record describes
+                          something else.
+                        */}
+                        <span className="sr-only">{t('archive')}</span>
+                      </Button>
+                    )}
+                    {/*
+                      ★ ITS OWN PERMISSION, AND ITS OWN DIALOG. The amounts
+                      are never in the board's data — they are fetched only
+                      when this opens, and only for a caller holding
+                      `cost.read`. A column here would put the company's
+                      cost base in front of every signed-in account.
+                    */}
+                    {canViewCost && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 px-2 text-gray-600"
+                        onClick={onCost}
+                      >
+                        <Wallet className="h-3.5 w-3.5" />
+                        <span className="sr-only">{t('tripCost')}</span>
+                      </Button>
+                    )}
+                  </div>
+                </TableCell>
+              )}
+            </>
+          )}
+        </TableRow>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The one lorry on this row.
+ *
+ * ★ A LEGACY LORRY IS NAMED AS SUCH, AND ONLY WHERE THERE IS NO CREW. A trip
+ * booked before dispatch became a pair may still carry `legacyVehicleId` with no
+ * assignment behind it; the board says "planned vehicle (legacy)" rather than a
+ * plate it does not have, so Operations knows to dispatch the trip again as a
+ * pair. `assignment.vehicle` is the canonical source and cannot answer this one:
+ * the read happens only on the uncrewed row, and migration 0029 case F leaves
+ * precisely those rows uncrewed by design — a lorry with no driver is not an
+ * assignment. Removing the read would render those trips as an ordinary `Unset`,
+ * losing the signal that they need re-dispatching.
+ *
+ * ★ `turn.vehicle === null` IS A DIFFERENT STATE AGAIN: a pre-0027 assignment
+ * the backfill could not resolve. It is crewed but names no lorry, and saying so
+ * is how it gets fixed.
+ */
+function Plate({
+  trip,
+  turn,
+}: Readonly<{ trip: TripScheduleWithRefs; turn: TripAssignmentRef | null }>) {
   const { t } = useLanguage();
-  if (trip.assignments.length === 0) {
+
+  if (!turn) {
     return trip.legacyVehicleId ? (
       <span className="text-xs font-normal text-amber-700">{t('dispatchLegacyBadge')}</span>
     ) : (
       <Unset />
     );
   }
-  return (
-    <ul className="space-y-0.5">
-      {trip.assignments.map((turn) => (
-        <li key={turn.id}>
-          {turn.vehicle ? (
-            formatPlate(turn.vehicle.plate)
-          ) : (
-            <span className="text-xs font-normal text-amber-700">{t('dispatchMissingVehicle')}</span>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
-/**
- * The drivers on the trip — each named once, however many lorries they hold —
- * with the count when there is more than one lorry, and the one control that
- * changes the crew.
- */
-function Crew({
-  trip,
-  canDispatch,
-  onDispatch,
-}: Readonly<{ trip: TripScheduleWithRefs; canDispatch: boolean; onDispatch: () => void }>) {
-  const { t } = useLanguage();
-  // ★ DEDUPED BY ID, KEYED BY ID, SHOWN BY NAME. Two different drivers may
-  // share a display name; folding them by name would show one person.
-  const drivers = [
-    ...new Map(trip.assignments.map((turn) => [turn.driver.id, turn.driver] as const)).values(),
-  ];
-  const lorries = trip.assignments.length;
-
-  return (
-    <div className="flex items-start gap-2">
-      <div>
-        {drivers.length === 0 ? (
-          <span className="text-gray-400">{t('driverUnassigned')}</span>
-        ) : (
-          <ul className="space-y-0.5 text-gray-900">
-            {drivers.map((driver) => (
-              <li key={driver.id}>{driver.displayName}</li>
-            ))}
-          </ul>
-        )}
-        {lorries > 1 ? (
-          <span className="block text-xs text-gray-500">
-            {`${lorries} ${t('dispatchVehicleUnit')} · ${drivers.length} ${t('dispatchDriverUnit')}`}
-          </span>
-        ) : null}
-      </div>
-      {canDispatch && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 px-2 text-xs text-gray-600"
-          onClick={onDispatch}
-        >
-          {lorries > 0 ? t('dispatchManage') : t('assignDriver')}
-        </Button>
-      )}
-    </div>
+  return turn.vehicle ? (
+    <>{formatPlate(turn.vehicle.plate)}</>
+  ) : (
+    <span className="text-xs font-normal text-amber-700">{t('dispatchMissingVehicle')}</span>
   );
 }
 
