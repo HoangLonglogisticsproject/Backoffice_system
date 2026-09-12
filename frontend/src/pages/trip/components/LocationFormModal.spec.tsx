@@ -21,6 +21,21 @@ import { LocationFormModal } from './LocationFormModal';
  */
 const configured = vi.hoisted(() => ({ value: true }));
 
+
+/**
+ * The two administrative dropdowns, stubbed at the hook.
+ *
+ * They read our own API through react-query, which is a provider this suite
+ * has no reason to stand up: what is under test here is the place form, not
+ * whether a list of provinces arrives. Stubbed empty, the selects render and
+ * stay empty — which is also the real behaviour when the source is down.
+ */
+vi.mock('@/hooks/useVnAdministrative', () => ({
+  useProvinces: () => ({ items: [], loading: false, failed: false }),
+  useDistricts: () => ({ items: [], loading: false, failed: false }),
+  useWards: () => ({ items: [], loading: false, failed: false }),
+}));
+
 vi.mock('@/utils/googleMaps', () => ({
   isMapsConfigured: () => configured.value,
   searchPlaces: vi.fn(),
@@ -40,10 +55,15 @@ vi.mock('./LocationMap', () => ({
 
 vi.mock('@/api/tripCatalogue', () => ({
   createTripLocation: vi.fn(),
-  updateTripLocation: vi.fn(),
+  createSharedTripLocation: vi.fn(),
+  updateTripLocationById: vi.fn(),
 }));
 
-import { createTripLocation, updateTripLocation } from '@/api/tripCatalogue';
+import {
+  createSharedTripLocation,
+  createTripLocation,
+  updateTripLocationById,
+} from '@/api/tripCatalogue';
 import { resolvePlace, searchPlaces } from '@/utils/googleMaps';
 
 const location = (over: Partial<TripLocation> = {}): TripLocation => ({
@@ -53,6 +73,12 @@ const location = (over: Partial<TripLocation> = {}): TripLocation => ({
   address: 'KCN Sóng Thần, Dĩ An',
   contact: 'Anh Tư',
   note: 'Cổng 2',
+  provinceCode: null,
+  province: null,
+  districtCode: null,
+  district: null,
+  wardCode: null,
+  ward: null,
   latitude: 10.8,
   longitude: 106.6,
   status: 'active',
@@ -62,12 +88,17 @@ const location = (over: Partial<TripLocation> = {}): TripLocation => ({
   ...over,
 });
 
-const renderForm = (editing: TripLocation | null = null) => {
+const renderForm = (editing: TripLocation | null = null, customerId: string | null = 'c1') => {
   const onSaved = vi.fn();
   const onClose = vi.fn();
   render(
     <LanguageProvider>
-      <LocationFormModal customerId="c1" editing={editing} onClose={onClose} onSaved={onSaved} />
+      <LocationFormModal
+        customerId={customerId}
+        editing={editing}
+        onClose={onClose}
+        onSaved={onSaved}
+      />
     </LanguageProvider>,
   );
   return { onSaved, onClose };
@@ -76,7 +107,8 @@ const renderForm = (editing: TripLocation | null = null) => {
 const search = vi.mocked(searchPlaces);
 const resolve = vi.mocked(resolvePlace);
 const create = vi.mocked(createTripLocation);
-const update = vi.mocked(updateTripLocation);
+const update = vi.mocked(updateTripLocationById);
+const createShared = vi.mocked(createSharedTripLocation);
 
 const type = (label: string, value: string) =>
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -87,7 +119,13 @@ const openSetup = () => fireEvent.click(screen.getByRole('button', { name: /Thi�
 const confirm = () => fireEvent.click(screen.getByRole('button', { name: 'Xác nhận vị trí' }));
 
 const TCS = { id: 'p1', primary: 'Kho TCS', secondary: 'Thuận An, Bình Dương' };
-const TCS_PLACE: ResolvedPlace = { address: 'Đường số 3, KCN VSIP 1, Thuận An', latitude: 10.9, longitude: 106.72 };
+const TCS_PLACE: ResolvedPlace = {
+  address: 'Đường số 3, KCN VSIP 1, Thuận An',
+  latitude: 10.9,
+  longitude: 106.72,
+  province: 'Tỉnh Bình Dương',
+  ward: 'Phường Bình Hòa',
+};
 
 describe('LocationFormModal with a map', () => {
   beforeEach(() => {
@@ -252,7 +290,7 @@ describe('LocationFormModal with a map', () => {
     await waitFor(() => expect(resolve).toHaveBeenCalled());
     // Google answers late; the operator's address is still theirs when it does.
     await act(async () => {
-      finish({ address: 'Google’s wording', latitude: 10.9, longitude: 106.72 });
+      finish({ ...TCS_PLACE, address: 'Google’s wording' });
     });
     await waitFor(() => expect(screen.getByTestId('pin')).toHaveTextContent('10.9,106.72'));
     confirm();
@@ -358,9 +396,44 @@ describe('LocationFormModal with a map', () => {
         address: 'Thủ Dầu Một',
         contact: null,
         note: null,
+        provinceCode: null,
+        province: null,
+        districtCode: null,
+        district: null,
+        wardCode: null,
+        ward: null,
         latitude: null,
         longitude: null,
       }),
+    );
+  });
+
+  it('★ opened with no customer, it creates a SHARED place — a different endpoint, not a null argument', async () => {
+    createShared.mockResolvedValue(location({ id: 'l9', customerId: null, name: 'Cảng Cát Lái' }));
+    renderForm(null, null);
+
+    type('Tên địa điểm', 'Cảng Cát Lái');
+    type('Địa chỉ', 'Đường Nguyễn Thị Định, TP. Thủ Đức');
+    save();
+
+    await waitFor(() =>
+      expect(createShared).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Cảng Cát Lái' }),
+      ),
+    );
+    // The per-customer endpoint is the one that would file it under somebody.
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('★ an edit goes by id, whoever owns the row — the customer it was opened with is not restated', async () => {
+    update.mockResolvedValue(location());
+    renderForm(location({ id: 'l4' }));
+
+    type('Tên địa điểm', 'Kho OSC 2');
+    save();
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('l4', expect.objectContaining({ name: 'Kho OSC 2' })),
     );
   });
 

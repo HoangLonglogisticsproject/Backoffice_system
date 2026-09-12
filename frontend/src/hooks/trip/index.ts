@@ -1,6 +1,7 @@
 export { tripKeys } from './keys';
 export { useTripSchedules, type DateRange, type TripSchedules } from './useTripSchedules';
 export {
+  useAllTripLocations,
   useTripCatalogue,
   useTripLocations,
   type CatalogueList,

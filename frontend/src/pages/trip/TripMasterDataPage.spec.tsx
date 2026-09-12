@@ -18,6 +18,21 @@ const useSession = vi.fn();
 const fetchTripLocations = vi.fn();
 const createTripLocation = vi.fn();
 const archiveTripLocation = vi.fn();
+
+/**
+ * The two administrative dropdowns, stubbed at the hook.
+ *
+ * They read our own API through react-query, which is a provider this suite
+ * has no reason to stand up: what is under test here is the place form, not
+ * whether a list of provinces arrives. Stubbed empty, the selects render and
+ * stay empty — which is also the real behaviour when the source is down.
+ */
+vi.mock('@/hooks/useVnAdministrative', () => ({
+  useProvinces: () => ({ items: [], loading: false, failed: false }),
+  useDistricts: () => ({ items: [], loading: false, failed: false }),
+  useWards: () => ({ items: [], loading: false, failed: false }),
+}));
+
 vi.mock('@/api/tripCatalogue', () => ({
   fetchTripVehicles: (...a: unknown[]) => fetchTripVehicles(...a),
   fetchTripCustomers: (...a: unknown[]) => fetchTripCustomers(...a),
@@ -117,17 +132,21 @@ describe('TripMasterDataPage', () => {
   });
 
   describe('the two catalogues', () => {
-    it('opens on the vehicles, showing the plate as somebody typed it', async () => {
+    it('★ opens on the vehicles, showing the plate the way every other screen draws it', async () => {
       renderPage();
 
-      // `51D.65233` and not a normalised form: the punctuation is theirs, and
-      // only the MATCHING is the server's.
-      expect(await screen.findByText('51D.65233')).toBeTruthy();
+      // ★ THE ROW IS `formatPlate` OF THE STORED STRING, NOT THE STORED STRING.
+      // This screen used to print the column verbatim — "the punctuation is
+      // theirs" — and the catalogue was the one place `50AA12333` sat beside
+      // `51C-4265` while the board, the driver and the export all agreed. A
+      // spelling is not a fact about a lorry: the fixture is stored as
+      // `51D.65233` and is read here as the same plate every other site draws.
+      expect(await screen.findByText('51D-65233')).toBeTruthy();
     });
 
     it('switches to the customers without re-reading the vehicles', async () => {
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(screen.getByRole('button', { name: 'Khách hàng' }));
 
@@ -170,7 +189,7 @@ describe('TripMasterDataPage', () => {
       // every past trip appears to say, which is why it is not the same tier.
       useSession.mockReturnValue(session(['trip.read', 'trip.create']));
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
@@ -180,7 +199,7 @@ describe('TripMasterDataPage', () => {
     it('hides the add button from a caller without trip.create', async () => {
       useSession.mockReturnValue(session(['trip.read']));
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       expect(screen.queryByRole('button', { name: 'Thêm xe' })).toBeNull();
     });
@@ -413,7 +432,7 @@ describe('TripMasterDataPage', () => {
      */
     it('★ sends the plate with no separator, however it was typed', async () => {
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
       fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '50H-44266' } });
@@ -430,7 +449,7 @@ describe('TripMasterDataPage', () => {
     it('★ shows the dash back while it is being typed', async () => {
       // The field reads as a plate; the state underneath is the payload.
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
       const plate = screen.getByLabelText('Biển số *') as HTMLInputElement;
@@ -441,7 +460,7 @@ describe('TripMasterDataPage', () => {
 
     it('upper-cases the series letter, so one lorry cannot become two', async () => {
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
       fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '50h44266' } });
@@ -454,7 +473,7 @@ describe('TripMasterDataPage', () => {
 
     it('stores an untouched note as null rather than as an empty string', async () => {
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
       fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '50H-44266' } });
@@ -474,7 +493,7 @@ describe('TripMasterDataPage', () => {
         new ApiError(409, 'CONFLICT', 'That vehicle is already in the catalogue, as “51D.65233”.'),
       );
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
       fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '51D 65233' } });
@@ -507,20 +526,21 @@ describe('TripMasterDataPage', () => {
       // reads as though saving would add a SECOND row for the same truck — the
       // exact duplicate this catalogue exists to prevent.
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(actionButton('Sửa'));
 
       expect(await screen.findByRole('heading', { name: 'Sửa xe' })).toBeTruthy();
       // ★ SEEDED FROM THE ROW, SHOWN IN THE ONE SPELLING. The catalogue still
-      // holds `51D.65233` — the LIST above prints the record as stored — and the
-      // field shows the same plate the way every other screen draws it.
+      // holds `51D.65233`; the list and this field both read it through
+      // `formatPlate`, so what was clicked and what is being corrected are the
+      // same string on screen. Only the payload is the stripped form.
       expect((screen.getByLabelText('Biển số *') as HTMLInputElement).value).toBe('51D-65233');
     });
 
     it('sends the correction to the row it was opened on', async () => {
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(actionButton('Sửa'));
       fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '51D-65234' } });
@@ -537,7 +557,7 @@ describe('TripMasterDataPage', () => {
       // People read "lưu trữ" as a delete and worry that last month's trips
       // lose the plate they were run under. The dialog has to say they do not.
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(actionButton('Lưu trữ'));
 
@@ -552,7 +572,7 @@ describe('TripMasterDataPage', () => {
 
     it('archives the vehicle on confirmation', async () => {
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       fireEvent.click(actionButton('Lưu trữ'));
       const [, confirm] = await screen.findAllByRole('button', { name: 'Lưu trữ' });
@@ -579,7 +599,7 @@ describe('TripMasterDataPage', () => {
       // left to produce an error the user could not have predicted.
       fetchTripVehicles.mockResolvedValue([vehicle({ status: 'archived' })]);
       renderPage();
-      await screen.findByText('51D.65233');
+      await screen.findByText('51D-65233');
 
       expect(screen.getByText('Đã lưu trữ')).toBeTruthy();
       expect((actionButton('Sửa') as HTMLButtonElement).disabled).toBe(true);

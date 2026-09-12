@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { MapPin, Search } from 'lucide-react';
-import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { createTripLocation, updateTripLocation } from '@/api/tripCatalogue';
+import {
+  createSharedTripLocation,
+  createTripLocation,
+  updateTripLocationById,
+} from '@/api/tripCatalogue';
 import { isApiError } from '@/utils/errors';
 import {
   isMapsConfigured,
@@ -15,15 +18,28 @@ import {
   type PlaceSuggestion,
   type ResolvedPlace,
 } from '@/utils/googleMaps';
+import {
+  AdminAreaFields,
+  EMPTY_ADMIN_AREA,
+  type AdminAreaValue,
+} from '@/components/trip/AdminAreaFields';
 import type { TripLocation } from '@/types/trip';
 import { LocationMap } from './LocationMap';
 
 /**
- * One of a customer's places, entered or corrected.
+ * One place, entered or corrected.
  *
- * ★ ALWAYS UNDER ONE CUSTOMER. The dialog is opened with the customer it
- * belongs to and creates under that id; there is no customer picker here, so
- * a place cannot be filed under the wrong company by a slip.
+ * ★ THE CUSTOMER IS DECIDED BY WHOEVER OPENED THIS, NEVER PICKED HERE. Opened
+ * from a customer's row it creates under that id; opened from the locations
+ * catalogue it is passed `null` and creates a SHARED place. Either way there is
+ * no customer picker on the form, so a place cannot be filed under the wrong
+ * company by a slip — and the dialog never has to ask a question whose answer
+ * the screen behind it already knows.
+ *
+ * ★ THE ADMINISTRATIVE THREE ARE TEXT, AND OPTIONAL. Tỉnh/thành, quận/huyện,
+ * phường/xã: filled from the address components of the place the operator
+ * picks, corrected by hand, and blank whenever nobody has said. They describe
+ * the row for a reader; nothing operational reads them.
  *
  * ★ THE OPERATOR NEVER TYPES A COORDINATE. A place has a name, an address and
  * a POSITION; the position is set by finding the place on a map and putting a
@@ -43,7 +59,8 @@ import { LocationMap } from './LocationMap';
  * touches it.
  */
 interface Props {
-  customerId: string;
+  /** Whose place this will be. `null` creates a SHARED one. */
+  customerId: string | null;
   /** `null` to add; a row to correct. */
   editing: TripLocation | null;
   onClose: () => void;
@@ -92,12 +109,18 @@ const SEARCH_DEBOUNCE_MS = 350;
 /** `''` → `null` for the optional texts; the required ones are only trimmed. */
 const blank = (value: string): string | null => (value.trim() === '' ? null : value.trim());
 
-/** What the form sends — the same body the endpoint has always taken. */
+/** What the form sends. */
 interface LocationBody {
   name: string;
   address: string;
   contact: string | null;
   note: string | null;
+  provinceCode: string | null;
+  province: string | null;
+  districtCode: string | null;
+  district: string | null;
+  wardCode: string | null;
+  ward: string | null;
   latitude: number | null;
   longitude: number | null;
 }
@@ -107,6 +130,7 @@ const locationBody = (fields: {
   address: string;
   contact: string;
   note: string;
+  area: AdminAreaValue;
   latitude: string;
   longitude: string;
 }): LocationBody => ({
@@ -114,17 +138,30 @@ const locationBody = (fields: {
   address: fields.address.trim(),
   contact: blank(fields.contact),
   note: blank(fields.note),
+  ...fields.area,
   latitude: numberOrNull(fields.latitude),
   longitude: numberOrNull(fields.longitude),
 });
 
-/** An existing row is patched under its customer; a new one is created there. */
+/**
+ * Four destinations, chosen by two questions: is there a row already, and does
+ * it belong to a customer.
+ *
+ * ★ AN EDIT GOES BY ID WHATEVER OPENED IT. The catalogue screen edits rows it
+ * does not necessarily have a customer for, and the per-customer dialog gains
+ * nothing from restating one it already proved. A CREATE still needs to say
+ * which population it is joining, and that is what `customerId` decides.
+ */
 const saveLocation = (
-  customerId: string,
+  customerId: string | null,
   editing: TripLocation | null,
   body: LocationBody,
-): Promise<TripLocation> =>
-  editing ? updateTripLocation(customerId, editing.id, body) : createTripLocation(customerId, body);
+): Promise<TripLocation> => {
+  if (editing) return updateTripLocationById(editing.id, body);
+  return customerId === null
+    ? createSharedTripLocation(body)
+    : createTripLocation(customerId, body);
+};
 
 /**
  * The server refuses half a point, a duplicate name and a retired customer
@@ -138,8 +175,25 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
   const { t } = useLanguage();
   const [name, setName] = useState(editing?.name ?? '');
   const [address, setAddress] = useState(editing?.address ?? '');
-  const [contact, setContact] = useState(editing?.contact ?? '');
-  const [note, setNote] = useState(editing?.note ?? '');
+  /**
+   * ★ READ, NEVER WRITTEN — the two fields this dialog stopped ASKING for.
+   * They are still sent, so correcting a place does not silently blank the
+   * contact and the note it already had. Restore the inputs below to edit them.
+   */
+  const [contact] = useState(editing?.contact ?? '');
+  const [note] = useState(editing?.note ?? '');
+  const [area, setArea] = useState<AdminAreaValue>(
+    editing
+      ? {
+          provinceCode: editing.provinceCode,
+          province: editing.province,
+          districtCode: editing.districtCode,
+          district: editing.district,
+          wardCode: editing.wardCode,
+          ward: editing.ward,
+        }
+      : EMPTY_ADMIN_AREA,
+  );
   const [latitude, setLatitude] = useState(numberField(editing?.latitude ?? null));
   const [longitude, setLongitude] = useState(numberField(editing?.longitude ?? null));
   const [busy, setBusy] = useState(false);
@@ -150,7 +204,6 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
   const mapEnabled = isMapsConfigured();
   const problem = pairProblem(latitude, longitude);
   const point = pointOf(latitude, longitude);
-  const located = point !== null;
 
   const setPoint = ({ latitude: lat, longitude: lng }: Coordinates) => {
     setLatitude(roundCoordinate(lat));
@@ -208,7 +261,15 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
       const saved = await saveLocation(
         customerId,
         editing,
-        locationBody({ name, address, contact, note, latitude, longitude }),
+        locationBody({
+          name,
+          address,
+          contact,
+          note,
+          area,
+          latitude,
+          longitude,
+        }),
       );
       await onSaved(saved);
       onClose();
@@ -273,10 +334,18 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
             />
           </div>
         )}
-        <Field id="location-contact" label={t('locationContact')} value={contact} onChange={setContact} />
-        <Field id="location-note" label={t('noteOptional')} value={note} onChange={setNote} />
+        {/*
+          ★ TWO DROPDOWNS, BECAUSE VIETNAM HAS TWO LEVELS. Tỉnh/thành → xã/phường,
+          served from our own API (which proxies and caches the public source).
+          The quận/huyện tier was abolished on 1 July 2025, so there is no third
+          control and nothing that could fill one.
+        */}
+        <AdminAreaFields value={area} onChange={setArea} />
 
-        <PositionSection
+        {/* <Field id="location-contact" label={t('locationContact')} value={contact} onChange={setContact} />
+        <Field id="location-note" label={t('noteOptional')} value={note} onChange={setNote} /> */}
+
+        {/* <PositionSection
           located={located}
           mapEnabled={mapEnabled}
           problem={problem}
@@ -290,7 +359,7 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
               onLongitude={setLongitude}
             />
           }
-        />
+        /> */}
 
         {error && (
           <p role="alert" className="text-sm text-red-600">
@@ -306,85 +375,86 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
   );
 }
 
-/**
- * How the map action reads: setting a position is the work when there is
- * none, and a quiet correction when there is one.
- */
-const MAP_ACTION = {
-  located: { variant: 'ghost', className: 'text-gray-600', label: 'editLocationPosition' },
-  unlocated: { variant: 'outline', className: undefined, label: 'setupLocation' },
-} as const;
-
-/**
- * ★ THE POSITION, AS A STATE AND ONE ACTION — never as two numbers to type.
- * The pill, the map action, the one-line exception for a free-text address
- * nobody picked, and the numbers: behind a fold when there is a map, in the
- * open with plain words when there is not.
- */
-function PositionSection({
-  located,
-  mapEnabled,
-  problem,
-  onSetup,
-  coordinateInputs,
-}: Readonly<{
-  located: boolean;
-  mapEnabled: boolean;
-  problem: PairProblem;
-  onSetup: () => void;
-  coordinateInputs: React.ReactNode;
-}>) {
-  const { t } = useLanguage();
-  const action = MAP_ACTION[located ? 'located' : 'unlocated'];
-
-  return (
-    <fieldset className="space-y-2 rounded-lg border border-gray-200 p-3">
-      <legend className="px-1 text-sm font-medium text-gray-700">{t('locationPosition')}</legend>
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusPill tone={located ? 'green' : 'amber'}>
-          {t(located ? 'locationLocated' : 'locationUnlocated')}
-        </StatusPill>
-        {mapEnabled ? (
-          <Button
-            type="button"
-            variant={action.variant}
-            size="sm"
-            className={action.className}
-            onClick={onSetup}
-          >
-            <MapPin className="size-3.5" aria-hidden />
-            {t(action.label)}
-          </Button>
-        ) : null}
-      </div>
-      {/* The exception, and only then: a free-text address nobody picked from the suggestions. */}
-      {located ? null : (
-        <p className="text-xs text-amber-700">
-          {t('locationNotYetLocated')}
-          {mapEnabled ? ` ${t('locationResolveHint')}` : ''}
-        </p>
-      )}
-
-      {mapEnabled ? (
-        // Behind a fold: for somebody who was handed coordinates, not the way in.
-        <details className="text-xs text-gray-500">
-          <summary className="cursor-pointer select-none">{t('manualCoordinates')}</summary>
-          <div className="mt-2">{coordinateInputs}</div>
-        </details>
-      ) : (
-        <>
-          <p className="text-xs text-gray-500">{t('locationCoordinatesHint')}</p>
-          {coordinateInputs}
-        </>
-      )}
-      {problem ? (
-        <p role="alert" className="text-xs text-red-600">
-          {t(problem === 'incomplete' ? 'locationPairIncomplete' : 'locationPairInvalid')}
-        </p>
-      ) : null}
-    </fieldset>
-  );
-}
+// ★ COMMENTED OUT WITH THE JSX THAT RENDERED IT — see the "Vị trí" block above. Restoring one means restoring the other, and it MUST be restored for a new place to get coordinates at all: those two numbers are the only thing the driver geofence can measure against.
+// /**
+//  * How the map action reads: setting a position is the work when there is
+//  * none, and a quiet correction when there is one.
+//  */
+// const MAP_ACTION = {
+//   located: { variant: 'ghost', className: 'text-gray-600', label: 'editLocationPosition' },
+//   unlocated: { variant: 'outline', className: undefined, label: 'setupLocation' },
+// } as const;
+//
+// /**
+//  * ★ THE POSITION, AS A STATE AND ONE ACTION — never as two numbers to type.
+//  * The pill, the map action, the one-line exception for a free-text address
+//  * nobody picked, and the numbers: behind a fold when there is a map, in the
+//  * open with plain words when there is not.
+//  */
+// function PositionSection({
+//   located,
+//   mapEnabled,
+//   problem,
+//   onSetup,
+//   coordinateInputs,
+// }: Readonly<{
+//   located: boolean;
+//   mapEnabled: boolean;
+//   problem: PairProblem;
+//   onSetup: () => void;
+//   coordinateInputs: React.ReactNode;
+// }>) {
+//   const { t } = useLanguage();
+//   const action = MAP_ACTION[located ? 'located' : 'unlocated'];
+//
+//   return (
+//     <fieldset className="space-y-2 rounded-lg border border-gray-200 p-3">
+//       <legend className="px-1 text-sm font-medium text-gray-700">{t('locationPosition')}</legend>
+//       <div className="flex flex-wrap items-center gap-2">
+//         <StatusPill tone={located ? 'green' : 'amber'}>
+//           {t(located ? 'locationLocated' : 'locationUnlocated')}
+//         </StatusPill>
+//         {mapEnabled ? (
+//           <Button
+//             type="button"
+//             variant={action.variant}
+//             size="sm"
+//             className={action.className}
+//             onClick={onSetup}
+//           >
+//             <MapPin className="size-3.5" aria-hidden />
+//             {t(action.label)}
+//           </Button>
+//         ) : null}
+//       </div>
+//       {/* The exception, and only then: a free-text address nobody picked from the suggestions. */}
+//       {located ? null : (
+//         <p className="text-xs text-amber-700">
+//           {t('locationNotYetLocated')}
+//           {mapEnabled ? ` ${t('locationResolveHint')}` : ''}
+//         </p>
+//       )}
+//
+//       {mapEnabled ? (
+//         // Behind a fold: for somebody who was handed coordinates, not the way in.
+//         <details className="text-xs text-gray-500">
+//           <summary className="cursor-pointer select-none">{t('manualCoordinates')}</summary>
+//           <div className="mt-2">{coordinateInputs}</div>
+//         </details>
+//       ) : (
+//         <>
+//           <p className="text-xs text-gray-500">{t('locationCoordinatesHint')}</p>
+//           {coordinateInputs}
+//         </>
+//       )}
+//       {problem ? (
+//         <p role="alert" className="text-xs text-red-600">
+//           {t(problem === 'incomplete' ? 'locationPairIncomplete' : 'locationPairInvalid')}
+//         </p>
+//       ) : null}
+//     </fieldset>
+//   );
+// }
 
 /**
  * The map, on top of the form: find the place, put the pin on the gate,
@@ -409,6 +479,18 @@ function LocationSetupModal({
   const [query, setQuery] = useState('');
   const [draft, setDraft] = useState<Coordinates | null>(initial);
   const [offeredAddress, setOfferedAddress] = useState<string | null>(null);
+  /**
+   * What the found place said about tỉnh/huyện/xã, travelling back with the
+   * confirm exactly as the address does.
+   *
+   * ★ DRAGGING THE PIN DOES NOT CHANGE IT, and that is the same rule the
+   * address follows. The operator moves the pin from the parcel's centre to the
+   * gate — a few dozen metres inside the SAME ward — so re-deriving the three
+   * would mean a second billed lookup to learn what is already known. An
+   * operator who really has moved the pin into the next district corrects the
+   * fields, which they can.
+   */
+
 
   const pick = (place: ResolvedPlace, text: string) => {
     setQuery(text);
@@ -432,7 +514,10 @@ function LocationSetupModal({
             disabled={draft === null}
             className="bg-blue-600 hover:bg-blue-700"
             onClick={() => {
-              if (draft) onConfirm({ ...draft, address: offeredAddress });
+              // The pin is the answer; the administrative fields are chosen
+              // from the official list, never inferred from where it landed.
+              if (draft)
+                onConfirm({ ...draft, address: offeredAddress, province: null, ward: null });
             }}
           >
             {t('confirmPosition')}
@@ -621,52 +706,53 @@ function PlaceSearch({
   );
 }
 
-/** The two numbers, as text fields. The server validates them again; this only keeps the pair whole. */
-function CoordinateInputs({
-  latitude,
-  longitude,
-  invalid,
-  onLatitude,
-  onLongitude,
-}: Readonly<{
-  latitude: string;
-  longitude: string;
-  invalid: boolean;
-  onLatitude: (value: string) => void;
-  onLongitude: (value: string) => void;
-}>) {
-  const { t } = useLanguage();
-  return (
-    <div className="grid grid-cols-2 gap-2">
-      <Input
-        id="location-latitude"
-        type="number"
-        inputMode="decimal"
-        step="any"
-        min={-90}
-        max={90}
-        placeholder={t('fieldLatitude')}
-        aria-label={t('fieldLatitude')}
-        aria-invalid={invalid || undefined}
-        value={latitude}
-        onChange={(event) => onLatitude(event.target.value)}
-      />
-      <Input
-        id="location-longitude"
-        type="number"
-        inputMode="decimal"
-        step="any"
-        min={-180}
-        max={180}
-        placeholder={t('fieldLongitude')}
-        aria-label={t('fieldLongitude')}
-        aria-invalid={invalid || undefined}
-        value={longitude}
-        onChange={(event) => onLongitude(event.target.value)}
-      />
-    </div>
-  );
-}
+// ★ COMMENTED OUT WITH `PositionSection`, its only caller.
+// /** The two numbers, as text fields. The server validates them again; this only keeps the pair whole. */
+// function CoordinateInputs({
+//   latitude,
+//   longitude,
+//   invalid,
+//   onLatitude,
+//   onLongitude,
+// }: Readonly<{
+//   latitude: string;
+//   longitude: string;
+//   invalid: boolean;
+//   onLatitude: (value: string) => void;
+//   onLongitude: (value: string) => void;
+// }>) {
+//   const { t } = useLanguage();
+//   return (
+//     <div className="grid grid-cols-2 gap-2">
+//       <Input
+//         id="location-latitude"
+//         type="number"
+//         inputMode="decimal"
+//         step="any"
+//         min={-90}
+//         max={90}
+//         placeholder={t('fieldLatitude')}
+//         aria-label={t('fieldLatitude')}
+//         aria-invalid={invalid || undefined}
+//         value={latitude}
+//         onChange={(event) => onLatitude(event.target.value)}
+//       />
+//       <Input
+//         id="location-longitude"
+//         type="number"
+//         inputMode="decimal"
+//         step="any"
+//         min={-180}
+//         max={180}
+//         placeholder={t('fieldLongitude')}
+//         aria-label={t('fieldLongitude')}
+//         aria-invalid={invalid || undefined}
+//         value={longitude}
+//         onChange={(event) => onLongitude(event.target.value)}
+//       />
+//     </div>
+//   );
+// }
 
 function Field({
   id,

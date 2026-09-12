@@ -9,6 +9,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  MapPin,
   Settings,
   Sparkles,
   Truck,
@@ -226,6 +227,15 @@ export default function MainLayout() {
                 to="/dispatch/master-data"
                 icon={Warehouse}
                 label={t('tripMasterData')}
+              />
+              {/* Ungated for the same reason as the two above: reading and
+                  adding a place are `trip.read`/`trip.create`, which every
+                  signed-in caller holds. The edit controls INSIDE the screen
+                  are what `trip.write` hides. */}
+              <NavItem
+                to="/dispatch/locations"
+                icon={MapPin}
+                label={t('locationCatalogue')}
               />
               {/* ★ GATED, UNLIKE THE TWO ABOVE. `trip.complete.review` is not
                   held by every signed-in caller — it closes a trip permanently

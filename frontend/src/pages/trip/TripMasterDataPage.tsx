@@ -24,7 +24,7 @@ import {
   updateTripVehicle,
 } from '@/api/tripCatalogue';
 import { isApiError } from '@/utils/errors';
-import { stripPlate } from '@/utils/format';
+import { formatPlate, stripPlate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import type { TranslationKey } from '@/types/translate';
 import { CustomerLocationsModal } from './components/CustomerLocationsModal';
@@ -48,8 +48,22 @@ type Tab = 'vehicles' | 'customers';
  *
  * `label` is the plate or the name; nothing else on the row differs, which is
  * what lets the table below be written once for both tabs.
+ *
+ * ★ `label` IS THE PAYLOAD, `display` IS THE VIEW OF IT — the same split
+ * `PlateInput` keeps. `label` is the canonical string: the plain plate the edit
+ * dialog strips and sends, the name `CustomerLocationsModal` is opened with.
+ * `display` is that string as a reader should see it, and is the ONLY thing
+ * this screen renders. Printing `label` is what left the catalogue showing
+ * `50AA12333` beside `51C-4265` while every other screen agreed — those are
+ * four spellings of the stored column, not four plates.
  */
-type CatalogueRowData = { id: string; label: string; note: string | null; status: string };
+type CatalogueRowData = {
+  id: string;
+  label: string;
+  display: string;
+  note: string | null;
+  status: string;
+};
 
 export default function TripMasterDataPage() {
   const { t } = useLanguage();
@@ -90,8 +104,13 @@ export default function TripMasterDataPage() {
   // plate or the name; nothing else on the row differs.
   const rows: CatalogueRowData[] =
     tab === 'vehicles'
-      ? catalogue.vehicles.items.map((row) => ({ ...row, label: row.plate }))
-      : catalogue.customers.items.map((row) => ({ ...row, label: row.name }));
+      ? catalogue.vehicles.items.map((row) => ({
+          ...row,
+          label: row.plate,
+          // A name is already its own display; a plate is not.
+          display: formatPlate(row.plate),
+        }))
+      : catalogue.customers.items.map((row) => ({ ...row, label: row.name, display: row.name }));
 
   return (
     <div className="space-y-6">
@@ -242,7 +261,7 @@ function CatalogueRow({
 
   return (
     <TableRow className={cn('transition-colors hover:bg-blue-50/30', archived && 'opacity-60')}>
-      <TableCell className="font-medium text-gray-900">{row.label}</TableCell>
+      <TableCell className="font-medium text-gray-900">{row.display}</TableCell>
       <TableCell className="text-gray-600">{row.note ?? '—'}</TableCell>
       <TableCell>
         <span
@@ -504,7 +523,7 @@ function ArchiveDialog({
 }: Readonly<{
   isOpen: boolean;
   tab: Tab;
-  row: { id: string; label: string };
+  row: { id: string; display: string };
   onClose: () => void;
   onArchived: () => void;
 }>) {
@@ -546,7 +565,7 @@ function ArchiveDialog({
         <p className="text-sm text-gray-600">
           {t(tab === 'vehicles' ? 'confirmArchiveVehicleBody' : 'confirmArchiveCustomerBody')}
         </p>
-        <p className="text-sm font-medium text-gray-900">{row.label}</p>
+        <p className="text-sm font-medium text-gray-900">{row.display}</p>
         {error && (
           <p role="alert" className="text-sm text-red-600">
             {error}

@@ -998,6 +998,47 @@ const PHRASES = {
   locationName: { vi: 'Tên địa điểm', en: 'Location name' },
   locationAddress: { vi: 'Địa chỉ', en: 'Address' },
   locationContact: { vi: 'Liên hệ', en: 'Contact' },
+  // ---------------------------------------------- the locations catalogue --
+  //
+  // The sidebar entry and the screen behind it: every place, shared and
+  // customer-owned, in one list.
+  locationCatalogue: { vi: 'Địa điểm', en: 'Locations' },
+  locationCatalogueHint: {
+    vi: 'Tên hay dùng và địa chỉ cụ thể của nó. Địa điểm dùng chung không thuộc khách hàng nào.',
+    en: 'The names everyone uses, and the address each one resolves to. A shared place belongs to no customer.',
+  },
+  addSharedLocation: { vi: 'Thêm địa điểm dùng chung', en: 'Add shared location' },
+  emptyLocationCatalogue: { vi: 'Chưa có địa điểm nào.', en: 'No locations yet.' },
+  /** The owner column, and the filter above it. */
+  locationOwner: { vi: 'Khách hàng', en: 'Customer' },
+  locationOwnerAll: { vi: 'Tất cả', en: 'All' },
+  /** What the owner cell says for a place belonging to nobody. */
+  locationShared: { vi: '— Dùng chung —', en: '— Shared —' },
+  /** Tỉnh · huyện · xã, as one column and as three fields. */
+  // ★ THREE LEVELS, RECORDING THE PRE-2025 HIERARCHY. Vietnam abolished the
+  // quận/huyện tier on 1 July 2025; 0030 and the administrative client explain
+  // why this deployment still writes it down.
+  locationAdminArea: { vi: 'Tỉnh / Quận / Phường', en: 'Province / district / ward' },
+  locationProvince: { vi: 'Tỉnh / Thành phố', en: 'Province / city' },
+  locationDistrict: { vi: 'Quận / Huyện', en: 'District' },
+  locationWard: { vi: 'Phường / Xã', en: 'Ward / commune' },
+  locationProvincePick: { vi: 'Chọn tỉnh / thành phố', en: 'Choose a province' },
+  locationDistrictPick: { vi: 'Chọn quận / huyện', en: 'Choose a district' },
+  locationWardPick: { vi: 'Chọn phường / xã', en: 'Choose a ward' },
+  locationDistrictNeedsProvince: { vi: 'Chọn tỉnh trước', en: 'Choose a province first' },
+  locationWardNeedsDistrict: { vi: 'Chọn quận / huyện trước', en: 'Choose a district first' },
+  // Shown under a dropdown that could not be filled. The form still saves:
+  // these two fields describe a place, they are not what makes one real.
+  adminAreaUnavailable: {
+    vi: 'Không lấy được danh mục hành chính. Vẫn lưu được địa điểm, bổ sung sau.',
+    en: 'The administrative list could not be loaded. The location still saves; fill these in later.',
+  },
+  // Same reassurance the vehicle and customer bodies give, for the same
+  // misreading: "lưu trữ" is not a delete, and past trips keep their snapshot.
+  confirmArchiveLocationBody: {
+    vi: 'Lưu trữ địa điểm này? Các chuyến đã chạy vẫn giữ nguyên địa chỉ đã lưu — địa điểm chỉ không còn được chọn cho chuyến mới.',
+    en: 'Archive this location? Past trips keep the address they copied — it is only no longer offered for new trips.',
+  },
   locationCoordinates: { vi: 'Toạ độ', en: 'Coordinates' },
   locationLocated: { vi: 'Đã định vị', en: 'Located' },
   locationUnlocated: { vi: 'Chưa định vị', en: 'Not located' },

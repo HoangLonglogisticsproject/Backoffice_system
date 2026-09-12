@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
-import { updateTripLocation } from '@/api/tripCatalogue';
+import { updateTripLocationById } from '@/api/tripCatalogue';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiError } from '@/utils/errors';
@@ -18,6 +18,21 @@ const useSession = vi.fn();
 
 const createTripSchedule = vi.fn();
 const fetchAllTripSchedules = vi.fn();
+
+/**
+ * The two administrative dropdowns, stubbed at the hook.
+ *
+ * They read our own API through react-query, which is a provider this suite
+ * has no reason to stand up: what is under test here is the place form, not
+ * whether a list of provinces arrives. Stubbed empty, the selects render and
+ * stay empty — which is also the real behaviour when the source is down.
+ */
+vi.mock('@/hooks/useVnAdministrative', () => ({
+  useProvinces: () => ({ items: [], loading: false, failed: false }),
+  useDistricts: () => ({ items: [], loading: false, failed: false }),
+  useWards: () => ({ items: [], loading: false, failed: false }),
+}));
+
 vi.mock('@/api/tripSchedule', () => ({
   fetchTripSchedules: (...a: unknown[]) => fetchTripSchedules(...a),
   fetchAllTripSchedules: (...a: unknown[]) => fetchAllTripSchedules(...a),
@@ -50,7 +65,7 @@ vi.mock('@/api/tripCatalogue', () => ({
   createTripCustomer: vi.fn(),
   fetchTripLocations: (...a: unknown[]) => fetchTripLocations(...a),
   createTripLocation: (...a: unknown[]) => createTripLocation(...a),
-  updateTripLocation: vi.fn(),
+  updateTripLocationById: vi.fn(),
   archiveTripLocation: vi.fn(),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
@@ -1947,7 +1962,7 @@ describe('★ an existing trip and its snapshot', () => {
     createTripLocation.mockReset();
     fetchEligibleDrivers.mockReset().mockResolvedValue([]);
     useSession.mockReset();
-    vi.mocked(updateTripLocation).mockReset();
+    vi.mocked(updateTripLocationById).mockReset();
   });
 
   it('★ reads readiness from the trip’s own snapshot, not from the master row, at both ends', async () => {
@@ -1968,7 +1983,7 @@ describe('★ an existing trip and its snapshot', () => {
   });
 
   it('★ a deliberate refresh of the pickup place names it again, and readiness follows the copy the save will make', async () => {
-    vi.mocked(updateTripLocation).mockResolvedValue(master() as never);
+    vi.mocked(updateTripLocationById).mockResolvedValue(master() as never);
     await openEdit(pickupStale, pickupStaleMasters());
 
     // The fix is offered on the pickup — the end whose snapshot is unlocated.
@@ -1977,7 +1992,10 @@ describe('★ an existing trip and its snapshot', () => {
     expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Kho A');
     fireEvent.click(placeSaveButton());
     await waitFor(() =>
-      expect(updateTripLocation).toHaveBeenCalledWith('c1', 'la', expect.objectContaining({ name: 'Kho A' })),
+      // ★ BY ID, NOT BY CUSTOMER. The place dialog patches the row it was
+      // opened on; the customer it belongs to is not restated, because the
+      // catalogue screen edits rows it has no customer for either.
+      expect(updateTripLocationById).toHaveBeenCalledWith('la', expect.objectContaining({ name: 'Kho A' })),
     );
 
     // Readiness now reads the master for THAT end — the copy the next save makes.
@@ -1993,7 +2011,7 @@ describe('★ an existing trip and its snapshot', () => {
   });
 
   it('★ the same for the delivery: the refreshed place is named in the patch, the untouched pickup is not', async () => {
-    vi.mocked(updateTripLocation).mockResolvedValue(master({ id: 'lb', name: 'Nhà máy A' }) as never);
+    vi.mocked(updateTripLocationById).mockResolvedValue(master({ id: 'lb', name: 'Nhà máy A' }) as never);
     await openEdit(deliveryStale, deliveryStaleMasters());
 
     expect(pillUnder('KCN Sóng Thần')).toHaveTextContent('Đã định vị');
@@ -2002,7 +2020,7 @@ describe('★ an existing trip and its snapshot', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Thiết lập vị trí' }));
     expect(await screen.findByLabelText('Tên địa điểm')).toHaveValue('Nhà máy A');
     fireEvent.click(placeSaveButton());
-    await waitFor(() => expect(updateTripLocation).toHaveBeenCalledWith('c1', 'lb', expect.anything()));
+    await waitFor(() => expect(updateTripLocationById).toHaveBeenCalledWith('lb', expect.anything()));
 
     await waitFor(() => expect(pillUnder('Bình Dương')).toHaveTextContent('Đã định vị'));
     expect(screen.getByText('Sẵn sàng xác minh vị trí')).toBeInTheDocument();

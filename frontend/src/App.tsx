@@ -17,6 +17,7 @@ import WorkListPage from './pages/worklist/WorkListPage'
 
 import TripSchedulePage from './pages/trip/TripSchedulePage'
 import TripMasterDataPage from './pages/trip/TripMasterDataPage'
+import LocationCataloguePage from './pages/trip/LocationCataloguePage'
 import CompletionReviewPage from './pages/trip/CompletionReviewPage'
 
 import NoAccessPage from './pages/system/NoAccessPage'
@@ -106,6 +107,9 @@ function App() {
             company-wide data, so there is no unit to scope it to (§21). */}
         <Route path="/dispatch/trip-schedule" element={<TripSchedulePage />} />
         <Route path="/dispatch/master-data" element={<TripMasterDataPage />} />
+        {/* Every place, shared and customer-owned. The customer's own door into
+            the same table stays on the master data screen. */}
+        <Route path="/dispatch/locations" element={<LocationCataloguePage />} />
         {/* The office side of the SAME completion lifecycle the Driver Portal
             submits into. One model, two counters. */}
         <Route path="/dispatch/completion-review" element={<CompletionReviewPage />} />
