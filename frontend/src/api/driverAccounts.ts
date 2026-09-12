@@ -110,6 +110,29 @@ export async function fetchDriver(userId: string): Promise<DriverAccount> {
 }
 
 /**
+ * `PATCH /driver-accounts/:id` — corrects the driver's NAME. Nothing else.
+ *
+ * ★ SUPERADMIN ONLY, DECIDED BY THE SERVER. The route requires `user.write`,
+ * whose tier is `'global'` — satisfied by an active SUPERADMIN assignment and
+ * by nothing a department can grant. The screen hides the control from anybody
+ * else as a courtesy; the 403 is what enforces it.
+ *
+ * Not the sign-in address, not the password, not the status: each of those is
+ * its own act with its own consequences, and the name is the one that is
+ * routinely just a typo.
+ */
+export async function renameDriver(
+  userId: string,
+  displayName: string,
+): Promise<DriverAccount> {
+  const { data } = await httpClient.patch<DriverAccount>(
+    `/driver-accounts/${encodeURIComponent(userId)}`,
+    { displayName },
+  );
+  return data;
+}
+
+/**
  * `PATCH /driver-accounts/:id/status` — disable or re-enable. ACCOUNT STATUS
  * ONLY: the server revokes sessions on disable, and touches no trip
  * assignment in either direction. Whether a trip still needs a driver is

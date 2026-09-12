@@ -4,6 +4,7 @@ import { DATABASE, type Database } from '../../../common/types/database.port';
 import { AppConfig } from '../../../config/app.config';
 import { IdentityRepository } from '../../../core/identity/persistence/identity.repository';
 import { AccountLifecycleService } from '../../../core/users/application/account-lifecycle.service';
+import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { AccountProvisioningService } from '../../../core/users/application/account-provisioning.service';
 import type { User } from '../../../core/users/domain/user.entity';
 import { assertProvisionableEmail } from '../../../core/users/domain/email';
@@ -57,6 +58,7 @@ export class DriverAccountService {
     private readonly config: AppConfig,
     private readonly accounts: DriverAccountRepository,
     private readonly lifecycle: AccountLifecycleService,
+    private readonly users: UserRepository,
   ) {}
 
   // ------------------------------------------------------ driver management --
@@ -107,6 +109,46 @@ export class DriverAccountService {
     return input.status === 'disabled'
       ? this.lifecycle.disable(change)
       : this.lifecycle.enable(change);
+  }
+
+  /**
+   * Corrects the name a driver is known by. THE NAME ONLY.
+   *
+   * ★ THE SAME DOOR RULE AS EVERY OTHER WRITE HERE: the target is checked to be
+   * a DRIVER first, so Driver Management cannot be used to rename an employee,
+   * and a non-driver id is answered "not found" — the same answer the read
+   * gives, so an administrator holding an arbitrary user id learns nothing.
+   *
+   * ★ WHAT IT DOES NOT TOUCH. Not the sign-in address, not the password, not
+   * the status, not one session. A driver signed in on a lorry stays signed in;
+   * the next screen they draw simply says the corrected name.
+   *
+   * ⚠ AND IT REWRITES HISTORY IN THE ONLY SENSE THAT MATTERS. `display_name` is
+   * not snapshotted onto a trip — the board and the completion review join it
+   * live — so correcting a misspelling corrects it everywhere it has ever
+   * appeared. That is the point: the alternative is a fleet where the same
+   * person is two people. It is also why this is `user.write`, a tier no
+   * department head holds.
+   */
+  async rename(input: { userId: string; displayName: string }): Promise<DriverAccount> {
+    if (!(await this.accounts.findDriver(input.userId))) {
+      throw new NotFoundError('Driver not found.');
+    }
+
+    const displayName = input.displayName.trim();
+    if (displayName.length === 0) {
+      throw new ValidationError('A driver needs a name.', { displayName: 'REQUIRED' });
+    }
+
+    const renamed = await this.users.setDisplayName({ userId: input.userId, displayName });
+    // The driver existed a statement ago. Gone now means deleted underneath us,
+    // which nothing in this deployment does — but saying "not found" is still
+    // the honest answer rather than returning a row that is not there.
+    if (!renamed) throw new NotFoundError('Driver not found.');
+
+    // Re-read through the driver projection so the caller gets the same six
+    // fields the list and the detail give, username included.
+    return this.get(input.userId);
   }
 
   // -------------------------------------------------------------- creation --

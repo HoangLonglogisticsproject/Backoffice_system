@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClipboardList, Plus } from 'lucide-react';
+import { ClipboardList, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import {
@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { RenameDriverModal } from '@/components/system/RenameDriverModal';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import {
@@ -72,6 +73,8 @@ export default function DriverManagementPage() {
   const [detailOf, setDetailOf] = useState<string | null>(null);
   /** The status change awaiting confirmation. */
   const [changing, setChanging] = useState<{ driver: DriverAccount; to: DriverAccountStatus } | null>(null);
+  /** The driver whose name is being corrected. */
+  const [renaming, setRenaming] = useState<DriverAccount | null>(null);
 
   if (!allowed) return <Navigate to="/403" replace />;
 
@@ -133,6 +136,18 @@ export default function DriverManagementPage() {
                       <Button size="sm" variant="outline" className={ROW_ACTION.neutral} onClick={() => setDetailOf(driver.id)}>
                         {t('viewDetail')}
                       </Button>
+                      {/* Beside the detail, not inside it: correcting a name is
+                          a one-field act, and burying it a dialog deep would
+                          make the commonest fix the hardest to reach. */}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className={ROW_ACTION.neutral}
+                        onClick={() => setRenaming(driver)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden />
+                        <span className="sr-only">{t('renameDriver')}</span>
+                      </Button>
                       <StatusButton driver={driver} onChoose={(to) => setChanging({ driver, to })} />
                     </div>
                   </TableCell>
@@ -168,6 +183,14 @@ export default function DriverManagementPage() {
           void reload();
         }}
       />
+
+      {renaming ? (
+        <RenameDriverModal
+          driver={renaming}
+          onClose={() => setRenaming(null)}
+          onRenamed={reload}
+        />
+      ) : null}
 
       {detailOf ? (
         <DriverDetailModal

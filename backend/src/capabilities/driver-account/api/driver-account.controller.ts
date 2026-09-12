@@ -49,6 +49,11 @@ const rejectSchema = z.object({
   reason: z.string().trim().min(1).max(1000),
 });
 
+/** The same bound the create form uses — one name, one rule. */
+const renameDriverSchema = z.object({
+  displayName: z.string().trim().min(1).max(200),
+});
+
 /**
  * Both directions, on a DRIVER. The employee route (`PATCH /users/:id/status`)
  * still accepts `disabled` only, because re-enabling an employee asks "into
@@ -60,6 +65,7 @@ const setDriverStatusSchema = z.object({
 });
 
 type CreateDriverInput = z.infer<typeof createDriverSchema>;
+type RenameDriverInput = z.infer<typeof renameDriverSchema>;
 type SetDriverStatusInput = z.infer<typeof setDriverStatusSchema>;
 type RequestDriverInput = z.infer<typeof requestDriverSchema>;
 type RejectInput = z.infer<typeof rejectSchema>;
@@ -73,6 +79,7 @@ type RejectInput = z.infer<typeof rejectSchema>;
  *   POST   /driver-accounts                    user.write             'global'
  *   GET    /driver-accounts                    user.write             'global'
  *   GET    /driver-accounts/:userId            user.write             'global'
+ *   PATCH  /driver-accounts/:userId            user.write             'global'
  *   PATCH  /driver-accounts/:userId/status     user.write             'global'
  *   POST   /driver-account-requests            driver.account.request 'head-anywhere'
  *   GET    /driver-account-requests            user.write             'global'
@@ -121,6 +128,30 @@ export class DriverAccountController {
   @RequirePermission('user.write')
   async get(@Param('userId', UuidParam) userId: string): Promise<DriverAccount> {
     return this.drivers.get(userId);
+  }
+
+  /**
+   * Corrects a driver's name.
+   *
+   * ★ `user.write` IS ALREADY "SUPERADMIN ONLY", so no new key was invented for
+   * this. That permission's requirement tier is `'global'`, which exactly one
+   * thing satisfies — an active SUPERADMIN assignment — and no departmental
+   * relation can ever grant it. A second permission meaning the same thing
+   * would be a second place for the rule to drift.
+   *
+   * ★ ITS OWN ROUTE, NOT A WIDER PATCH ON THE ACCOUNT. Status has one and so
+   * does the name: each says in its path what it changes, so a body that
+   * carried `status` by accident could not flip an account through the rename
+   * door, and neither route needs to explain which of its fields are optional.
+   */
+  @Patch('driver-accounts/:userId')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('user.write')
+  async rename(
+    @Param('userId', UuidParam) userId: string,
+    @Body(new ZodValidationPipe(renameDriverSchema)) body: RenameDriverInput,
+  ): Promise<DriverAccount> {
+    return this.drivers.rename({ userId, displayName: body.displayName });
   }
 
   /**

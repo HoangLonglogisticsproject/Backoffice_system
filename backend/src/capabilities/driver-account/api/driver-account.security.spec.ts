@@ -56,6 +56,7 @@ describe('driver-account HTTP security', () => {
     listMine: jest.Mock;
     list: jest.Mock;
     get: jest.Mock;
+    rename: jest.Mock;
     setStatus: jest.Mock;
   };
 
@@ -126,6 +127,7 @@ describe('driver-account HTTP security', () => {
         status: 'active',
         createdAt: new Date('2026-08-01T00:00:00Z'),
       }),
+      rename: jest.fn().mockResolvedValue({ id: MANAGED, displayName: 'Trần Văn B' }),
       setStatus: jest.fn().mockResolvedValue({ id: MANAGED, status: 'disabled' }),
     };
 
@@ -238,6 +240,32 @@ describe('driver-account HTTP security', () => {
       expect(response.body).toEqual({ id: MANAGED, status });
     });
 
+    it('★ corrects a driver’s name', async () => {
+      const response = await authed('patch', DETAIL).send({ displayName: 'Trần Văn B' }).expect(200);
+
+      expect(drivers.rename).toHaveBeenCalledWith({ userId: MANAGED, displayName: 'Trần Văn B' });
+      expect(response.body.displayName).toBe('Trần Văn B');
+    });
+
+    it('★ refuses a blank name before any service, and cannot flip status through the rename door', async () => {
+      await authed('patch', DETAIL).send({ displayName: '   ' }).expect(422);
+      // The rename route's schema has no `status` key, so a body carrying one
+      // is a body with an unknown field and a missing required one.
+      await authed('patch', DETAIL).send({ status: 'disabled' }).expect(422);
+
+      expect(drivers.rename).not.toHaveBeenCalled();
+      expect(drivers.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('refuses a rename without the CSRF header, before the service', async () => {
+      await request(app.getHttpServer())
+        .patch(DETAIL)
+        .set('Cookie', `${SESSION_COOKIE}=${TOKEN}`)
+        .send({ displayName: 'Trần Văn B' })
+        .expect(403);
+      expect(drivers.rename).not.toHaveBeenCalled();
+    });
+
     it('refuses a status that is neither, before any service', async () => {
       await authed('patch', STATUS).send({ status: 'archived' }).expect(422);
       expect(drivers.setStatus).not.toHaveBeenCalled();
@@ -330,6 +358,7 @@ describe('driver-account HTTP security', () => {
     it.each([
       ['get', LIST],
       ['get', DETAIL],
+      ['patch', DETAIL],
       ['patch', STATUS],
     ] as const)('★ may not manage driver accounts — %s %s is 403 and reaches no service', async (method, path) => {
       const response = await authed(method, path).send({ status: 'disabled' });
@@ -363,13 +392,15 @@ describe('driver-account HTTP security', () => {
     it.each([
       ['get', LIST],
       ['get', DETAIL],
+      ['patch', DETAIL],
       ['patch', STATUS],
     ] as const)('may not manage driver accounts — %s %s', async (method, path) => {
-      const response = await authed(method, path).send({ status: 'active' });
+      const response = await authed(method, path).send({ status: 'active', displayName: 'X' });
 
       expect(response.status).toBe(403);
       expect(drivers.list).not.toHaveBeenCalled();
       expect(drivers.get).not.toHaveBeenCalled();
+      expect(drivers.rename).not.toHaveBeenCalled();
       expect(drivers.setStatus).not.toHaveBeenCalled();
     });
   });
@@ -388,6 +419,7 @@ describe('driver-account HTTP security', () => {
       ['post', REJECT],
       ['get', LIST],
       ['get', DETAIL],
+      ['patch', DETAIL],
       ['patch', STATUS],
     ] as const)('refuses %s %s with 403, and reaches no service', async (method, path) => {
       const response = await authed(method, path).send({ reason: 'x', status: 'active' });

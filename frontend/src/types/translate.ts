@@ -460,6 +460,13 @@ const PHRASES = {
     vi: 'Tài khoản tài xế: tạo mới, xem chi tiết, vô hiệu hóa và kích hoạt lại. Phân công chuyến được thực hiện trên Lịch xe.',
     en: 'Driver accounts: create, view, disable and re-enable. Trips are assigned on the schedule board.',
   },
+  renameDriver: { vi: 'Sửa tên tài xế', en: 'Edit driver name' },
+  // Says what the dialog does NOT change, because the obvious next question
+  // when somebody opens it is whether the sign-in address moves too.
+  renameDriverHint: {
+    vi: 'Tên này hiện trên bảng điều phối, trên app tài xế và trên mọi chuyến đã chạy. Đổi tên không ảnh hưởng tài khoản đăng nhập, mật khẩu hay trạng thái.',
+    en: 'This name appears on the dispatch board, in the driver app and on every past trip. Renaming touches neither the sign-in account, the password, nor the status.',
+  },
   addDriver: { vi: 'Thêm tài xế', en: 'Add driver' },
   driverListEmpty: { vi: 'Chưa có tài khoản tài xế nào.', en: 'No driver accounts yet.' },
   colUsername: { vi: 'Tên đăng nhập', en: 'Username' },
