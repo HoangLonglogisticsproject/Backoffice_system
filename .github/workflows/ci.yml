@@ -286,7 +286,35 @@ jobs:
   frontend:
     name: frontend · lint, types, build, unit tests
     needs: detect
-    if: needs.detect.outputs.frontend == 'true'
+
+    # ★ PATH-GATED ON A PULL REQUEST, UNCONDITIONAL ON `main`. The asymmetry
+    # closes a release-gate hole; it is not a stylistic choice.
+    #
+    # Frontend drift is measured in `release` against the revision Vercel is
+    # actually SERVING, which can lag several commits behind `main` — a
+    # promotion that was disarmed, failed, or was refused by the backend gate
+    # leaves drift outstanding. So a push touching only backend paths can
+    # legitimately need a frontend promotion for changes made earlier. Gated on
+    # paths alone, that promotion would happen on a run where this job was
+    # SKIPPED: production frontend deployed without lint, types, build or unit
+    # tests having run for the commit being deployed.
+    #
+    # ⚠ REQUIRING `needs.frontend.result == 'success'` AT THE DEPLOY STEP ALONE
+    # WOULD CLOSE THE HOLE BY DEADLOCKING IT. Drift would say promote, the gate
+    # would say skipped, and the frontend would stay stale until somebody
+    # happened to touch a frontend path — silently, since neither is an error.
+    # Running this job on every `main` push removes that condition's only
+    # failure mode instead, so the gate below is a guarantee rather than a
+    # coin flip on which paths the last commit happened to touch.
+    #
+    # The cost is one lint/typecheck/build/test cycle on documentation-only
+    # pushes to `main`. Pull requests — the high-volume case — keep the saving
+    # exactly as it was, and `assert-tests-ran.mjs` still refuses a run that
+    # discovered no tests, so this cannot pass vacuously.
+    if: >-
+      needs.detect.outputs.frontend == 'true'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
     runs-on: ubuntu-latest
 
     steps:
@@ -817,18 +845,74 @@ jobs:
 
           echo "origin (committed, from frontend/api/backend-origin.ts): ${BACKEND_ORIGIN}"
           echo "GET ${BACKEND_ORIGIN}/api/health"
+
+          # ★ REACHABILITY AND CORRECTNESS ARE TWO DIFFERENT QUESTIONS, asked in
+          # that order. The retry loop answers "did anything answer at all",
+          # which is the flaky one — a container replaced seconds ago, an nginx
+          # keepalive pool still holding the socket of the process that went
+          # away. The assertions after it answer "is the thing that answered the
+          # backend we just shipped", which no amount of retrying can change:
+          # an `environment` of `staging` is wrong on the first attempt and
+          # wrong on the fifth, so it fails immediately rather than spending
+          # twenty seconds confirming it.
+          answered=false
           for attempt in 1 2 3 4 5; do
-            if curl -fsS --max-time 10 "${BACKEND_ORIGIN}/api/health"; then
-              echo
-              echo "backend answers on its public endpoint - the frontend may be promoted"
-              exit 0
+            if curl -fsS --max-time 10 -o health.json "${BACKEND_ORIGIN}/api/health"; then
+              answered=true
+              break
             fi
             echo "attempt ${attempt}/5 failed"
             [ "$attempt" = 5 ] || sleep 5
           done
 
-          echo "::error::${BACKEND_ORIGIN}/api/health did not answer. Refusing to promote the frontend."
-          exit 1
+          if [ "$answered" != true ]; then
+            echo "::error::${BACKEND_ORIGIN}/api/health did not answer. Refusing to promote the frontend."
+            exit 1
+          fi
+
+          cat health.json; echo
+
+          # ★ A 200 IS NOT THE CONTRACT, THE BODY IS. `curl -fsS` already
+          # refuses a non-2xx, and the endpoint answers 503 when the database is
+          # unreachable (`HealthController`: `status: 'degraded'`,
+          # `checks.database: 'down'`) — so the transport check alone does cover
+          # a dead database. It does NOT cover the case this gate exists for:
+          # a backend that is perfectly healthy and is not the one production
+          # should be talking to. `environment` is the field that catches a
+          # container built with the wrong `NODE_ENV`, and nothing else in this
+          # pipeline looks at it.
+          #
+          # Each field is asserted separately because each failure is a
+          # different diagnosis, and a single combined expression would report
+          # all three as one unreadable mismatch.
+          if ! jq -e . health.json >/dev/null 2>&1; then
+            echo "::error::${BACKEND_ORIGIN}/api/health answered, but not with JSON. Something other than the API is on this host."
+            exit 1
+          fi
+
+          fail=0
+          assert_field() {
+            local path="$1" want="$2" got
+            got="$(jq -r "$path // \"<missing>\"" health.json)"
+            if [ "$got" = "$want" ]; then
+              echo "  ok   ${path} = ${want}"
+            else
+              echo "::error::${BACKEND_ORIGIN}/api/health reports ${path} = '${got}', expected '${want}'."
+              fail=1
+            fi
+          }
+
+          assert_field '.status' ok
+          assert_field '.environment' production
+          assert_field '.checks.database' up
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::The backend on ${BACKEND_ORIGIN} is not the healthy production backend. Refusing to promote the frontend."
+            exit 1
+          fi
+
+          rm -f health.json
+          echo "backend answers on its public endpoint, as production, with its database up - the frontend may be promoted"
 
 
       # ---------------------------------------------------------- frontend --
@@ -839,9 +923,21 @@ jobs:
         # one nobody has confirmed is at this commit — shipping a frontend past
         # it is exactly how the original skew happened. Stricter than the
         # condition it replaces, and deliberately so: the frontend cannot lead.
+        #
+        # ★ AND THE FRONTEND MUST HAVE BEEN VALIDATED IN THIS RUN, FOR THIS
+        # COMMIT. `needs.frontend.result` is the JOB's verdict — a different
+        # fact from every `steps.*.outcome` beside it, and the one that says
+        # lint, types, build and unit tests passed on the revision about to be
+        # promoted. Without it this step would accept "an earlier commit was
+        # tested once", which is not a statement about what is being deployed.
+        #
+        # `== 'success'` admits neither `skipped` nor `failure`. The job is
+        # unconditional on `main` (see its own `if:`) precisely so this can be
+        # strict without ever deadlocking outstanding drift.
         if: >-
           steps.plan.outputs.frontend == 'true'
           && vars.RELEASE_FRONTEND_ENABLED == 'true'
+          && needs.frontend.result == 'success'
           && steps.deploy_be.outcome == 'success'
           && steps.verify_be.outcome == 'success'
         env:
@@ -938,10 +1034,32 @@ jobs:
         if: steps.deploy_be.outcome == 'success' || steps.deploy_fe.outcome == 'success'
         env:
           PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+          FE_PROMOTED: ${{ steps.deploy_fe.outcome }}
         run: |
           set -euo pipefail
+
+          # ★ AN UNSET ORIGIN MEANS TWO DIFFERENT THINGS, AND ONLY ONE OF THEM
+          # IS SURVIVABLE. This step used to warn and `exit 0` either way, which
+          # made every release report a green "Smoke the public origin" while
+          # asserting nothing whatsoever — the exact shape of failure this
+          # pipeline is supposed to make impossible.
+          #
+          # If a frontend was just promoted, this is the ONLY check that looks at
+          # the origin users load. Skipping it silently means nobody finds out
+          # that the promotion broke the site until somebody opens it, so an
+          # unset variable here is a failed release. The backend is already
+          # verified on its own public endpoint by `verify_be`, so the state
+          # being reported is "production frontend live, unverified".
+          #
+          # If only the backend moved, `verify_be` has already reached it from
+          # outside the VPS over HTTPS and asserted its health contract, so
+          # there is no unverified change in flight and a warning is honest.
           if [ -z "${PUBLIC_ORIGIN:-}" ]; then
-            echo "::warning::PUBLIC_ORIGIN is not set - the deployment was verified only from inside the VPS."
+            if [ "${FE_PROMOTED:-}" = success ]; then
+              echo "::error::A production frontend was promoted and PUBLIC_ORIGIN is not set, so nothing verified the origin users load. Set the PUBLIC_ORIGIN variable on the staging environment (see deploy/README.md)."
+              exit 1
+            fi
+            echo "::warning::PUBLIC_ORIGIN is not set - no frontend was promoted, and the backend was already verified on its public HTTPS endpoint."
             exit 0
           fi
           echo "GET ${PUBLIC_ORIGIN}/api/health"
