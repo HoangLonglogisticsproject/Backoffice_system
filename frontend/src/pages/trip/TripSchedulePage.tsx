@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { StatusPill } from '@/components/common/StatusPill';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useTripCatalogue, useTripSchedules } from '@/hooks/trip';
@@ -212,6 +213,15 @@ export default function TripSchedulePage() {
                 <TableHead className="font-semibold text-gray-600">{t('colDate')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colVehicle')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colDriver')}</TableHead>
+                {/*
+                  ★ THE ASSIGNMENT'S STATE, BESIDE THE PAIR IT DESCRIBES, and a
+                  different column from `colStatus` further along: that one is the
+                  TRIP's status and belongs to the booking, this one belongs to the
+                  lorry on this row.
+                */}
+                <TableHead className="font-semibold text-gray-600">
+                  {t('colAssignmentState')}
+                </TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCustomer')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCargo')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colPickup')}</TableHead>
@@ -445,30 +455,24 @@ const platesOf = (trip: TripScheduleWithRefs): string =>
     .join('; ');
 
 /**
- * ★ ONE ROW PER DISPATCH ASSIGNMENT — the grain of this table (ADR-0004).
+ * ★ ONE ROW PER DISPATCH ASSIGNMENT, GROUPED UNDER ONE TRIP.
  *
- * A trip carrying three lorries is three rows, each naming exactly one lorry
- * and exactly one driver. It used to be one row whose vehicle and driver cells
- * each held a list, which read as a single operational unit and hid the pairing:
- * nothing on screen said which driver was in which lorry.
+ * A trip carrying two lorries is two rows. Three columns vary down them — the
+ * lorry, its driver, and that pair's dispatch state — because those are the
+ * only facts that belong to an assignment rather than to the booking. Every
+ * other column, and every control, is the trip's and carries `rowSpan`, so one
+ * booking still reads as one booking and Sửa / Lưu trữ / Chi phí / Điều độ
+ * cannot be fired twice for it.
  *
- * ★ AN UNCREWED TRIP IS STILL EXACTLY ONE ROW. `[null]` rather than `[]` is what
- * guarantees that — a trip with nobody on it is a finding the board must show,
- * not a trip that disappears. That is the same shape the server's own
- * assignment-grain projection uses, where such a trip yields one row with a
- * null assignment id.
+ * ★ AN UNCREWED TRIP IS STILL EXACTLY ONE ROW. `[null]` rather than `[]` is
+ * what guarantees it: a trip nobody is driving is a finding the board must
+ * show, not a trip that disappears from it. That row reads "Chưa chọn" for the
+ * lorry and "Chưa phân công" for the driver and the state.
  *
- * ★ THE TRIP'S OWN FACTS ARE SPANNED, NOT REPEATED. Date, customer, cargo, both
- * legs, status, prices, note, author and every control carry `rowSpan`, so one
- * booking still reads as one booking and Edit / Archive / Cost / Dispatch cannot
- * be fired twice for the same trip. Only the vehicle and driver columns vary
- * down the rows, which is precisely what differs between assignments.
- *
- * ★ AND THE `STT` COLUMN STAYS A TRIP COUNTER. It is the spreadsheet's own
- * column and `firstRowNumber` computes a trip ordinal from the page size, so
- * numbering assignments there would make "row 7" mean two different things
- * depending on how many lorries the earlier trips happened to carry. It is
- * spanned with the rest.
+ * ★ AND `STT` STAYS A TRIP COUNTER. It is the spreadsheet's own column and
+ * `firstRowNumber` computes a trip ordinal from the page size, so numbering
+ * assignments there would make "row 7" mean two different things depending on
+ * how many lorries the earlier trips happened to carry.
  */
 function TripRows({
   trip,
@@ -482,7 +486,7 @@ function TripRows({
   onDispatch,
 }: Readonly<{
   trip: TripScheduleWithRefs;
-  /** The trip's ordinal in the export, 1-based and continuous across pages. */
+  /** The trip's ordinal, 1-based and continuous across pages. */
   rowNumber: number;
   mayPrice: boolean;
   canManage: boolean;
@@ -494,32 +498,30 @@ function TripRows({
 }>) {
   const { t, language } = useLanguage();
 
-  // `[null]` is the uncrewed trip: one row, no assignment. See the header.
   const turns: readonly (TripAssignmentRef | null)[] =
     trip.assignments.length > 0 ? trip.assignments : [null];
   const span = turns.length;
 
-  // A finished trip takes no dispatch change — the server refuses every
-  // assignment write once it is closed, so offering the control would offer a
-  // guaranteed 409.
+  // A finished trip takes no dispatch change: the server refuses every
+  // assignment write once it is closed, so the control would only earn a 409.
   const canDispatch = canManage && trip.status !== 'finished';
 
   return (
     <>
       {turns.map((turn, row) => (
         <TableRow
-          // ★ THE ASSIGNMENT IS THE ROW'S IDENTITY. The trip id is the fallback
-          // for the uncrewed row, which is the only row that has no assignment.
+          // The assignment is the row's identity; the trip id is the fallback
+          // for the uncrewed row, the only row that has no assignment.
           key={turn?.id ?? trip.id}
           className="align-top transition-colors hover:bg-blue-50/30"
         >
           {row === 0 && (
             <>
               {/*
-                The `STT` column of the sheet, continued ACROSS pages: trip 1
-                of page 2 is 51, not 1. Restarting the count per page would
-                make two different trips both "1" and break the one thing the
-                column is for — saying which row somebody means out loud.
+                The `STT` column of the sheet, continued ACROSS pages: trip 1 of
+                page 2 is 51, not 1. Restarting per page would make two
+                different trips both "1" and break the one thing the column is
+                for — saying which row somebody means out loud.
               */}
               <TableCell rowSpan={span} className="text-center font-medium text-gray-500">
                 {rowNumber}
@@ -531,19 +533,18 @@ function TripRows({
           )}
 
           {/*
-            ★ EXACTLY ONE PLATE. Formatted for reading, not normalised: the
+            ★ EXACTLY ONE LORRY. Formatted for reading, not normalised: the
             catalogue stores the plate as somebody typed it, so `50H49266` and
             `50H-49266` stop looking like two lorries down one column.
           */}
           <TableCell className="whitespace-nowrap font-medium text-gray-900">
-            <Plate trip={trip} turn={turn} />
+            {turn?.vehicle ? formatPlate(turn.vehicle.plate) : <Unset />}
           </TableCell>
 
           {/*
-            ★ EXACTLY ONE DRIVER — the one in the lorry on this row. Who is
-            driving is decided by Operations; the driver never does, the portal
-            has no such control and the server refuses a driver account the
-            route.
+            ★ EXACTLY ONE DRIVER — the one in the lorry on this row. Operations
+            decides who drives; the driver never does, the portal has no such
+            control and the server refuses a driver account the route.
           */}
           <TableCell className="whitespace-nowrap">
             {turn ? (
@@ -551,6 +552,24 @@ function TripRows({
             ) : (
               <span className="text-gray-400">{t('driverUnassigned')}</span>
             )}
+          </TableCell>
+
+          {/*
+            ★ THE ASSIGNMENT'S STATE, AND NOTHING ELSE'S. Every row the board
+            shows comes from an ACTIVE assignment, so the state it reports is
+            "đã phân công" — a fact about this lorry and driver, quite separate
+            from the trip's own status further along the row. Nothing here is
+            derived from `started` or from any completion: a turn's completion
+            lifecycle is its own, and this read model carries none of it.
+          */}
+          <TableCell className="whitespace-nowrap">
+            {/*
+              No assignment means no assignment state, so this falls to the
+              board's own "no value" marker rather than repeating the driver
+              cell's "Chưa phân công" — the same fact stated twice in one row
+              reads as two findings.
+            */}
+            {turn ? <StatusPill tone="green">{t('assignmentAssigned')}</StatusPill> : <Unset />}
           </TableCell>
 
           {row === 0 && (
@@ -573,17 +592,20 @@ function TripRows({
               </TableCell>
               <TableCell rowSpan={span}>
                 {/*
-                  The same badge either way. A reader without `trip.write`
-                  gets it as a label; a dispatcher gets it as the control
-                  that moves the trip along the board — one click, its own
-                  endpoint, no form.
+                  The same badge either way. A reader without `trip.write` gets
+                  it as a label; a dispatcher gets it as the control that moves
+                  the trip along the board — one click, its own endpoint, no
+                  form.
 
-                  ★ AND A FINISHED TRIP IS A LABEL FOR EVERYBODY. `finished`
-                  is terminal (BD-01), so the server refuses every move away
-                  from it — offering the dropdown here would be offering a
-                  control whose only possible outcome is a 409. The server
-                  still decides; this just stops asking it a settled
-                  question.
+                  ★ AND A FINISHED TRIP IS A LABEL FOR EVERYBODY. `finished` is
+                  terminal (BD-01), so the server refuses every move away from
+                  it — offering the dropdown here would be offering a control
+                  whose only possible outcome is a 409. The server still
+                  decides; this just stops asking it a settled question.
+
+                  ★ THIS IS THE TRIP'S STATUS, spanned across the assignment
+                  rows because one booking has one status. The per-row column
+                  above is the assignment's, and the two are never merged.
                 */}
                 {canManage && trip.status !== 'finished' ? (
                   <TripStatusSelect tripId={trip.id} status={trip.status} />
@@ -593,29 +615,27 @@ function TripRows({
               </TableCell>
 
               {/*
-                ★ THE TWO AGREED CHARGES — what this run is sold for and what
-                it is bought for. They are the only amounts on the board, and
-                only for a head or the superadmin. The wallet button beside
-                them opens what the run COST us: a different ledger behind
+                ★ THE TWO AGREED CHARGES — what this run is sold for and what it
+                is bought for. They are the only amounts on the board, and only
+                for a head or the superadmin. The wallet button beside them
+                opens what the run COST us: a different ledger behind
                 `cost.read`, fetched when that dialog opens and never in this
                 list's data.
 
-                ★ FORMATTED, NEVER PARSED. `formatMoney` does string work —
-                the values are `NUMERIC(14,2)` carried as text precisely so
-                nothing rounds them, and `Number(...)` here would undo that
-                for the sake of a thousands separator.
+                ★ FORMATTED, NEVER PARSED. `formatMoney` does string work — the
+                values are `NUMERIC(14,2)` carried as text precisely so nothing
+                rounds them, and `Number(...)` here would undo that for the sake
+                of a thousands separator.
 
                 ★ TESTED FOR TRUTHINESS RATHER THAN AGAINST `null`. A strict
-                `=== null` reads correctly against the contract and still
-                hands `undefined` to `formatMoney`, which unmounted the board
-                on the first fixture that predated the field. A missing price
-                and an empty one are the same fact, and neither is worth a
-                crash.
+                `=== null` reads correctly against the contract and still hands
+                `undefined` to `formatMoney`, which unmounted the board on the
+                first fixture that predated the field. A missing price and an
+                empty one are the same fact, and neither is worth a crash.
 
-                ★ AND THEY BELONG TO THE TRIP, NOT THE LORRY. One booking is
-                sold once however many lorries run it, so these are spanned
-                with the rest — repeating them per assignment would invite
-                somebody to add them up.
+                ★ AND THEY BELONG TO THE BOOKING, NOT THE LORRY, so they are
+                spanned: repeating them per assignment would invite somebody to
+                add them up.
               */}
               {mayPrice && (
                 <>
@@ -626,9 +646,9 @@ function TripRows({
                     {trip.sellPrice ? formatMoney(trip.sellPrice) : <Unset />}
                   </TableCell>
                   {/*
-                    Lighter than the selling price on purpose: this is what
-                    the run cost to buy, and the column people scan down is
-                    the one they invoice from.
+                    Lighter than the selling price on purpose: this is what the
+                    run cost to buy, and the column people scan down is the one
+                    they invoice from.
                   */}
                   <TableCell
                     rowSpan={span}
@@ -650,11 +670,11 @@ function TripRows({
                 <TableCell rowSpan={span}>
                   <div className="flex items-center gap-1">
                     {/*
-                      ★ ONCE PER TRIP, ALL FOUR. Every one of these acts on the
-                      trip rather than on a lorry — including Dispatch, which
-                      opens the panel where the whole crew is managed. They sit
-                      in a spanned cell so a three-lorry trip cannot offer three
-                      Archive buttons for the same booking.
+                      ★ ALL FOUR ACT ON THE TRIP, SO ALL FOUR APPEAR ONCE.
+                      Điều độ opens the panel where the whole crew is managed,
+                      which is why it moved out of the driver cell when that
+                      cell became one-per-assignment: left there, a three-lorry
+                      trip would have offered three of it.
                     */}
                     {canDispatch && (
                       <Button
@@ -687,19 +707,19 @@ function TripRows({
                         <Archive className="h-3.5 w-3.5" />
                         {/*
                           Labelled "Lưu trữ", never "Xoá": the row survives
-                          archiving, and a button that promises deletion over
-                          an operation that keeps the record describes
-                          something else.
+                          archiving, and a button that promises deletion over an
+                          operation that keeps the record describes something
+                          else.
                         */}
                         <span className="sr-only">{t('archive')}</span>
                       </Button>
                     )}
                     {/*
-                      ★ ITS OWN PERMISSION, AND ITS OWN DIALOG. The amounts
-                      are never in the board's data — they are fetched only
-                      when this opens, and only for a caller holding
-                      `cost.read`. A column here would put the company's
-                      cost base in front of every signed-in account.
+                      ★ ITS OWN PERMISSION, AND ITS OWN DIALOG. The amounts are
+                      never in the board's data — they are fetched only when this
+                      opens, and only for a caller holding `cost.read`. A column
+                      here would put the company's cost base in front of every
+                      signed-in account.
                     */}
                     {canViewCost && (
                       <Button
@@ -722,45 +742,6 @@ function TripRows({
     </>
   );
 }
-
-/**
- * The one lorry on this row.
- *
- * ★ A LEGACY LORRY IS NAMED AS SUCH, AND ONLY WHERE THERE IS NO CREW. A trip
- * booked before dispatch became a pair may still carry `legacyVehicleId` with no
- * assignment behind it; the board says "planned vehicle (legacy)" rather than a
- * plate it does not have, so Operations knows to dispatch the trip again as a
- * pair. `assignment.vehicle` is the canonical source and cannot answer this one:
- * the read happens only on the uncrewed row, and migration 0029 case F leaves
- * precisely those rows uncrewed by design — a lorry with no driver is not an
- * assignment. Removing the read would render those trips as an ordinary `Unset`,
- * losing the signal that they need re-dispatching.
- *
- * ★ `turn.vehicle === null` IS A DIFFERENT STATE AGAIN: a pre-0027 assignment
- * the backfill could not resolve. It is crewed but names no lorry, and saying so
- * is how it gets fixed.
- */
-function Plate({
-  trip,
-  turn,
-}: Readonly<{ trip: TripScheduleWithRefs; turn: TripAssignmentRef | null }>) {
-  const { t } = useLanguage();
-
-  if (!turn) {
-    return trip.legacyVehicleId ? (
-      <span className="text-xs font-normal text-amber-700">{t('dispatchLegacyBadge')}</span>
-    ) : (
-      <Unset />
-    );
-  }
-
-  return turn.vehicle ? (
-    <>{formatPlate(turn.vehicle.plate)}</>
-  ) : (
-    <span className="text-xs font-normal text-amber-700">{t('dispatchMissingVehicle')}</span>
-  );
-}
-
 /**
  * A multi-line cell from the workbook.
  *
