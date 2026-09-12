@@ -683,12 +683,6 @@ const PHRASES = {
   colEmail: { vi: 'Email', en: 'Email' },
   colPhone: { vi: 'SĐT', en: 'Phone' },
   colStatus: { vi: 'Trạng thái', en: 'Status' },
-  // ★ THE ASSIGNMENT'S OWN COLUMN, kept apart from `colStatus` on purpose.
-  // `colStatus` is the TRIP's status (Chờ xử lý / Đã xác nhận / …), one per
-  // booking; this one is the dispatch state of a single lorry-and-driver pair,
-  // one per row. Merging them would state two different facts in one cell.
-  colAssignmentState: { vi: 'Trạng thái phân công', en: 'Assignment state' },
-  assignmentAssigned: { vi: 'Đã phân công', en: 'Assigned' },
   colActions: { vi: 'Thao tác', en: 'Actions' },
 
   // Add Employee Modal
