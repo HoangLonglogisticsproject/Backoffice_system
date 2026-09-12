@@ -184,12 +184,32 @@ sudo -n /usr/local/bin/bo-release <40-hex-sha>
 npx vercel@48.2.0 deploy --prod --token="$VERCEL_TOKEN" --meta githubCommitSha=<sha>
 ```
 
-⚠ Deploying a frontend by hand **bypasses the health gate**. Check the backend
-first, with the same question the gate asks:
+⚠ Deploying a frontend by hand **bypasses the health gate**, so ask the gate's
+own question first — and note that `curl -fsS` alone is *not* that question. A
+backend running with `environment: staging`, or any other build, answers `200`
+with a healthy database, and the gate would refuse exactly that. Assert the
+contract, and read the origin from the one committed constant instead of typing
+a second copy of it here:
 
 ```bash
-curl -fsS https://bo-api.hoanglonglti.com/api/health   # status ok · environment production · database up
+# From a clone of the revision you are about to deploy, at its root. The origin
+# comes from frontend/api/backend-origin.ts via the same reader the release uses,
+# so it cannot drift from what the gate checks or what the deployed function calls.
+origin="$(bash .github/scripts/backend-origin.sh)"
+
+if curl -fsS --max-time 10 "$origin/api/health" -o health.json &&
+   jq -e '.status == "ok" and .environment == "production" and .checks.database == "up"' health.json >/dev/null
+then
+  echo "OK — $origin is the healthy production backend"
+else
+  echo "REFUSE — not the healthy production backend. Do not promote."
+  cat health.json 2>/dev/null
+fi
 ```
+
+Same three fields, same origin, same reader as **The health gate** above — which
+is the point: a hand deployment should not be able to pass a weaker check than
+the pipeline's. `jq` is the only extra requirement (`apt-get install -y jq`).
 
 ## Layout on the VPS
 
@@ -939,11 +959,25 @@ curl -sI https://bo-api.hoanglonglti.com/ | head -1           # MUST be 404 — 
 openssl s_client -connect bo-api.hoanglonglti.com:443 -servername bo-api.hoanglonglti.com </dev/null 2>/dev/null | openssl x509 -noout -issuer -dates
 ```
 
-The pipeline asks the first of those on every release, through the `staging`
-environment variable set under **Cutover, and going back**. Leave it unset and
-the release only warns — but then the frontend is promoted on
-the strength of a loopback health check, which is the skew this whole
-arrangement exists to prevent.
+The pipeline asks the first of those on every release, and asks more of it than
+the snippet above does.
+
+**The origin is not configuration.** `verify_be` reads
+`frontend/api/backend-origin.ts` through `.github/scripts/backend-origin.sh` —
+the same constant `frontend/api/[...path].ts` imports — so the host the gate
+measures and the host production actually calls are one string by construction.
+There is no `BACKEND_ORIGIN` variable on the `staging` environment any more, and
+nothing reads one; the reader refuses a missing file, a missing or duplicated
+declaration, an empty value, a non-https scheme and a path, each as a failed
+release.
+
+**And the gate asserts the contract, not just a `2xx`:** `status == ok`,
+`environment == production`, `checks.database == up`. Frontend promotion depends
+on it — the deploy step carries `steps.verify_be.outcome == 'success'` — so a
+backend that is healthy on loopback but unreachable or mislabelled on `bo-api`
+stops the release with the previous frontend still live, which is the skew this
+whole arrangement exists to prevent. See **What a frontend promotion requires**
+above for the full condition.
 
 ### The authenticated check, done by a person, once
 
