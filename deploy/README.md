@@ -19,8 +19,157 @@ static build from /var/www/opsystem behind Cloudflare. Keep it: it is the route
 that survives Vercel, the same way the tunnel is the route that survives DNS.
 ```
 
-Which backend route is live is decided by one Vercel environment variable —
-see **bo-api.hoanglonglti.com** below for both directions.
+Which backend route is live is decided by **one line of committed TypeScript**,
+`frontend/api/backend-origin.ts` — not by a dashboard variable. See
+**★ Where the backend origin is written down** below for why, and
+**Cutover, and going back** for both directions.
+
+## The automatic release pipeline
+
+A push to `main` is the only thing that deploys. `.github/workflows/ci.yml`:
+
+```
+push to main
+  │
+  ├─ detect        which half of the monorepo changed (+ proves the three shell scripts still pass their self-tests)
+  ├─ backend       boundaries · typecheck · build · unit + security tests
+  ├─ frontend      lint · typecheck · build · unit tests
+  └─ integration   frontend ↔ real backend ↔ real PostgreSQL, all migrations applied
+       │
+       ▼
+  release · deploy what drifted, backend first        ← needs: [detect, backend, frontend, integration]
+       │
+       1. Configure the deploy connection   ssh key + pinned host key; armed-but-unreachable FAILS
+       2. Read the deployed frontend revision   records the previous deployment uid BEFORE anything moves
+       3. Decide what has drifted               frontend only; the backend's drift is settled on the VPS
+       4. Deploy the backend                    sudo -n bo-release <sha>   (exit 0 ⇒ "the backend IS this commit")
+       5. Verify the backend on its public HTTPS endpoint   ★ THE GATE
+       6. Deploy the frontend                   vercel deploy --prod
+       7. Smoke the public origin               the origin users load
+```
+
+### The backend-first guarantee, and where it is actually enforced
+
+Job ordering is not the mechanism — step conditions are. The frontend step
+carries:
+
+```yaml
+if: steps.plan.outputs.frontend == 'true'
+ && vars.RELEASE_FRONTEND_ENABLED == 'true'
+ && steps.deploy_be.outcome == 'success'
+ && steps.verify_be.outcome == 'success'
+```
+
+`outcome == 'success'` rather than `!failure()` is the whole point: a **skipped**
+backend step means the backend was disarmed, and a disarmed backend is one nobody
+has confirmed is at this commit. Shipping a frontend past it is the original
+skew. So the frontend cannot lead, cannot tie, and cannot proceed on a
+backend that was merely *not broken*.
+
+### The health gate — what it actually asserts
+
+Step 5 reads the origin from `frontend/api/backend-origin.ts` (the same constant
+the deployed edge function imports, so the host verified and the host called are
+one string by construction) and then requires **all** of:
+
+| | |
+|---|---|
+| reachable | `GET <origin>/api/health` answers 2xx — 5 attempts over ~20 s, because a container replaced seconds ago is the one most likely to 502 |
+| `status` | `ok` |
+| `environment` | `production` — the field that catches a container built with the wrong `NODE_ENV`; nothing else in the pipeline looks at it |
+| `checks.database` | `up` |
+
+Reachability is retried; the three field assertions are not. An `environment` of
+`staging` is wrong on the fifth attempt too.
+
+⚠ **`bo-release`'s own health check is not this check.** That one curls
+`http://127.0.0.1:3000/health` from inside the VPS: it proves the container is
+up and *nothing* about whether a browser can reach it. Between the two sit DNS,
+the certificate, nginx's `:443` block and the firewall. Step 5 is the one that
+asks from outside, and it is the one the frontend waits on.
+
+### Frontend promotion
+
+**Vercel's own Git deployment for `main` is switched off** in
+`frontend/vercel.json`:
+
+```json
+"git": { "deploymentEnabled": { "main": false } }
+```
+
+That is what makes the gate meaningful. With it on there would be two competing
+production deployment mechanisms, and Vercel's would win the race every time —
+promoting a frontend while the backend release was still building. Branch
+previews still deploy, which is harmless: they are not production.
+
+So production frontend deployments come from exactly one place: step 6, after
+step 5 passed.
+
+### Required secrets and variables
+
+All on the **`staging` GitHub Environment** — the job names `environment: staging`,
+and without that line `vars` and `secrets` resolve to empty strings.
+
+| name | kind | required for | if missing |
+|---|---|---|---|
+| `VPS_HOST` | secret | backend deploy | disarmed: warn + skip · armed: **fail** |
+| `VPS_USER` | secret | backend deploy | as above |
+| `VPS_SSH_KEY` | secret | backend deploy | as above |
+| `VPS_PORT` | secret | backend deploy | defaults to 22 |
+| `VPS_HOST_KEY` | secret | host pinning | falls back to `ssh-keyscan` TOFU **every run** — set it |
+| `VERCEL_TOKEN` | secret | frontend deploy + drift | drift unknown ⇒ frontend treated as drifted |
+| `VERCEL_ORG_ID` | secret | frontend deploy | as above |
+| `VERCEL_PROJECT_ID` | secret | frontend deploy | as above |
+| `RELEASE_BACKEND_ENABLED` | variable | arming | unset ⇒ plan printed, nothing deployed |
+| `RELEASE_FRONTEND_ENABLED` | variable | arming | unset ⇒ plan printed, nothing promoted |
+| `PUBLIC_ORIGIN` | variable | step 7 | **fails the release if a frontend was promoted** — otherwise a promotion would go unverified |
+
+There is deliberately **no `BACKEND_ORIGIN`** in either system. It was once a
+Vercel variable *and* a GitHub variable with nothing comparing them; it is now
+one committed line. Do not reintroduce it.
+
+### Failure behaviour
+
+| fails | frontend promoted? | production state |
+|---|---|---|
+| any of `backend` / `frontend` / `integration` | no — `release` never starts | unchanged |
+| step 4, backend deploy | **no** | `bo-release` rolled the container back to the previous image and re-gated it; if that also failed it says `MANUAL RECOVERY REQUIRED` |
+| step 5, public health gate | **no** | backend is deployed and reachable only internally; frontend still serves the previous build against the *old* origin |
+| step 6, frontend deploy | n/a | backend deployed, frontend unchanged. Re-run the job; nothing to undo |
+| step 7, smoke | already promoted | the **Frontend rollback instructions** step prints the previous deployment uid and the exact `vercel rollback` command. It does not roll back automatically — a flaky `curl` must not revert production |
+
+### Concurrency
+
+```yaml
+concurrency: { group: release, cancel-in-progress: false }
+```
+
+No `github.ref` in the group: **one release at a time across the repository**,
+and never cancelled mid-flight — interrupting between `migrate` and `up -d`
+leaves a schema ahead of the container using it. GitHub keeps one job running and
+one waiting; a third arrival replaces the waiter, so an intermediate commit can
+be skipped. That is safe *only* because detection is drift-based: the newest sha
+still diffs against what is actually running, so nothing the skipped commit
+changed is lost.
+
+### Emergency / manual deployment
+
+The pipeline is not the only way in, just the only automatic one:
+
+```bash
+# backend, from a shell on the VPS as a user who may (see Releasing by hand)
+sudo -n /usr/local/bin/bo-release <40-hex-sha>
+
+# frontend, from anywhere with the token
+npx vercel@48.2.0 deploy --prod --token="$VERCEL_TOKEN" --meta githubCommitSha=<sha>
+```
+
+⚠ Deploying a frontend by hand **bypasses the health gate**. Check the backend
+first, with the same question the gate asks:
+
+```bash
+curl -fsS https://bo-api.hoanglonglti.com/api/health   # status ok · environment production · database up
+```
 
 ## Layout on the VPS
 
