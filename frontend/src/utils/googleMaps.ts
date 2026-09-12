@@ -1,12 +1,19 @@
 /**
  * Google Maps Platform, for AUTHORING a place — and for nothing else.
  *
- * ★ THE ONLY FILE THAT KNOWS GOOGLE EXISTS, together with `LocationMap`.
- * Everything else works with an address and a pair of numbers. The Driver
- * Portal never imports this: the phone's own Geolocation API produces the
- * reading, and the server's haversine produces the verdict. Google here helps
- * an operator find a warehouse and put a pin on its gate — the pin's final
- * position is what `trip_locations` stores, and that is the business truth.
+ * ★ THE ONLY FILE THAT KNOWS GOOGLE EXISTS. Everything else works with an
+ * address and a pair of numbers. The Driver Portal never imports this: the
+ * phone's own Geolocation API produces the reading, and the server's haversine
+ * produces the verdict. Google here helps an operator find a warehouse, and the
+ * coordinates that come back with the place they pick are what `trip_locations`
+ * stores.
+ *
+ * ⚠ THE MAP HALF CURRENTLY HAS NO CALLER. `loadGoogleMaps` and the `maps` /
+ * `marker` types below served `LocationMap`, the draggable-pin dialog, which was
+ * removed with the location form's position section. Only `searchPlaces` and
+ * `resolvePlace` are reached today. They are kept because restoring a pin is a
+ * UI decision, not an adapter one — and because `importLibrary` is how this
+ * file would load anything from Google again.
  *
  * ★ TWO PRODUCTS, LOADED ONCE, ONLY WHEN THE LOCATION FORM OPENS.
  *

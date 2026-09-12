@@ -117,6 +117,9 @@ describeIntegration('Driver accounts against real PostgreSQL', () => {
       config,
       new DriverAccountRepository(database),
       lifecycle,
+      // Renaming writes `users.display_name` and nothing else; the driver
+      // repository above is read-only by design.
+      users,
     );
   });
 

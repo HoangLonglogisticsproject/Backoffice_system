@@ -1019,7 +1019,8 @@ describe('TripSchedulePage', () => {
 
         expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
         expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Nhà máy Bình Dương');
-        expect(screen.getByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeInTheDocument();
+        // The dialog no longer speaks about a position: re-picking the address
+        // is what carries coordinates back in.
         // The same form the master-data screen and "add place" use — not a second one.
         expect(document.querySelectorAll('#location-form')).toHaveLength(1);
       });

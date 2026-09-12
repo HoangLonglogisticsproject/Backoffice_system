@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripMasterDataPage from './TripMasterDataPage';
@@ -18,6 +18,7 @@ const useSession = vi.fn();
 const fetchTripLocations = vi.fn();
 const createTripLocation = vi.fn();
 const archiveTripLocation = vi.fn();
+const updateTripLocationById = vi.fn();
 
 /**
  * The two administrative dropdowns, stubbed at the hook.
@@ -44,7 +45,7 @@ vi.mock('@/api/tripCatalogue', () => ({
   archiveTripCustomer: (...a: unknown[]) => archiveTripCustomer(...a),
   fetchTripLocations: (...a: unknown[]) => fetchTripLocations(...a),
   createTripLocation: (...a: unknown[]) => createTripLocation(...a),
-  updateTripLocation: vi.fn(),
+  updateTripLocationById: (...a: unknown[]) => updateTripLocationById(...a),
   archiveTripLocation: (...a: unknown[]) => archiveTripLocation(...a),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
@@ -279,35 +280,49 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Thêm địa điểm' }));
       fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho mới' } });
       fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'Thủ Dầu Một' } });
-      fireEvent.change(screen.getByLabelText('Liên hệ'), { target: { value: 'Anh Tư' } });
-      expect(screen.getByText(/Chưa định vị/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
+      // ⚠ UNLOCATED, AND NOTHING ON THIS FORM CAN CHANGE THAT. The position
+      // section was removed; coordinates now arrive only with a picked address
+      // suggestion, and a free-typed address carries none. The server refuses a
+      // driver's confirmation at such a place as DESTINATION_MISSING.
       await waitFor(() =>
         expect(createTripLocation).toHaveBeenCalledWith('c1', {
           name: 'Kho mới',
           address: 'Thủ Dầu Một',
-          contact: 'Anh Tư',
+          contact: null,
           note: null,
+          provinceCode: null,
+          province: null,
+          districtCode: null,
+          district: null,
+          wardCode: null,
+          ward: null,
           latitude: null,
           longitude: null,
         }),
       );
     });
 
-    it('sends the pair when both coordinates were typed', async () => {
-      createTripLocation.mockResolvedValue(location({ id: 'l9' }));
+    it('★ keeps an existing place’s coordinates through an edit, though nothing shows them', async () => {
+      fetchTripLocations.mockResolvedValue([location({ latitude: 10.8, longitude: 106.6 })]);
+      updateTripLocationById.mockResolvedValue(location());
       await openPlaces();
+      await screen.findByText('Kho OSC');
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Thêm địa điểm' }));
-      fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho OSC' } });
-      fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'KCN Sóng Thần' } });
-      fireEvent.change(screen.getByLabelText('Vĩ độ'), { target: { value: '10.8' } });
-      fireEvent.change(screen.getByLabelText('Kinh độ'), { target: { value: '106.6' } });
+      // The pencil INSIDE the places dialog, not the catalogue row behind it.
+      const places = within(screen.getByRole('dialog'));
+      fireEvent.click(places.getAllByRole('button', { name: 'Sửa' })[0]!);
+      fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho OSC 2' } });
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
+      // Dropping the pair on every correction would un-locate the whole
+      // catalogue one typo at a time.
       await waitFor(() =>
-        expect(createTripLocation).toHaveBeenCalledWith('c1', expect.objectContaining({ latitude: 10.8, longitude: 106.6 })),
+        expect(updateTripLocationById).toHaveBeenCalledWith(
+          'l1',
+          expect.objectContaining({ latitude: 10.8, longitude: 106.6 }),
+        ),
       );
     });
 
@@ -397,7 +412,8 @@ describe('TripMasterDataPage', () => {
         expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
         expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Nhà máy Bình Dương');
         expect(screen.getByLabelText('Địa chỉ')).toHaveValue('KCN Sóng Thần');
-        expect(screen.getByText('Địa điểm này chưa có vị trí trên bản đồ.')).toBeInTheDocument();
+        // The dialog no longer says anything about a position — the remedy is to
+        // re-pick the address, whose suggestion carries the coordinates.
         expect(document.querySelectorAll('#location-form')).toHaveLength(1);
       });
 
