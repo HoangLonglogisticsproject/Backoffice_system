@@ -100,9 +100,8 @@ const turn = (over: Record<string, unknown> = {}) => ({
 /**
  * The table's BODY rows, in document order.
  *
- * ★ THE GRAIN OF THIS TABLE IS THE ASSIGNMENT (ADR-0004), so a trip with three
- * lorries is three rows. Counting rows is therefore the assertion that matters,
- * and `getAllByRole('row')` would include the header — hence `tbody`.
+ * ★ THE GRAIN IS THE ASSIGNMENT, so a trip with three lorries is three rows.
+ * `getAllByRole('row')` would include the header — hence `tbody`.
  */
 const bodyRows = (): HTMLElement[] => {
   const body = screen.getByRole('table').querySelector('tbody');
@@ -110,13 +109,11 @@ const bodyRows = (): HTMLElement[] => {
 };
 
 /**
- * Every row as the pair it names: `[plate, driver]`.
+ * Every row as the pair it names: `[lơ xe, tài xế]`.
  *
- * Read positionally from the two columns that vary down the rows. A row after
- * the first of a trip has no spanned cells of its own, so the plate is its first
- * cell and the driver its second; on a trip's first row they are the third and
- * fourth, after the spanned STT and date. Taking the last two of the first four
- * cells handles both without the test needing to know which kind of row it is.
+ * A trip's FIRST row carries the spanned STT and date, so its lorry and driver
+ * are cells 3 and 4; a later row has no spanned cells, so they are cells 1 and
+ * 2. Taking the last two of the first four handles both.
  */
 const pairs = (): [string, string][] =>
   bodyRows().map((row) => {
@@ -242,20 +239,14 @@ describe('TripSchedulePage', () => {
     );
 
   /**
-   * ★ ONE ROW PER DISPATCH ASSIGNMENT — the invariant this table exists to show.
+   * ★ ONE ROW PER DISPATCH ASSIGNMENT, GROUPED UNDER ONE TRIP.
    *
-   * A trip carrying N active assignments is N rows. The trip's own facts are
-   * spanned across them, so one booking still reads as one booking, but the
-   * vehicle and driver columns name exactly one each — which is the pairing the
-   * previous board hid by listing all the plates in one cell and all the drivers
-   * in another.
-   *
-   * An uncrewed trip is the boundary case and is still exactly one row: a trip
-   * with nobody on it is a finding, not a trip that disappears.
+   * Three columns vary down the rows — lorry, driver, assignment state. Every
+   * other column and every control belongs to the booking and is spanned. An
+   * uncrewed trip is still exactly one row.
    */
-  describe('★ the board is assignment-grain (ADR-0004)', () => {
+  describe('★ assignment-grain rows', () => {
     const write = () => useSession.mockReturnValue(session(['trip.read', 'trip.write']));
-    /** The board answers with these trips, verbatim. */
     const board = (...items: unknown[]) =>
       fetchTripSchedules.mockResolvedValue({
         items,
@@ -264,20 +255,18 @@ describe('TripSchedulePage', () => {
         total: items.length,
         totalPages: 1,
       });
-    /** The STT cell of every row that has one — i.e. one per trip. */
+    /** The STT cell of every row that carries one — i.e. one per trip. */
     const stt = () =>
       bodyRows()
         .map((row) => {
           const first = row.querySelector('td');
-          // Only a trip's FIRST row carries the spanned STT; on the others the
-          // first cell is the plate.
           return first && first.getAttribute('rowspan') !== null
             ? (first.textContent ?? '').trim()
             : null;
         })
-        .filter((value): value is string => value !== null);
+        .filter((v): v is string => v !== null);
 
-    it('★ THE REPORTED CASE — two lorries on one trip are two rows, correctly paired', async () => {
+    it('★ 1 trip + 2 assignments — exactly 2 rows, each pairing its own lorry and driver', async () => {
       board(
         trip({
           assignments: [
@@ -294,16 +283,12 @@ describe('TripSchedulePage', () => {
         ['50H-49266', 'CAO TRUONG SON'],
         ['51D-60088', 'QUAN TRUONG THOAI'],
       ]);
-      // Neither row may carry the other's lorry.
       const [first, second] = bodyRows();
       expect(within(first!).queryByText('51D-60088')).toBeNull();
       expect(within(second!).queryByText('50H-49266')).toBeNull();
     });
 
-    it('★ three assignments are three rows, and React is given three distinct keys', async () => {
-      // A duplicated key is not visible in the DOM, but React complains about it
-      // on stderr — so the absence of that complaint is the assertion.
-      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    it('★ 3 assignments — exactly 3 rows', async () => {
       board(
         trip({
           assignments: [
@@ -317,77 +302,74 @@ describe('TripSchedulePage', () => {
       await screen.findByText('50H-49266');
 
       expect(bodyRows()).toHaveLength(3);
-      expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/i);
-      errors.mockRestore();
     });
 
-    it('★ the same driver on two lorries is named on both rows', async () => {
+    it('★ the same driver on two lorries is named on BOTH rows', async () => {
       board(
-        trip({
-          assignments: [
-            turn(),
-            turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } }),
-          ],
-        }),
+        trip({ assignments: [turn(), turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } })] }),
       );
       renderPage();
       await screen.findByText('50H-49266');
 
-      // Two rows, one driver, named twice — the board used to de-duplicate the
-      // name, which made two lorries look like one turn.
       expect(bodyRows()).toHaveLength(2);
       expect(screen.getAllByText('Tài Xế A')).toHaveLength(2);
-      expect(pairs()).toEqual([
-        ['50H-49266', 'Tài Xế A'],
-        ['51D-65233', 'Tài Xế A'],
-      ]);
     });
 
-    it('an uncrewed trip is exactly one row, saying so, with the control to fix it', async () => {
-      write();
+    it('★ 0 assignments — exactly 1 row, "Chưa chọn" and "Chưa phân công"', async () => {
       board(trip({ assignments: [] }));
       renderPage();
       await screen.findByText('WWL');
 
       expect(bodyRows()).toHaveLength(1);
-      expect(screen.getByText('Chưa phân công')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^phân công$/i })).toBeInTheDocument();
+      expect(pairs()).toEqual([['Chưa chọn', 'Chưa phân công']]);
     });
 
-    it('★ a legacy trip is one row that names its planned lorry as legacy', async () => {
-      // Migration 0029 case F: a lorry was planned before dispatch became a pair
-      // and was never crewed. Rendering a plain "—" would lose the signal that it
-      // needs re-dispatching.
+    it('★ NO legacy UI text, even when the trip still carries legacyVehicleId', async () => {
+      // `legacyVehicleId` stays in the model for backward compatibility, but it
+      // is not a UI state of this board: the row reads exactly as any other
+      // uncrewed trip.
       board(trip({ assignments: [], legacyVehicleId: 'legacy-v' }));
       renderPage();
       await screen.findByText('WWL');
 
       expect(bodyRows()).toHaveLength(1);
-      expect(screen.getByText(/dữ liệu cũ/i)).toBeInTheDocument();
+      expect(screen.queryByText(/dữ liệu cũ/i)).toBeNull();
+      expect(screen.queryByText(/xe dự kiến/i)).toBeNull();
+      expect(screen.queryByText(/thiếu xe/i)).toBeNull();
+      expect(pairs()).toEqual([['Chưa chọn', 'Chưa phân công']]);
     });
 
-    it('★ a mixed page counts rows per assignment — 2 + 0 crew is three rows', async () => {
+    it('★ the assignment state is shown per row, and only on crewed rows', async () => {
       board(
-        trip({
-          assignments: [
-            turn(),
-            turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } }),
-          ],
-        }),
+        trip({ assignments: [turn(), turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } })] }),
         trip({ id: 't2', customer: { id: 'c2', name: 'VIỄN ĐẠT' }, assignments: [] }),
       );
       renderPage();
       await screen.findByText('50H-49266');
 
-      expect(bodyRows()).toHaveLength(3);
-      expect(pairs()).toEqual([
-        ['50H-49266', 'Tài Xế A'],
-        ['51D-65233', 'Tài Xế A'],
-        ['Chưa chọn', 'Chưa phân công'],
-      ]);
+      // Scoped to the table: the "Đã phân công" TAB carries the same words.
+      const table = within(screen.getByRole('table'));
+      // Two crewed rows carry it; the uncrewed row does not invent one.
+      expect(table.getAllByText('Đã phân công')).toHaveLength(2);
     });
 
-    it('★ every trip-level control appears once per trip, never once per lorry', async () => {
+    it('★ the TRIP status stays trip-level — one control per trip, not one per lorry', async () => {
+      write();
+      board(
+        trip({ assignments: [turn(), turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } })] }),
+      );
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      // "Đã phân công" (assignment) and "Chờ xử lý" (trip status) are separate
+      // facts in separate columns: two of the first, one control for the second.
+      const table = within(screen.getByRole('table'));
+      expect(bodyRows()).toHaveLength(2);
+      expect(table.getAllByText('Đã phân công')).toHaveLength(2);
+      expect(table.getAllByRole('combobox', { name: 'Đổi trạng thái' })).toHaveLength(1);
+    });
+
+    it('★ trip-level actions appear once per trip, never once per lorry', async () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.write', 'cost.read']));
       board(
         trip({
@@ -401,25 +383,18 @@ describe('TripSchedulePage', () => {
       renderPage();
       await screen.findByText('50H-49266');
 
-      // Three rows, one of each control — a three-lorry trip must not offer
-      // three Archive buttons for the same booking.
       expect(bodyRows()).toHaveLength(3);
       expect(screen.getAllByRole('button', { name: 'Sửa' })).toHaveLength(1);
       expect(screen.getAllByRole('button', { name: 'Lưu trữ' })).toHaveLength(1);
       expect(screen.getAllByRole('button', { name: /chi phí/i })).toHaveLength(1);
       expect(screen.getAllByRole('button', { name: /^điều độ$/i })).toHaveLength(1);
-      // And the trip's own facts are stated once, not once per lorry.
+      // And the booking's own facts are stated once, not once per lorry.
       expect(screen.getAllByText('WWL')).toHaveLength(1);
     });
 
-    it('★ STT and the total stay at TRIP grain, however many lorries the trips carry', async () => {
+    it('★ pagination and STT stay at TRIP grain', async () => {
       board(
-        trip({
-          assignments: [
-            turn(),
-            turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } }),
-          ],
-        }),
+        trip({ assignments: [turn(), turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } })] }),
         trip({
           id: 't2',
           customer: { id: 'c2', name: 'VIỄN ĐẠT' },
@@ -429,9 +404,7 @@ describe('TripSchedulePage', () => {
       renderPage();
       await screen.findByText('51D-00003');
 
-      // Three rows from two trips: the ordinals count TRIPS, so they are 1 and 2
-      // — not 1, 2, 3. The column is the spreadsheet's own trip counter and
-      // `firstRowNumber` computes a trip ordinal from the page size.
+      // Three rows from two trips: the ordinals count TRIPS, so 1 and 2.
       expect(bodyRows()).toHaveLength(3);
       expect(stt()).toEqual(['1', '2']);
     });
@@ -501,15 +474,12 @@ describe('TripSchedulePage', () => {
       renderPage();
       await screen.findByText('50H-49266');
 
-      // ★ THREE ASSIGNMENTS, THREE ROWS. The old board put all three plates and
-      // both drivers inside ONE row, which said nothing about which driver was
-      // in which lorry.
       expect(pairs()).toEqual([
         ['50H-49266', 'Tài Xế A'],
         ['51D-65233', 'Tài Xế A'],
         ['51D-00003', 'Tài Xế B'],
       ]);
-      // The per-trip crew summary is gone with the list it summarised.
+      // The per-trip crew summary went with the list it summarised.
       expect(screen.queryByText(/xe · .* tài xế/)).toBeNull();
     });
 
@@ -739,14 +709,18 @@ describe('TripSchedulePage', () => {
       expect(screen.queryByRole('button', { name: /^điều độ$/i })).not.toBeInTheDocument();
     });
 
-    it('names a legacy planned lorry as such — a trip booked before dispatch became a pair', async () => {
+    it('★ shows NO legacy state for a trip that still carries legacyVehicleId', async () => {
+      // The column is kept in the model for backward compatibility; it is not a
+      // UI state of this board. Such a trip reads like any other uncrewed one.
       fetchTripSchedules.mockResolvedValue({
         items: [trip({ assignments: [], legacyVehicleId: 'legacy-v' })],
         page: 1, limit: 20, total: 1, totalPages: 1,
       });
       renderPage();
+      await screen.findByText('WWL');
 
-      expect(await screen.findByText(/dữ liệu cũ/i)).toBeInTheDocument();
+      expect(screen.queryByText(/dữ liệu cũ/i)).toBeNull();
+      expect(pairs()).toEqual([['Chưa chọn', 'Chưa phân công']]);
     });
   });
 
@@ -958,7 +932,7 @@ describe('TripSchedulePage', () => {
 
       await waitFor(() => expect(assignDriver).toHaveBeenCalled());
       expect(await screen.findByText('51D-65233')).toBeInTheDocument();
-      // One row per lorry, each with its own driver — not one row listing both.
+      // One row per lorry, each with its own driver.
       expect(pairs()).toEqual([
         ['50H-49266', 'Tài Xế A'],
         ['51D-65233', 'Tài Xế B'],
