@@ -303,22 +303,42 @@ export interface TripVehicle {
 }
 
 /**
- * A customer's place — a warehouse, a yard, a factory gate.
+ * A place — a warehouse, a yard, a port gate, a factory door.
  *
- * ★ OWNED BY ONE CUSTOMER, AND THAT IS THE MODEL. A location is listed, chosen
- * and edited only under its customer; there is no company-wide pool of
- * places, and a trip for one customer cannot name another's. Coordinates are
- * OPTIONAL: a place is real before anybody has located it, and a trip may use
- * it — the driver's confirmation there is then refused as DESTINATION_MISSING
- * exactly as for a trip typed by hand.
+ * 
+ * ★ OWNED BY ONE CUSTOMER, OR BY NOBODY (0030). `customerId` names the customer
+ * whose warehouse this is; `null` means a SHARED place — Cảng Cát Lái, a hired
+ * yard — entered once and usable from any trip. The two populations differ in
+ * that one field and in nothing else: same columns, same name rule (a separate
+ * partial index enforces it for the shared ones), same snapshot onto a trip.
+ *
+ * Coordinates are OPTIONAL: a place is real before anybody has located it, and
+ * a trip may use it — the driver's confirmation there is then refused as
+ * DESTINATION_MISSING exactly as for a trip typed by hand.
+ *
+ * ★ THREE ADMINISTRATIVE LEVELS: tỉnh/thành → quận/huyện → phường/xã, each a
+ * CODE and a NAME. Descriptive, never operational — the trip snapshots
+ * `address` and the geofence measures coordinates, so nothing here reads them,
+ * and `null` means "not recorded".
+ *
+ * ⚠ THIS IS THE PRE-2025 HIERARCHY, DELIBERATELY. Vietnam abolished the
+ * district tier on 1 July 2025; 0030 and the administrative client both explain
+ * why this deployment still records it.
  */
 export interface TripLocation {
   id: string;
-  customerId: string;
+  /** `null` for a shared place. See 0030. */
+  customerId: string | null;
   name: string;
   address: string;
   contact: string | null;
   note: string | null;
+  provinceCode: string | null;
+  province: string | null;
+  districtCode: string | null;
+  district: string | null;
+  wardCode: string | null;
+  ward: string | null;
   /** Both or neither. `null` means "not located yet", never "at 0,0". */
   latitude: number | null;
   longitude: number | null;
@@ -326,6 +346,16 @@ export interface TripLocation {
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * One row of the catalogue screen: the place, plus who owns it spelled out.
+ *
+ * `customerName` is `null` exactly when `customerId` is — the screen prints
+ * "shared" for that, rather than an empty cell that reads as missing data.
+ */
+export interface TripLocationListing extends TripLocation {
+  customerName: string | null;
 }
 
 /** A customer, for the same reason: `VIỄN ĐẠT` and `VIẼN ĐẠT` are one company. */

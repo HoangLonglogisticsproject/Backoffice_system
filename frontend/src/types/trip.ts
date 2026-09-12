@@ -256,23 +256,43 @@ export interface TripLocationRef {
 }
 
 /**
- * One of a customer's places. Always read and written under its customer;
- * there is no company-wide list. Coordinates are optional — "not located
- * yet" is a real state the screens say out loud.
+ * A place: a customer's warehouse, or one the whole company uses.
+ *
+ * `customerId` names the owner; `null` means SHARED — Cảng Cát Lái, a hired
+ * yard — entered once on the locations catalogue and not tied to anybody.
+ * Coordinates are optional: "not located yet" is a real state the screens say
+ * out loud.
+ *
+ * Three administrative levels — tỉnh/thành → quận/huyện → phường/xã — each a
+ * CODE and a NAME. Descriptive only: nothing operational reads them, and `null`
+ * means "not recorded". This is the PRE-2025 hierarchy on purpose; see 0030.
  */
 export interface TripLocation {
   id: string;
-  customerId: string;
+  /** `null` for a shared place. */
+  customerId: string | null;
   name: string;
   address: string;
   contact: string | null;
   note: string | null;
+  provinceCode: string | null;
+  province: string | null;
+  districtCode: string | null;
+  district: string | null;
+  wardCode: string | null;
+  ward: string | null;
   latitude: number | null;
   longitude: number | null;
   status: CatalogueStatus;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One row of the locations catalogue: the place, plus its owner spelled out. */
+export interface TripLocationListing extends TripLocation {
+  /** `null` exactly when `customerId` is. The screen prints "shared" for it. */
+  customerName: string | null;
 }
 
 export interface TripVehicleRef {

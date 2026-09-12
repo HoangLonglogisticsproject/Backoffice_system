@@ -75,6 +75,11 @@ describe('searchPlaces / resolvePlace', () => {
       address: 'Kho TCS, Bình Dương',
       latitude: 10.9,
       longitude: 106.72,
+      // The stub place carries no address components, and that is the ordinary
+      // case rather than a gap: Google says what it knows, and `null` here
+      // means it said nothing — never that the place has no province.
+      province: null,
+      ward: null,
     });
   });
 

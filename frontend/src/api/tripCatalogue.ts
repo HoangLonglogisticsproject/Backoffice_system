@@ -1,5 +1,10 @@
 import { httpClient } from './client';
-import type { TripCustomer, TripLocation, TripVehicle } from '@/types/trip';
+import type {
+  TripCustomer,
+  TripLocation,
+  TripLocationListing,
+  TripVehicle,
+} from '@/types/trip';
 
 /**
  * The vehicle and customer catalogues (contract §21).
@@ -35,6 +40,10 @@ export interface LocationInput {
   address: string;
   contact?: string | null;
   note?: string | null;
+  /** Tỉnh/thành · quận/huyện · phường/xã. Free text; `null` is "not recorded". */
+  province?: string | null;
+  district?: string | null;
+  ward?: string | null;
   /** Both or neither. The server refuses half a point. */
   latitude?: number | null;
   longitude?: number | null;
@@ -131,11 +140,59 @@ export async function archiveTripCustomer(customerId: string): Promise<TripCusto
 
 // ------------------------------------------------------------- locations ----
 //
-// ★ ALWAYS UNDER A CUSTOMER. Every call names the customer in the path; there
-// is no `/trip-locations`, and the server holds each id to its customer.
+// ★ TWO GROUPS OF CALLS, ONE TABLE.
+//
+//   under a customer   `/trip-customers/:id/locations` — that customer's own
+//                      places. The server holds each id to the customer named
+//                      in the path; somebody else's answers 404.
+//   the catalogue      `/trip-locations` — every place with its owner
+//                      resolved, creating SHARED ones, and correcting or
+//                      retiring any row by id.
+//
+// The customer segment is routing, not authorisation: both groups need the same
+// permissions over the same deployment-wide catalogue.
 
 const locationsPath = (customerId: string) =>
   `/trip-customers/${encodeURIComponent(customerId)}/locations`;
+
+const locationPath = (locationId: string) => `/trip-locations/${encodeURIComponent(locationId)}`;
+
+/** Every place, shared first, each carrying `customerName`. */
+export async function fetchAllTripLocations(
+  includeArchived = false,
+): Promise<TripLocationListing[]> {
+  const { data } = await httpClient.get<TripLocationListing[]>('/trip-locations', {
+    params: archivedParam(includeArchived),
+  });
+  return data;
+}
+
+/**
+ * Adds a SHARED place — one belonging to no customer.
+ *
+ * A name that normalises onto an existing shared place answers **409** naming
+ * the spelling already there, exactly as the vehicle catalogue does. A
+ * customer's own place with the same name is not a clash: the two populations
+ * have separate unique indexes.
+ */
+export async function createSharedTripLocation(input: LocationInput): Promise<TripLocation> {
+  const { data } = await httpClient.post<TripLocation>('/trip-locations', input);
+  return data;
+}
+
+/** Corrects any place by id — shared or a customer's. The catalogue's edit. */
+export async function updateTripLocationById(
+  locationId: string,
+  input: Partial<LocationInput>,
+): Promise<TripLocation> {
+  const { data } = await httpClient.patch<TripLocation>(locationPath(locationId), input);
+  return data;
+}
+
+export async function archiveTripLocationById(locationId: string): Promise<TripLocation> {
+  const { data } = await httpClient.post<TripLocation>(`${locationPath(locationId)}/archive`);
+  return data;
+}
 
 export async function fetchTripLocations(
   customerId: string,

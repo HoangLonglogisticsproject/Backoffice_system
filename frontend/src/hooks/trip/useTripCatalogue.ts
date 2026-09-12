@@ -1,9 +1,19 @@
 import { useCallback, useMemo } from 'react';
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
-import { fetchTripCustomers, fetchTripLocations, fetchTripVehicles } from '@/api/tripCatalogue';
+import {
+  fetchAllTripLocations,
+  fetchTripCustomers,
+  fetchTripLocations,
+  fetchTripVehicles,
+} from '@/api/tripCatalogue';
 import { useSession } from '@/contexts/SessionProvider';
 import { ApiError, isApiError } from '@/utils/errors';
-import type { TripCustomer, TripLocation, TripVehicle } from '@/types/trip';
+import type {
+  TripCustomer,
+  TripLocation,
+  TripLocationListing,
+  TripVehicle,
+} from '@/types/trip';
 import { tripKeys } from './keys';
 
 /**
@@ -139,6 +149,35 @@ export function useTripLocations(
   return customerId === null
     ? { data: [], items: [], error: null, loading: false, forbidden: false, notFound: false, reload }
     : { ...list, reload };
+}
+
+/**
+ * Every place in the deployment, for the locations catalogue.
+ *
+ * ★ ONE LIST, NOT A LIST PER CUSTOMER STITCHED TOGETHER. The server resolves
+ * the owner's name in the same read, so a screen showing two hundred places
+ * makes one request rather than one per customer — and a place belonging to
+ * NOBODY has no customer list it could have arrived from.
+ */
+export function useAllTripLocations(
+  includeArchived = false,
+): CatalogueList<TripLocationListing> & { reload: () => Promise<void> } {
+  const queryClient = useQueryClient();
+  const { state, loading: sessionLoading } = useSession();
+
+  const query = useQuery({
+    queryKey: tripKeys.allLocations(includeArchived),
+    queryFn: () => fetchAllTripLocations(includeArchived),
+    enabled: state?.status === 'ready',
+    staleTime: CATALOGUE_STALE_MS,
+  });
+
+  const reload = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: tripKeys.catalogues() }),
+    [queryClient],
+  );
+
+  return { ...useCatalogueList(query, sessionLoading), reload };
 }
 
 /** The query's own shape, as the four states a screen actually branches on. */

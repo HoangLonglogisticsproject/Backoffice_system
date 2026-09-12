@@ -1,12 +1,19 @@
 /**
  * Google Maps Platform, for AUTHORING a place — and for nothing else.
  *
- * ★ THE ONLY FILE THAT KNOWS GOOGLE EXISTS, together with `LocationMap`.
- * Everything else works with an address and a pair of numbers. The Driver
- * Portal never imports this: the phone's own Geolocation API produces the
- * reading, and the server's haversine produces the verdict. Google here helps
- * an operator find a warehouse and put a pin on its gate — the pin's final
- * position is what `trip_locations` stores, and that is the business truth.
+ * ★ THE ONLY FILE THAT KNOWS GOOGLE EXISTS. Everything else works with an
+ * address and a pair of numbers. The Driver Portal never imports this: the
+ * phone's own Geolocation API produces the reading, and the server's haversine
+ * produces the verdict. Google here helps an operator find a warehouse, and the
+ * coordinates that come back with the place they pick are what `trip_locations`
+ * stores.
+ *
+ * ⚠ THE MAP HALF CURRENTLY HAS NO CALLER. `loadGoogleMaps` and the `maps` /
+ * `marker` types below served `LocationMap`, the draggable-pin dialog, which was
+ * removed with the location form's position section. Only `searchPlaces` and
+ * `resolvePlace` are reached today. They are kept because restoring a pin is a
+ * UI decision, not an adapter one — and because `importLibrary` is how this
+ * file would load anything from Google again.
  *
  * ★ TWO PRODUCTS, LOADED ONCE, ONLY WHEN THE LOCATION FORM OPENS.
  *
@@ -97,9 +104,23 @@ interface PlacePrediction {
   toPlace(): Place;
 }
 
+/**
+ * One piece of a structured address, as Places (New) returns it.
+ *
+ * `longText` is the spelled-out name (`Thành phố Hồ Chí Minh`), `shortText` the
+ * abbreviated one; `types` is what the piece IS, and a single component
+ * routinely carries several.
+ */
+interface AddressComponent {
+  longText: string | null | undefined;
+  shortText: string | null | undefined;
+  types: string[];
+}
+
 interface Place {
   location: LatLng | null | undefined;
   formattedAddress: string | null | undefined;
+  addressComponents: AddressComponent[] | null | undefined;
   fetchFields(request: { fields: string[] }): Promise<unknown>;
 }
 
@@ -195,12 +216,70 @@ export interface PlaceSuggestion {
   secondary: string;
 }
 
+/**
+ * Vietnam's two administrative levels, as a place carries them.
+ *
+ * Every field is independently absent: Google says what it knows about the
+ * place it was asked about, and for a warehouse on a provincial road that is
+ * routinely the province and nothing else. `null` means GOOGLE DID NOT SAY —
+ * never "this place has no ward" — which is why nothing downstream treats one
+ * as an error and the form leaves all three editable.
+ */
+export interface AdminArea {
+  /** Tỉnh / thành phố trực thuộc trung ương. */
+  province: string | null;
+  /** Phường / xã / đặc khu. */
+  ward: string | null;
+}
+
 /** What a chosen place gives the form: the two numbers, and an address to offer. */
-export interface ResolvedPlace {
+export interface ResolvedPlace extends AdminArea {
   address: string | null;
   latitude: number;
   longitude: number;
 }
+
+/**
+ * ★ THE TYPES ARE TRIED IN ORDER, AND THE ORDER IS THE WHOLE OF THIS MAPPING.
+ *
+ * Google has no "ward" — it has a ladder of `administrative_area_level_N` plus
+ * a `sublocality` family, and which rung a Vietnamese ward lands on depends on
+ * the place. A commune outside a city usually comes back as
+ * `administrative_area_level_3`; a ward inside one is frequently only a
+ * `sublocality_level_1`. Taking the first type that is present, in this order,
+ * gets the specific answer where there is one and the general answer where
+ * there is not.
+ *
+ * ⚠ AND THE WARD IS A HINT, NOT AN ANSWER. Vietnam merged and renamed its
+ * communes wholesale in 2025, and Google's data for a given place often still
+ * names the unit that existed before. The location form therefore does NOT
+ * auto-select a ward from this — it offers the official list instead. What is
+ * here is kept because the PROVINCE survives the reform intact and is worth
+ * pre-selecting, and because a hint is cheap when nothing depends on it.
+ */
+const ADMIN_AREA_TYPES: Record<keyof AdminArea, readonly string[]> = {
+  province: ['administrative_area_level_1'],
+  ward: ['administrative_area_level_3', 'sublocality_level_1', 'sublocality'],
+};
+
+const adminAreaOf = (components: AddressComponent[] | null | undefined): AdminArea => {
+  const pick = (types: readonly string[]): string | null => {
+    for (const type of types) {
+      const match = components?.find((component) => component.types.includes(type));
+      // The spelled-out form: `Thành phố Hồ Chí Minh`, not `HCM`. This is read
+      // by a person on a list, and the short form saves nothing worth the
+      // ambiguity.
+      const text = match?.longText ?? match?.shortText ?? null;
+      if (text) return text;
+    }
+    return null;
+  };
+
+  return {
+    province: pick(ADMIN_AREA_TYPES.province),
+    ward: pick(ADMIN_AREA_TYPES.ward),
+  };
+};
 
 let session: object | null = null;
 
@@ -251,7 +330,10 @@ export async function resolvePlace(suggestion: PlaceSuggestion): Promise<Resolve
   if (!prediction) throw new Error('That suggestion is no longer available. Search again.');
 
   const place = prediction.toPlace();
-  await place.fetchFields({ fields: ['location', 'formattedAddress'] });
+  // ★ ALL THREE IN ONE FETCH, NOT A SECOND CALL. The session token makes
+  // search-then-select ONE billable session; asking for the components
+  // separately afterwards would start a second one for the same place.
+  await place.fetchFields({ fields: ['location', 'formattedAddress', 'addressComponents'] });
   session = null;
 
   const location = place.location;
@@ -261,5 +343,6 @@ export async function resolvePlace(suggestion: PlaceSuggestion): Promise<Resolve
     address: place.formattedAddress ?? null,
     latitude: location.lat(),
     longitude: location.lng(),
+    ...adminAreaOf(place.addressComponents),
   };
 }

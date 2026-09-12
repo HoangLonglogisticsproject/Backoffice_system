@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Archive, MapPin, Pencil, Plus } from 'lucide-react';
-import { StatusPill, type StatusTone } from '@/components/common/StatusPill';
+import { StatusPill } from '@/components/common/StatusPill';
+import { isLocated, statusOf } from '@/components/trip/locationStatus';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -19,26 +20,6 @@ import { LocationFormModal } from './LocationFormModal';
  * the only door to it. Archive rather than delete — a trip that went there
  * keeps its snapshot and its reference.
  */
-/** Both halves present. The server stores them both or neither; this is the only readiness there is. */
-const isLocated = (location: TripLocation): boolean =>
-  location.latitude !== null && location.longitude !== null;
-
-/**
- * What the pill says about a place. One decision, not a nested one.
- *
- * ★ "LOCATED" ANSWERS "CAN A DRIVER BE CHECKED HERE", AND NOTHING MORE. It is
- * a fact about the master row's coordinates. Whether any driver's reading
- * then passed at this place is the server's verdict on an execution event,
- * worded separately in the completion review.
- */
-const statusOf = (
-  location: TripLocation,
-): { label: 'statusArchived' | 'locationLocated' | 'locationUnlocated'; tone: StatusTone } => {
-  if (location.status !== 'active') return { label: 'statusArchived', tone: 'gray' };
-  if (isLocated(location)) return { label: 'locationLocated', tone: 'green' };
-  return { label: 'locationUnlocated', tone: 'amber' };
-};
-
 interface Props {
   customer: { id: string; name: string };
   canAdd: boolean;

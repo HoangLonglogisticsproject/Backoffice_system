@@ -70,6 +70,15 @@ export const tripKeys = {
   /** One customer's places. Under the catalogue prefix, so a reload clears them too. */
   locations: (customerId: string, includeArchived: boolean) =>
     [...tripKeys.catalogues(), 'locations', customerId, { includeArchived }] as const,
+  /**
+   * Every place, for the locations catalogue.
+   *
+   * Under the same prefix as the per-customer lists on purpose: adding a place
+   * from either screen has to clear the other, and a shared `reload()` that
+   * misses one leaves two screens disagreeing about the same table.
+   */
+  allLocations: (includeArchived: boolean) =>
+    [...tripKeys.catalogues(), 'locations', 'all', { includeArchived }] as const,
   vehicles: (includeArchived: boolean) =>
     [...tripKeys.catalogues(), 'vehicles', { includeArchived }] as const,
   customers: (includeArchived: boolean) =>

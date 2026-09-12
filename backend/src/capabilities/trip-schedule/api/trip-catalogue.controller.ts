@@ -20,7 +20,12 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { TripCatalogueService } from '../application/trip-catalogue.service';
-import type { TripCustomer, TripLocation, TripVehicle } from '../domain/trip-schedule';
+import type {
+  TripCustomer,
+  TripLocation,
+  TripLocationListing,
+  TripVehicle,
+} from '../domain/trip-schedule';
 
 /**
  * The trucks and the customers, as rows rather than as text typed into a cell.
@@ -61,11 +66,38 @@ const contact = z.string().trim().max(2000).nullable();
 const latitude = z.number().min(-90).max(90).nullable();
 const longitude = z.number().min(-180).max(180).nullable();
 
+/**
+ * Tỉnh/thành and xã/phường, each as the state's code and its name.
+ *
+ * ★ ACCEPTED AS TEXT, NOT VALIDATED AGAINST THE LIVE LIST, AND THAT IS
+ * DELIBERATE. The names and codes come from `/vn-provinces`, which this server
+ * already proxies — so checking them here would mean a second upstream call on
+ * every save, failing the save whenever that free service is down. These fields
+ * are DESCRIPTIVE: nothing operational reads them, so a stale ward name is a
+ * cosmetic wrong, while a save refused because somebody else's API blinked is
+ * an operational one.
+ *
+ * ★ THREE LEVELS, RECORDING THE PRE-2025 HIERARCHY. See 0030 for why the
+ * abolished district tier is still written down.
+ */
+const adminName = z.string().trim().max(200).nullable();
+const adminCode = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9]{1,10}$/, 'An administrative code is 1-10 letters or digits.')
+  .nullable();
+
 const createLocationSchema = z.object({
   name: locationName,
   address,
   contact: contact.optional(),
   note: note.optional(),
+  provinceCode: adminCode.optional(),
+  province: adminName.optional(),
+  districtCode: adminCode.optional(),
+  district: adminName.optional(),
+  wardCode: adminCode.optional(),
+  ward: adminName.optional(),
   latitude: latitude.optional(),
   longitude: longitude.optional(),
 });
@@ -184,11 +216,68 @@ export class TripCatalogueController {
 
   // ------------------------------------------------------------ locations ----
   //
-  // ★ ALWAYS UNDER A CUSTOMER, NEVER A POOL. Every route names the customer in
-  // its path and the service holds the location to it; there is no
-  // `GET /trip-locations`. Same permissions as the customer catalogue: reading
-  // is `trip.read`, adding is `trip.create`, changing is `trip.write` — and
-  // `BackofficeOnlyGuard` keeps every one of them from a driver account.
+  // ★ TWO DOORS TO ONE TABLE, AND THEY ARE NOT REDUNDANT.
+  //
+  //   /trip-customers/:id/locations   a customer's own places. The customer is
+  //                                   named in the path and the service holds
+  //                                   the location to it: an id belonging to
+  //                                   somebody else is 404, never 403.
+  //   /trip-locations                 the catalogue screen. Lists every place
+  //                                   with its owner resolved, creates SHARED
+  //                                   ones (`customer_id NULL`, see 0030), and
+  //                                   corrects or retires a row by id.
+  //
+  // ★ WHY THE SECOND DOOR IS NOT A HOLE IN THE FIRST. The customer segment was
+  // never an authorisation boundary — everything here is one deployment-wide
+  // catalogue behind one set of permissions, which is why a mismatch is
+  // answered "not found" rather than "forbidden". It is a ROUTING boundary: it
+  // stops a place being reached while pretending to sit under a customer it
+  // does not belong to. `/trip-locations/:id` names no customer at all, so
+  // there is nothing for it to lie about.
+  //
+  // Same permissions throughout, and the same as the customer catalogue:
+  // reading is `trip.read`, adding is `trip.create`, changing is `trip.write` —
+  // and `BackofficeOnlyGuard` keeps every one of them from a driver account.
+
+  @Get('trip-locations')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async listAllLocations(
+    @Query(new ZodValidationPipe(catalogueQuerySchema)) query: CatalogueQuery,
+  ): Promise<TripLocationListing[]> {
+    return this.catalogue.listAllLocations(wantsArchived(query));
+  }
+
+  /** Creates a SHARED place. A customer's own goes through the route below. */
+  @Post('trip-locations')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.create')
+  async createSharedLocation(
+    @Body(new ZodValidationPipe(createLocationSchema)) body: CreateLocationBody,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<TripLocation> {
+    return this.catalogue.createSharedLocation({ ...body, createdBy: actor.id });
+  }
+
+  @Patch('trip-locations/:locationId')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  async updateLocationById(
+    @Param('locationId', UuidParam) locationId: string,
+    @Body(new ZodValidationPipe(updateLocationSchema)) body: UpdateLocationBody,
+  ): Promise<TripLocation> {
+    return this.catalogue.updateLocationById(locationId, body);
+  }
+
+  @Post('trip-locations/:locationId/archive')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.write')
+  @HttpCode(HttpStatus.OK)
+  async archiveLocationById(
+    @Param('locationId', UuidParam) locationId: string,
+  ): Promise<TripLocation> {
+    return this.catalogue.archiveLocationById(locationId);
+  }
 
   @Get('trip-customers/:customerId/locations')
   @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DriverManagementPage from './DriverManagementPage';
+import { ApiError } from '@/utils/errors';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 
 /**
@@ -17,6 +18,7 @@ const fetchDrivers = vi.fn();
 const fetchDriver = vi.fn();
 const createDriver = vi.fn();
 const setDriverStatus = vi.fn();
+const renameDriver = vi.fn();
 const useSession = vi.fn();
 
 vi.mock('@/api/driverAccounts', () => ({
@@ -24,6 +26,7 @@ vi.mock('@/api/driverAccounts', () => ({
   fetchDriver: (...a: unknown[]) => fetchDriver(...a),
   createDriver: (...a: unknown[]) => createDriver(...a),
   setDriverStatus: (...a: unknown[]) => setDriverStatus(...a),
+  renameDriver: (...a: unknown[]) => renameDriver(...a),
   requestDriver: vi.fn(),
 }));
 
@@ -326,6 +329,76 @@ describe('DriverManagementPage', () => {
       fireEvent.click(disable);
 
       expect(await screen.findByText('Vô hiệu hóa tài khoản tài xế?')).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * ★ THE PERMISSION IS NOT RE-CHECKED HERE, AND THAT IS DELIBERATE. The whole
+   * screen already redirects a caller without `user.write` — a tier only an
+   * active SUPERADMIN holds — so a second gate on the button would be a second
+   * place for the rule to drift. The 'who sees it' block above is what covers
+   * it, and the server refuses regardless of what is drawn.
+   */
+  describe('correcting a name', () => {
+    const openRename = async () => {
+      renderPage();
+      await screen.findByText('Nguyễn Văn Tài');
+      fireEvent.click(screen.getByRole('button', { name: 'Sửa tên tài xế' }));
+      return dialog();
+    };
+
+    it('★ opens on the current name and sends the corrected one', async () => {
+      renameDriver.mockResolvedValue(driver({ displayName: 'Nguyễn Văn Tài Em' }));
+      const panel = await openRename();
+
+      const field = panel.getByLabelText('Tài xế') as HTMLInputElement;
+      expect(field.value).toBe('Nguyễn Văn Tài');
+
+      fireEvent.change(field, { target: { value: 'Nguyễn Văn Tài Em' } });
+      fireEvent.click(panel.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() => expect(renameDriver).toHaveBeenCalledWith('d1', 'Nguyễn Văn Tài Em'));
+    });
+
+    it('★ cannot save a blank name, nor the name it already has', async () => {
+      const panel = await openRename();
+      const field = panel.getByLabelText('Tài xế');
+      const save = panel.getByRole('button', { name: 'Lưu' });
+
+      // Unchanged: saving a name back onto itself can only fail or do nothing.
+      expect(save).toBeDisabled();
+
+      fireEvent.change(field, { target: { value: '   ' } });
+      expect(save).toBeDisabled();
+
+      fireEvent.change(field, { target: { value: 'Tên mới' } });
+      expect(save).toBeEnabled();
+      expect(renameDriver).not.toHaveBeenCalled();
+    });
+
+    it('trims before sending — a trailing space is not part of anybody’s name', async () => {
+      renameDriver.mockResolvedValue(driver());
+      const panel = await openRename();
+
+      fireEvent.change(panel.getByLabelText('Tài xế'), { target: { value: '  Tên mới  ' } });
+      fireEvent.click(panel.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() => expect(renameDriver).toHaveBeenCalledWith('d1', 'Tên mới'));
+    });
+
+    it('★ shows the server’s refusal rather than a generic failure', async () => {
+      renameDriver.mockRejectedValue(new ApiError(404, 'NOT_FOUND', 'Driver not found.'));
+      const panel = await openRename();
+
+      fireEvent.change(panel.getByLabelText('Tài xế'), { target: { value: 'Tên mới' } });
+      fireEvent.click(panel.getByRole('button', { name: 'Lưu' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Driver not found.');
+    });
+
+    it('says the rename touches neither the login nor the status', async () => {
+      const panel = await openRename();
+      expect(panel.getByText(/không ảnh hưởng tài khoản đăng nhập/)).toBeInTheDocument();
     });
   });
 });

@@ -99,4 +99,31 @@ export class UserRepository {
     );
     return rows[0] ? toUser(rows[0]) : null;
   }
+
+  /**
+   * Corrects the name an account is KNOWN BY. Nothing else.
+   *
+   * ★ NOT THE SIGN-IN IDENTITY. `display_name` is a label: it is what the board,
+   * the driver's own app and every past trip print. The address somebody signs
+   * in with lives in `identities` and is not reachable from here, so a rename
+   * cannot lock anybody out or collide with 0010's canonical-email index.
+   *
+   * ★ AND NO `expectedCurrent`. `setStatus` above takes one because a status is
+   * a state machine and two concurrent disables must not both report success. A
+   * name is not: the last writer wins, which is the correct answer when two
+   * administrators fix the same typo.
+   *
+   * `null` when the id names nobody. The caller decides what that means — for
+   * Driver Management it is "not found", the same answer a non-driver gets.
+   */
+  async setDisplayName(
+    input: { userId: string; displayName: string },
+    executor: DatabaseQuery = this.db,
+  ): Promise<User | null> {
+    const rows = await executor.query<UserRow>(
+      'UPDATE users SET display_name = $2 WHERE id = $1 RETURNING *',
+      [input.userId, input.displayName],
+    );
+    return rows[0] ? toUser(rows[0]) : null;
+  }
 }
