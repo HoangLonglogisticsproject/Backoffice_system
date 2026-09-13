@@ -251,7 +251,8 @@ describe('TripSchedulePage', () => {
       expect(screen.queryByRole('button', { name: /^điều độ$/i })).not.toBeInTheDocument();
     });
 
-    it('★ shows every lorry and every driver on the row — each driver once, with the count', async () => {
+    it('★ one row per lorry, each with ITS driver and its own state — the trip spanned once', async () => {
+      write();
       board(
         turn(),
         turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } }),
@@ -259,12 +260,21 @@ describe('TripSchedulePage', () => {
       );
       renderPage();
 
-      expect(await screen.findByText('50H-49266')).toBeInTheDocument();
-      expect(screen.getByText('51D-65233')).toBeInTheDocument();
-      expect(screen.getByText('51D-00003')).toBeInTheDocument();
-      expect(screen.getAllByText('Tài Xế A')).toHaveLength(1);
-      expect(screen.getByText('Tài Xế B')).toBeInTheDocument();
-      expect(screen.getByText('3 xe · 2 tài xế')).toBeInTheDocument();
+      const rowOf = async (plate: string) => within((await screen.findByText(plate)).closest('tr')!);
+      // The pairing is what the row is for: which driver is in WHICH lorry.
+      expect((await rowOf('50H-49266')).getByText('Tài Xế A')).toBeInTheDocument();
+      expect((await rowOf('51D-65233')).getByText('Tài Xế A')).toBeInTheDocument();
+      expect((await rowOf('51D-00003')).getByText('Tài Xế B')).toBeInTheDocument();
+      // The same driver on two lorries is two rows, never one folded name.
+      expect(screen.getAllByText('Tài Xế A')).toHaveLength(2);
+      // Each pair carries its own state; the tab of the same name is outside the table.
+      const table = screen.getByText('WWL').closest('table')!;
+      expect(within(table).getAllByText('Đã phân công')).toHaveLength(3);
+      // The trip's own facts are spanned down its three rows, not repeated —
+      // and its one dispatch control fires once.
+      expect(screen.getByText('WWL').closest('td')).toHaveAttribute('rowspan', '3');
+      expect(screen.getAllByText('WWL')).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /^điều độ$/i })).toHaveLength(1);
     });
 
     it('★ adds a lorry WITH its driver, sending the pair and nothing else', async () => {
@@ -712,7 +722,7 @@ describe('TripSchedulePage', () => {
 
       await waitFor(() => expect(assignDriver).toHaveBeenCalled());
       expect(await screen.findByText('51D-65233')).toBeInTheDocument();
-      expect(screen.getByText('2 xe · 2 tài xế')).toBeInTheDocument();
+      expect(within(screen.getByText('51D-65233').closest('tr')!).getByText('Tài Xế B')).toBeInTheDocument();
     });
 
     it('không mời điều độ một người chỉ có trip.create', async () => {

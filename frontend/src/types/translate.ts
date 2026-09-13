@@ -314,6 +314,7 @@ const PHRASES = {
   dispatchVehicleUnit: { vi: 'xe', en: 'vehicles' },
   dispatchDriverUnit: { vi: 'tài xế', en: 'drivers' },
   dispatchManage: { vi: 'Điều độ', en: 'Dispatch' },
+  assignmentAssigned: { vi: 'Đã phân công', en: 'Assigned' },
   dispatchLegacyBadge: { vi: 'Xe dự kiến (dữ liệu cũ)', en: 'Planned vehicle (legacy)' },
   assignReason: { vi: 'Lý do thay đổi', en: 'Reason for the change' },
   noEligibleDrivers: {

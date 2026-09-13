@@ -24,6 +24,7 @@ import { formatMoney } from '@/utils/format/money';
 import {
   TRIP_ASSIGNMENT_FILTERS,
   type TripAssignmentFilter,
+  type TripAssignmentRef,
   type TripScheduleWithRefs,
 } from '@/types/trip';
 import type { TranslationKey } from '@/types/translate';
@@ -211,6 +212,7 @@ export default function TripSchedulePage() {
                 <TableHead className="font-semibold text-gray-600">{t('colDate')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colVehicle')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colDriver')}</TableHead>
+                <TableHead className="font-semibold text-gray-600">{t('colAssignment')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCustomer')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCargo')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colPickup')}</TableHead>
@@ -242,65 +244,82 @@ export default function TripSchedulePage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {trips.items.map((trip, index) => (
-                <TableRow key={trip.id} className="align-top transition-colors hover:bg-blue-50/30">
+              {trips.items.map((trip, index) =>
+                /*
+                  ★ ONE ROW PER ASSIGNMENT (ADR-0004), not one per trip. The
+                  trip's own facts are spanned down its rows rather than
+                  repeated, so one booking still reads as one booking; the
+                  lorry, its driver and the state of that pair vary row by row.
+                  STT and pagination stay at TRIP grain: `total` counts trips.
+                */
+                assignmentRows(trip).map((turn, position) => {
+                  const lead = position === 0;
+                  const span = Math.max(trip.assignments.length, 1);
+                  return (
+                <TableRow
+                  key={turn?.id ?? trip.id}
+                  className="align-top transition-colors hover:bg-blue-50/30"
+                >
+                  {lead && (<>
                   {/*
                     The `STT` column of the sheet, continued ACROSS pages: row 1
                     of page 2 is 51, not 1. Restarting the count per page would
                     make two different rows both "1" and break the one thing the
                     column is for — saying which row somebody means out loud.
                   */}
-                  <TableCell className="text-center font-medium text-gray-500">
+                  <TableCell rowSpan={span} className="text-center font-medium text-gray-500">
                     {trips.firstRowNumber + index}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-gray-900">
+                  <TableCell rowSpan={span} className="whitespace-nowrap text-gray-900">
                     {formatCalendarDay(trip.scheduledOn, language)}
                   </TableCell>
+                  </>)}
                   <TableCell className="whitespace-nowrap font-medium text-gray-900">
-                    {/*
-                      ★ ONE LINE PER LORRY (ADR-0004). A trip carries any
-                      number of them, each with its own driver; the row stays
-                      one row and the cell grows. Formatted for reading, not
-                      normalised: the catalogue stores the plate as somebody
-                      typed it, so `50H49266` and `50H-49266` stop looking like
-                      two lorries down one column.
-                    */}
-                    <Plates trip={trip} />
+                    <Vehicle trip={trip} turn={turn} />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {/*
-                      ★ WHO IS DRIVING, AND THE ONE CONTROL THAT CHANGES IT.
-                      Operations dispatches; the driver never does — the portal
-                      has no such button and the server refuses a driver
-                      account the route. Hidden on a finished trip for the
-                      same reason the status dropdown is: the server refuses
-                      every assignment write once a trip is finished.
-                    */}
-                    <Crew
-                      trip={trip}
-                      canDispatch={canManage && trip.status !== 'finished'}
-                      onDispatch={() => setAssigningRow(trip)}
-                    />
+                  <TableCell className="whitespace-nowrap text-gray-900">
+                    {turn ? (
+                      turn.driver.displayName
+                    ) : (
+                      <span className="text-gray-400">{t('driverUnassigned')}</span>
+                    )}
                   </TableCell>
-                  <TableCell className="text-gray-900">{trip.customer?.name ?? <Unset />}</TableCell>
                   <TableCell>
+                    {/*
+                      ★ THE STATE OF THIS PAIR, NOT OF THE TRIP. The board
+                      receives ACTIVE assignments only, so every row it shows
+                      is "assigned"; `started` is an execution flag and is not
+                      a state, and completion is its own lifecycle that this
+                      read model does not carry.
+                    */}
+                    {turn ? (
+                      <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-1 text-xs font-medium whitespace-nowrap text-sky-700 ring-1 ring-sky-600/20 ring-inset">
+                        {t('assignmentAssigned')}
+                      </span>
+                    ) : (
+                      <Unset />
+                    )}
+                  </TableCell>
+                  {lead && (<>
+                  <TableCell rowSpan={span} className="text-gray-900">{trip.customer?.name ?? <Unset />}</TableCell>
+                  <TableCell rowSpan={span}>
                     <Prose value={trip.cargoInfo} />
                   </TableCell>
-                  <TableCell>
+                  <TableCell rowSpan={span}>
                     <Leg
                       address={trip.pickupAddress}
                       contact={trip.pickupContact}
                       at={trip.pickupAt}
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell rowSpan={span}>
                     <Leg
                       address={trip.deliveryAddress}
                       contact={trip.deliveryContact}
                       at={trip.deliveryAt}
                     />
                   </TableCell>
-                  <TableCell>
+                  <TableCell rowSpan={span}>
                     {/*
                       The same badge either way. A reader without `trip.write`
                       gets it as a label; a dispatcher gets it as the control
@@ -342,7 +361,7 @@ export default function TripSchedulePage() {
                   */}
                   {mayPrice && (
                     <>
-                      <TableCell className="whitespace-nowrap text-right font-medium tabular-nums text-gray-900">
+                      <TableCell rowSpan={span} className="whitespace-nowrap text-right font-medium tabular-nums text-gray-900">
                         {trip.sellPrice ? formatMoney(trip.sellPrice) : <Unset />}
                       </TableCell>
                       {/*
@@ -350,20 +369,37 @@ export default function TripSchedulePage() {
                         the run cost to buy, and the column people scan down is
                         the one they invoice from.
                       */}
-                      <TableCell className="whitespace-nowrap text-right tabular-nums text-gray-600">
+                      <TableCell rowSpan={span} className="whitespace-nowrap text-right tabular-nums text-gray-600">
                         {trip.purchasePrice ? formatMoney(trip.purchasePrice) : <Unset />}
                       </TableCell>
                     </>
                   )}
-                  <TableCell>
+                  <TableCell rowSpan={span}>
                     <Prose value={trip.note} />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-gray-600">
+                  <TableCell rowSpan={span} className="whitespace-nowrap text-gray-600">
                     {trip.createdByUser.displayName}
                   </TableCell>
                   {(canManage || canViewCost) && (
-                    <TableCell>
+                    <TableCell rowSpan={span}>
                       <div className="flex items-center gap-1">
+                        {/*
+                          ★ THE ONE CONTROL THAT CHANGES THE CREW, once per
+                          trip. Operations dispatches; the driver never does.
+                          Hidden on a finished trip for the same reason the
+                          status dropdown is: the server refuses every
+                          assignment write once a trip is finished.
+                        */}
+                        {canManage && trip.status !== 'finished' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-1 px-2 text-xs text-gray-600"
+                            onClick={() => setAssigningRow(trip)}
+                          >
+                            {trip.assignments.length > 0 ? t('dispatchManage') : t('assignDriver')}
+                          </Button>
+                        )}
                         {canManage && (
                         <Button
                           variant="outline"
@@ -413,8 +449,11 @@ export default function TripSchedulePage() {
                       </div>
                     </TableCell>
                   )}
+                  </>)}
                 </TableRow>
-              ))}
+                  );
+                }),
+              )}
             </TableBody>
           </Table>
 
@@ -603,92 +642,40 @@ const platesOf = (trip: TripScheduleWithRefs): string =>
     .join('; ');
 
 /**
- * The lorries on the trip, one per line.
- *
- * ★ A LEGACY LORRY IS NAMED AS SUCH. A trip booked before dispatch became a
- * pair may still carry `vehicleId` with no assignment behind it; the board
- * says "planned vehicle (legacy)" rather than a plate it does not have, so
- * Operations knows to dispatch the trip again as a pair.
- *
- * ★ IT READS `legacyVehicleId`, AND ONLY WHERE THERE IS NO CREW.
- * `assignment.vehicle` is the canonical source and cannot answer this one: the
- * read happens only where `assignments.length === 0`, and migration 0029 case F
- * leaves precisely those rows uncrewed by design — a lorry with no driver is not
- * an assignment. The legacy column is therefore the only record that a lorry was
- * ever planned, and removing the read would render those trips as an ordinary
- * `Unset`, losing the signal that they need re-dispatching.
+ * The board's row grain: one row per ACTIVE assignment, and exactly one row for
+ * a trip with none — `[null]`, never `[]`, because an uncrewed trip is a
+ * finding the board must show, not a trip that disappears.
  */
-function Plates({ trip }: Readonly<{ trip: TripScheduleWithRefs }>) {
+const assignmentRows = (trip: TripScheduleWithRefs): (TripAssignmentRef | null)[] =>
+  trip.assignments.length === 0 ? [null] : trip.assignments;
+
+/**
+ * The lorry of one assignment row.
+ *
+ * ★ A LEGACY LORRY IS NAMED AS SUCH, on the one row an uncrewed trip gets. A
+ * trip booked before dispatch became a pair may still carry `legacyVehicleId`
+ * with no assignment behind it; the board says "planned vehicle (legacy)"
+ * rather than a plate it does not have, so Operations knows to dispatch the
+ * trip again as a pair. `assignment.vehicle` is the canonical source and
+ * cannot answer this one: migration 0029 case F leaves precisely those rows
+ * uncrewed by design.
+ */
+function Vehicle({
+  trip,
+  turn,
+}: Readonly<{ trip: TripScheduleWithRefs; turn: TripAssignmentRef | null }>) {
   const { t } = useLanguage();
-  if (trip.assignments.length === 0) {
+  if (turn === null) {
     return trip.legacyVehicleId ? (
       <span className="text-xs font-normal text-amber-700">{t('dispatchLegacyBadge')}</span>
     ) : (
       <Unset />
     );
   }
-  return (
-    <ul className="space-y-0.5">
-      {trip.assignments.map((turn) => (
-        <li key={turn.id}>
-          {turn.vehicle ? (
-            formatPlate(turn.vehicle.plate)
-          ) : (
-            <span className="text-xs font-normal text-amber-700">{t('dispatchMissingVehicle')}</span>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/**
- * The drivers on the trip — each named once, however many lorries they hold —
- * with the count when there is more than one lorry, and the one control that
- * changes the crew.
- */
-function Crew({
-  trip,
-  canDispatch,
-  onDispatch,
-}: Readonly<{ trip: TripScheduleWithRefs; canDispatch: boolean; onDispatch: () => void }>) {
-  const { t } = useLanguage();
-  // ★ DEDUPED BY ID, KEYED BY ID, SHOWN BY NAME. Two different drivers may
-  // share a display name; folding them by name would show one person.
-  const drivers = [
-    ...new Map(trip.assignments.map((turn) => [turn.driver.id, turn.driver] as const)).values(),
-  ];
-  const lorries = trip.assignments.length;
-
-  return (
-    <div className="flex items-start gap-2">
-      <div>
-        {drivers.length === 0 ? (
-          <span className="text-gray-400">{t('driverUnassigned')}</span>
-        ) : (
-          <ul className="space-y-0.5 text-gray-900">
-            {drivers.map((driver) => (
-              <li key={driver.id}>{driver.displayName}</li>
-            ))}
-          </ul>
-        )}
-        {lorries > 1 ? (
-          <span className="block text-xs text-gray-500">
-            {`${lorries} ${t('dispatchVehicleUnit')} · ${drivers.length} ${t('dispatchDriverUnit')}`}
-          </span>
-        ) : null}
-      </div>
-      {canDispatch && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 px-2 text-xs text-gray-600"
-          onClick={onDispatch}
-        >
-          {lorries > 0 ? t('dispatchManage') : t('assignDriver')}
-        </Button>
-      )}
-    </div>
+  return turn.vehicle ? (
+    formatPlate(turn.vehicle.plate)
+  ) : (
+    <span className="text-xs font-normal text-amber-700">{t('dispatchMissingVehicle')}</span>
   );
 }
 
