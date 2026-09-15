@@ -3,7 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
-import { Lock } from 'lucide-react'
+import { Eye, EyeOff, Lock } from 'lucide-react'
 import logo from '@/assets/img/LOGO.png'
 import { useSession } from '@/contexts/SessionProvider'
 import { changePassword } from '@/api/auth'
@@ -73,6 +73,26 @@ export default function ChangePasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  /**
+   * Which of the three boxes is currently readable, keyed by the field's own id.
+   *
+   * ★ ONE RECORD RATHER THAN THREE `useState`s, because the three toggles are
+   * the same control repeated — a shape that adds a field without adding a hook.
+   * Each starts hidden: a password is shown because somebody asked for it, not
+   * by default on a screen someone may be standing behind.
+   *
+   * ★ AND THEY ARE INDEPENDENT ON PURPOSE. Revealing the new password to check
+   * a typo must not also reveal the current one — that is the credential the
+   * account still holds everywhere else.
+   */
+  const [visible, setVisible] = useState({
+    currentPassword: false,
+    newPassword: false,
+    confirmPassword: false,
+  })
+  const toggle = (field: keyof typeof visible) =>
+    setVisible((state) => ({ ...state, [field]: !state[field] }))
 
   const navigate = useNavigate()
   const { state, loading, signOut } = useSession()
@@ -147,14 +167,29 @@ export default function ChangePasswordPage() {
                 </div>
                 <Input
                   id="currentPassword"
-                  type="password"
+                  type={visible.currentPassword ? 'text' : 'password'}
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
                   autoComplete="current-password"
                   placeholder="Nhập mật khẩu hiện tại"
-                  className="pl-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
+                  className="pl-11 pr-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
                   required
                 />
+                <button
+                  type="button"
+                  onClick={() => toggle('currentPassword')}
+                  // ★ ITS OWN NAME, NOT THE FIELD'S. Sharing a label makes the
+                  // input and the toggle answer to the same lookup, which leaves
+                  // the toggle effectively unreachable by name.
+                  aria-label={visible.currentPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  aria-pressed={visible.currentPassword}
+                  // ★ `tabIndex={-1}` DELIBERATELY NOT SET. Tab reaching this is
+                  // the only way somebody who cannot use a mouse can read back
+                  // what they typed.
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
+                >
+                  {visible.currentPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
+                </button>
               </div>
             </div>
 
@@ -168,15 +203,30 @@ export default function ChangePasswordPage() {
                 </div>
                 <Input
                   id="newPassword"
-                  type="password"
+                  type={visible.newPassword ? 'text' : 'password'}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   autoComplete="new-password"
                   minLength={MIN_PERMANENT_PASSWORD_LENGTH}
                   placeholder={`Ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự`}
-                  className="pl-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
+                  className="pl-11 pr-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
                   required
                 />
+                <button
+                  type="button"
+                  onClick={() => toggle('newPassword')}
+                  // ★ ITS OWN NAME, NOT THE FIELD'S. Sharing a label makes the
+                  // input and the toggle answer to the same lookup, which leaves
+                  // the toggle effectively unreachable by name.
+                  aria-label={visible.newPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  aria-pressed={visible.newPassword}
+                  // ★ `tabIndex={-1}` DELIBERATELY NOT SET. Tab reaching this is
+                  // the only way somebody who cannot use a mouse can read back
+                  // what they typed.
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
+                >
+                  {visible.newPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
+                </button>
               </div>
             </div>
 
@@ -190,15 +240,30 @@ export default function ChangePasswordPage() {
                 </div>
                 <Input
                   id="confirmPassword"
-                  type="password"
+                  type={visible.confirmPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   autoComplete="new-password"
                   minLength={MIN_PERMANENT_PASSWORD_LENGTH}
                   placeholder={`Ít nhất ${MIN_PERMANENT_PASSWORD_LENGTH} ký tự`}
-                  className="pl-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
+                  className="pl-11 pr-11 py-[22px] bg-transparent border-[#e2e8f0] text-gray-700 placeholder:text-gray-400 focus-visible:ring-1 focus-visible:ring-[#1b3670] rounded-xl shadow-sm"
                   required
                 />
+                <button
+                  type="button"
+                  onClick={() => toggle('confirmPassword')}
+                  // ★ ITS OWN NAME, NOT THE FIELD'S. Sharing a label makes the
+                  // input and the toggle answer to the same lookup, which leaves
+                  // the toggle effectively unreachable by name.
+                  aria-label={visible.confirmPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  aria-pressed={visible.confirmPassword}
+                  // ★ `tabIndex={-1}` DELIBERATELY NOT SET. Tab reaching this is
+                  // the only way somebody who cannot use a mouse can read back
+                  // what they typed.
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none"
+                >
+                  {visible.confirmPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
+                </button>
               </div>
             </div>
 

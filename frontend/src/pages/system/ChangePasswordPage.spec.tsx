@@ -207,6 +207,65 @@ describe('ChangePasswordPage', () => {
     await waitFor(() => expect(changePassword).toHaveBeenCalledTimes(1));
   });
 
+  describe('showing what was typed', () => {
+    // The three boxes are the same control three times, so the cases are
+    // written once against whichever one is named.
+    const boxes = [
+      ['Mật khẩu hiện tại', 'Nhập mật khẩu hiện tại'],
+      ['Mật khẩu mới', 'Ít nhất 12 ký tự'],
+      ['Nhập lại mật khẩu mới', 'Ít nhất 12 ký tự'],
+    ] as const;
+
+    it.each(boxes)('starts %s hidden and reveals it on request', (label) => {
+      renderPage();
+      const box = screen.getByLabelText(label);
+      const toggle = box.parentElement!.querySelector('button')!;
+
+      expect(box).toHaveAttribute('type', 'password');
+
+      fireEvent.click(toggle);
+      expect(box).toHaveAttribute('type', 'text');
+
+      fireEvent.click(toggle);
+      expect(box).toHaveAttribute('type', 'password');
+    });
+
+    it('reveals one box without revealing the others', () => {
+      renderPage();
+      const current = screen.getByLabelText('Mật khẩu hiện tại');
+
+      fireEvent.click(current.parentElement!.querySelector('button')!);
+
+      // Checking a typo in the NEW password must not expose the credential the
+      // account still holds everywhere else.
+      expect(current).toHaveAttribute('type', 'text');
+      expect(screen.getByLabelText('Mật khẩu mới')).toHaveAttribute('type', 'password');
+      expect(screen.getByLabelText('Nhập lại mật khẩu mới')).toHaveAttribute('type', 'password');
+    });
+
+    it('names itself, so the toggle is reachable without seeing it', () => {
+      renderPage();
+      const toggle = screen.getAllByRole('button', { name: 'Hiện mật khẩu' })[0];
+
+      fireEvent.click(toggle);
+
+      expect(toggle).toHaveAccessibleName('Ẩn mật khẩu');
+      expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('does not submit the form', () => {
+      renderPage();
+
+      // `type="button"`: inside a <form>, a button without it defaults to
+      // submit, so revealing a password would try to change it.
+      expect(screen.getAllByRole('button', { name: 'Hiện mật khẩu' })[0]).toHaveAttribute(
+        'type',
+        'button',
+      );
+      expect(changePassword).not.toHaveBeenCalled();
+    });
+  });
+
   it('sends an anonymous visitor to login instead of rendering the form', () => {
     useSession.mockReturnValue({ state: { status: 'anonymous' }, loading: false, signOut });
     renderPage();
