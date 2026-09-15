@@ -30,7 +30,6 @@ const updateTripLocationById = vi.fn();
  */
 vi.mock('@/hooks/useVnAdministrative', () => ({
   useProvinces: () => ({ items: [], loading: false, failed: false }),
-  useDistricts: () => ({ items: [], loading: false, failed: false }),
   useWards: () => ({ items: [], loading: false, failed: false }),
 }));
 

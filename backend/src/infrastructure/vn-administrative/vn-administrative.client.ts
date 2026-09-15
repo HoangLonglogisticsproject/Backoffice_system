@@ -11,25 +11,21 @@ import type { Env } from '../../config/env.schema';
  * field, disappears, or is swapped for another, this file changes and nothing
  * else does. Same discipline the frontend keeps around Google Maps.
  *
- * ★ THREE LEVELS, AND THAT IS A DECISION RATHER THAN THE CURRENT LAW.
+ * ★ TWO LEVELS, BECAUSE VIETNAM HAS TWO. On 1 July 2025 the 63 tỉnh/thành were
+ * merged into 34 and the quận/huyện rung was ABOLISHED outright: a ward now
+ * hangs directly off a province. `…/api/v2` serves that structure and this
+ * reads it. `…/api/v1` still serves the pre-reform three-tier one, which is why
+ * `VN_ADMIN_API_URL` must not be pointed there — `listWards` reads `wards` off
+ * a province, and a v1 province carries `districts` instead.
  *
- * Vietnam went two-tier on 1 July 2025 — 34 tỉnh/thành, then xã/phường, with
- * quận/huyện ABOLISHED. This deployment reads the PRE-reform hierarchy on
- * purpose: 63 provinces → districts → wards, which is what `…/api/v1` serves
- * (`…/api/v2` serves the two-tier one).
- *
- * WHY, because the next reader will otherwise assume it is a mistake: these
- * three fields are DESCRIPTIVE. Nothing operational reads them — a trip
- * snapshots its `address`, the geofence measures coordinates — and they exist
- * so a person can find a row in a list. The people using this list, and the
- * customer contracts it is reconciled against, still say "Quận 7" and "Bình
- * Dương". The old hierarchy is also self-consistent, which a mix of new
- * provinces and old districts could never be.
- *
- * ⚠ THE COST, STATED ONCE: the province list offers 63 names, some of which no
- * longer exist as provinces, and the wards are the pre-merger ones. Moving to
- * the current structure is `VN_ADMIN_API_URL` → `…/api/v2` plus deleting the
- * district rung; nothing else here assumes three.
+ * ⚠ WHAT THAT MEANS FOR ROWS FILED BEFORE THE SWITCH. A location saved under
+ * the old hierarchy kept a province that may no longer exist ("Tỉnh Bình
+ * Dương") and a district that certainly does not ("Quận 7"). Nothing here
+ * rewrites them, and nothing needs to: these fields are DESCRIPTIVE — a trip
+ * snapshots its `address`, the geofence measures coordinates — so a stale one
+ * is a label a person still recognises, not a broken reference. Re-picking the
+ * province on the location form is what migrates a row, and the form clears the
+ * old district when that happens so no row ends up half-new.
  *
  * ★ THE RESPONSE IS PARSED, NOT TRUSTED. A free public API with no contract
  * behind it can answer with HTML from a proxy, an error object, or a shape it
@@ -65,12 +61,15 @@ const unitSchema = z.object({ code: z.number(), name: z.string().min(1) }).passt
 const unitsSchema = z.array(unitSchema);
 
 /**
- * ★ THE CHILDREN COME WRAPPED IN THEIR PARENT, NOT AS A BARE LIST. Asking for
- * one province at `depth=2` answers with the PROVINCE, carrying `districts`;
- * the same for a district and its `wards`. So each of these reads one field out
- * of one object rather than parsing an array.
+ * ★ THE WARDS COME WRAPPED IN THEIR PROVINCE, NOT AS A BARE LIST. Asking for
+ * one province at `depth=2` answers with the PROVINCE, carrying `wards`. So
+ * this reads one field out of one object rather than parsing an array.
+ *
+ * ⚠ AND IT IS `wards`, WHICH IS ALSO THE VERSION CHECK. The same path on
+ * `…/api/v1` answers with `districts` and no `wards` at all, so a deployment
+ * misconfigured back to v1 fails HERE, at the boundary, with "an unexpected
+ * shape" — rather than silently serving an empty ward list.
  */
-const withDistrictsSchema = z.object({ districts: unitsSchema }).passthrough();
 const withWardsSchema = z.object({ wards: unitsSchema }).passthrough();
 
 type Unit = z.infer<typeof unitSchema>;
@@ -119,35 +118,30 @@ export class VnAdministrativeClient {
 
   constructor(private readonly config: ConfigService<Env, true>) {}
 
-  /** The 63 tỉnh/thành of the pre-2025 hierarchy. */
+  /** The 34 tỉnh/thành as they stand after the 2025 merger. */
   async listProvinces(): Promise<AdministrativeUnit[]> {
     return asUnits(await this.get('/p/', unitsSchema));
   }
 
-  /** The quận/huyện/thị xã under one province. */
-  async listDistricts(provinceCode: string): Promise<AdministrativeUnit[]> {
+  /**
+   * The phường/xã of one PROVINCE — there is no rung between the two any more.
+   *
+   * ★ `depth=2`, WHICH IS NOW THE WHOLE TREE. Under the old hierarchy this was
+   * the middle of three calls and `depth=3` was the thing to avoid; two-tier,
+   * `depth=2` IS a province and everything under it. One call per province,
+   * behind a 24-hour cache.
+   *
+   * ⚠ IT IS A BIGGER ANSWER THAN THE OLD ONE — Hồ Chí Minh returns 168 wards in
+   * a single response where it used to return 22 districts. Still tens of
+   * kilobytes, still once a day, and the alternative was two round trips for
+   * the same data.
+   */
+  async listWards(provinceCode: string): Promise<AdministrativeUnit[]> {
     const province = await this.get(
       `/p/${encodeURIComponent(provinceCode)}?depth=2`,
-      withDistrictsSchema,
-    );
-    return asUnits(province.districts);
-  }
-
-  /**
-   * The phường/xã/thị trấn under one DISTRICT — not under a province.
-   *
-   * ★ `depth=2` ONE RUNG AT A TIME, NEVER `depth=3`. The service asks in its own
-   * documentation not to lean on `depth=3`, and it pays for its own hosting; one
-   * province's whole tree is also far more than a dropdown needs. Two shallow
-   * calls a dispatcher makes once, behind a 24-hour cache, cost it almost
-   * nothing.
-   */
-  async listWards(districtCode: string): Promise<AdministrativeUnit[]> {
-    const district = await this.get(
-      `/d/${encodeURIComponent(districtCode)}?depth=2`,
       withWardsSchema,
     );
-    return asUnits(district.wards);
+    return asUnits(province.wards);
   }
 
   /**

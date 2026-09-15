@@ -5,16 +5,22 @@ import {
   SelectTrigger,
 } from '@/components/ui/select';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useDistricts, useProvinces, useWards } from '@/hooks/useVnAdministrative';
+import { useProvinces, useWards } from '@/hooks/useVnAdministrative';
 
 /**
- * Tỉnh/Thành phố → Quận/Huyện → Phường/Xã, as three dropdowns that cascade.
+ * Tỉnh/Thành phố → Phường/Xã, as two dropdowns that cascade.
  *
- * ★ THREE LEVELS, RECORDING THE PRE-2025 HIERARCHY ON PURPOSE. Vietnam went
- * two-tier on 1 July 2025 and abolished quận/huyện; the server reads the older
- * feed anyway, because these fields exist for a person finding a row in a list
- * and that person still says "Quận 7". The client on the server side carries
- * the full reasoning and the cost.
+ * ★ TWO LEVELS, BECAUSE VIETNAM HAS TWO. The 2025 merger left 34 tỉnh/thành and
+ * abolished quận/huyện outright, so a ward is chosen straight out of a province
+ * and there is no third control to offer.
+ *
+ * ★ THE ABOLISHED TIER IS STILL IN THE VALUE, AND STILL READ-ONLY ON SCREEN.
+ * Rows filed before the switch carry a district, `fullAddress` still prints it,
+ * and blanking it on save would quietly destroy data during an unrelated edit.
+ * So it is carried through untouched, SHOWN so nobody wonders where the
+ * "Quận 7" in the list came from, and cleared the moment somebody re-picks the
+ * province — which is the one moment keeping it would produce a row that is
+ * half new and half old.
  *
  * ★ THE CODE AND THE NAME TOGETHER ARE THE ANSWER, because the code alone is
  * not unique in this source — see `keyOf`. Both are reported to the caller and
@@ -30,6 +36,10 @@ import { useDistricts, useProvinces, useWards } from '@/hooks/useVnAdministrativ
 export interface AdminAreaValue {
   provinceCode: string | null;
   province: string | null;
+  /**
+   * The abolished tier. Never written by this component — only carried through
+   * from a row saved before 1 July 2025, and cleared when the province changes.
+   */
   districtCode: string | null;
   district: string | null;
   wardCode: string | null;
@@ -97,32 +107,21 @@ export function AdminAreaFields({
 }>) {
   const { t } = useLanguage();
   const provinces = useProvinces();
-  const districts = useDistricts(value.provinceCode);
-  const wards = useWards(value.districtCode);
+  const wards = useWards(value.provinceCode);
 
   const pickProvince = (key: string | null) => {
     const province = unitOf(key, provinces.items);
     if (!province) return;
-    // ★ CHANGING A LEVEL CLEARS EVERY LEVEL BELOW IT. Keeping them would leave
-    // a ward filed under a district it does not belong to — a row that reads as
-    // precise and is wrong, which is worse than one that reads as incomplete.
+    // ★ CHANGING THE PROVINCE CLEARS EVERYTHING UNDER IT — the ward, and the
+    // pre-merger district if the row still had one. Keeping either would leave
+    // a ward filed under a province it does not belong to, or a "Quận 7" under
+    // a province that never had one: a row that reads as precise and is wrong,
+    // which is worse than one that reads as incomplete.
     onChange({
       provinceCode: province.code,
       province: province.name,
       districtCode: null,
       district: null,
-      wardCode: null,
-      ward: null,
-    });
-  };
-
-  const pickDistrict = (key: string | null) => {
-    const district = unitOf(key, districts.items);
-    if (!district) return;
-    onChange({
-      ...value,
-      districtCode: district.code,
-      district: district.name,
       wardCode: null,
       ward: null,
     });
@@ -135,7 +134,6 @@ export function AdminAreaFields({
   };
 
   const provinceChosen = value.provinceCode !== null;
-  const districtChosen = value.districtCode !== null;
 
   return (
     /*
@@ -172,55 +170,24 @@ export function AdminAreaFields({
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="location-district" className="text-sm font-medium text-gray-700">
-          {t('locationDistrict')}
-        </label>
-        <Select
-          value={keyOf(value.districtCode, value.district)}
-          onValueChange={pickDistrict}
-          disabled={!provinceChosen || districts.loading}
-        >
-          <SelectTrigger id="location-district" className="w-full min-w-0">
-            <Chosen
-              name={value.district}
-              placeholder={t(
-                !provinceChosen
-                  ? 'locationDistrictNeedsProvince'
-                  : districts.loading
-                    ? 'loading'
-                    : 'locationDistrictPick',
-              )}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {districts.items.map((unit) => (
-              <SelectItem key={keyOf(unit.code, unit.name)} value={keyOf(unit.code, unit.name)}>
-                {unit.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {districts.failed ? <p className="text-xs text-amber-700">{t('adminAreaUnavailable')}</p> : null}
-      </div>
-      <div className="space-y-2">
         <label htmlFor="location-ward" className="text-sm font-medium text-gray-700">
           {t('locationWard')}
         </label>
         {/*
-          Disabled until a DISTRICT is chosen, because the list is the
-          district's — and the placeholder says which state the control is in,
+          Disabled until a PROVINCE is chosen, because the list is the
+          province's — and the placeholder says which state the control is in,
           rather than leaving a dead box with no explanation.
         */}
         <Select
           value={keyOf(value.wardCode, value.ward)}
           onValueChange={pickWard}
-          disabled={!districtChosen || wards.loading}
+          disabled={!provinceChosen || wards.loading}
         >
           <SelectTrigger id="location-ward" className="w-full min-w-0">
             <Chosen
               name={value.ward}
               placeholder={t(
-                !districtChosen ? 'locationWardNeedsDistrict' : wards.loading ? 'loading' : 'locationWardPick',
+                !provinceChosen ? 'locationWardNeedsProvince' : wards.loading ? 'loading' : 'locationWardPick',
               )}
             />
           </SelectTrigger>
@@ -234,6 +201,22 @@ export function AdminAreaFields({
         </Select>
         {wards.failed ? <p className="text-xs text-amber-700">{t('adminAreaUnavailable')}</p> : null}
       </div>
+
+      {/*
+        ★ ONLY FOR A ROW THAT STILL CARRIES ONE, AND ONLY TO BE READ. Without
+        it, a location filed before the merger shows "Quận 7" in the catalogue's
+        address column and nothing on the form that accounts for it — which
+        reads as a bug. There is deliberately no control to clear it on its own:
+        the district goes when the province is re-picked, together, because
+        those two are only ever wrong as a pair.
+      */}
+      {value.district === null ? null : (
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-gray-500">{t('locationDistrictLegacy')}</p>
+          <p className="truncate text-sm text-gray-500">{value.district}</p>
+          <p className="text-xs text-amber-700">{t('locationDistrictLegacyHint')}</p>
+        </div>
+      )}
     </div>
   );
 }

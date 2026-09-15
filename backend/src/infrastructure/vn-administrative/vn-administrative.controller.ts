@@ -6,7 +6,8 @@ import { VnAdministrativeService } from './vn-administrative.service';
 import type { AdministrativeUnit } from './vn-administrative.client';
 
 /**
- * The two dropdowns on the location form, served from our own origin.
+ * The two dropdowns on the location form — tỉnh/thành then phường/xã — served
+ * from our own origin.
  *
  * ★ WHY THIS IS PROXIED RATHER THAN CALLED FROM THE BROWSER. The upstream does
  * send `Access-Control-Allow-Origin: *`, so a direct call would work — this is
@@ -30,9 +31,9 @@ import type { AdministrativeUnit } from './vn-administrative.client';
  */
 
 /**
- * A unit code as the upstream issues them: `"79"` for a province, `"760"` for
- * a district. Digits in practice; accepted as alphanumeric so a source that
- * codes differently does not need this file changed.
+ * A unit code as the upstream issues them: `"79"` for a province, `"26734"` for
+ * a ward. Digits in practice; accepted as alphanumeric so a source that codes
+ * differently does not need this file changed.
  *
  * Short and alphanumeric — enough to keep anything path-shaped or query-shaped
  * out of the URL it is interpolated into. Not `UuidParam`: these are not ours
@@ -53,28 +54,19 @@ export class VnAdministrativeController {
     return this.units.listProvinces();
   }
 
-  /** The quận/huyện/thị xã of one province. */
-  @Get('vn-provinces/:provinceCode/districts')
-  @UseGuards(AuthGuard)
-  async listDistricts(
-    @Param('provinceCode', new ZodValidationPipe(unitCodeSchema)) provinceCode: string,
-  ): Promise<AdministrativeUnit[]> {
-    return this.units.listDistricts(provinceCode);
-  }
-
   /**
-   * The phường/xã/thị trấn of one DISTRICT.
+   * The phường/xã of one province.
    *
-   * ★ ITS OWN PATH, NOT NESTED UNDER THE PROVINCE. A district code identifies a
-   * district on its own, so `/vn-provinces/79/districts/760/wards` would carry a
-   * segment the server neither needs nor checks — an invitation to send a
-   * mismatched pair and wonder which half won.
+   * ★ NESTED UNDER THE PROVINCE, BECAUSE THE PROVINCE IS THE PARENT. Since the
+   * 2025 merger abolished quận/huyện there is nothing between the two, so the
+   * path says exactly what the hierarchy is and carries no segment the server
+   * would have to check for agreement.
    */
-  @Get('vn-districts/:districtCode/wards')
+  @Get('vn-provinces/:provinceCode/wards')
   @UseGuards(AuthGuard)
   async listWards(
-    @Param('districtCode', new ZodValidationPipe(unitCodeSchema)) districtCode: string,
+    @Param('provinceCode', new ZodValidationPipe(unitCodeSchema)) provinceCode: string,
   ): Promise<AdministrativeUnit[]> {
-    return this.units.listWards(districtCode);
+    return this.units.listWards(provinceCode);
   }
 }

@@ -263,9 +263,14 @@ export interface TripLocationRef {
  * Coordinates are optional: "not located yet" is a real state the screens say
  * out loud.
  *
- * Three administrative levels — tỉnh/thành → quận/huyện → phường/xã — each a
- * CODE and a NAME. Descriptive only: nothing operational reads them, and `null`
- * means "not recorded". This is the PRE-2025 hierarchy on purpose; see 0030.
+ * Two administrative levels — tỉnh/thành → phường/xã — each a CODE and a NAME.
+ * Descriptive only: nothing operational reads them, and `null` means "not
+ * recorded".
+ *
+ * `district*` is the tier Vietnam abolished on 1 July 2025. It survives on the
+ * type because rows filed before then still carry one and blanking those would
+ * destroy data; nothing WRITES it any more. `AdminAreaFields` shows it
+ * read-only and clears it when the province is re-picked.
  */
 export interface TripLocation {
   id: string;

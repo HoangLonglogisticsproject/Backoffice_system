@@ -1038,19 +1038,25 @@ const PHRASES = {
   locationOwnerAll: { vi: 'Tất cả', en: 'All' },
   /** What the owner cell says for a place belonging to nobody. */
   locationShared: { vi: '— Dùng chung —', en: '— Shared —' },
-  /** Tỉnh · huyện · xã, as one column and as three fields. */
-  // ★ THREE LEVELS, RECORDING THE PRE-2025 HIERARCHY. Vietnam abolished the
-  // quận/huyện tier on 1 July 2025; 0030 and the administrative client explain
-  // why this deployment still writes it down.
-  locationAdminArea: { vi: 'Tỉnh / Quận / Phường', en: 'Province / district / ward' },
+  /** Tỉnh · xã, as one column and as two fields. */
+  // ★ TWO LEVELS, BECAUSE THE 2025 MERGER LEFT TWO. The 63 provinces became 34
+  // and quận/huyện was abolished on 1 July 2025, so a ward hangs straight off a
+  // province and nothing here offers a third control.
+  locationAdminArea: { vi: 'Tỉnh / Phường', en: 'Province / ward' },
   locationProvince: { vi: 'Tỉnh / Thành phố', en: 'Province / city' },
-  locationDistrict: { vi: 'Quận / Huyện', en: 'District' },
   locationWard: { vi: 'Phường / Xã', en: 'Ward / commune' },
   locationProvincePick: { vi: 'Chọn tỉnh / thành phố', en: 'Choose a province' },
-  locationDistrictPick: { vi: 'Chọn quận / huyện', en: 'Choose a district' },
   locationWardPick: { vi: 'Chọn phường / xã', en: 'Choose a ward' },
-  locationDistrictNeedsProvince: { vi: 'Chọn tỉnh trước', en: 'Choose a province first' },
-  locationWardNeedsDistrict: { vi: 'Chọn quận / huyện trước', en: 'Choose a district first' },
+  locationWardNeedsProvince: { vi: 'Chọn tỉnh trước', en: 'Choose a province first' },
+  // The abolished tier, shown READ-ONLY and only on a row that still carries
+  // one. It explains why such a row's address line reads "…, Quận 7, …" when
+  // no control offers that any more, and it goes as soon as the province is
+  // re-picked.
+  locationDistrictLegacy: { vi: 'Quận / Huyện (trước sáp nhập)', en: 'District (pre-merger)' },
+  locationDistrictLegacyHint: {
+    vi: 'Cấp quận / huyện đã bỏ từ 01/07/2025. Chọn lại tỉnh / thành phố để cập nhật địa điểm này.',
+    en: 'The district tier was abolished on 1 July 2025. Re-pick the province to bring this location up to date.',
+  },
   // Shown under a dropdown that could not be filled. The form still saves:
   // these two fields describe a place, they are not what makes one real.
   adminAreaUnavailable: {

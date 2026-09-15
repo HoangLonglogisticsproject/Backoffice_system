@@ -1,14 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import {
-  fetchDistricts,
-  fetchProvinces,
-  fetchWards,
-  type AdministrativeUnit,
-} from '@/api/vnAdministrative';
+import { fetchProvinces, fetchWards, type AdministrativeUnit } from '@/api/vnAdministrative';
 import { useSession } from '@/contexts/SessionProvider';
 
 /**
- * The tỉnh/thành list, one province's quận/huyện, and one district's xã/phường.
+ * The tỉnh/thành list, and one province's xã/phường.
  *
  * ★ `staleTime: Infinity`, WHICH IS NOT THE USUAL EXAGGERATION. Vietnam's
  * administrative units change roughly once a generation — the 2025 reform was
@@ -25,8 +20,7 @@ import { useSession } from '@/contexts/SessionProvider';
 const ADMIN_KEYS = {
   all: ['vn-administrative'] as const,
   provinces: () => [...ADMIN_KEYS.all, 'provinces'] as const,
-  districts: (provinceCode: string) => [...ADMIN_KEYS.all, 'districts', provinceCode] as const,
-  wards: (districtCode: string) => [...ADMIN_KEYS.all, 'wards', districtCode] as const,
+  wards: (provinceCode: string) => [...ADMIN_KEYS.all, 'wards', provinceCode] as const,
 };
 
 export interface AdministrativeList {
@@ -50,43 +44,25 @@ export function useProvinces(enabled = true): AdministrativeList {
   return { items: query.data ?? [], loading: query.isFetching, failed: query.isError };
 }
 
-/** `null` before a province is chosen: no request, and an empty, settled list. */
-export function useDistricts(provinceCode: string | null): AdministrativeList {
-  return useChildren(provinceCode, ADMIN_KEYS.districts, fetchDistricts);
-}
-
 /**
- * `null` before a DISTRICT is chosen. Wards hang off the district, not the
- * province — the old hierarchy this deployment records has three rungs.
- */
-export function useWards(districtCode: string | null): AdministrativeList {
-  return useChildren(districtCode, ADMIN_KEYS.wards, fetchWards);
-}
-
-/**
- * One rung below whatever was chosen above it.
+ * One province's phường/xã — wards hang off the PROVINCE, because the 2025
+ * merger left nothing between the two.
  *
- * ★ THE TWO LOWER LEVELS ARE THE SAME QUERY WITH A DIFFERENT PARENT, so they
- * are written once. A parent of `null` means the control above has not been
- * answered yet: no request goes out, and the list comes back EMPTY AND SETTLED
- * rather than loading — a dropdown that spins forever because nothing was ever
- * asked for is the bug this avoids.
+ * `null` before a province is chosen: no request goes out, and the list comes
+ * back EMPTY AND SETTLED rather than loading. A dropdown that spins forever
+ * because nothing was ever asked for is the bug that avoids.
  */
-function useChildren(
-  parentCode: string | null,
-  key: (code: string) => readonly unknown[],
-  fetchChildren: (code: string) => Promise<AdministrativeUnit[]>,
-): AdministrativeList {
+export function useWards(provinceCode: string | null): AdministrativeList {
   const { state } = useSession();
 
   const query = useQuery({
-    queryKey: key(parentCode ?? ''),
-    queryFn: () => fetchChildren(parentCode as string),
-    enabled: parentCode !== null && state?.status === 'ready',
+    queryKey: ADMIN_KEYS.wards(provinceCode ?? ''),
+    queryFn: () => fetchWards(provinceCode as string),
+    enabled: provinceCode !== null && state?.status === 'ready',
     staleTime: Infinity,
     retry: 1,
   });
 
-  if (parentCode === null) return { items: [], loading: false, failed: false };
+  if (provinceCode === null) return { items: [], loading: false, failed: false };
   return { items: query.data ?? [], loading: query.isFetching, failed: query.isError };
 }

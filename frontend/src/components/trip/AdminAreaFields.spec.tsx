@@ -4,29 +4,26 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 import { AdminAreaFields, EMPTY_ADMIN_AREA, type AdminAreaValue } from './AdminAreaFields';
 
 /**
- * The three cascading dropdowns.
+ * The two cascading dropdowns, and what became of the third.
  *
  * ★ THE HOOKS ARE STUBBED, NOT THE HTTP LAYER. What is under test is the
- * CASCADE — which control is live, what a pick writes, and what changing a
- * level does to the levels below it. Whether a list arrives is the hook's
+ * CASCADE — which control is live, what a pick writes, and what changing the
+ * province does to everything under it. Whether a list arrives is the hook's
  * business and the server's.
  */
 
 const provinces = vi.fn();
-const districts = vi.fn();
 const wards = vi.fn();
 
 vi.mock('@/hooks/useVnAdministrative', () => ({
   useProvinces: () => provinces(),
-  useDistricts: (code: string | null) => districts(code),
   useWards: (code: string | null) => wards(code),
 }));
 
 const HCM = { code: '79', name: 'Thành phố Hồ Chí Minh' };
 const HA_NOI = { code: '1', name: 'Thành phố Hà Nội' };
-const Q1 = { code: '760', name: 'Quận 1' };
-const GO_VAP = { code: '764', name: 'Quận Gò Vấp' };
 const BEN_NGHE = { code: '26743', name: 'Phường Bến Nghé' };
+const TAN_THUAN = { code: '27460', name: 'Phường Tân Thuận' };
 
 const settled = (items: { code: string; name: string }[]) => ({
   items,
@@ -34,14 +31,23 @@ const settled = (items: { code: string; name: string }[]) => ({
   failed: false,
 });
 
-/** A place filled in to the bottom, for the tests about clearing it again. */
+/** A place filled in to the bottom, under the post-merger hierarchy. */
 const IN_BEN_NGHE: AdminAreaValue = {
+  ...EMPTY_ADMIN_AREA,
   provinceCode: HCM.code,
   province: HCM.name,
-  districtCode: Q1.code,
-  district: Q1.name,
   wardCode: BEN_NGHE.code,
   ward: BEN_NGHE.name,
+};
+
+/**
+ * A row filed BEFORE 1 July 2025: it still carries the abolished quận/huyện,
+ * and a province that has since been merged away is equally possible.
+ */
+const PRE_MERGER: AdminAreaValue = {
+  ...IN_BEN_NGHE,
+  districtCode: '760',
+  district: 'Quận 1',
 };
 
 const renderFields = (value: AdminAreaValue = EMPTY_ADMIN_AREA) => {
@@ -74,16 +80,17 @@ const choose = async (trigger: string, option: string) => {
 describe('AdminAreaFields', () => {
   beforeEach(() => {
     provinces.mockReset().mockReturnValue(settled([HCM, HA_NOI]));
-    districts.mockReset().mockReturnValue(settled([]));
     wards.mockReset().mockReturnValue(settled([]));
   });
 
-  it('★ offers all three levels: tỉnh → quận/huyện → phường/xã', () => {
+  it('★ offers two levels and no third: tỉnh → phường/xã', () => {
     renderFields();
 
     expect(screen.getByLabelText('Tỉnh / Thành phố')).toBeInTheDocument();
-    expect(screen.getByLabelText('Quận / Huyện')).toBeInTheDocument();
     expect(screen.getByLabelText('Phường / Xã')).toBeInTheDocument();
+    // The 2025 merger abolished quận/huyện. Offering it would ask somebody to
+    // file a place under a tier that no longer exists.
+    expect(screen.queryByLabelText('Quận / Huyện')).not.toBeInTheDocument();
   });
 
   it('reports both the code and the name when a province is picked', async () => {
@@ -103,39 +110,31 @@ describe('AdminAreaFields', () => {
     });
   });
 
-  it('★ each control is dead until the one above it is answered, and says which', () => {
+  it('★ the ward is dead until a province is answered, and says so', () => {
     renderFields();
-
-    expect(screen.getByLabelText('Quận / Huyện')).toBeDisabled();
-    expect(screen.getByText('Chọn tỉnh trước')).toBeInTheDocument();
 
     expect(screen.getByLabelText('Phường / Xã')).toBeDisabled();
-    expect(screen.getByText('Chọn quận / huyện trước')).toBeInTheDocument();
+    expect(screen.getByText('Chọn tỉnh trước')).toBeInTheDocument();
   });
 
-  it('★ asks for children of the level above — districts of the province, wards of the DISTRICT', () => {
+  it('★ asks for wards of the PROVINCE — there is no rung in between any more', () => {
     renderFields();
-    expect(districts).toHaveBeenCalledWith(null);
     expect(wards).toHaveBeenCalledWith(null);
 
-    districts.mockReturnValue(settled([Q1, GO_VAP]));
     wards.mockReturnValue(settled([BEN_NGHE]));
     renderFields(IN_BEN_NGHE);
 
-    expect(districts).toHaveBeenLastCalledWith(HCM.code);
-    // Not the province: in this hierarchy a ward hangs off its district.
-    expect(wards).toHaveBeenLastCalledWith(Q1.code);
+    expect(wards).toHaveBeenLastCalledWith(HCM.code);
   });
 
-  it('★ changing the province clears BOTH levels below it', async () => {
-    districts.mockReturnValue(settled([Q1, GO_VAP]));
+  it('★ changing the province clears the ward under it', async () => {
     wards.mockReturnValue(settled([BEN_NGHE]));
     const { onChange } = renderFields(IN_BEN_NGHE);
 
     await choose('Tỉnh / Thành phố', HA_NOI.name);
 
-    // Keeping them would leave Quận 1 and Phường Bến Nghé filed under Hà Nội —
-    // a row that reads as precise and is wrong.
+    // Keeping it would leave Phường Bến Nghé filed under Hà Nội — a row that
+    // reads as precise and is wrong.
     expect(onChange).toHaveBeenCalledWith({
       provinceCode: HA_NOI.code,
       province: HA_NOI.name,
@@ -146,32 +145,12 @@ describe('AdminAreaFields', () => {
     });
   });
 
-  it('★ changing the district clears the ward and keeps the province', async () => {
-    districts.mockReturnValue(settled([Q1, GO_VAP]));
-    wards.mockReturnValue(settled([BEN_NGHE]));
-    const { onChange } = renderFields(IN_BEN_NGHE);
-
-    await choose('Quận / Huyện', GO_VAP.name);
-
-    expect(onChange).toHaveBeenCalledWith({
-      provinceCode: HCM.code,
-      province: HCM.name,
-      districtCode: GO_VAP.code,
-      district: GO_VAP.name,
-      wardCode: null,
-      ward: null,
-    });
-  });
-
-  it('keeps the two levels above when a ward is picked', async () => {
-    districts.mockReturnValue(settled([Q1]));
-    wards.mockReturnValue(settled([BEN_NGHE]));
+  it('keeps the province when a ward is picked', async () => {
+    wards.mockReturnValue(settled([BEN_NGHE, TAN_THUAN]));
     const { onChange } = renderFields({
       ...EMPTY_ADMIN_AREA,
       provinceCode: HCM.code,
       province: HCM.name,
-      districtCode: Q1.code,
-      district: Q1.name,
     });
 
     await choose('Phường / Xã', BEN_NGHE.name);
@@ -180,15 +159,75 @@ describe('AdminAreaFields', () => {
   });
 
   it('★ the trigger shows the NAME, not the code', () => {
-    districts.mockReturnValue(settled([Q1]));
     wards.mockReturnValue(settled([BEN_NGHE]));
     renderFields(IN_BEN_NGHE);
 
     // Base UI's own `Select.Value` renders the VALUE, which put `79` where the
     // province name belongs. The trigger draws its own content instead.
     expect(screen.getByLabelText('Tỉnh / Thành phố')).toHaveTextContent(HCM.name);
-    expect(screen.getByLabelText('Quận / Huyện')).toHaveTextContent(Q1.name);
     expect(screen.getByLabelText('Phường / Xã')).toHaveTextContent(BEN_NGHE.name);
+  });
+
+  describe('a row filed before the merger', () => {
+    it('★ shows the abolished district, so the address column is accounted for', () => {
+      wards.mockReturnValue(settled([BEN_NGHE]));
+      renderFields(PRE_MERGER);
+
+      // `fullAddress` still prints "Quận 1". Without this the form would show
+      // nothing that explains where it came from, which reads as a bug.
+      expect(screen.getByText('Quận / Huyện (trước sáp nhập)')).toBeInTheDocument();
+      expect(screen.getByText('Quận 1')).toBeInTheDocument();
+      expect(screen.getByText(/đã bỏ từ 01\/07\/2025/)).toBeInTheDocument();
+    });
+
+    it('★ shows nothing about districts on a row that never had one', () => {
+      wards.mockReturnValue(settled([BEN_NGHE]));
+      renderFields(IN_BEN_NGHE);
+
+      expect(screen.queryByText('Quận / Huyện (trước sáp nhập)')).not.toBeInTheDocument();
+    });
+
+    it('★ offers no way to edit it — only the province re-pick clears it', () => {
+      wards.mockReturnValue(settled([BEN_NGHE]));
+      renderFields(PRE_MERGER);
+
+      // Two controls on the form, both of them the current hierarchy's. A
+      // control for the old tier would invite somebody to fill it back in.
+      expect(screen.getAllByRole('combobox')).toHaveLength(2);
+    });
+
+    it('★ re-picking the province drops the district with the ward', async () => {
+      wards.mockReturnValue(settled([BEN_NGHE]));
+      const { onChange } = renderFields(PRE_MERGER);
+
+      await choose('Tỉnh / Thành phố', HA_NOI.name);
+
+      // The two are only ever wrong as a pair: a new province with an old
+      // district under it is a row that is half migrated and self-contradictory.
+      expect(onChange).toHaveBeenCalledWith({
+        provinceCode: HA_NOI.code,
+        province: HA_NOI.name,
+        districtCode: null,
+        district: null,
+        wardCode: null,
+        ward: null,
+      });
+    });
+
+    it('★ an unrelated edit leaves the district exactly as it was', async () => {
+      wards.mockReturnValue(settled([BEN_NGHE, TAN_THUAN]));
+      const { onChange } = renderFields(PRE_MERGER);
+
+      await choose('Phường / Xã', TAN_THUAN.name);
+
+      // Correcting the ward must not silently destroy the district the row has
+      // carried since before the reform — it is still what the contract says.
+      expect(onChange).toHaveBeenCalledWith({
+        ...PRE_MERGER,
+        wardCode: TAN_THUAN.code,
+        ward: TAN_THUAN.name,
+      });
+    });
   });
 
   it('★ says the list could not be loaded rather than showing an empty dropdown with no reason', async () => {

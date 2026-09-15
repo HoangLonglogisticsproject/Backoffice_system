@@ -40,7 +40,12 @@ export interface LocationInput {
   address: string;
   contact?: string | null;
   note?: string | null;
-  /** Tỉnh/thành · quận/huyện · phường/xã. Free text; `null` is "not recorded". */
+  /**
+   * Tỉnh/thành · phường/xã. Free text; `null` is "not recorded".
+   *
+   * `district` is the tier abolished on 1 July 2025 — sent only to carry a
+   * pre-merger row's value back unchanged, never filled in fresh.
+   */
   province?: string | null;
   district?: string | null;
   ward?: string | null;

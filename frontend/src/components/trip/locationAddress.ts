@@ -13,7 +13,13 @@ import type { TripLocation } from '@/types/trip';
  * ★ NARROWEST FIRST, WIDEST LAST, which is the Vietnamese convention: house and
  * street, then phường/xã, then quận/huyện, then tỉnh/thành.
  *
- * Any part may be missing — the administrative three are optional and a place
+ * ★ QUẬN/HUYỆN IS STILL READ, THOUGH NOTHING WRITES IT ANY MORE. The tier was
+ * abolished on 1 July 2025 and the location form has no control for it, but a
+ * row filed before then still carries one and it is still how somebody
+ * recognises that place. Dropping it from the line would silently shorten
+ * every old address for no gain.
+ *
+ * Any part may be missing — the administrative fields are optional and a place
  * is real before anybody has filled them in — so the join skips blanks rather
  * than leaving `, ,` behind.
  */
