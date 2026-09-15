@@ -316,14 +316,15 @@ export interface TripVehicle {
  * a trip may use it — the driver's confirmation there is then refused as
  * DESTINATION_MISSING exactly as for a trip typed by hand.
  *
- * ★ THREE ADMINISTRATIVE LEVELS: tỉnh/thành → quận/huyện → phường/xã, each a
- * CODE and a NAME. Descriptive, never operational — the trip snapshots
- * `address` and the geofence measures coordinates, so nothing here reads them,
- * and `null` means "not recorded".
+ * ★ TWO ADMINISTRATIVE LEVELS: tỉnh/thành → phường/xã, each a CODE and a NAME.
+ * Descriptive, never operational — the trip snapshots `address` and the
+ * geofence measures coordinates, so nothing here reads them, and `null` means
+ * "not recorded".
  *
- * ⚠ THIS IS THE PRE-2025 HIERARCHY, DELIBERATELY. Vietnam abolished the
- * district tier on 1 July 2025; 0030 and the administrative client both explain
- * why this deployment still records it.
+ * ⚠ `district*` IS THE TIER VIETNAM ABOLISHED on 1 July 2025, kept because rows
+ * filed before then still carry one and a stale label a person recognises beats
+ * a column blanked by a migration. Nothing writes it any more: the location
+ * form has no control for it and clears it when the province is re-picked.
  */
 export interface TripLocation {
   id: string;

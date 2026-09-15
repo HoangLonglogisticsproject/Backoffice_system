@@ -9,10 +9,9 @@ import { httpClient } from './client';
  * rate-limit allowance is spent once rather than once per dispatcher, and an
  * outage upstream is answered from a cache instead of by an empty dropdown.
  *
- * ★ THREE LEVELS: tỉnh/thành → quận/huyện → phường/xã. Vietnam went two-tier
- * on 1 July 2025 and this deployment records the older hierarchy on purpose —
- * the server’s administrative client explains why. Wards hang off a DISTRICT,
- * not off a province.
+ * ★ TWO LEVELS: tỉnh/thành → phường/xã. The 2025 merger left 34 provinces and
+ * abolished quận/huyện, so a ward hangs directly off a PROVINCE and there is no
+ * rung in between to ask for.
  */
 
 /** One unit: the state's code, and its name. */
@@ -29,18 +28,10 @@ export async function fetchProvinces(): Promise<AdministrativeUnit[]> {
   return data;
 }
 
-/** The quận/huyện of one province. */
-export async function fetchDistricts(provinceCode: string): Promise<AdministrativeUnit[]> {
+/** The phường/xã of one province. */
+export async function fetchWards(provinceCode: string): Promise<AdministrativeUnit[]> {
   const { data } = await httpClient.get<AdministrativeUnit[]>(
-    `/vn-provinces/${encodeURIComponent(provinceCode)}/districts`,
-  );
-  return data;
-}
-
-/** The phường/xã of one DISTRICT — the district identifies itself, so no province in the path. */
-export async function fetchWards(districtCode: string): Promise<AdministrativeUnit[]> {
-  const { data } = await httpClient.get<AdministrativeUnit[]>(
-    `/vn-districts/${encodeURIComponent(districtCode)}/wards`,
+    `/vn-provinces/${encodeURIComponent(provinceCode)}/wards`,
   );
   return data;
 }

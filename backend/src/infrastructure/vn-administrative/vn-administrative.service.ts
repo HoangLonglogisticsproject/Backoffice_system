@@ -32,7 +32,7 @@ interface CacheEntry {
 export class VnAdministrativeService {
   private readonly logger = new Logger(VnAdministrativeService.name);
 
-  /** Keyed by what was asked for: `'provinces'`, or a province code. */
+  /** Keyed by what was asked for: `'provinces'`, or `wards:` a province code. */
   private readonly cache = new Map<string, CacheEntry>();
 
   /**
@@ -51,17 +51,11 @@ export class VnAdministrativeService {
     return this.cached('provinces', () => this.upstream.listProvinces());
   }
 
-  listDistricts(provinceCode: string): Promise<AdministrativeUnit[]> {
-    // Prefixed so a code can never collide with the provinces key, or with a
-    // district code that happens to equal a province code — they are separate
-    // numbering spaces and both are just digits.
-    return this.cached(`districts:${provinceCode}`, () =>
-      this.upstream.listDistricts(provinceCode),
-    );
-  }
-
-  listWards(districtCode: string): Promise<AdministrativeUnit[]> {
-    return this.cached(`wards:${districtCode}`, () => this.upstream.listWards(districtCode));
+  listWards(provinceCode: string): Promise<AdministrativeUnit[]> {
+    // Prefixed so a province code can never collide with the `'provinces'` key
+    // itself — both are just text, and one of them is attacker-adjacent in the
+    // sense that it arrives from a URL.
+    return this.cached(`wards:${provinceCode}`, () => this.upstream.listWards(provinceCode));
   }
 
   private async cached(

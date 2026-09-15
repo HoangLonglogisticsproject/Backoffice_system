@@ -35,10 +35,12 @@ import type { TripLocation } from '@/types/trip';
  * company by a slip — and the dialog never has to ask a question whose answer
  * the screen behind it already knows.
  *
- * ★ THE ADMINISTRATIVE THREE ARE TEXT, AND OPTIONAL. Tỉnh/thành, quận/huyện,
- * phường/xã: filled from the address components of the place the operator
- * picks, corrected by hand, and blank whenever nobody has said. They describe
- * the row for a reader; nothing operational reads them.
+ * ★ THE ADMINISTRATIVE FIELDS ARE TEXT, AND OPTIONAL. Tỉnh/thành and phường/xã:
+ * filled from the address components of the place the operator picks,
+ * corrected by hand, and blank whenever nobody has said. They describe the row
+ * for a reader; nothing operational reads them. A pre-merger row also carries
+ * the abolished quận/huyện, which this form sends back unchanged rather than
+ * blanking — see `AdminAreaFields`.
  *
  * ★ THE OPERATOR NEVER TYPES A COORDINATE. A place has a name, an address and
  * a POSITION; the position is set by finding the place on a map and putting a
@@ -304,7 +306,8 @@ export function LocationFormModal({ customerId, editing, onClose, onSaved }: Rea
           ★ TWO DROPDOWNS, BECAUSE VIETNAM HAS TWO LEVELS. Tỉnh/thành → xã/phường,
           served from our own API (which proxies and caches the public source).
           The quận/huyện tier was abolished on 1 July 2025, so there is no third
-          control and nothing that could fill one.
+          control and nothing that could fill one — only a read-only line on the
+          rows that were filed while it still existed.
         */}
         <AdminAreaFields value={area} onChange={setArea} />
 

@@ -77,8 +77,10 @@ const longitude = z.number().min(-180).max(180).nullable();
  * cosmetic wrong, while a save refused because somebody else's API blinked is
  * an operational one.
  *
- * ★ THREE LEVELS, RECORDING THE PRE-2025 HIERARCHY. See 0030 for why the
- * abolished district tier is still written down.
+ * ★ TWO LEVELS, PLUS ONE THAT IS ONLY EVER ECHOED BACK. `district*` is the tier
+ * abolished on 1 July 2025; it stays in the schema so a form editing a
+ * pre-merger row can return the value it was given instead of having its save
+ * rejected. Nothing produces a fresh one.
  */
 const adminName = z.string().trim().max(200).nullable();
 const adminCode = z

@@ -201,12 +201,14 @@ export const envSchema = z.object({
 
   /**
    * Where Vietnam's administrative units are read from, for the location
-   * form's three dropdowns: tỉnh/thành → quận/huyện → phường/xã.
+   * form's two dropdowns: tỉnh/thành → phường/xã.
    *
-   * ⚠ `/api/v1` IS THE PRE-2025 HIERARCHY, ON PURPOSE — 63 provinces with a
-   * district tier under them. `/api/v2` is the current two-tier one. The
-   * client explains why this deployment reads the older shape; switching is
-   * this value plus removing the district rung.
+   * ⚠ `/api/v2` IS THE CURRENT, TWO-TIER HIERARCHY, AND THE VERSION IS PART OF
+   * THE CONTRACT. Vietnam merged its provinces on 1 July 2025: 63 became 34,
+   * and quận/huyện was abolished. `/api/v1` still serves the pre-reform shape —
+   * 63 provinces with a district rung — so pointing this at `v1` would not
+   * merely change the data, it would break the client, which reads wards
+   * directly off a province.
    *
    * ★ CONFIGURABLE BECAUSE THE SOURCE IS SOMEBODY ELSE'S. This is a free public
    * service with no contract behind it. If it disappears, or a better one
@@ -220,7 +222,7 @@ export const envSchema = z.object({
    * behind the office NAT, and it means an outage there is answered from cache
    * rather than by an empty dropdown in front of somebody trying to work.
    */
-  VN_ADMIN_API_URL: z.string().url().default('https://provinces.open-api.vn/api/v1'),
+  VN_ADMIN_API_URL: z.string().url().default('https://provinces.open-api.vn/api/v2'),
 });
 
 export type Env = z.infer<typeof envSchema>;
