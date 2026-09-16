@@ -62,6 +62,12 @@ services:
       # req.ip; trusting more than the one proxy in front of us would let a
       # forged X-Forwarded-For mint a fresh throttle budget per request.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
+      # ★ THE ADDRESS-SEARCH KEY, HERE AND NOT IN THE BUNDLE. The browser asks
+      # /api/places and never learns who answers, so this credential stays on
+      # the server. Empty is allowed and degrades gracefully: the suggestion box
+      # says it is unavailable, while the OpenStreetMap pin and the two
+      # coordinate fields still locate a place. Get one at account.goong.io.
+      GOONG_API_KEY: ${GOONG_API_KEY:-}
     ports:
       - '127.0.0.1:3000:3000'
     healthcheck:
