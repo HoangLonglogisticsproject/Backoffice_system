@@ -41,5 +41,22 @@ export default defineConfig({
      * part of the build, and no production code reads `TZ`.
      */
     env: { TZ: 'UTC' },
+
+    /**
+     * ★ RAISED FROM THE 5s DEFAULT BECAUSE SOME BEHAVIOUR IS GENUINELY SLOW,
+     * NOT BECAUSE ANYTHING HANGS.
+     *
+     * The location form derives a position from the typed address on a 900 ms
+     * debounce, and several specs drive that sequence more than once. Five
+     * seconds is enough on an idle machine and not enough when the suite's
+     * fifty files are sharing the CPU — which showed up as eighteen failures
+     * under load, all of them `Test timed out in 5000ms`, in files that pass
+     * one at a time.
+     *
+     * ⚠ A TIMEOUT IS STILL A REAL FAILURE. This buys headroom for a debounce,
+     * not permission for a test to wait on something that never happens; a
+     * genuinely stuck test now takes fifteen seconds to say so instead of five.
+     */
+    testTimeout: 15_000,
   },
 })

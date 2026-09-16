@@ -5,6 +5,7 @@ import { HealthModule } from './infrastructure/health/health.module';
 import { AuthModule } from './infrastructure/auth/auth.module';
 import { TtyModule } from './infrastructure/tty/tty.module';
 import { VnAdministrativeModule } from './infrastructure/vn-administrative/vn-administrative.module';
+import { PlaceSearchModule } from './infrastructure/place-search/place-search.module';
 import { AuthorizationModule } from './core/authorization/authorization.module';
 import { IdentityModule } from './core/identity/identity.module';
 import { OrganizationModule } from './core/organization/organization.module';
@@ -44,6 +45,7 @@ import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.m
     TtyModule,
     HealthModule,
     VnAdministrativeModule,
+    PlaceSearchModule,
 
     // the foundation
     UsersModule,

@@ -61,20 +61,40 @@ const renderFields = (value: AdminAreaValue = EMPTY_ADMIN_AREA) => {
 };
 
 /**
- * Opens a select and picks one of its options.
+ * Types into a box and picks one of the options that survives the filter.
  *
- * ★ POINTER EVENTS, NOT A BARE CLICK. Base UI commits a selection on
- * pointerup; `fireEvent.click` alone dispatches neither, so the popup opens,
- * the option is found, and nothing is ever chosen — a silent no-op that reads
- * in the failure output as "the component did not call onChange" and sends you
- * looking for a bug in the component.
+ * ★ THIS IS THE INTERACTION, NOT A DETOUR AROUND IT. These are comboboxes now
+ * because 168 wards cannot be found by scrolling; typing a fragment IS how one
+ * is chosen, so the helper does what a dispatcher does rather than reaching
+ * past the filter to click a hidden row.
+ *
+ * ★ POINTER EVENTS, NOT A BARE CLICK. Base UI commits on pointerup;
+ * `fireEvent.click` alone dispatches neither, so the popup opens, the option is
+ * found, and nothing is ever chosen — a silent no-op that reads in the failure
+ * output as "the component did not call onChange" and sends you looking for a
+ * bug in the component.
  */
-const choose = async (trigger: string, option: string) => {
-  fireEvent.click(screen.getByLabelText(trigger));
+const choose = async (label: string, option: string, typed = option.slice(0, 8)) => {
+  openBox(screen.getByLabelText(label));
+  fireEvent.change(screen.getByLabelText(label), { target: { value: typed } });
   const chosen = await screen.findByRole('option', { name: option });
   fireEvent.pointerDown(chosen);
   fireEvent.pointerUp(chosen);
   fireEvent.click(chosen);
+};
+
+/**
+ * Opens the popup.
+ *
+ * ★ `pointerDown` AND `mouseDown`, NOT JUST `click`. Measured: a bare click
+ * leaves `aria-expanded="false"` and the list never mounts, so every assertion
+ * downstream fails with "unable to find role=option" and reads like a filtering
+ * bug rather than a popup that was never opened.
+ */
+const openBox = (box: HTMLElement) => {
+  fireEvent.pointerDown(box);
+  fireEvent.mouseDown(box);
+  fireEvent.click(box);
 };
 
 describe('AdminAreaFields', () => {
@@ -113,8 +133,12 @@ describe('AdminAreaFields', () => {
   it('★ the ward is dead until a province is answered, and says so', () => {
     renderFields();
 
-    expect(screen.getByLabelText('Phường / Xã')).toBeDisabled();
-    expect(screen.getByText('Chọn tỉnh trước')).toBeInTheDocument();
+    const ward = screen.getByLabelText('Phường / Xã');
+    expect(ward).toBeDisabled();
+    // The reason lives in the placeholder now that the control is an input.
+    // A dead box with no explanation is the thing being avoided, whichever
+    // element carries the sentence.
+    expect(ward).toHaveAttribute('placeholder', 'Chọn tỉnh trước');
   });
 
   it('★ asks for wards of the PROVINCE — there is no rung in between any more', () => {
@@ -158,14 +182,39 @@ describe('AdminAreaFields', () => {
     expect(onChange).toHaveBeenCalledWith(IN_BEN_NGHE);
   });
 
-  it('★ the trigger shows the NAME, not the code', () => {
+  it('★ the box shows the NAME, not the code', () => {
     wards.mockReturnValue(settled([BEN_NGHE]));
     renderFields(IN_BEN_NGHE);
 
-    // Base UI's own `Select.Value` renders the VALUE, which put `79` where the
-    // province name belongs. The trigger draws its own content instead.
-    expect(screen.getByLabelText('Tỉnh / Thành phố')).toHaveTextContent(HCM.name);
-    expect(screen.getByLabelText('Phường / Xã')).toHaveTextContent(BEN_NGHE.name);
+    // The option's VALUE is `code|name`, because a code is not unique in this
+    // feed. What a person reads must never be that — only the name.
+    expect(screen.getByLabelText('Tỉnh / Thành phố')).toHaveValue(HCM.name);
+    expect(screen.getByLabelText('Phường / Xã')).toHaveValue(BEN_NGHE.name);
+  });
+
+  it('★ typing narrows the list — the reason these are not plain dropdowns', async () => {
+    wards.mockReturnValue(settled([BEN_NGHE, TAN_THUAN]));
+    renderFields({ ...EMPTY_ADMIN_AREA, provinceCode: HCM.code, province: HCM.name });
+
+    const ward = screen.getByLabelText('Phường / Xã');
+    openBox(ward);
+    fireEvent.change(ward, { target: { value: 'Tân' } });
+
+    // Hồ Chí Minh has 168 wards after the 2025 merger. Finding one by eye is
+    // the slowest thing on this form; three letters is the whole feature.
+    expect(await screen.findByRole('option', { name: TAN_THUAN.name })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: BEN_NGHE.name })).toBeNull();
+  });
+
+  it('says so when nothing matches, rather than showing an empty box', async () => {
+    wards.mockReturnValue(settled([BEN_NGHE]));
+    renderFields({ ...EMPTY_ADMIN_AREA, provinceCode: HCM.code, province: HCM.name });
+
+    const ward = screen.getByLabelText('Phường / Xã');
+    openBox(ward);
+    fireEvent.change(ward, { target: { value: 'zzzz' } });
+
+    expect(await screen.findByText('Không có đơn vị nào khớp.')).toBeInTheDocument();
   });
 
   describe('a row filed before the merger', () => {

@@ -1,9 +1,7 @@
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-} from '@/components/ui/select';
+  SearchableSelect,
+  type SearchableOption,
+} from '@/components/ui/searchable-select';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useProvinces, useWards } from '@/hooks/useVnAdministrative';
 
@@ -80,23 +78,15 @@ const unitOf = (
   key === null ? undefined : units.find((unit) => keyOf(unit.code, unit.name) === key);
 
 /**
- * What the closed trigger reads.
+ * The units, as the searchable select wants them.
  *
- * ★ THE NAME, RENDERED HERE, NOT `SelectValue`. Base UI's `Select.Value` prints
- * the VALUE it was given — which is why the trigger showed `79` instead of
- * "Thành phố Hồ Chí Minh". The two existing selects in this codebase never
- * noticed: the page-size one has a value that reads like its label, and the
- * language one writes its own trigger content, which is what this does.
+ * ★ THE OPTION'S `value` IS THE CODE AND THE NAME, ITS `label` IS THE NAME
+ * ALONE. Which is the whole reason the two are separate fields: the code is not
+ * unique in this feed, so it cannot identify the option, but a person reading a
+ * dropdown must not be shown `27118|Phường An Hội Đông` either.
  */
-function Chosen({ name, placeholder }: Readonly<{ name: string | null; placeholder: string }>) {
-  // ★ `min-w-0` IS WHAT LETS IT TRUNCATE AT ALL. A flex child refuses to shrink
-  // below its content by default, so without this the trigger grows to fit
-  // "Thành phố Hồ Chí Minh", pushes past the dialog, and the modal grows a
-  // horizontal scrollbar instead of an ellipsis.
-  const shared = 'min-w-0 flex-1 truncate text-left';
-  if (name === null) return <span className={`${shared} text-muted-foreground`}>{placeholder}</span>;
-  return <span className={shared}>{name}</span>;
-}
+const optionsOf = (units: { code: string; name: string }[]): SearchableOption[] =>
+  units.map((unit) => ({ value: keyOf(unit.code, unit.name) as string, label: unit.name }));
 
 export function AdminAreaFields({
   value,
@@ -149,21 +139,14 @@ export function AdminAreaFields({
         <label htmlFor="location-province" className="text-sm font-medium text-gray-700">
           {t('locationProvince')}
         </label>
-        <Select value={keyOf(value.provinceCode, value.province)} onValueChange={pickProvince}>
-          <SelectTrigger id="location-province" className="w-full min-w-0">
-            <Chosen
-              name={value.province}
-              placeholder={t(provinces.loading ? 'loading' : 'locationProvincePick')}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {provinces.items.map((unit) => (
-              <SelectItem key={keyOf(unit.code, unit.name)} value={keyOf(unit.code, unit.name)}>
-                {unit.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          id="location-province"
+          items={optionsOf(provinces.items)}
+          value={keyOf(value.provinceCode, value.province)}
+          onValueChange={pickProvince}
+          placeholder={t(provinces.loading ? 'loading' : 'locationProvincePick')}
+          emptyText={t('locationNoUnitMatches')}
+        />
         {provinces.failed ? (
           <p className="text-xs text-amber-700">{t('adminAreaUnavailable')}</p>
         ) : null}
@@ -178,27 +161,17 @@ export function AdminAreaFields({
           province's — and the placeholder says which state the control is in,
           rather than leaving a dead box with no explanation.
         */}
-        <Select
+        <SearchableSelect
+          id="location-ward"
+          items={optionsOf(wards.items)}
           value={keyOf(value.wardCode, value.ward)}
           onValueChange={pickWard}
           disabled={!provinceChosen || wards.loading}
-        >
-          <SelectTrigger id="location-ward" className="w-full min-w-0">
-            <Chosen
-              name={value.ward}
-              placeholder={t(
-                !provinceChosen ? 'locationWardNeedsProvince' : wards.loading ? 'loading' : 'locationWardPick',
-              )}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {wards.items.map((unit) => (
-              <SelectItem key={keyOf(unit.code, unit.name)} value={keyOf(unit.code, unit.name)}>
-                {unit.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          placeholder={t(
+            !provinceChosen ? 'locationWardNeedsProvince' : wards.loading ? 'loading' : 'locationWardPick',
+          )}
+          emptyText={t('locationNoUnitMatches')}
+        />
         {wards.failed ? <p className="text-xs text-amber-700">{t('adminAreaUnavailable')}</p> : null}
       </div>
 

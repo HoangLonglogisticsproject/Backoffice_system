@@ -1,6 +1,24 @@
 import '@testing-library/jest-dom/vitest';
+import { configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
 import { toast } from 'sonner';
+
+/**
+ * How long `findBy*` and `waitFor` keep looking.
+ *
+ * ★ RAISED BECAUSE THE APP'S OWN DEBOUNCE IS 900 ms AND THE DEFAULT IS 1000.
+ * Testing Library's async timeout is SEPARATE from Vitest's test timeout, so
+ * raising the latter did nothing for this: the location form derives a position
+ * from the typed address after 900 ms, leaving a hundred milliseconds for React
+ * to render and the assertion to run. On an idle machine that passed; with
+ * fifty spec files sharing the CPU it lost, and reported itself as "unable to
+ * find an element" — which reads like a missing feature rather than a race, and
+ * sent a real debugging session after the wrong thing.
+ *
+ * Five seconds is far longer than any debounce here and still well inside the
+ * test timeout, so a genuinely missing element still fails, just honestly.
+ */
+configure({ asyncUtilTimeout: 5_000 });
 
 /**
  * `window.matchMedia`, which jsdom does not implement at all.
