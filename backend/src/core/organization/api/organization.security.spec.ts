@@ -39,6 +39,7 @@ describe('organization HTTP security', () => {
     require: jest.Mock;
     create: jest.Mock;
     rename: jest.Mock;
+    setFunction: jest.Mock;
     archive: jest.Mock;
   };
   let memberships: { listRoster: jest.Mock; transfer: jest.Mock };
@@ -49,6 +50,7 @@ describe('organization HTTP security', () => {
     global: false,
     headOf: [],
     memberOf: [],
+    functions: [],
     mustChangeSecret: false,
     ...over,
   });
@@ -62,6 +64,7 @@ describe('organization HTTP security', () => {
       require: jest.fn().mockResolvedValue(department),
       create: jest.fn().mockResolvedValue(department),
       rename: jest.fn().mockResolvedValue({ ...department, name: 'Renamed' }),
+      setFunction: jest.fn().mockResolvedValue({ ...department, function: 'dispatch' }),
       archive: jest.fn().mockResolvedValue({ ...department, status: 'archived' }),
     };
     memberships = {
@@ -273,6 +276,14 @@ describe('organization HTTP security', () => {
       expect(departments.rename).not.toHaveBeenCalled();
       expect(departments.archive).not.toHaveBeenCalled();
     });
+
+    it('★ cannot set what a unit is for — that decides who dispatches and prices', async () => {
+      // `unit.write` is global-only, so a head cannot make their own unit the
+      // dispatch unit. This is the line that keeps 0032 from being a privilege
+      // escalation.
+      await authed('patch', `/departments/${A}`).send({ function: 'dispatch' }).expect(403);
+      expect(departments.setFunction).not.toHaveBeenCalled();
+    });
   });
 
   // ----------------------------------------------------------- SUPERADMIN --
@@ -383,6 +394,49 @@ describe('organization HTTP security', () => {
       expect(departments.create).toHaveBeenCalledWith({ slug: 'ops', name: 'Operations' });
       expect(departments.rename).toHaveBeenCalledWith(A, 'Renamed');
       expect(archived.body.status).toBe('archived');
+    });
+
+    describe('★ what a unit is for (0032)', () => {
+      it('sets the function through the same patch', async () => {
+        const response = await authed('patch', `/departments/${A}`).send({ function: 'dispatch' });
+
+        expect(response.status).toBe(200);
+        expect(departments.setFunction).toHaveBeenCalledWith(A, 'dispatch');
+        // A patch that names only the function does not rename anything.
+        expect(departments.rename).not.toHaveBeenCalled();
+        expect(response.body.function).toBe('dispatch');
+      });
+
+      it('clears it with an explicit null, which is different from leaving it out', async () => {
+        await authed('patch', `/departments/${A}`).send({ function: null }).expect(200);
+        expect(departments.setFunction).toHaveBeenCalledWith(A, null);
+
+        departments.setFunction.mockClear();
+        await authed('patch', `/departments/${A}`).send({ name: 'Just a rename' }).expect(200);
+        expect(departments.setFunction).not.toHaveBeenCalled();
+      });
+
+      it('renames and sets the function in one request', async () => {
+        await authed('patch', `/departments/${A}`)
+          .send({ name: 'Điều độ', function: 'dispatch' })
+          .expect(200);
+
+        expect(departments.rename).toHaveBeenCalledWith(A, 'Điều độ');
+        expect(departments.setFunction).toHaveBeenCalledWith(A, 'dispatch');
+      });
+
+      it('refuses a function the business did not name, before the service runs', async () => {
+        const response = await authed('patch', `/departments/${A}`).send({ function: 'marketing' });
+
+        expect(response.status).toBe(422);
+        expect(departments.setFunction).not.toHaveBeenCalled();
+      });
+
+      it('refuses an empty patch rather than answering 200 for nothing', async () => {
+        await authed('patch', `/departments/${A}`).send({}).expect(422);
+        expect(departments.rename).not.toHaveBeenCalled();
+        expect(departments.setFunction).not.toHaveBeenCalled();
+      });
     });
 
     it('transfers somebody into the unit named on the route', async () => {

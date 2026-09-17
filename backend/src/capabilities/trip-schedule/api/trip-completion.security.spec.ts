@@ -48,6 +48,7 @@ describe('trip-completion HTTP security', () => {
     global: false,
     headOf: [],
     memberOf: [],
+    functions: [],
     mustChangeSecret: false,
     ...over,
   });
@@ -160,11 +161,11 @@ describe('trip-completion HTTP security', () => {
     });
   });
 
-  describe('★ a department head — the tier that must NOT be enough', () => {
+  describe('★ the head of a booking function — the seniority that must NOT be enough', () => {
     beforeEach(() => {
-      // Holds `trip.write` (head-anywhere) and could edit any trip on the
-      // board. Closing one is a different authority.
-      context = asContext({ headOf: [DEPT], memberOf: [DEPT] });
+      // Holds `trip.write` (a head within sales) and could edit any trip on
+      // the board. Closing one is a different authority.
+      context = asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['sales'] });
     });
 
     it.each(DECISIONS)('refuses %s %s with 403', async (method, path) => {
@@ -182,8 +183,8 @@ describe('trip-completion HTTP security', () => {
     });
 
     it('★ may still READ the attempts, which are dispatch information', async () => {
-      // `trip.read` is `'any'`. The list carries a declaration word and a
-      // rejection reason, never an amount.
+      // `trip.read` is the booking functions' key. The list carries a
+      // declaration word and a rejection reason, never an amount.
       //
       // ★ ASSERTED ON THE RESPONSE, NOT CHAINED ONTO THE REQUEST. Supertest's
       // `.expect(200)` does fail the test, but it is the only check here and it
@@ -199,13 +200,56 @@ describe('trip-completion HTTP security', () => {
     });
   });
 
-  describe('an ordinary member', () => {
+  /**
+   * ★ AN ORDINARY UNIT — MEMBER OR HEAD — SEES NOT EVEN THE LIST. The attempts
+   * are trip data, and `trip.read` follows the unit's function (2026-09-17).
+   */
+  describe.each([
+    ['a member of an ordinary unit', () => asContext({ memberOf: [DEPT] })],
+    ['the head of an ordinary unit', () => asContext({ headOf: [DEPT], memberOf: [DEPT] })],
+  ])('%s', (_label, caller) => {
     beforeEach(() => {
-      context = asContext({ memberOf: [DEPT] });
+      context = caller();
     });
 
-    it.each(DECISIONS)('refuses %s %s', async (method, path) => {
-      await authed(method, path).send(anyBody).expect(403);
+    it.each([['get', LIST], ...DECISIONS] as const)('refuses %s %s, reaching no service', async (method, path) => {
+      const response = await authed(method, path).send(anyBody);
+
+      expect(response.status).toBe(403);
+      for (const mock of Object.values(completion)) expect(mock).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * ★ NO DEPARTMENT FUNCTION REACHES A DECISION (0032). Dispatch arranges the
+   * run and prices it; it is not the final reviewer of its own work. The
+   * permission has no `orFunction`, an architecture test keeps it that way,
+   * and these cases prove it over HTTP for every function the business named.
+   */
+  describe.each([
+    ['a dispatch member', () => asContext({ memberOf: [DEPT], functions: ['dispatch'] })],
+    ['the dispatch head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['dispatch'] })],
+    ['an accounting member', () => asContext({ memberOf: [DEPT], functions: ['accounting'] })],
+    ['the accounting head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['accounting'] })],
+    ['a sales member', () => asContext({ memberOf: [DEPT], functions: ['sales'] })],
+    ['the sales head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['sales'] })],
+  ])('★ %s — never the final reviewer', (_label, caller) => {
+    beforeEach(() => {
+      context = caller();
+    });
+
+    it.each(DECISIONS)('refuses %s %s with 403, reaching no decision', async (method, path) => {
+      const response = await authed(method, path).send(anyBody);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(completion.approve).not.toHaveBeenCalled();
+      expect(completion.reject).not.toHaveBeenCalled();
+    });
+
+    it('may still read the attempts — `trip.read` is `any`', async () => {
+      const response = await authed('get', LIST);
+      expect(response.status).toBe(200);
     });
   });
 

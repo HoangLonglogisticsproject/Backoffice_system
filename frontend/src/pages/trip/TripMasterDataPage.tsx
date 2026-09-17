@@ -112,6 +112,15 @@ export default function TripMasterDataPage() {
         }))
       : catalogue.customers.items.map((row) => ({ ...row, label: row.name, display: row.name }));
 
+  // The catalogues are trip data: no `trip.read`, no screen. See TripSchedulePage.
+  if (!can('trip.read')) {
+    return (
+      <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        {t('tripNoPermission')}
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col items-start justify-between gap-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm sm:flex-row sm:items-center">

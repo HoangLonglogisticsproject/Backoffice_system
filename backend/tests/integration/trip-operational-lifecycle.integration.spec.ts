@@ -168,6 +168,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       vehicles,
       users,
       notifications,
+      requests,
     );
     money = new TripCostService(
       database,
@@ -177,6 +178,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       new TripCostTotalsRepository(database),
       assignments,
       vehicles,
+      requests,
     );
     completion = new TripCompletionService(
       database,
@@ -3770,6 +3772,107 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(await sql(`SELECT 1 FROM trip_status_history WHERE trip_id = $1 AND to_status = 'finished'`, [trip])).toHaveLength(0);
       // The approved turn is closed; the other is still the driver's to work.
       expect((await completion.listRequests(trip)).map((r) => r.state).sort()).toEqual(['approved', 'pending']);
+    });
+
+    /**
+     * ★ EXPENSE vs COMPLETION. A figure declared after the submit is one the
+     * reviewer never saw; one declared after the approval is money moving on
+     * a turn whose money had stopped. Both are refused at the service, per
+     * ASSIGNMENT — the other lorry on the trip keeps declaring — and a
+     * rejection reopens the turn for new lines as it does for edits.
+     */
+    it('★ refuses a new expense while a turn is under review, and after it is approved — the other turn is untouched', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+      const declareOn = (assignment: string, by: string) =>
+        money.declareCost({ assignmentId: assignment, category: 'fuel', amount: '100000.00', declaredBy: by });
+
+      const requestA = await ask(a, driverA);
+      await expect(declareOn(a, driverA)).rejects.toThrow(ConflictError);
+      // B's turn has no request; A's review freezes nothing of B's.
+      await declareOn(b, driverB);
+
+      await completion.approve(trip, requestA.id, reviewer);
+      expect((await tripStatus(trip)).status).not.toBe('finished');
+      // Approved, on a trip still open: the turn's figures are final anyway.
+      await expect(declareOn(a, driverA)).rejects.toThrow(ConflictError);
+      expect(await sql(`SELECT 1 FROM trip_costs WHERE driver_assignment_id = $1`, [a])).toHaveLength(0);
+
+      // A rejection reopens B for new lines, exactly as it reopens edits.
+      const requestB = await completion.submit(b, driverB, 'expenses');
+      await expect(declareOn(b, driverB)).rejects.toThrow(ConflictError);
+      await completion.reject(trip, requestB.id, { by: reviewer, reason: 'Thiếu dầu.' });
+      await declareOn(b, driverB);
+      expect(await sql(`SELECT 1 FROM trip_costs WHERE driver_assignment_id = $1`, [b])).toHaveLength(2);
+    });
+
+    /**
+     * ★ DL-108: an approved turn's execution record is final, per assignment.
+     * The sibling turn still pending does not reopen it; a retry of a
+     * milestone reported before the approval is still answered with its row.
+     */
+    it('★ an approved turn takes no new milestone — while its sibling, still pending, keeps reporting', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const b = (await assignTo(trip, driverB)).id;
+      const tap = (assignment: string, by: string, type: (typeof journey)[number], key = `${assignment}:${type}`) =>
+        execution.recordEvent({ assignmentId: assignment, type, clientEventId: key, recordedBy: by, deviceReportedAt: new Date(), ...readingFor(type) });
+
+      // A reports its arrival, asks, and is approved; B asks and waits.
+      const arrived = await tap(a, driverA, 'ARRIVED_PICKUP');
+      const requestA = await ask(a, driverA);
+      const requestB = await ask(b, driverB);
+      await completion.approve(trip, requestA.id, reviewer);
+      expect((await tripStatus(trip)).status).not.toBe('finished');
+      expect(requestB.state).toBe('pending');
+
+      // 1. A is closed: a NEW milestone is refused and nothing is written.
+      await expect(tap(a, driverA, 'PICKUP_CONFIRMED')).rejects.toThrow(ConflictError);
+      // 6. …but the retry of the arrival A already reported is still answered with that row.
+      expect((await tap(a, driverA, 'ARRIVED_PICKUP')).id).toBe(arrived.id);
+      expect(await sql(`SELECT 1 FROM trip_execution_events WHERE driver_assignment_id = $1`, [a])).toHaveLength(1);
+
+      // 2. B is pending, not approved: the lifecycle lets it keep reporting.
+      await tap(b, driverB, 'ARRIVED_PICKUP');
+      // 5. The trip staying open because of B changes nothing for A.
+      await expect(tap(a, driverA, 'PICKUP_CONFIRMED', `${a}:again`)).rejects.toThrow(ConflictError);
+
+      // 3. A rejection reopens B for the corrections it asks for.
+      await completion.reject(trip, requestB.id, { by: reviewer, reason: 'Thiếu mốc giao.' });
+      await tap(b, driverB, 'PICKUP_CONFIRMED');
+      expect(await sql(`SELECT 1 FROM trip_execution_events WHERE driver_assignment_id = $1`, [b])).toHaveLength(2);
+    });
+
+    it('★ a declaration and a submission arriving together leave no editable line on a pending turn', async () => {
+      const { trip, assignment: a } = await runningTrip();
+      const declareOn = () =>
+        money.declareCost({ assignmentId: a, category: 'fuel', amount: '100000.00', declaredBy: driverA });
+
+      // Two real transactions on two pooled clients; the trip row's FOR UPDATE
+      // orders them. Either the line lands first and the submit freezes it, or
+      // the submit lands first and the line is refused — never a live editable
+      // line under a pending request.
+      const outcomes = await Promise.allSettled([declareOn(), completion.submit(a, driverA, 'none')]);
+      const pending = (await sql(
+        `SELECT state FROM trip_completion_requests WHERE driver_assignment_id = $1`,
+        [a],
+      )) as { state: string }[];
+      const lines = (await sql(
+        `SELECT state FROM trip_costs WHERE driver_assignment_id = $1`,
+        [a],
+      )) as { state: string }[];
+
+      if (lines.length === 1) {
+        // The line won: the submit either froze it (declaration 'none' then
+        // conflicts with a live line → refused) — so no request exists…
+        expect(outcomes[1].status).toBe('rejected');
+        expect(pending).toHaveLength(0);
+        expect(lines[0]!.state).toBe('editable');
+      } else {
+        // …or the submit won and the declaration was refused.
+        expect(outcomes[0].status).toBe('rejected');
+        expect(pending.map((r) => r.state)).toEqual(['pending']);
+        expect(lines).toHaveLength(0);
+      }
     });
 
     it('★ approving the LAST active turn closes the trip — once, with one history row', async () => {

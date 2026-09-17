@@ -5,7 +5,7 @@ import {
   ValidationError,
 } from '../../../common/errors/domain.error';
 import { DATABASE, type Database } from '../../../common/types/database.port';
-import { Department, normalizeSlug } from '../domain/department.entity';
+import { Department, DepartmentFunction, normalizeSlug } from '../domain/department.entity';
 import { DepartmentRepository } from '../persistence/department.repository';
 import { MembershipRepository } from '../persistence/membership.repository';
 
@@ -50,6 +50,21 @@ export class DepartmentService {
     if (!renamed) throw new NotFoundError('Department not found.');
 
     return renamed;
+  }
+
+  /**
+   * SetDepartmentFunction — what the unit is for, or `null` for none (0032).
+   *
+   * No membership check and no role check: the function is a fact about the
+   * unit, and whether anybody is in it is irrelevant to what kind of unit it
+   * is. Authorization reads it fresh on the next request, so there is nothing
+   * to invalidate.
+   */
+  async setFunction(id: string, fn: DepartmentFunction | null): Promise<Department> {
+    const updated = await this.departments.setFunction(id, fn);
+    if (!updated) throw new NotFoundError('Department not found.');
+
+    return updated;
   }
 
   /**

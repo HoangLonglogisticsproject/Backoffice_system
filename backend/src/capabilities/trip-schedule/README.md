@@ -35,15 +35,23 @@ Index là lớp thứ hai, không phải lớp thứ nhất.
 ## Quyền — bất đối xứng, và cố ý
 
 ```
-trip.read    'any'            mọi tài khoản đã hoàn tất provisioning
-trip.create  'any'            như trên
-trip.write   'head-anywhere'  SUPERADMIN, hoặc trưởng phòng của BẤT KỲ phòng nào
+trip.read         global | function sales·accounting·dispatch   — board, detail, history, events, assignments, completion list, danh mục
+trip.create       global | function sales·accounting·dispatch   (0032) — thêm chuyến, xe, khách, địa điểm
+trip.write        'head-anywhere' & function sales·accounting·dispatch — SUPERADMIN, hoặc trưởng phòng CỦA MỘT PHÒNG CHỨC NĂNG
+dispatch.write    global | function dispatch     (0032) — assign / replace / end / danh sách tài xế
+trip.price.read   global | function sales·accounting·dispatch
+trip.price.write  global | function dispatch     — key giá trong body POST / PATCH
 ```
 
-Ai cũng đọc và thêm dòng; sửa, đổi trạng thái hoặc archive thì cần SUPERADMIN
-hoặc một trưởng phòng.
+Dữ liệu chuyến thuộc **ba phòng nghiệp vụ** (Kinh doanh, Kế toán, Điều độ) và
+SUPERADMIN — phòng khác (Marketing, HR, IT…) không đọc, không thêm, không sửa,
+dù là trưởng phòng (làm rõ nghiệp vụ 2026-09-17). Trong ba phòng đó: ai cũng đọc
+và thêm dòng; sửa, đổi trạng thái hoặc archive cần SUPERADMIN hoặc trưởng phòng;
+điều phối và nhập giá là việc của phòng Điều độ. `PATCH /trip-schedules/:id`
+phân quyền theo field: key giá → `trip.price.write`, key khác → `trip.write`.
+Customer Service **chưa** được đưa vào — quyết định còn để ngỏ.
 
-**Vì sao ai cũng thêm được, kể cả vào danh mục xe/khách.** Giới hạn việc thêm
+**Vì sao người đặt chuyến cũng thêm được vào danh mục xe/khách.** Giới hạn việc thêm
 cho quản trị viên trông có vẻ an toàn hơn nhưng không phải: người điều vận đang
 nhập một chuyến cho khách chưa có trong danh sách sẽ phải dừng lại, tìm quản trị
 viên, và đợi. Thứ họ thực sự làm là ghi tên khách vào ô ghi chú — và danh mục bị

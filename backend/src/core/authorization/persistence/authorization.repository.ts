@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { AuthorizationContext } from '../domain/authorization.context';
+import type { DepartmentFunction } from '../../organization/domain/department.entity';
 import type { AssignableRoleKey } from '../domain/permission';
 import type { UserSummary } from '../../../common/types/user-summary';
 
@@ -102,6 +103,7 @@ export class AuthorizationRepository {
       global: boolean;
       head_of: string[] | null;
       member_of: string[] | null;
+      functions: DepartmentFunction[] | null;
       must_change_secret: boolean | null;
     }>(
       `SELECT
@@ -113,6 +115,13 @@ export class AuthorizationRepository {
          (SELECT COALESCE(array_agg(m.department_id), '{}')
             FROM department_memberships m
            WHERE m.user_id = $1 AND m.status = 'active') AS member_of,
+         -- ★ THE FUNCTION OF THE UNIT THE CALLER IS IN (0032): one primary-key
+         -- lookup off the same active membership, nulls dropped, so an ordinary
+         -- unit contributes nothing and a driver (no membership) gets '{}'.
+         (SELECT COALESCE(array_agg(d.function), '{}')
+            FROM department_memberships m
+            JOIN departments d ON d.id = m.department_id
+           WHERE m.user_id = $1 AND m.status = 'active' AND d.function IS NOT NULL) AS functions,
          (SELECT COALESCE(bool_or(i.must_change_secret), false)
             FROM identities i
            WHERE i.user_id = $1) AS must_change_secret
@@ -129,6 +138,7 @@ export class AuthorizationRepository {
       global: row?.global ?? false,
       headOf: row?.head_of ?? [],
       memberOf: row?.member_of ?? [],
+      functions: row?.functions ?? [],
       mustChangeSecret: row?.must_change_secret ?? false,
     };
   }

@@ -213,7 +213,9 @@ describe('TripSchedulePage', () => {
     );
 
   describe('★ dispatch — the lorries and their drivers (ADR-0004)', () => {
-    const write = () => useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+    // `dispatch.write` (0032): the crew control is drawn for the dispatch
+    // function and the superadmin, never for `trip.write` alone.
+    const write = () => useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
     const board = (...turns: unknown[]) =>
       fetchTripSchedules.mockResolvedValue({
         items: [trip({ assignments: turns })],
@@ -570,7 +572,7 @@ describe('TripSchedulePage', () => {
    */
   describe('★ crewing a trip from the create form (ADR-0004 input layer)', () => {
     const dispatcher = () =>
-      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'dispatch.write']));
 
     const openForm = async () => {
       fetchTripVehicles.mockResolvedValue([
@@ -1926,10 +1928,12 @@ describe('TripSchedulePage', () => {
    * not have them.
    */
   describe('★ the two prices on a trip', () => {
-    /** A head: may correct a row AND may see what it is sold and bought for. */
-    const write = ['trip.read', 'trip.create', 'trip.write', 'trip.price.read'];
-    /** An ordinary dispatcher: adds trips, sees no money at all. */
+    /** Dispatch: may correct a row, sees the prices AND sets them (0032). */
+    const write = ['trip.read', 'trip.create', 'trip.write', 'trip.price.read', 'trip.price.write'];
+    /** A caller who adds trips and sees no money at all. */
     const dispatcher = ['trip.read', 'trip.create'];
+    /** Accounting, or a sales head: sees the two figures and may not touch them. */
+    const reader = ['trip.read', 'trip.create', 'trip.write', 'trip.price.read'];
 
     const pricedBoard = (over: Record<string, unknown> = {}) => {
       fetchTripSchedules.mockResolvedValue({
@@ -2015,6 +2019,103 @@ describe('TripSchedulePage', () => {
       const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
       expect(body).not.toHaveProperty('sellPrice');
       expect(body).not.toHaveProperty('purchasePrice');
+    });
+
+    /**
+     * ★ READ IS NOT WRITE (0032). Sales and accounting see the two figures on
+     * the board and on the form, and cannot type into either — and the payload
+     * carries neither key, because the server refuses a body that mentions a
+     * price from them.
+     */
+    describe('★ a reader who may see the prices and not set them', () => {
+      it('draws both columns on the board', async () => {
+        useSession.mockReturnValue(session(reader));
+        pricedBoard();
+        renderPage();
+
+        expect(await screen.findByText('4,500,000')).toBeInTheDocument();
+        expect(screen.getByText('3,000,000')).toBeInTheDocument();
+      });
+
+      it('★ draws both fields disabled, the selling price not required, and says why', async () => {
+        useSession.mockReturnValue(session(reader));
+        pricedBoard();
+        renderPage();
+        await screen.findByText('WWL');
+        fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+
+        const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
+        const buy = screen.getByLabelText('Giá cước mua (VND)') as HTMLInputElement;
+        expect(sell.disabled).toBe(true);
+        expect(buy.disabled).toBe(true);
+        expect(sell.required).toBe(false);
+        // The stored figures are shown, not blanked: this caller may read them.
+        expect(sell.value).toBe('4,500,000.00');
+        expect(screen.getByText(/chỉ điều độ mới nhập/i)).toBeInTheDocument();
+      });
+
+      it('★ sends no price key at all when saving — not even the figure it was shown', async () => {
+        useSession.mockReturnValue(session(reader));
+        pricedBoard();
+        renderPage();
+        await screen.findByText('WWL');
+        fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+        await screen.findByLabelText('Giá cước bán (VND) *');
+
+        fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+
+        await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+        const [, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+        expect(payload).not.toHaveProperty('sellPrice');
+        expect(payload).not.toHaveProperty('purchasePrice');
+      });
+    });
+
+    /**
+     * ★ A DISPATCH MEMBER PRICES AN EXISTING TRIP WITHOUT `trip.write` (0032).
+     * The server authorizes the patch per field, so the form offers the edit,
+     * disables everything that is not a price, and sends the two price keys
+     * and nothing else.
+     */
+    describe('★ a dispatch member — prices only, on an existing trip', () => {
+      const dispatchMember = ['trip.read', 'trip.create', 'dispatch.write', 'trip.price.read', 'trip.price.write'];
+
+      it('offers the edit control, though there is no trip.write', async () => {
+        useSession.mockReturnValue(session(dispatchMember));
+        pricedBoard();
+        renderPage();
+        await screen.findByText('WWL');
+
+        expect(screen.getAllByRole('button', { name: 'Sửa' }).length).toBeGreaterThan(0);
+        // And no archive: that is `trip.write`.
+        expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+      });
+
+      it('★ disables every non-price field, keeps the prices open, and sends only the two keys', async () => {
+        useSession.mockReturnValue(session(dispatchMember));
+        pricedBoard();
+        renderPage();
+        await screen.findByText('WWL');
+        fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+
+        const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
+        const cargo = screen.getByLabelText('Thông tin hàng') as HTMLInputElement;
+        expect(sell.disabled).toBe(false);
+        expect(sell.closest('fieldset')).toBeNull();
+        // Disabled through the enclosing `fieldset`, which is what the browser
+        // honours; the element's own attribute stays untouched.
+        expect(cargo.closest('fieldset')?.disabled).toBe(true);
+        expect(cargo.matches(':disabled')).toBe(true);
+        expect(screen.getByText(/chỉ sửa được giá cước/i)).toBeInTheDocument();
+
+        fireEvent.change(sell, { target: { value: '5000000' } });
+        fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+
+        await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
+        const [id, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+        expect(id).toBe('t1');
+        expect(payload).toEqual({ sellPrice: '5000000', purchasePrice: '3000000.00' });
+      });
     });
 
     it('★ sends the digits typed, without the separators the field shows', async () => {

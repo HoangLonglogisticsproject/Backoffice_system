@@ -2,9 +2,11 @@ import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/co
 import { z } from 'zod';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
+import { ProvisionedAccountGuard } from '../../../core/authorization/api/provisioned-account.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
+import { DriverOnlyGuard } from '../../../core/identity/api/driver-only.guard';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { DriverPortalService } from '../application/driver-portal.service';
 import { TripCompletionService } from '../application/trip-completion.service';
@@ -163,16 +165,22 @@ export class DriverPortalController {
    * The scope IS the session user: the query starts from their assignments, so
    * there is no id a caller could supply to widen it. That is why this route
    * takes no parameter at all.
+   *
+   * ★ BUT THE PROVISIONING GATE STILL APPLIES. Without `ActiveAssignmentGuard`
+   * nothing on this route loaded a context, so a driver still holding their
+   * temporary password read every customer, address and cargo note on their
+   * trips — the one thing the contract says they may not do before changing
+   * it. `ProvisionedAccountGuard` is that gate on its own, and nothing more.
    */
   @Get('assignments')
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, DriverOnlyGuard, ProvisionedAccountGuard)
   async listMyAssignments(@CurrentUser() actor: SessionUser): Promise<DriverTrip[]> {
     return this.portal.listMyAssignments(actor.id);
   }
 
   /** One assignment, whitelisted — see `DriverTrip` for what is absent and why. */
   @Get('assignments/:assignmentId')
-  @UseGuards(AuthGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, DriverOnlyGuard, ActiveAssignmentGuard)
   async findMyAssignment(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @CurrentUser() actor: SessionUser,
@@ -193,7 +201,7 @@ export class DriverPortalController {
    * not something they can act on.
    */
   @Post('assignments/:assignmentId/execution-events')
-  @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
   async recordEvent(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(recordEventSchema)) body: RecordEventBody,
@@ -212,7 +220,7 @@ export class DriverPortalController {
   // --------------------------------------------------------------- expense ----
 
   @Post('assignments/:assignmentId/expenses')
-  @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
   async declareExpense(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(declareExpenseSchema)) body: DeclareExpenseBody,
@@ -230,7 +238,7 @@ export class DriverPortalController {
    * here by the service.
    */
   @Patch('assignments/:assignmentId/expenses/:costId')
-  @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
   async editExpense(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @Param('costId', UuidParam) costId: string,
@@ -250,7 +258,7 @@ export class DriverPortalController {
    * reopens them all. Another lorry on the same trip is untouched.
    */
   @Post('assignments/:assignmentId/completion-requests')
-  @UseGuards(AuthGuard, CsrfGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
   async submitCompletion(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(submitCompletionSchema)) body: SubmitCompletionBody,

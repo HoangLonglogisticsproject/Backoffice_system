@@ -24,6 +24,17 @@ export const canSeeTripPrices = (authorization: AuthorizationContext | undefined
   authorization !== undefined && can(authorization, 'trip.price.read');
 
 /**
+ * May this caller SET what a trip is sold and bought for?
+ *
+ * ★ A NARROWER KEY THAN READING (0032). Sales and accounting read the figures;
+ * only dispatch and a global administrator type them. The write path asks this
+ * and the read path asks `canSeeTripPrices`, so the two questions cannot be
+ * collapsed back into one by a later edit to either.
+ */
+export const canSetTripPrices = (authorization: AuthorizationContext | undefined): boolean =>
+  authorization !== undefined && can(authorization, 'trip.price.write');
+
+/**
  * Hands back the row with both prices blanked, unless the caller may see them.
  *
  * ★ WHY A PROJECTION AND NOT A NARROWER QUERY. 0024 put the quoted price on

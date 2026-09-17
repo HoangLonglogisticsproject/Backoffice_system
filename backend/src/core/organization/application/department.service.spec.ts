@@ -18,6 +18,7 @@ const department = (over: Partial<Department> = {}): Department => ({
   slug: 'unit-one',
   name: 'Unit One',
   status: 'active',
+  function: null,
   createdAt: new Date('2026-01-01'),
   updatedAt: new Date('2026-01-01'),
   ...over,
@@ -45,6 +46,7 @@ describe('DepartmentService', () => {
       findBySlug: jest.fn(),
       list: jest.fn(),
       rename: jest.fn(),
+      setFunction: jest.fn(),
       archive: jest.fn(),
     } as unknown as jest.Mocked<DepartmentRepository>;
     memberships = {
@@ -153,6 +155,32 @@ describe('DepartmentService', () => {
       departments.rename.mockResolvedValue(null);
 
       await expect(service.rename('nope', 'X')).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('setFunction (0032)', () => {
+    it('sets what the unit is for, and hands back the row as stored', async () => {
+      departments.setFunction.mockResolvedValue(department({ function: 'dispatch' }));
+
+      const updated = await service.setFunction('dep-1', 'dispatch');
+
+      expect(departments.setFunction).toHaveBeenCalledWith('dep-1', 'dispatch');
+      expect(updated.function).toBe('dispatch');
+    });
+
+    it('clears it with null — an ordinary unit again', async () => {
+      departments.setFunction.mockResolvedValue(department({ function: null }));
+
+      const updated = await service.setFunction('dep-1', null);
+
+      expect(departments.setFunction).toHaveBeenCalledWith('dep-1', null);
+      expect(updated.function).toBeNull();
+    });
+
+    it('is a not-found when the unit does not exist', async () => {
+      departments.setFunction.mockResolvedValue(null);
+
+      await expect(service.setFunction('nope', 'sales')).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 });

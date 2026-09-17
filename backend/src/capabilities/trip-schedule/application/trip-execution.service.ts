@@ -26,6 +26,7 @@ import {
 } from '../domain/trip-location';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
 import {
+  CompletionRequestRepository,
   DriverAssignmentRepository,
   ExecutionEventRepository,
 } from '../persistence/trip-execution.repository';
@@ -64,6 +65,7 @@ export class TripExecutionService {
     private readonly vehicles: TripVehicleRepository,
     private readonly users: UserRepository,
     private readonly notifications: NotificationService,
+    private readonly requests: CompletionRequestRepository,
   ) {}
 
   // ------------------------------------------------------------ assignment ----
@@ -455,6 +457,27 @@ export class TripExecutionService {
       // and the assignment are in hand.
       if (assignment.driverUserId !== input.recordedBy) {
         throw new ForbiddenError('Only the driver on an assignment may report its progress.');
+      }
+
+      // ★ AN APPROVED TURN TAKES NO NEW MILESTONE (DL-108).
+      //
+      // Approval is the SuperAdmin saying "this turn's record is what
+      // happened". A milestone reported afterwards would move a time the
+      // reviewer already judged — and it would do so on a turn whose money has
+      // just been made immutable. So the record closes with the approval,
+      // PER ASSIGNMENT: another lorry's turn on the same trip is still that
+      // driver's to report, and a REJECTED turn is reopened for exactly the
+      // corrections a rejection asks for. Nothing here reads the trip's
+      // status — a trip left open by a sibling turn does not reopen this one.
+      //
+      // Read under the trip lock, after the retry answer above: a phone
+      // retrying a milestone it reported before the approval still gets the
+      // row it wrote, because that lookup never reaches this line.
+      const history = await this.requests.listByAssignment(assignment.id, tx);
+      if (history.some((request) => request.state === 'approved')) {
+        throw new ConflictError(
+          'That assignment has been approved, so its execution record is final.',
+        );
       }
 
       // ★ THE JOURNEY CANNOT BE SKIPPED, AND THIS IS WHERE THAT HOLDS — PER

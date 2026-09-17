@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthController } from './api/auth.controller';
 import { AuthGuard } from './api/auth.guard';
 import { BackofficeOnlyGuard } from './api/backoffice-only.guard';
+import { DriverOnlyGuard } from './api/driver-only.guard';
 import { AuthenticationService } from './application/authentication.service';
 import { CsrfGuard } from './api/csrf.guard';
 import { LoginThrottleService } from './application/login-throttle.service';
@@ -25,6 +26,7 @@ import { SessionService } from './application/session.service';
     AuthenticationService,
     AuthGuard,
     BackofficeOnlyGuard,
+    DriverOnlyGuard,
     CsrfGuard,
     LoginThrottleService,
   ],
@@ -34,6 +36,7 @@ import { SessionService } from './application/session.service';
     IdentityRepository,
     AuthGuard,
     BackofficeOnlyGuard,
+    DriverOnlyGuard,
     AuthenticationService,
   ],
 })

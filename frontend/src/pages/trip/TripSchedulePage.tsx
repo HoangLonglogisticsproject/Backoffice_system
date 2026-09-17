@@ -59,6 +59,11 @@ export default function TripSchedulePage() {
 
   const canAdd = can('trip.create');
   const canManage = can('trip.write');
+  // ★ DISPATCH IS ITS OWN KEY (0032), AND NOT A SUBSET OF `trip.write`. A
+  // dispatcher may crew a trip and may not correct its row; a head of Sales
+  // may correct the row and may not crew it. Neither implies the other, so
+  // the crew button and the edit button read different hints.
+  const canDispatch = can('dispatch.write');
   // ★ A SEPARATE PERMISSION, AND A SEPARATE COLUMN CONDITION. Money is not
   // `trip.write`: an accountant may hold `cost.read` and no right to correct
   // the board at all, so gating the actions column on `canManage` alone would
@@ -70,6 +75,9 @@ export default function TripSchedulePage() {
   // A viewer without it is sent `null` for both figures whatever the trip
   // holds, so the columns are dropped rather than drawn full of em dashes.
   const mayPrice = can('trip.price.read');
+  // Setting them is a fourth key (0032). A dispatch member holds it without
+  // `trip.write`, so the edit control is offered for the price alone.
+  const mayEditPrices = can('trip.price.write');
   const [costFor, setCostFor] = useState<string | null>(null);
   /**
    * The trip whose crew is being dispatched. `trip.write`, like every other correction.
@@ -114,6 +122,18 @@ export default function TripSchedulePage() {
     setEditing(trip);
     setFormOpen(true);
   };
+
+  // ★ THE SCREEN ITSELF SAYS NO, not only the menu. A caller outside the
+  // booking functions holds no `trip.read`; the server answers 403 to every
+  // read below, so drawing the board and letting it fail would be a screen
+  // that lies about what it is for.
+  if (!can('trip.read')) {
+    return (
+      <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        {t('tripNoPermission')}
+      </p>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -238,7 +258,7 @@ export default function TripSchedulePage() {
                 )}
                 <TableHead className="font-semibold text-gray-600">{t('colNote')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCreatedBy')}</TableHead>
-                {(canManage || canViewCost) && (
+                {(canManage || canViewCost || canDispatch || mayEditPrices) && (
                   <TableHead className="font-semibold text-gray-600">{t('colActions')}</TableHead>
                 )}
               </TableRow>
@@ -380,17 +400,17 @@ export default function TripSchedulePage() {
                   <TableCell rowSpan={span} className="whitespace-nowrap text-gray-600">
                     {trip.createdByUser.displayName}
                   </TableCell>
-                  {(canManage || canViewCost) && (
+                  {(canManage || canViewCost || canDispatch || mayEditPrices) && (
                     <TableCell rowSpan={span}>
                       <div className="flex items-center gap-1">
                         {/*
                           ★ THE ONE CONTROL THAT CHANGES THE CREW, once per
-                          trip. Operations dispatches; the driver never does.
+                          trip. Dispatch dispatches; the driver never does.
                           Hidden on a finished trip for the same reason the
                           status dropdown is: the server refuses every
                           assignment write once a trip is finished.
                         */}
-                        {canManage && trip.status !== 'finished' && (
+                        {canDispatch && trip.status !== 'finished' && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -400,7 +420,7 @@ export default function TripSchedulePage() {
                             {trip.assignments.length > 0 ? t('dispatchManage') : t('assignDriver')}
                           </Button>
                         )}
-                        {canManage && (
+                        {(canManage || mayEditPrices) && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -508,11 +528,11 @@ export default function TripSchedulePage() {
         trip={editing}
         customers={catalogue.customers.items}
         // The same active lorries the dispatch panel offers, for the crew rows
-        // on the create form. Dispatching is `trip.write`, which the create
+        // on the create form. Dispatching is `dispatch.write`, which the create
         // permission does not imply — so the section is offered only to
         // somebody the server would actually accept the assignments from.
         vehicles={catalogue.vehicles.items}
-        mayDispatch={can('trip.write')}
+        mayDispatch={canDispatch}
         // `data` is null until the read lands; `items` defaults to [], which
         // cannot tell an empty catalogue from an unread one.
         cataloguesLoaded={catalogue.customers.data !== null}

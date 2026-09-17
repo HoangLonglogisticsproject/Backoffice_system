@@ -21,7 +21,10 @@ import {
 } from '../persistence/trip-cost.repository';
 import type { TripCostEdit, VehicleOwnership } from '../domain/trip-execution';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
-import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
+import {
+  CompletionRequestRepository,
+  DriverAssignmentRepository,
+} from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
 
 /**
@@ -55,6 +58,7 @@ export class TripCostService {
     private readonly totals: TripCostTotalsRepository,
     private readonly assignments: DriverAssignmentRepository,
     private readonly vehicles: TripVehicleRepository,
+    private readonly requests: CompletionRequestRepository,
   ) {}
 
   // ---------------------------------------------------------------- costs ----
@@ -212,6 +216,30 @@ export class TripCostService {
       // express it: the guard knows who somebody IS, not which turn they hold.
       if (assignment.driverUserId !== input.declaredBy) {
         throw new ForbiddenError('Only the driver on an assignment may declare its expenses.');
+      }
+
+      // ★ NO NEW LINE ONCE THE TURN'S MONEY IS UNDER REVIEW OR FINAL.
+      //
+      // `submit` freezes the lines that exist at that moment, and `approve`
+      // finalises them. Neither could touch a line that did not exist yet —
+      // so a figure declared AFTER the submit was a figure the reviewer never
+      // saw, and one declared after approval was money moving on a turn whose
+      // money had stopped moving (contract §9.6). `trip_costs_guard_update`
+      // guards UPDATEs and cannot see an INSERT, so the rule lives here, under
+      // the same trip lock `submit` and `approve` take, which is what makes it
+      // race-free: a declaration and a submission on one turn run one after
+      // the other, never interleaved.
+      //
+      // Read AFTER the retry answer above, on purpose: a phone retrying a
+      // declaration it made before the submit still gets its original line.
+      const history = await this.requests.listByAssignment(assignment.id, tx);
+      if (history.some((request) => request.state === 'approved')) {
+        throw new ConflictError('That assignment has been approved, so its figures are final.');
+      }
+      if (history.some((request) => request.state === 'pending')) {
+        throw new ConflictError(
+          'That assignment has a completion request waiting for review, so its figures are frozen.',
+        );
       }
 
       // ★ THE ASSIGNMENT'S LORRY, never `trip.vehicleId` (legacy, ADR-0004).

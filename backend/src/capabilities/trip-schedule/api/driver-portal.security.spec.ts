@@ -7,10 +7,13 @@ import { DomainErrorFilter } from '../../../common/http/domain-error.filter';
 import { AppConfig } from '../../../config/app.config';
 import { AuthorizationService } from '../../../core/authorization/application/authorization.service';
 import { AuthorizationContext } from '../../../core/authorization/domain/authorization.context';
+import { ProvisionedAccountGuard } from '../../../core/authorization/api/provisioned-account.guard';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
+import { DriverOnlyGuard } from '../../../core/identity/api/driver-only.guard';
 import { SESSION_COOKIE } from '../../../core/identity/api/session.cookie';
 import { SessionService } from '../../../core/identity/application/session.service';
+import type { AccountType } from '../../../core/users/domain/user.entity';
 import { DriverPortalService } from '../application/driver-portal.service';
 import { TripCompletionService } from '../application/trip-completion.service';
 import { TripCostService } from '../application/trip-cost.service';
@@ -68,6 +71,7 @@ describe('driver-portal HTTP security', () => {
 
   let app: INestApplication;
   let context: AuthorizationContext;
+  let accountType: AccountType;
 
   let portal: { listMyAssignments: jest.Mock; findMyAssignment: jest.Mock };
   let execution: { recordEvent: jest.Mock };
@@ -80,12 +84,14 @@ describe('driver-portal HTTP security', () => {
     global: false,
     headOf: [],
     memberOf: [],
+    functions: [],
     mustChangeSecret: false,
     ...over,
   });
 
   beforeEach(async () => {
     context = asContext();
+    accountType = 'driver';
 
     portal = {
       listMyAssignments: jest.fn().mockResolvedValue([]),
@@ -115,6 +121,8 @@ describe('driver-portal HTTP security', () => {
         Reflector,
         AuthGuard,
         CsrfGuard,
+        DriverOnlyGuard,
+        ProvisionedAccountGuard,
         ActiveAssignmentGuard,
         { provide: DriverPortalService, useValue: portal },
         { provide: TripExecutionService, useValue: execution },
@@ -125,9 +133,14 @@ describe('driver-portal HTTP security', () => {
         {
           provide: SessionService,
           useValue: {
-            resolve: jest
-              .fn()
-              .mockResolvedValue({ id: DRIVER_A, displayName: 'Tài Xế A', status: 'active' }),
+            // What KIND of account is calling: a driver unless a case says
+            // otherwise. `DriverOnlyGuard` reads this off the session row.
+            resolve: jest.fn().mockImplementation(async () => ({
+              id: DRIVER_A,
+              displayName: 'Tài Xế A',
+              status: 'active',
+              accountType,
+            })),
           },
         },
         {
@@ -286,6 +299,40 @@ describe('driver-portal HTTP security', () => {
 
         expect(response.status).toBe(403);
         expect(response.body.error.code).toBe('PASSWORD_CHANGE_REQUIRED');
+      },
+    );
+
+    it('★ refuses the LIST too — the one route with no assignment to guard', async () => {
+      // This route reaches neither `PermissionGuard` nor `ActiveAssignmentGuard`,
+      // and used to answer a half-provisioned driver with every customer,
+      // address and cargo note on their trips. `ProvisionedAccountGuard` is
+      // the gate on its own.
+      const response = await authed('get', '/driver/assignments');
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('PASSWORD_CHANGE_REQUIRED');
+      expect(portal.listMyAssignments).not.toHaveBeenCalled();
+    });
+  });
+
+  // ------------------------------------------------------- employee account --
+
+  describe('★ an employee account holding Driver Portal URLs', () => {
+    beforeEach(() => {
+      // An employee, and a senior one — head of a department, holding every
+      // Backoffice trip permission there is. None of that is a driver.
+      accountType = 'employee';
+      context = asContext({ headOf: ['11111111-1111-1111-1111-111111111111'], memberOf: ['11111111-1111-1111-1111-111111111111'], functions: ['dispatch'] });
+    });
+
+    it.each<Route>([['get', '/driver/assignments'], ...scopedRoutes(ASSIGNMENT_A)])(
+      'refuses %s %s with 403 — the mirror of BackofficeOnlyGuard',
+      async (method, path) => {
+        const response = await authed(method, path).send(anyBody);
+
+        expect(response.status).toBe(403);
+        expect(response.body.error.code).toBe('FORBIDDEN');
+        noWriteHappened();
       },
     );
   });

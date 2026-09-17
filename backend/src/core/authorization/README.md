@@ -66,6 +66,21 @@ cookie
 | `unit.read` | target ∈ `memberOf` |
 | `unit.member.read` | target ∈ `headOf` |
 | `unit.write` · `unit.member.write` · `role.assign` · `user.write` | chỉ `global` |
+| `trip.read` · `trip.create` · `trip.price.read` | `global` **hoặc** phòng có `function ∈ {sales, accounting, dispatch}` |
+| `trip.write` | `head-anywhere` **và** phòng có `function ∈ {sales, accounting, dispatch}` (`withinFunction`) |
+| `driver.account.request` | `head-anywhere` — head của phòng bất kỳ |
+| `dispatch.write` · `trip.price.write` | `global` **hoặc** phòng có `function = 'dispatch'` |
+| `cost.*` · `trip.complete.review` | chỉ `global` — **không có** `orFunction`, architecture test giữ |
+
+**`orFunction` / `withinFunction` (0032).** Một requirement là
+`{ tier, orFunction?, withinFunction? }`. `can()` cho qua nếu đạt tier **hoặc**
+phòng của caller (đọc từ membership active → `departments.function`) nằm trong
+`orFunction`; nếu có `withinFunction` thì tier chỉ được tính **khi** phòng nằm
+trong danh sách đó (AND — dùng cho `trip.write`: head *của phòng chức năng*).
+Context mang `functions: []` cho driver (không membership) và cho phòng thường
+(`function IS NULL`), nên hai nhóm đó không bao giờ hưởng quyền theo function.
+Thứ tự: `mustChangeSecret` → `global` → `orFunction` → `withinFunction` → tier.
+Không còn key nào ở tier `any`.
 
 Quan hệ là thứ database đã lưu; role là nhãn suy ra để hiển thị. Quyết định theo
 quan hệ nghĩa là không có giá trị dẫn xuất nào có thể lệch khỏi row sinh ra nó.

@@ -9,6 +9,13 @@
 /** §5. Archived, never deleted — memberships keep pointing at the row. */
 export type DepartmentStatus = 'active' | 'archived';
 
+/**
+ * What a unit is FOR, as authorization reads it (0032). `null` is every
+ * ordinary unit. Set by a global administrator through `PATCH /departments/:id`
+ * with `{ function }`; never inferred from the name.
+ */
+export type DepartmentFunction = 'sales' | 'accounting' | 'dispatch';
+
 /** `GET /departments/:departmentId` (§5). */
 export interface Department {
   id: string;
@@ -16,6 +23,7 @@ export interface Department {
   slug: string;
   name: string;
   status: DepartmentStatus;
+  function: DepartmentFunction | null;
   createdAt: string;
   updatedAt: string;
 }

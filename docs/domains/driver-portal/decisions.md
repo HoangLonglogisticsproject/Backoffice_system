@@ -526,3 +526,19 @@ Nguồn: [`../../architecture/adr-0004-dispatch-assignment-multi-vehicle.md`](..
 **Legacy conflict mới:** **L-12** — assignment active cũ mà Trip không có `vehicle_id`
 (Case B của `0029`). `0027` để CHECK ở `NOT VALID` nên không chặn deploy; `0030` VALIDATE
 chỉ chạy khi audit production cho Case B = 0 — xem `deploy/README.md`.
+
+---
+
+# 11. ★ Bổ sung 2026-09-16 — Authorization theo chức năng phòng (0032)
+
+| # | Quyết định | Trạng thái | Enforce |
+|---|---|---|---|
+| **DL-101** | Sales / Kế toán / Điều độ **không** là role. Phân biệt bằng `departments.function ∈ {sales, accounting, dispatch, NULL}`, SuperAdmin đặt qua `PATCH /departments/:id`. Không seed, không đặt tên phòng trong code | **[CONFIRMED]** CEO | `0032` + `PermissionRequirement.orFunction` |
+| **DL-102** | Điều phối (assign / replace / end / danh sách driver) là **`dispatch.write`**: SuperAdmin hoặc mọi thành viên phòng `dispatch`. Head phòng khác **không** điều phối được | **[CONFIRMED]** CEO | `trip-schedule.controller.ts` + security spec |
+| **DL-103** | Giá tách đọc/ghi: `trip.price.read` (head-anywhere, hoặc `sales`/`accounting`/`dispatch` — member lẫn head) · `trip.price.write` (SuperAdmin hoặc `dispatch`). Sales/Kế toán xem, không nhập/sửa. `PATCH /trip-schedules/:id` phân quyền **theo field**: key giá → `trip.price.write`, key khác → `trip.write` | **[CONFIRMED]** CEO | `requirePriceAuthority` (POST) · `requirePatchAuthority` (PATCH) · `redactPrices` dùng `trip.price.read` |
+| **DL-104** | `trip.complete.review` giữ `global`, **không** `orFunction`. Điều độ không phải cấp duyệt cuối | **[CONFIRMED]** CEO | `tests/architecture/authorization-policy.spec.ts` |
+| **DL-105** | Driver Portal: `DriverOnlyGuard` trên mọi route `/driver/*`; `GET /driver/assignments` gate `mustChangeSecret` qua `ProvisionedAccountGuard` | **[CONFIRMED]** | driver-portal security spec |
+| **DL-106** | `trip.create` **không** còn `any`: SuperAdmin hoặc phòng `sales` / `accounting` / `dispatch` (member lẫn head). Phòng khác (Marketing, HR, IT…) đọc board, không tạo Trip; Driver bị chặn ở boundary. Cùng key gate thêm xe / khách / địa điểm | **[CONFIRMED]** CEO | `PERMISSION_REQUIREMENT` + `authorization-policy.spec.ts` + trip-schedule security spec |
+| **DL-109** | Dữ liệu Trip (board, chi tiết, giá, danh mục xe/khách/địa điểm) chỉ thuộc phòng `sales` / `accounting` / `dispatch` và SuperAdmin. `trip.read` và `trip.price.read` = `global ∨ function` (bỏ `any` / `head-anywhere`); `trip.write` = head **trong** phòng chức năng (`withinFunction`). `DEPARTMENT_HEAD` phòng khác **không** tự có trip visibility. **Customer Service: deferred**, chưa có function, không suy đoán | **[CONFIRMED]** CEO 2026-09-17 | `PERMISSION_REQUIREMENT` + `authorization-policy.spec` + trip-schedule / trip-completion security spec; frontend ẩn mục ĐIỀU PHỐI và 3 màn hình khi thiếu `trip.read` |
+| **DL-108** | Assignment đã **approved** → execution record **bất biến**: Driver không ghi thêm / bổ sung execution event; sai/thiếu thì SuperAdmin **reject** rồi Driver bổ sung và submit lại. Không ngoại lệ vì Trip còn assignment khác pending. `pending` / `rejected` / chưa có request: giữ lifecycle hiện tại (submit không bắt buộc đủ mốc, nên pending vẫn ghi được mốc còn thiếu). Retry cùng `client_event_id` vẫn idempotent | **[CONFIRMED]** CEO 2026-09-16 | `TripExecutionService.recordEvent` dưới trip lock, sau lookup idempotency; unit + integration regression |
+| **DL-107** | Driver **không** khai thêm chi phí khi assignment đang có completion `pending` hoặc đã `approved` (kể cả khi Trip chưa finished vì assignment khác). `rejected` mở lại. Trước đây service chỉ chặn Trip `finished` → dòng khai sau submit không bị khoá, dòng khai sau approve không bao giờ bất biến (vi phạm contract §9.6) | **[CONFIRMED]** — hệ quả của §9.6 | `TripCostService.declareCost` dưới trip lock; unit + integration regression (2026-09-16 performance reconciliation) |
