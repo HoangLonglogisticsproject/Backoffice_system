@@ -448,6 +448,14 @@ describeIntegration('Organization against real PostgreSQL', () => {
      * server can prove the rollback: the unit spec sees the error leave the
      * callback, this sees the rename it took down with it.
      */
+    it('★ stores the function given at creation, and null when none is (DL-110)', async () => {
+      const sales = await departments.create({ slug: 'sales', name: 'Kinh doanh', function: 'sales' });
+      const hr = await departments.create({ slug: 'hr', name: 'Nhân sự' });
+
+      expect((await departmentRepository.findById(sales.id))?.function).toBe('sales');
+      expect((await departmentRepository.findById(hr.id))?.function).toBeNull();
+    });
+
     it('renames and sets the function together, and both are stored', async () => {
       const a = await departments.create({ slug: 'a', name: 'A' });
 

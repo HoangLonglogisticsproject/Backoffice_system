@@ -24,8 +24,17 @@ export class DepartmentService {
     private readonly memberships: MembershipRepository,
   ) {}
 
-  /** CreateDepartment. */
-  async create(input: { slug: string; name: string }): Promise<Department> {
+  /**
+   * CreateDepartment. `function` may be given at birth (DL-110): a sales,
+   * accounting or dispatch unit is created AS one, so its first member holds
+   * the right permissions from their first request. Absent means an ordinary
+   * unit, which is what `null` says.
+   */
+  async create(input: {
+    slug: string;
+    name: string;
+    function?: DepartmentFunction | null;
+  }): Promise<Department> {
     const slug = normalizeSlug(input.slug);
     const name = input.name.trim();
 
@@ -38,7 +47,7 @@ export class DepartmentService {
       throw new ConflictError('That department slug is already in use.');
     }
 
-    return this.departments.create({ slug, name });
+    return this.departments.create({ slug, name, function: input.function ?? null });
   }
 
   /** RenameDepartment. The slug is deliberately immutable — things point at it. */

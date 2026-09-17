@@ -50,13 +50,13 @@ export class DepartmentRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   async create(
-    input: { slug: string; name: string },
+    input: { slug: string; name: string; function?: DepartmentFunction | null },
     executor: DatabaseQuery = this.db,
   ): Promise<Department> {
     try {
       const rows = await executor.query<DepartmentRow>(
-        'INSERT INTO departments (slug, name) VALUES ($1, $2) RETURNING *',
-        [normalizeSlug(input.slug), input.name.trim()],
+        'INSERT INTO departments (slug, name, function) VALUES ($1, $2, $3) RETURNING *',
+        [normalizeSlug(input.slug), input.name.trim(), input.function ?? null],
       );
 
       const row = rows[0];

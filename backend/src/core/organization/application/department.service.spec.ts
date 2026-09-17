@@ -63,7 +63,25 @@ describe('DepartmentService', () => {
 
       await service.create({ slug: '  Unit-One  ', name: '  Unit One  ' });
 
-      expect(departments.create).toHaveBeenCalledWith({ slug: 'unit-one', name: 'Unit One' });
+      expect(departments.create).toHaveBeenCalledWith({
+        slug: 'unit-one',
+        name: 'Unit One',
+        function: null,
+      });
+    });
+
+    it('★ creates a unit AS a business function when told so — no NULL window (DL-110)', async () => {
+      departments.findBySlug.mockResolvedValue(null);
+      departments.create.mockResolvedValue(department({ function: 'sales' }));
+
+      const created = await service.create({ slug: 'sales', name: 'Kinh doanh', function: 'sales' });
+
+      expect(departments.create).toHaveBeenCalledWith({
+        slug: 'sales',
+        name: 'Kinh doanh',
+        function: 'sales',
+      });
+      expect(created.function).toBe('sales');
     });
 
     it('rejects a blank slug or name rather than storing whitespace', async () => {
