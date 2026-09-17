@@ -41,9 +41,16 @@ import { MembershipService } from '../application/membership.service';
  * `AuthGuard` resolved from the session cookie and nothing else.
  */
 
+/**
+ * `function` at CREATION, so a business unit never exists in the window
+ * between "created" and "told what it is for" — a window in which its members
+ * would hold no trip permission at all (0032, DL-110). Optional: an ordinary
+ * unit is created without it and stays `null`.
+ */
 const createDepartmentSchema = z.object({
   slug: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(200),
+  function: z.enum(DEPARTMENT_FUNCTIONS).nullable().optional(),
 });
 
 /**

@@ -16,9 +16,9 @@ export interface AuthorizationMeResponse {
   /**
    * ★ WHICH APPLICATION THIS ACCOUNT BELONGS IN. `driver` accounts are refused
    * every Backoffice route by `BackofficeOnlyGuard` regardless of what
-   * `permissions` lists — `trip.read` is `'any'` and appears for them too — so
-   * a client that drew a menu from `permissions` alone drew one the server
-   * would 403 row by row. This is the field the client routes SHELLS on:
+   * `permissions` lists, and `DriverOnlyGuard` refuses employees at `/driver`
+   * the same way — neither is a permission. This is the field the client
+   * routes SHELLS on:
    * `/driver` for a driver, the Backoffice for everybody else. Like `role`, a
    * rendering aid; the guard decides.
    */

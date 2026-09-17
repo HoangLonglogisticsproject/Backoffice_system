@@ -34,8 +34,10 @@ thành file không ai muốn đụng.
 
 | Use case | Ở đâu | Transaction làm gì |
 |---|---|---|
-| `CreateDepartment` | `DepartmentService.create` | insert; unique index là chốt chặn cho race |
+| `CreateDepartment` | `DepartmentService.create` | insert, **kèm `function`** nếu là phòng nghiệp vụ (DL-110); unique index là chốt chặn cho race |
 | `RenameDepartment` | `DepartmentService.rename` | chỉ đổi `name`; `slug` bất biến vì thứ khác trỏ vào nó |
+| `SetDepartmentFunction` | `DepartmentService.setFunction` | `function ∈ sales · accounting · dispatch · null`; authorization đọc lại ở request kế tiếp |
+| `UpdateDepartment` | `DepartmentService.update` | `name` + `function` trong **một** transaction — `PATCH /departments/:id` |
 | `ArchiveDepartment` | `DepartmentService.archive` | lock unit → đếm member → archive. **409 nếu còn member** |
 | `EnrollMember` | `MembershipService.enroll` | cho người **chưa** thuộc phòng nào |
 | `TransferMembership` | `MembershipService.transfer` | **end phòng cũ → tạo phòng mới**, một transaction |

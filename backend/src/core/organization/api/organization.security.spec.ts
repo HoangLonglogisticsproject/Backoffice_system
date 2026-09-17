@@ -43,6 +43,8 @@ describe('organization HTTP security', () => {
   };
   let memberships: { listRoster: jest.Mock; transfer: jest.Mock };
   let context: AuthorizationContext;
+  /** What kind of account the session resolves to; the driver block flips it. */
+  let accountType: 'employee' | 'driver';
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: ACTOR,
@@ -58,6 +60,7 @@ describe('organization HTTP security', () => {
 
   beforeEach(async () => {
     context = asContext();
+    accountType = 'employee';
     departments = {
       list: jest.fn().mockResolvedValue([department]),
       require: jest.fn().mockResolvedValue(department),
@@ -97,9 +100,12 @@ describe('organization HTTP security', () => {
         {
           provide: SessionService,
           useValue: {
-            resolve: jest
-              .fn()
-              .mockResolvedValue({ id: ACTOR, displayName: 'Actor', status: 'active' }),
+            resolve: jest.fn().mockImplementation(async () => ({
+              id: ACTOR,
+              displayName: 'Actor',
+              status: 'active',
+              accountType,
+            })),
           },
         },
         {
@@ -190,9 +196,13 @@ describe('organization HTTP security', () => {
       expect(memberships.listRoster).not.toHaveBeenCalled();
     });
 
-    it('cannot write anything', async () => {
+    it('cannot write anything — not a unit, not what a unit is for', async () => {
       await authed('post', '/departments').send({ slug: 'x', name: 'X' }).expect(403);
+      await authed('post', '/departments')
+        .send({ slug: 'sales', name: 'Kinh doanh', function: 'sales' })
+        .expect(403);
       await authed('patch', `/departments/${A}`).send({ name: 'X' }).expect(403);
+      await authed('patch', `/departments/${A}`).send({ function: 'dispatch' }).expect(403);
       await authed('post', `/departments/${A}/archive`).expect(403);
       await authed('post', `/departments/${A}/members`).send({ userId: TARGET }).expect(403);
 
@@ -200,6 +210,33 @@ describe('organization HTTP security', () => {
       expect(departments.update).not.toHaveBeenCalled();
       expect(departments.archive).not.toHaveBeenCalled();
       expect(memberships.transfer).not.toHaveBeenCalled();
+    });
+  });
+
+  // --------------------------------------------------------------- DRIVER --
+
+  /**
+   * ★ A DRIVER ACCOUNT, refused by PERMISSION alone. These routes carry no
+   * `BackofficeOnlyGuard`; a driver has no membership, so every scoped and
+   * global permission fails closed in `can()`. Pinned here so that the day a
+   * driver is given a membership for some other reason, `unit.write` staying
+   * GLOBAL-only is still what keeps them from reshaping the org chart.
+   */
+  describe('a driver account', () => {
+    beforeEach(() => {
+      accountType = 'driver';
+      context = asContext();
+    });
+
+    it('cannot create a unit, with or without a function, nor set one', async () => {
+      await authed('post', '/departments')
+        .send({ slug: 'sales', name: 'Kinh doanh', function: 'sales' })
+        .expect(403);
+      await authed('post', '/departments').send({ slug: 'x', name: 'X' }).expect(403);
+      await authed('patch', `/departments/${A}`).send({ function: 'dispatch' }).expect(403);
+      await authed('get', '/departments').expect(403);
+
+      noneOfTheServicesRan();
     });
   });
 
@@ -265,8 +302,11 @@ describe('organization HTTP security', () => {
       expect(memberships.transfer).not.toHaveBeenCalled();
     });
 
-    it('cannot create, rename or archive a unit', async () => {
+    it('cannot create, rename or archive a unit — nor create one AS a function', async () => {
       await authed('post', '/departments').send({ slug: 'x', name: 'X' }).expect(403);
+      await authed('post', '/departments')
+        .send({ slug: 'dispatch', name: 'Điều độ', function: 'dispatch' })
+        .expect(403);
       await authed('patch', `/departments/${A}`).send({ name: 'X' }).expect(403);
       await authed('post', `/departments/${A}/archive`).expect(403);
 
@@ -395,6 +435,26 @@ describe('organization HTTP security', () => {
     });
 
     describe('★ what a unit is for (0032)', () => {
+      it('★ creates a unit with its function in ONE request — the unit is never "made, but not yet sales"', async () => {
+        await authed('post', '/departments')
+          .send({ slug: 'sales', name: 'Kinh doanh', function: 'sales' })
+          .expect(201);
+
+        expect(departments.create).toHaveBeenCalledWith({
+          slug: 'sales',
+          name: 'Kinh doanh',
+          function: 'sales',
+        });
+      });
+
+      it('refuses a function the business did not name at creation, before the service runs', async () => {
+        await authed('post', '/departments')
+          .send({ slug: 'mk', name: 'Marketing', function: 'marketing' })
+          .expect(422);
+
+        expect(departments.create).not.toHaveBeenCalled();
+      });
+
       it('sets the function through the same patch', async () => {
         const response = await authed('patch', `/departments/${A}`).send({ function: 'dispatch' });
 

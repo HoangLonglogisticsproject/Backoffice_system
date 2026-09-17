@@ -304,6 +304,11 @@ nhận **403**. Đừng dùng nó để dựng menu — lấy id từ `/authoriz
 ```jsonc
 // POST /departments — 201
 { "slug": "ops", "name": "Operations" }
+// một phòng NGHIỆP VỤ được tạo KÈM function ngay từ đầu (DL-110), để không có
+// khoảng "đã tạo nhưng chưa là sales" trong đó thành viên không có quyền Trip:
+{ "slug": "sales", "name": "Kinh doanh", "function": "sales" }
+// function ∈ sales · accounting · dispatch; bỏ trống hoặc null = phòng thường.
+// Phòng đã tồn tại: `PATCH /departments/:id { "function": ... }`.
 ```
 
 Archive một phòng còn người active → **409**. Chuyển hết người đi trước.
