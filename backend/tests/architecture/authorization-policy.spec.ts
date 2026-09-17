@@ -66,26 +66,17 @@ describe('★ the two price keys agree with each other', () => {
 });
 
 describe('★ booking a trip belongs to the three functions, and to no seniority', () => {
-  it('trip.create is global or one of sales / accounting / dispatch — never head-anywhere, never any', () => {
-    expect(PERMISSION_REQUIREMENT['trip.create']).toEqual({
-      tier: 'global',
-      orFunction: ['sales', 'accounting', 'dispatch'],
-    });
-  });
-
-  it('★ trip.read is the same three functions — no head, no member, no "any" reads the board', () => {
-    expect(PERMISSION_REQUIREMENT['trip.read']).toEqual({
-      tier: 'global',
-      orFunction: ['sales', 'accounting', 'dispatch'],
-    });
-  });
-
-  it('★ trip.price.read follows the unit’s function, never seniority', () => {
-    expect(PERMISSION_REQUIREMENT['trip.price.read']).toEqual({
-      tier: 'global',
-      orFunction: ['sales', 'accounting', 'dispatch'],
-    });
-  });
+  // Booking, reading the board and reading its prices: the same three
+  // functions, never head-anywhere, never member, never "any".
+  it.each(['trip.create', 'trip.read', 'trip.price.read'] as const)(
+    '★ %s is global or one of sales / accounting / dispatch — no seniority reads or books',
+    (key) => {
+      expect(PERMISSION_REQUIREMENT[key]).toEqual({
+        tier: 'global',
+        orFunction: ['sales', 'accounting', 'dispatch'],
+      });
+    },
+  );
 
   it('★ trip.write is a head WITHIN a booking function — a head elsewhere corrects nothing', () => {
     expect(PERMISSION_REQUIREMENT['trip.write']).toEqual({

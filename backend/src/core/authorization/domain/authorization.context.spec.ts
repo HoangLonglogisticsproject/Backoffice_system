@@ -102,31 +102,23 @@ describe('can()', () => {
   });
 
   describe('function-granted permissions — the trip schedule', () => {
-    it('★ shows the board to the three booking functions and the superadmin — and to nobody else', () => {
-      // No `{ departmentId }` argument: the trip schedule belongs to no
-      // department. What decides is the FUNCTION of the caller's own unit.
-      for (const caller of [memberOfA(), headOfA(), context()]) {
-        expect(can(caller, 'trip.read')).toBe(false);
-      }
-      for (const fn of ['sales', 'accounting', 'dispatch'] as const) {
-        expect(can(context({ memberOf: [A], functions: [fn] }), 'trip.read')).toBe(true);
-        expect(can(context({ headOf: [A], memberOf: [A], functions: [fn] }), 'trip.read')).toBe(true);
-      }
-      expect(can(superadmin(), 'trip.read')).toBe(true);
-    });
-
-    it('★ lets only the three booking functions and the superadmin ADD a row (0032)', () => {
-      // Seniority elsewhere buys nothing: a head of an ordinary department
-      // reads the board and corrects it, and does not book on it.
-      for (const caller of [memberOfA(), headOfA(), context()]) {
-        expect(can(caller, 'trip.create')).toBe(false);
-      }
-      for (const fn of ['sales', 'accounting', 'dispatch'] as const) {
-        expect(can(context({ memberOf: [A], functions: [fn] }), 'trip.create')).toBe(true);
-        expect(can(context({ headOf: [A], memberOf: [A], functions: [fn] }), 'trip.create')).toBe(true);
-      }
-      expect(can(superadmin(), 'trip.create')).toBe(true);
-    });
+    // No `{ departmentId }` argument: the trip schedule belongs to no
+    // department. What decides is the FUNCTION of the caller's own unit —
+    // seniority elsewhere buys nothing, and a head of an ordinary department
+    // neither reads the board nor books on it (0032).
+    it.each(['trip.read', 'trip.create'] as const)(
+      '★ grants %s to the three booking functions and the superadmin — and to nobody else',
+      (key) => {
+        for (const caller of [memberOfA(), headOfA(), context()]) {
+          expect(can(caller, key)).toBe(false);
+        }
+        for (const fn of ['sales', 'accounting', 'dispatch'] as const) {
+          expect(can(context({ memberOf: [A], functions: [fn] }), key)).toBe(true);
+          expect(can(context({ headOf: [A], memberOf: [A], functions: [fn] }), key)).toBe(true);
+        }
+        expect(can(superadmin(), key)).toBe(true);
+      },
+    );
 
     it('is unaffected by which department is named, when one is named anyway', () => {
       const dispatcher = context({ memberOf: [A], functions: ['dispatch'] });
