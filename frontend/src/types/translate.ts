@@ -1045,8 +1045,15 @@ const PHRASES = {
   locationAdminArea: { vi: 'Tỉnh / Phường', en: 'Province / ward' },
   locationProvince: { vi: 'Tỉnh / Thành phố', en: 'Province / city' },
   locationWard: { vi: 'Phường / Xã', en: 'Ward / commune' },
-  locationProvincePick: { vi: 'Chọn tỉnh / thành phố', en: 'Choose a province' },
-  locationWardPick: { vi: 'Chọn phường / xã', en: 'Choose a ward' },
+  locationProvincePick: { vi: 'Gõ để tìm tỉnh / thành phố', en: 'Type to find a province' },
+  // Shown inside the dropdown when what was typed matches no unit. Not an
+  // error: these boxes filter a fixed official list, so "no match" usually
+  // means a typo or a name that changed in the 2025 merger.
+  locationNoUnitMatches: {
+    vi: 'Không có đơn vị nào khớp.',
+    en: 'No administrative unit matches that.',
+  },
+  locationWardPick: { vi: 'Gõ để tìm phường / xã', en: 'Type to find a ward' },
   locationWardNeedsProvince: { vi: 'Chọn tỉnh trước', en: 'Choose a province first' },
   // The abolished tier, shown READ-ONLY and only on a row that still carries
   // one. It explains why such a row's address line reads "…, Quận 7, …" when
@@ -1072,11 +1079,24 @@ const PHRASES = {
   locationCoordinates: { vi: 'Toạ độ', en: 'Coordinates' },
   locationLocated: { vi: 'Đã định vị', en: 'Located' },
   locationUnlocated: { vi: 'Chưa định vị', en: 'Not located' },
-  // Shown when NO map is configured for the deployment: the pair is entered
-  // here by hand, once, as master data — and never on a trip.
-  locationCoordinatesHint: {
-    vi: 'Bản đồ chưa được bật cho môi trường này. Nếu có sẵn vĩ độ và kinh độ, nhập cả hai; nếu không, để trống cả hai.',
-    en: 'The map is not enabled for this environment. If you have the latitude and longitude, enter both; otherwise leave both empty.',
+  // ★ THE WARNING THAT STANDS IN FRONT OF `OUTSIDE_GEOFENCE`. Correcting the
+  // address of a located place leaves the old pair attached; saved that way,
+  // the driver reaches the right gate and the server says he is somewhere else
+  // — which reads as the driver lying rather than as the row being wrong.
+  // While the address is being turned into a point by itself. Named as a state,
+  // not as a spinner: the operator needs to know something is in flight before
+  // they conclude nothing happened and reach for the map.
+  locationLocating: { vi: 'Đang xác định vị trí…', en: 'Locating…' },
+  // ★ THE HONEST LABEL ON AN AUTOMATIC ANSWER. A geocoded point is the street
+  // or the parcel, not the gate — close enough for most places and not for a
+  // 160-hectare port. Saying where it came from is what makes somebody check it.
+  locationAutoLocated: {
+    vi: 'Vị trí lấy tự động từ địa chỉ. Kiểm tra lại ghim nếu là cảng, kho lớn hay khu công nghiệp.',
+    en: 'Position derived automatically from the address. Check the pin for ports, large yards and industrial parks.',
+  },
+  locationAddressChanged: {
+    vi: 'Địa chỉ đã thay đổi nhưng toạ độ vẫn là toạ độ cũ. Chọn lại một gợi ý địa chỉ, hoặc chỉnh ghim trên bản đồ.',
+    en: 'The address changed but the coordinates are still the old ones. Pick an address suggestion again, or move the pin on the map.',
   },
   // ------------------------------------------- the position, as the operator sees it --
   locationPosition: { vi: 'Vị trí', en: 'Position' },
@@ -1101,7 +1121,9 @@ const PHRASES = {
     vi: 'Không tìm được địa điểm. Thử lại, hoặc đặt ghim trực tiếp trên bản đồ.',
     en: 'The search failed. Try again, or place the pin on the map directly.',
   },
-  // ★ THE POINT OF THE MAP. Google finds the parcel; the operator finds the gate.
+  // ★ THE POINT OF THE MAP. The geocoder finds the parcel; the operator finds
+  // the gate. Cảng Cát Lái is 1.3 km across, so its centre is outside the 300 m
+  // the server confirms a driver within.
   locationPinHint: {
     vi: 'Điều chỉnh ghim đến đúng cổng/điểm mà tài xế cần đến. Kéo ghim hoặc bấm lên bản đồ; toạ độ bên dưới là toạ độ được lưu.',
     en: 'Move the pin to the exact gate or point the driver must reach. Drag it or click the map; the coordinates below are what is saved.',

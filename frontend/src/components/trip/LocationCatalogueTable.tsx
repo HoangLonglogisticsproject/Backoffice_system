@@ -1,7 +1,7 @@
-import { Archive, Pencil } from 'lucide-react';
-// `MapPin`, `StatusPill` and `isLocated` belong to the commented-out status
-// column and "Thiết lập vị trí" button below; restore them together.
+import { Archive, MapPin, Pencil } from 'lucide-react';
+import { StatusPill } from '@/components/common/StatusPill';
 import { fullAddress } from '@/components/trip/locationAddress';
+import { isLocated, statusOf } from '@/components/trip/locationStatus';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -48,17 +48,18 @@ export function LocationCatalogueTable({
         <TableRow>
           <TableHead className="font-semibold text-gray-600">{t('locationName')}</TableHead>
           <TableHead className="font-semibold text-gray-600">{t('locationAddress')}</TableHead>
-          {/* PAIRED WITH THE TWO COMMENTED CELLS BELOW. A header with no cell
-              under it leaves a blank column and shifts every column after it,
-              which is what put two empty gaps in the middle of this table. */}
-          {/* <TableHead className="font-semibold text-gray-600">{t('locationOwner')}</TableHead>
-          <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead> */}
+          {/* PAIRED WITH THE COMMENTED CELL BELOW. A header with no cell under
+              it leaves a blank column and shifts every column after it, which
+              is what put empty gaps in the middle of this table. */}
+          {/* <TableHead className="font-semibold text-gray-600">{t('locationOwner')}</TableHead> */}
+          <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
           {canManage && <TableHead className="font-semibold text-gray-600">{t('colActions')}</TableHead>}
         </TableRow>
       </TableHeader>
       <TableBody>
         {rows.map((location) => {
           const archived = location.status !== 'active';
+          const status = statusOf(location);
 
           return (
             <TableRow
@@ -73,14 +74,22 @@ export function LocationCatalogueTable({
                 {location.customerName ?? (
                   <span className="text-gray-500 italic">{t('locationShared')}</span>
                 )}
-              </TableCell>
+              </TableCell> */}
+              {/*
+                ★ "ĐÃ ĐỊNH VỊ" IS THE COLUMN THAT SAYS WHICH ROWS WILL FAIL. A
+                place with no coordinates refuses every driver's arrival with
+                DESTINATION_MISSING, and without this column nobody finds that
+                out until a lorry is at the gate. Gray beats amber on an
+                archived row: `statusOf` checks the status first, because a
+                place nobody can pick has no location problem worth flagging.
+              */}
               <TableCell>
                 <StatusPill tone={status.tone}>{t(status.label)}</StatusPill>
-              </TableCell> */}
+              </TableCell>
               {canManage && (
                 <TableCell>
                   <div className="flex items-center gap-1">
-                    {/* {!archived && !isLocated(location) ? (
+                    {!archived && !isLocated(location) ? (
                       // The obvious next action on a place no driver can be
                       // checked at: the same dialog the pencil opens, named
                       // for the job.
@@ -93,7 +102,7 @@ export function LocationCatalogueTable({
                         <MapPin className="size-3.5" aria-hidden />
                         {t('setupLocation')}
                       </Button>
-                    ) : null} */}
+                    ) : null}
                     {!archived ? (
                       <>
                         <Button

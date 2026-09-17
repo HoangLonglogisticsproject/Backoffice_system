@@ -281,10 +281,11 @@ describe('TripMasterDataPage', () => {
       fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'Thủ Dầu Một' } });
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
-      // ⚠ UNLOCATED, AND NOTHING ON THIS FORM CAN CHANGE THAT. The position
-      // section was removed; coordinates now arrive only with a picked address
-      // suggestion, and a free-typed address carries none. The server refuses a
-      // driver's confirmation at such a place as DESTINATION_MISSING.
+      // ⚠ UNLOCATED, BECAUSE NOBODY LOCATED IT. A free-typed address carries no
+      // coordinates; the form says "Chưa định vị" and still saves, because a
+      // place is real before anybody has located it. Until somebody picks a
+      // suggestion, drops a pin or types the pair, the server refuses a
+      // driver's confirmation there as DESTINATION_MISSING.
       await waitFor(() =>
         expect(createTripLocation).toHaveBeenCalledWith('c1', {
           name: 'Kho mới',
@@ -411,9 +412,16 @@ describe('TripMasterDataPage', () => {
         expect(await screen.findByText('Sửa địa điểm')).toBeInTheDocument();
         expect(screen.getByLabelText('Tên địa điểm')).toHaveValue('Nhà máy Bình Dương');
         expect(screen.getByLabelText('Địa chỉ')).toHaveValue('KCN Sóng Thần');
-        // The dialog no longer says anything about a position — the remedy is to
-        // re-pick the address, whose suggestion carries the coordinates.
+        // ★ AND THE DIALOG OPENS ON THE POSITION PROBLEM. "Thiết lập vị trí" on
+        // the row is the same form the pencil opens, so the section that says
+        // "Chưa định vị" and offers the map is right there — which is the whole
+        // point of naming the action for the job.
+        // Scoped to the FORM, not to a dialog: the places modal and the
+        // location form are both dialogs, so `getByRole('dialog')` is
+        // ambiguous the moment the second one opens.
+        const form = document.querySelector('#location-form') as HTMLElement;
         expect(document.querySelectorAll('#location-form')).toHaveLength(1);
+        expect(within(form).getByText('Chưa định vị')).toBeInTheDocument();
       });
 
       it('★ shows a reader "Chưa định vị" and no setup action', async () => {

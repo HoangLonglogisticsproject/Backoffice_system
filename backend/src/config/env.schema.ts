@@ -223,6 +223,66 @@ export const envSchema = z.object({
    * rather than by an empty dropdown in front of somebody trying to work.
    */
   VN_ADMIN_API_URL: z.string().url().default('https://provinces.open-api.vn/api/v2'),
+
+  /**
+   * Where an address typed into the location form is looked up, so the place
+   * gets the coordinates the driver's arrival is measured against.
+   *
+   * ★ GOONG, AND NOT THE OPENSTREETMAP THE MAP ITSELF DRAWS. Measured before
+   * choosing: Nominatim answers nothing for `Cảng Cát Lái` and correctly for
+   * `Cang Cat Lai` — it cannot be typed the way Vietnamese is typed — and it
+   * carries no house number on numbered side streets, which is where
+   * warehouses are. The MAP has no such problem, so its tiles stay OSM and
+   * cost nothing; only searching is bought.
+   */
+  GOONG_API_URL: z.string().url().default('https://rsapi.goong.io'),
+
+  /**
+   * ⚠ A SERVER KEY. It never reaches the browser — the page asks `/places` and
+   * never learns who answers. That is the improvement over what this replaced:
+   * the Google browser key shipped inside the bundle and was defended only by
+   * an HTTP-referrer rule. Never commit it; `.env` is ignored. Get one at
+   * https://account.goong.io.
+   *
+   * ★ OPTIONAL, AND THAT IS A DECISION WITH A REASON. Making it required would
+   * refuse to BOOT without it — which sounds strict and is actually wrong here,
+   * because it would mean every developer and every CI job needs a key for
+   * work that has nothing to do with addresses.
+   *
+   * What it costs to be optional is bounded, because searching is a SHORTCUT
+   * and not the only way in: the map is OpenStreetMap and needs no key, so a
+   * deployment without this one can still put a pin on a gate and can still be
+   * handed two numbers. Empty here means the suggestion box says it is
+   * unavailable and the form keeps working — the same bargain
+   * `VN_ADMIN_API_URL` strikes when its service is down.
+   */
+  GOONG_API_KEY: z.string().default(''),
+
+  /**
+   * The KEYLESS geocoder, used only when `GOONG_API_KEY` is empty.
+   *
+   * ★ SO "TYPE THE ADDRESS AND THE POSITION APPEARS" IS TRUE WITH NOTHING
+   * CONFIGURED. OpenStreetMap's own geocoder needs no account. It is measurably
+   * weaker for Vietnamese — the client strips diacritics because the index
+   * cannot match them, and numbered side streets resolve to the street rather
+   * than the door — so a key upgrades this rather than replacing a gap.
+   *
+   * ⚠ ITS POLICY IS A REAL CONSTRAINT, NOT A SUGGESTION: one request per second
+   * for the whole application, and a `User-Agent` that identifies the caller.
+   * The client queues to the first and sends the second. Point this at a
+   * self-hosted instance and both stop mattering.
+   */
+  NOMINATIM_API_URL: z.string().url().default('https://nominatim.openstreetmap.org'),
+
+  /**
+   * ⚠ REQUIRED BY THE PUBLIC INSTANCE'S POLICY. It wants to know who is asking
+   * and how to reach them if this deployment starts misbehaving; an anonymous
+   * caller is blocked. Put a real contact in it before relying on this path.
+   */
+  NOMINATIM_USER_AGENT: z
+    .string()
+    .min(1)
+    .default('HoangLongLogistics-Backoffice (https://hoanglonglti.com)'),
 });
 
 export type Env = z.infer<typeof envSchema>;
