@@ -17,6 +17,7 @@
     "db:down": "docker compose down",
     "user:create": "ts-node -T src/core/users/cli/create-user.cli.ts",
     "user:promote": "ts-node -T src/core/users/cli/promote-user.cli.ts",
+    "dev:seed-departments": "ts-node -T src/core/organization/cli/seed-departments.cli.ts",
     "sonar": "bash scripts/sonar-findings.sh",
     "test:integration": "jest --config jest.integration.config.js"
   },

@@ -111,6 +111,7 @@ lệnh** — argv nhìn thấy được trong `ps` và rơi vào history của s
 |---|---|
 | `npm run dev` | chạy watch mode |
 | `npm run migrate` | áp migration, forward-only, chạy lại thì skip |
+| `npm run dev:seed-departments` | **chỉ dev**: tạo 3 phòng `sales` · `accounting` · `dispatch` kèm `function` để test phân quyền Trip; idempotent; từ chối chạy khi `NODE_ENV=production` (production đặt function qua `PATCH /departments/:id`, ADR-0005) |
 | `npm run typecheck` | |
 | `npm run build` | |
 | `npm test` | 95 test; **103** nếu có PostgreSQL (xem dưới) |
