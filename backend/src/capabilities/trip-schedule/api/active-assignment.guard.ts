@@ -1,14 +1,8 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
-import {
-  ForbiddenError,
-  PasswordChangeRequiredError,
-  UnauthorizedError,
-} from '../../../common/errors/domain.error';
-import { REQUEST_USER } from '../../../core/identity/api/current-user.decorator';
-import type { SessionUser } from '../../../core/identity/application/session.service';
+import { ForbiddenError } from '../../../common/errors/domain.error';
 import { AuthorizationService } from '../../../core/authorization/application/authorization.service';
-import { REQUEST_AUTHORIZATION } from '../../../core/authorization/api/permission.guard';
+import { loadProvisionedContext } from '../../../core/authorization/api/permission.guard';
 import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
 
 /**
@@ -62,26 +56,10 @@ export class ActiveAssignmentGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
-    const user = (request as unknown as Record<string, unknown>)[REQUEST_USER] as
-      | SessionUser
-      | undefined;
-
-    // Runs after AuthGuard, always. A missing user is what a route that forgot
-    // AuthGuard looks like from here, and the safe reading of that is "no".
-    if (!user) throw new UnauthorizedError('Authentication required.');
-
-    const authorization = await this.authorization.loadContext(user.id);
-    (request as unknown as Record<string, unknown>)[REQUEST_AUTHORIZATION] = authorization;
-
-    // The same gate the other three guards apply: provisioning is not finished
-    // until the temporary credential is replaced. Repeated here because this
-    // guard may be the only one on a route, and forgetting it would let a
-    // half-provisioned account report deliveries.
-    if (authorization.mustChangeSecret) {
-      throw new PasswordChangeRequiredError(
-        'Password change required before using this deployment.',
-      );
-    }
+    // Runs after AuthGuard, always, and applies the same provisioning gate the
+    // other guards do — this guard may be the only one on a route, and
+    // skipping it would let a half-provisioned account report deliveries.
+    const { user } = await loadProvisionedContext(request, this.authorization);
 
     // ★ FROM THE ROUTE, NEVER FROM THE BODY. A body that named its own
     // assignment would let a caller holding one turn act on any other by

@@ -296,6 +296,7 @@ nhận **403**. Đừng dùng nó để dựng menu — lấy id từ `/authoriz
 // GET /departments — 200
 [
   { "id": "60630e75-…", "slug": "finance", "name": "Finance", "status": "active",
+    "function": "accounting",   // sales · accounting · dispatch · null (0032, §14)
     "createdAt": "2026-08-18T08:34:22.918Z", "updatedAt": "2026-08-18T08:34:22.918Z" }
 ]
 ```

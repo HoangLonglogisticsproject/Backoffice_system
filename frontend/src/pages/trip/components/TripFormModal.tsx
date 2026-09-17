@@ -653,20 +653,10 @@ export function TripFormModal({
         });
         tripId = trip.id;
       } else {
-      const payload = tripPayload(form, trip, mayEditPrices, refreshed);
-
-      if (createdTripId === null) {
-        const saved = await saveTrip(trip, payload);
-        tripId = saved.id;
-        if (trip === null) setCreatedTripId(saved.id);
-      } else {
-        // The trip this form created moments ago, corrected rather than
-        // recreated. PATCH is `trip.write`, the same permission the crew
-        // section already required to be drawn, so this cannot 403 for anyone
-        // who could reach a partial failure in the first place.
-        await updateTripSchedule(createdTripId, payload);
-        tripId = createdTripId;
-      }
+        tripId = await persistTrip(trip, createdTripId, tripPayload(form, trip, mayEditPrices, refreshed));
+        // A NEW trip's id is remembered so a retry corrects it rather than
+        // booking it again; on a retry this stores the same id it already holds.
+        if (trip === null) setCreatedTripId(tripId);
       }
 
       const failed = await dispatchCrew(tripId, checked, (error_) =>
@@ -1089,6 +1079,27 @@ export function TripFormModal({
     </Modal>
   );
 }
+
+/**
+ * Books the trip, or corrects the one this form booked moments ago.
+ *
+ * A retry after a partial crew failure PATCHes the remembered id rather than
+ * recreating: PATCH is `trip.write`, the same permission the crew section
+ * already required to be drawn, so this cannot 403 for anyone who could reach
+ * a partial failure in the first place. Answers the id the crew is dispatched
+ * against either way.
+ */
+const persistTrip = async (
+  trip: TripScheduleWithRefs | null,
+  createdTripId: string | null,
+  payload: Parameters<typeof saveTrip>[1],
+): Promise<string> => {
+  if (createdTripId !== null) {
+    await updateTripSchedule(createdTripId, payload);
+    return createdTripId;
+  }
+  return (await saveTrip(trip, payload)).id;
+};
 
 /** What the read-only block after a choice shows: an active place, or the trip's own copy of an archived one. */
 interface ChosenPlace {

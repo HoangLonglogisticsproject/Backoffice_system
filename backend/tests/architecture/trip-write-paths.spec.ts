@@ -317,8 +317,18 @@ describe('★ driver write routes — resource scope', () => {
     // gate itself or a half-provisioned account could report deliveries.
     const guard = code(await read('api', 'active-assignment.guard.ts'));
 
-    expect(guard).toContain('mustChangeSecret');
-    expect(guard).toContain('PasswordChangeRequiredError');
+    // The gate lives in ONE shared step, `loadProvisionedContext`, so it cannot
+    // drift between guards; this guard must call it, and it must still gate.
+    expect(guard).toContain('loadProvisionedContext(');
+    const shared = code(
+      await readFile(
+        join(CAPABILITY, '..', '..', 'core', 'authorization', 'api', 'permission.guard.ts'),
+        'utf8',
+      ),
+    );
+    const step = shared.slice(shared.indexOf('function loadProvisionedContext'));
+    expect(step).toContain('mustChangeSecret');
+    expect(step).toContain('PasswordChangeRequiredError');
   });
 
   it('has no global-administrator escape', async () => {

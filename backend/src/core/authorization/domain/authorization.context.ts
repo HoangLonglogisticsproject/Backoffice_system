@@ -88,8 +88,7 @@ const grantedByFunction = (
   context: AuthorizationContext,
   requirement: PermissionRequirement,
 ): boolean =>
-  requirement.orFunction !== undefined &&
-  requirement.orFunction.some((fn) => context.functions.includes(fn));
+  requirement.orFunction?.some((fn) => context.functions.includes(fn)) ?? false;
 
 /**
  * Does the caller's unit satisfy the requirement's `withinFunction`, when it

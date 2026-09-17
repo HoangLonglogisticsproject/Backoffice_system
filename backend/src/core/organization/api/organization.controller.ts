@@ -126,8 +126,8 @@ export class OrganizationController {
    *
    * `unit.write` is global-only, so the function of a department — which
    * decides what its members may dispatch and price — is set by the one actor
-   * who may also create the unit. Two writes when both keys are sent; each is
-   * a single statement and neither depends on the other.
+   * who may also create the unit. Both keys land in ONE transaction — see
+   * `DepartmentService.update` — so a rename never outlives a refused function.
    */
   @Patch(':departmentId')
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
@@ -136,15 +136,8 @@ export class OrganizationController {
     @Param('departmentId', UuidParam) departmentId: string,
     @Body(new ZodValidationPipe(updateDepartmentSchema)) body: UpdateDepartmentInput,
   ): Promise<Department> {
-    let department: Department | undefined;
-    if (body.name !== undefined) {
-      department = await this.departments.rename(departmentId, body.name);
-    }
-    if ('function' in body) {
-      department = await this.departments.setFunction(departmentId, body.function ?? null);
-    }
-    // The schema refuses a body with neither key, so one of the two ran.
-    return department ?? this.departments.require(departmentId);
+    // The schema refuses a body with neither key; the service does too.
+    return this.departments.update(departmentId, body);
   }
 
   /** Archiving refuses while anyone is still in the unit — see the service. */

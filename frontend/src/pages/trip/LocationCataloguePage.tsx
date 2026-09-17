@@ -4,6 +4,7 @@ import { LocationCatalogueTable } from '@/components/trip/LocationCatalogueTable
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { NoTripAccess } from '@/pages/trip/components/NoTripAccess';
 import { useSession } from '@/contexts/SessionProvider';
 import { archiveTripLocationById } from '@/api/tripCatalogue';
 import { useAllTripLocations } from '@/hooks/trip';
@@ -90,13 +91,7 @@ export default function LocationCataloguePage() {
   };
 
   // A customer's places are trip data: no `trip.read`, no screen. See TripSchedulePage.
-  if (!can('trip.read')) {
-    return (
-      <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-        {t('tripNoPermission')}
-      </p>
-    );
-  }
+  if (!can('trip.read')) return <NoTripAccess />;
 
   return (
     <div className="space-y-6">

@@ -27,7 +27,8 @@ export class DriverOnlyGuard implements CanActivate {
 
     // Absence is refused, for the reason `BackofficeOnlyGuard` gives: deciding
     // on a missing session would turn a forgotten `AuthGuard` into an open door.
-    if (!user || user.accountType !== 'driver') {
+    // `?.` keeps that: no user reads as `undefined`, which is not 'driver'.
+    if (user?.accountType !== 'driver') {
       // One sentence for every case, so an employee holding a driver URL learns
       // only that it is not for them.
       throw new ForbiddenError('This area is only available to driver accounts.');

@@ -59,7 +59,7 @@ viên, và đợi. Thứ họ thực sự làm là ghi tên khách vào ô ghi c
 
 **Vì sao sửa vẫn là quản trị.** Đổi tên một khách hàng thay đổi ý nghĩa của mọi
 chuyến trong quá khứ đã trỏ tới nó. Đó là quản trị, không phải nhập liệu — nên
-nó không mở cho `'any'`.
+nó không mở cho mọi thành viên của phòng chức năng.
 
 **★ Vì sao `'head-anywhere'` chứ không phải `'head'`.** `can()` fail-closed khi
 một requirement có phạm vi được hỏi mà không kèm `departmentId`, và các route
@@ -75,22 +75,24 @@ phòng nào sở hữu. Trưởng phòng Sales sửa được một chuyến kh�
 và ở đây nó được chấp nhận: trưởng phòng chính là người điều vận tìm đến khi gõ
 sai một dòng.
 
-### ★ Bậc `'any'` là thay đổi vào `core`, và nó không phải một lỗ hổng
+### ★ `global | orFunction` — lịch xe không thuộc phòng nào, nhưng thuộc ba *chức năng*
 
 `PERMISSION_REQUIREMENT` trước đây chỉ có `'head' | 'member' | 'global'` — ba
 quan hệ với một **phòng ban**. Lịch xe không thuộc phòng nào: xe là của công ty,
 khách là của công ty, và điều vận không phải một đơn vị ai đó là thành viên. Gán
 nó vào một phòng nào đó là bịa ra một sự thật.
 
-Nếu không có bậc này, các route ở đây sẽ phải bỏ `PermissionGuard` và chạy bằng
-`AuthGuard` trần — **và đó mới là lỗ hổng thật**, vì `PermissionGuard` cũng là
-nơi duy nhất từ chối `mustChangeSecret`. Một người còn mật khẩu tạm sẽ đọc và ghi
-được lịch xe, đúng thứ §12 của hợp đồng frontend hứa là không xảy ra.
+Thứ nó thuộc về là **chức năng** của phòng (`departments.function`, 0032):
+`trip.read` · `trip.create` · `trip.price.read` là `{ tier: 'global',
+orFunction: ['sales', 'accounting', 'dispatch'] }` — SuperAdmin, hoặc bất kỳ
+thành viên (head lẫn member) của một phòng mang một trong ba function đó. Phòng
+không có function, và driver không có membership, mang `functions: []` và không
+bao giờ qua được. Không còn key nào ở bậc `'any'`; architecture test giữ điều đó.
 
-Nó vẫn fail-closed: `'any'` là một giá trị **phải viết ra** cho một key cụ thể
-trong bảng. Một permission thiếu entry không mặc định thành `'any'` — nó không
-compile. Và `can()` vẫn từ chối `'any'` cho người còn credential tạm, vì kiểm tra
-đó chạy trước.
+Các route vẫn đi qua `PermissionGuard` chứ không chạy bằng `AuthGuard` trần — vì
+`PermissionGuard` (và `ProvisionedAccountGuard` ở Driver Portal) là nơi từ chối
+`mustChangeSecret`. Một người còn mật khẩu tạm không đọc được lịch xe, đúng thứ
+§12 của hợp đồng frontend hứa; `can()` kiểm tra điều đó trước cả `global`.
 
 ## Phân trang — ngoại lệ duy nhất trong API này
 

@@ -39,7 +39,7 @@ describe('authorization HTTP security', () => {
     list: jest.Mock;
     require: jest.Mock;
     create: jest.Mock;
-    rename: jest.Mock;
+    update: jest.Mock;
     archive: jest.Mock;
   }
   interface MembershipDouble {
@@ -68,7 +68,7 @@ describe('authorization HTTP security', () => {
       list: jest.fn().mockResolvedValue([]),
       require: jest.fn().mockResolvedValue({ id: A, slug: 'a', name: 'A' }),
       create: jest.fn().mockResolvedValue({ id: A }),
-      rename: jest.fn().mockResolvedValue({ id: A }),
+      update: jest.fn().mockResolvedValue({ id: A }),
       archive: jest.fn().mockResolvedValue({ id: A }),
       listRoster: jest.fn().mockResolvedValue([]),
       transfer: jest.fn().mockResolvedValue({ id: 'mem-1' }),

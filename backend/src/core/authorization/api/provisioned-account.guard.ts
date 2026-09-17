@@ -1,10 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
-import { PasswordChangeRequiredError, UnauthorizedError } from '../../../common/errors/domain.error';
-import { REQUEST_USER } from '../../identity/api/current-user.decorator';
-import type { SessionUser } from '../../identity/application/session.service';
 import { AuthorizationService } from '../application/authorization.service';
-import { REQUEST_AUTHORIZATION } from './permission.guard';
+import { loadProvisionedContext } from './permission.guard';
 
 /**
  * Refuses a caller who has not replaced their temporary credential — and
@@ -29,20 +26,7 @@ export class ProvisionedAccountGuard implements CanActivate {
   constructor(private readonly authorization: AuthorizationService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<Request>();
-    const user = (request as unknown as Record<string, unknown>)[REQUEST_USER] as
-      | SessionUser
-      | undefined;
-
-    if (!user) throw new UnauthorizedError('Authentication required.');
-
-    const authorization = await this.authorization.loadContext(user.id);
-    (request as unknown as Record<string, unknown>)[REQUEST_AUTHORIZATION] = authorization;
-
-    if (authorization.mustChangeSecret) {
-      throw new PasswordChangeRequiredError('Password change required before using this deployment.');
-    }
-
+    await loadProvisionedContext(context.switchToHttp().getRequest<Request>(), this.authorization);
     return true;
   }
 }

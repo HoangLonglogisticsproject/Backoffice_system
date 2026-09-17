@@ -76,7 +76,7 @@ describeIntegration('Organization against real PostgreSQL', () => {
     // The real schema, applied from the real files: a test that hand-writes its
     // own DDL proves something about the hand-written DDL, not about what ships.
     const migrations = join(__dirname, '..', '..', 'migrations');
-    for (const file of ['0001_identity.sql', '0002_users_updated_at.sql', '0003_organization.sql']) {
+    for (const file of ['0001_identity.sql', '0002_users_updated_at.sql', '0003_organization.sql', '0032_department_function.sql']) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
 
@@ -441,6 +441,31 @@ describeIntegration('Organization against real PostgreSQL', () => {
       expect(renamed.updatedAt.getTime()).toBeGreaterThanOrEqual(a.updatedAt.getTime());
       // The slug is immutable: things point at it.
       expect(renamed.slug).toBe(a.slug);
+    });
+
+    /**
+     * ★ `PATCH { name, function }` IS ONE TRANSACTION (0032). Only a real
+     * server can prove the rollback: the unit spec sees the error leave the
+     * callback, this sees the rename it took down with it.
+     */
+    it('renames and sets the function together, and both are stored', async () => {
+      const a = await departments.create({ slug: 'a', name: 'A' });
+
+      const updated = await departments.update(a.id, { name: 'Điều độ', function: 'dispatch' });
+
+      expect(updated).toMatchObject({ name: 'Điều độ', function: 'dispatch' });
+      expect(await departmentRepository.findById(a.id)).toMatchObject({ name: 'Điều độ', function: 'dispatch' });
+    });
+
+    it('★ rolls the rename back when the function is refused by the CHECK', async () => {
+      const a = await departments.create({ slug: 'a', name: 'A' });
+
+      // Past the service's type — the database's CHECK is the last word.
+      await expect(
+        departments.update(a.id, { name: 'Renamed', function: 'marketing' as never }),
+      ).rejects.toThrow();
+
+      expect(await departmentRepository.findById(a.id)).toMatchObject({ name: 'A', function: null });
     });
   });
 

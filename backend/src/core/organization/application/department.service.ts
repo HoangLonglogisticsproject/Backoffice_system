@@ -68,6 +68,39 @@ export class DepartmentService {
   }
 
   /**
+   * UpdateDepartment — rename, set the function, or both, in ONE transaction.
+   *
+   * `PATCH /departments/:id` accepts either key or both. Two separate writes
+   * would let the first land and the second fail — a unit renamed "Điều độ"
+   * that is still not dispatch — so both statements run on one connection and
+   * commit or roll back together. Each half keeps the same validation and the
+   * same not-found answer as `rename` / `setFunction`, which stay for callers
+   * that only ever change one thing.
+   */
+  async update(
+    id: string,
+    patch: { name?: string; function?: DepartmentFunction | null },
+  ): Promise<Department> {
+    const name = patch.name?.trim();
+    if (name !== undefined && name.length === 0) {
+      throw new ValidationError('Department name is required.');
+    }
+    if (name === undefined && !('function' in patch)) {
+      throw new ValidationError('Nothing to change.');
+    }
+
+    return this.db.transaction(async (tx) => {
+      let department: Department | null = null;
+      if (name !== undefined) department = await this.departments.rename(id, name, tx);
+      if ('function' in patch) {
+        department = await this.departments.setFunction(id, patch.function ?? null, tx);
+      }
+      if (!department) throw new NotFoundError('Department not found.');
+      return department;
+    });
+  }
+
+  /**
    * ArchiveDepartment — only when the unit is empty.
    *
    * No cascade, deliberately. Archiving a unit that still holds people would

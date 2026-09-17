@@ -13,6 +13,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { NoTripAccess } from '@/pages/trip/components/NoTripAccess';
 import { useSession } from '@/contexts/SessionProvider';
 import { useTripCatalogue, useTripSchedules } from '@/hooks/trip';
 import { archiveTripSchedule } from '@/api/tripSchedule';
@@ -127,13 +128,7 @@ export default function TripSchedulePage() {
   // booking functions holds no `trip.read`; the server answers 403 to every
   // read below, so drawing the board and letting it fail would be a screen
   // that lies about what it is for.
-  if (!can('trip.read')) {
-    return (
-      <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-        {t('tripNoPermission')}
-      </p>
-    );
-  }
+  if (!can('trip.read')) return <NoTripAccess />;
 
   return (
     <div className="space-y-6">

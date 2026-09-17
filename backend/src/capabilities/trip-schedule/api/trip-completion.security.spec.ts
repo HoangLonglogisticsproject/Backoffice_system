@@ -247,7 +247,7 @@ describe('trip-completion HTTP security', () => {
       expect(completion.reject).not.toHaveBeenCalled();
     });
 
-    it('may still read the attempts — `trip.read` is `any`', async () => {
+    it('may still read the attempts — `trip.read` is the booking functions’ key', async () => {
       const response = await authed('get', LIST);
       expect(response.status).toBe(200);
     });
