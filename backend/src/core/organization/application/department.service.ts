@@ -82,7 +82,7 @@ export class DepartmentService {
     patch: { name?: string; function?: DepartmentFunction | null },
   ): Promise<Department> {
     const name = patch.name?.trim();
-    if (name !== undefined && name.length === 0) {
+    if (name?.length === 0) {
       throw new ValidationError('Department name is required.');
     }
     if (name === undefined && !('function' in patch)) {

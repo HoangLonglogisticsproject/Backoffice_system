@@ -478,7 +478,7 @@ export function TripFormModal({
   // form sends the two price keys and nothing else, and every other control
   // is disabled so nothing typed into it can be lost on save.
   const mayEditTrip = can('trip.write');
-  const priceOnly = trip !== null && !mayEditTrip && mayEditPrices;
+  const priceOnly = isPriceOnly(trip, mayEditTrip, mayEditPrices);
   // Correcting a place — locating it — is `trip.write`, the same key the
   // master-data screen asks for. A dispatcher without it still sees that a
   // place is not located; they just cannot fix it from here.
@@ -535,7 +535,7 @@ export function TripFormModal({
    * driver would otherwise discover at the gate. Whether a driver's reading
    * later PASSES is a different fact, decided by the server.
    */
-  const tripLocationReady = isLocated(placeAt('pickup')) && isLocated(placeAt('delivery'));
+  const tripLocationReady = bothLocated(placeAt('pickup'), placeAt('delivery'));
 
   /**
    * The place dialog, if open: which end asked for it, and — for "set up
@@ -902,7 +902,7 @@ export function TripFormModal({
             value={form.pickupLocationId}
             onChange={(id) => set('pickupLocationId', id)}
             onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
-            onSetup={mayManagePlaces ? (location) => setPlaceDialog({ end: 'pickup', editing: location }) : null}
+            onSetup={setupHandlerFor(mayManagePlaces, 'pickup', setPlaceDialog)}
             address={form.pickupAddress}
             contact={form.pickupContact}
             onAddress={(value) => set('pickupAddress', value)}
@@ -918,7 +918,7 @@ export function TripFormModal({
             value={form.deliveryLocationId}
             onChange={(id) => set('deliveryLocationId', id)}
             onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
-            onSetup={mayManagePlaces ? (location) => setPlaceDialog({ end: 'delivery', editing: location }) : null}
+            onSetup={setupHandlerFor(mayManagePlaces, 'delivery', setPlaceDialog)}
             address={form.deliveryAddress}
             contact={form.deliveryContact}
             onAddress={(value) => set('deliveryAddress', value)}
@@ -1118,6 +1118,31 @@ interface ChosenPlace {
  */
 const isLocated = (place: ChosenPlace | null): boolean =>
   place?.latitude != null && place?.longitude != null;
+
+/** Ready for location verification exactly when BOTH ends name a located place. */
+const bothLocated = (pickup: ChosenPlace | null, delivery: ChosenPlace | null): boolean =>
+  isLocated(pickup) && isLocated(delivery);
+
+/**
+ * Editing an existing row while holding the price keys and nothing else — a
+ * dispatch member. The form then sends the two prices and disables the rest.
+ */
+const isPriceOnly = (
+  trip: TripScheduleWithRefs | null,
+  mayEditTrip: boolean,
+  mayEditPrices: boolean,
+): boolean => trip !== null && !mayEditTrip && mayEditPrices;
+
+/**
+ * The "set up location" handler for one end, or null for a caller who may not
+ * correct places — `LocationEnd` draws no control for null.
+ */
+const setupHandlerFor = (
+  mayManagePlaces: boolean,
+  end: End,
+  open: (dialog: { end: End; editing: TripLocation | null }) => void,
+): ((location: TripLocation) => void) | null =>
+  mayManagePlaces ? (location) => open({ end, editing: location }) : null;
 
 /** The trip's readiness for location verification, in one line. Said here so the office sees it before the driver does. */
 function TripReadiness({ ready }: Readonly<{ ready: boolean }>) {
