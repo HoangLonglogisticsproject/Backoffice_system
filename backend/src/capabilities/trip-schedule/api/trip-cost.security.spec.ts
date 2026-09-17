@@ -57,6 +57,7 @@ describe('trip-cost HTTP security', () => {
     global: false,
     headOf: [],
     memberOf: [],
+    functions: [],
     mustChangeSecret: false,
     ...over,
   });

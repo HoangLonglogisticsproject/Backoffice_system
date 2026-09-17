@@ -19,6 +19,7 @@ import { AuthGuard } from '../../identity/api/auth.guard';
 import { CsrfGuard } from '../../identity/api/csrf.guard';
 import { PermissionGuard, RequirePermission } from '../../authorization/api/permission.guard';
 import {
+  DEPARTMENT_FUNCTIONS,
   Department,
   DepartmentMembership,
   EmployeeRosterRow,
@@ -45,9 +46,23 @@ const createDepartmentSchema = z.object({
   name: z.string().trim().min(1).max(200),
 });
 
-const renameDepartmentSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-});
+/**
+ * The patch. Either half may be absent; an absent key is left alone.
+ *
+ * `function` is nullable on purpose: `null` CLEARS it, turning the unit back
+ * into an ordinary one. That is a different request from omitting the key, and
+ * the schema keeps the two apart — the same distinction the trip patch makes.
+ * A value outside the three the business named is refused here, before the
+ * database's CHECK would have refused it as a 500.
+ */
+const updateDepartmentSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    function: z.enum(DEPARTMENT_FUNCTIONS).nullable().optional(),
+  })
+  .refine((body) => body.name !== undefined || 'function' in body, {
+    message: 'Nothing to change.',
+  });
 
 /**
  * Direct transfer by a global administrator.
@@ -65,7 +80,7 @@ const transferIntoSchema = z.object({
 });
 
 type CreateDepartmentInput = z.infer<typeof createDepartmentSchema>;
-type RenameDepartmentInput = z.infer<typeof renameDepartmentSchema>;
+type UpdateDepartmentInput = z.infer<typeof updateDepartmentSchema>;
 type TransferIntoInput = z.infer<typeof transferIntoSchema>;
 
 @Controller('departments')
@@ -106,14 +121,23 @@ export class OrganizationController {
     return this.departments.create(body);
   }
 
+  /**
+   * Rename the unit, set what it is for, or both.
+   *
+   * `unit.write` is global-only, so the function of a department — which
+   * decides what its members may dispatch and price — is set by the one actor
+   * who may also create the unit. Both keys land in ONE transaction — see
+   * `DepartmentService.update` — so a rename never outlives a refused function.
+   */
   @Patch(':departmentId')
   @UseGuards(AuthGuard, CsrfGuard, PermissionGuard)
   @RequirePermission('unit.write')
-  async rename(
+  async update(
     @Param('departmentId', UuidParam) departmentId: string,
-    @Body(new ZodValidationPipe(renameDepartmentSchema)) body: RenameDepartmentInput,
+    @Body(new ZodValidationPipe(updateDepartmentSchema)) body: UpdateDepartmentInput,
   ): Promise<Department> {
-    return this.departments.rename(departmentId, body.name);
+    // The schema refuses a body with neither key; the service does too.
+    return this.departments.update(departmentId, body);
   }
 
   /** Archiving refuses while anyone is still in the unit — see the service. */

@@ -1,7 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import { Department, DepartmentStatus, normalizeSlug } from '../domain/department.entity';
+import {
+  Department,
+  DepartmentFunction,
+  DepartmentStatus,
+  normalizeSlug,
+} from '../domain/department.entity';
 
 /**
  * SQLSTATE 23505 — unique_violation. Read as a property rather than imported
@@ -16,6 +21,7 @@ interface DepartmentRow {
   slug: string;
   name: string;
   status: DepartmentStatus;
+  function: DepartmentFunction | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -25,6 +31,7 @@ const toDepartment = (row: DepartmentRow): Department => ({
   slug: row.slug,
   name: row.name,
   status: row.status,
+  function: row.function,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -108,6 +115,27 @@ export class DepartmentRepository {
     const rows = await executor.query<DepartmentRow>(
       'UPDATE departments SET name = $2 WHERE id = $1 RETURNING *',
       [id, name.trim()],
+    );
+    return rows[0] ? toDepartment(rows[0]) : null;
+  }
+
+  /**
+   * Sets — or clears, with `null` — what the unit does (0032).
+   *
+   * ★ A PLAIN UPDATE, NOT A HISTORY ROW. Changing a unit's function changes
+   * what its members may do from the next request on, exactly as granting a
+   * head does; and like a rename it overwrites. If "who was dispatch when"
+   * ever has to be answered, that is a history table this method does not
+   * pretend to be.
+   */
+  async setFunction(
+    id: string,
+    fn: DepartmentFunction | null,
+    executor: DatabaseQuery = this.db,
+  ): Promise<Department | null> {
+    const rows = await executor.query<DepartmentRow>(
+      'UPDATE departments SET function = $2 WHERE id = $1 RETURNING *',
+      [id, fn],
     );
     return rows[0] ? toDepartment(rows[0]) : null;
   }

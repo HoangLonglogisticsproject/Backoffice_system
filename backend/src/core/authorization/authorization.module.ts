@@ -10,6 +10,7 @@ import {
   HeadOfTargetUserDepartmentGuard,
   PermissionGuard,
 } from './api/permission.guard';
+import { ProvisionedAccountGuard } from './api/provisioned-account.guard';
 
 /**
  * Who may do what.
@@ -34,6 +35,7 @@ import {
     PermissionGuard,
     HeadOfRouteDepartmentGuard,
     HeadOfTargetUserDepartmentGuard,
+    ProvisionedAccountGuard,
   ],
   exports: [
     AuthorizationService,
@@ -41,6 +43,7 @@ import {
     PermissionGuard,
     HeadOfRouteDepartmentGuard,
     HeadOfTargetUserDepartmentGuard,
+    ProvisionedAccountGuard,
   ],
 })
 export class AuthorizationModule {}

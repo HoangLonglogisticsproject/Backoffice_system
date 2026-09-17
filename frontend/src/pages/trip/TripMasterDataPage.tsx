@@ -13,6 +13,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { NoTripAccess } from '@/pages/trip/components/NoTripAccess';
 import { useSession } from '@/contexts/SessionProvider';
 import { useTripCatalogue } from '@/hooks/trip';
 import {
@@ -111,6 +112,9 @@ export default function TripMasterDataPage() {
           display: formatPlate(row.plate),
         }))
       : catalogue.customers.items.map((row) => ({ ...row, label: row.name, display: row.name }));
+
+  // The catalogues are trip data: no `trip.read`, no screen. See TripSchedulePage.
+  if (!can('trip.read')) return <NoTripAccess />;
 
   return (
     <div className="space-y-6">

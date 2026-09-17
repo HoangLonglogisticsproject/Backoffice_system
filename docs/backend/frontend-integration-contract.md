@@ -285,7 +285,7 @@ mọi session, disable account. Người đó lập tức mất phiên và khôn
 | `GET /departments` | **chỉ GLOBAL** | 200 |
 | `GET /departments/:id` | member của phòng đó, hoặc GLOBAL | 200 |
 | `POST /departments` | GLOBAL | 201 |
-| `PATCH /departments/:id` | GLOBAL | 200 |
+| `PATCH /departments/:id` | GLOBAL | 200 — body `{ name?, function? }`; `function` ∈ `sales · accounting · dispatch · null`, quyết định thành viên phòng đó có `dispatch.write` / `trip.price.*` không (0032) |
 | `POST /departments/:id/archive` | GLOBAL | 200 |
 
 ⚠️ `GET /departments` **không có scope**, nên chỉ GLOBAL qua được. HEAD và MEMBER
@@ -296,6 +296,7 @@ nhận **403**. Đừng dùng nó để dựng menu — lấy id từ `/authoriz
 // GET /departments — 200
 [
   { "id": "60630e75-…", "slug": "finance", "name": "Finance", "status": "active",
+    "function": "accounting",   // sales · accounting · dispatch · null (0032, §14)
     "createdAt": "2026-08-18T08:34:22.918Z", "updatedAt": "2026-08-18T08:34:22.918Z" }
 ]
 ```
@@ -837,6 +838,43 @@ lưu.
 Server quyết theo **quan hệ** (`headOf`, `memberOf`), không theo role. Role chỉ
 là nhãn suy ra để hiển thị.
 
+### Quyền theo **chức năng phòng** (0032) — `departments.function`
+
+Một số quyền không phụ thuộc head/member mà phụ thuộc phòng của người gọi **làm
+gì**. SuperAdmin đặt `function` cho phòng (`sales · accounting · dispatch · null`)
+qua `PATCH /departments/:id`; mọi thành viên active của phòng đó — head lẫn
+member — giữ quyền tương ứng. Không có role `DISPATCHER`; driver không có
+membership nên không bao giờ giữ các quyền này.
+
+**Từ 2026-09-17: dữ liệu Trip chỉ thuộc ba phòng chức năng + SuperAdmin.**
+`DEPARTMENT_HEAD` **không** tự có trip visibility: head phòng Marketing/HR/IT
+không đọc Trip, không đọc giá, không sửa Trip. `trip.write` = head **và** phòng
+thuộc `sales|accounting|dispatch`. Frontend ẩn toàn bộ mục ĐIỀU PHỐI và ba màn
+hình dispatch khi `permissions` không có `trip.read`. **Customer Service chưa
+được đưa vào** — quyết định nghiệp vụ còn để ngỏ, không có function `customer-service`.
+
+| Permission | SUPERADMIN | phòng `dispatch` | phòng `accounting` | phòng `sales` | head phòng khác | member phòng khác |
+|---|---|---|---|---|---|---|
+| `trip.read` (board, detail, history, events, assignments, completion list, catalogue xe/khách/địa điểm) | ✓ | ✓ | ✓ | ✓ | **✗** | ✗ |
+| `trip.create` (tạo Trip; thêm xe/khách/địa điểm) | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| `trip.write` (sửa/status/archive/catalogue) — **head trong phòng chức năng** | ✓ | chỉ head | chỉ head | chỉ head | **✗** | ✗ |
+| `dispatch.write` (assign/replace/end, `GET /trip-drivers`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| `trip.price.read` | ✓ | ✓ | ✓ | ✓ | **✗** | ✗ |
+| `trip.price.write` (`sellPrice`/`purchasePrice` trong body) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| `trip.complete.review` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+**`PATCH /trip-schedules/:id` được phân quyền theo field**, không theo route:
+key thường (địa chỉ, ghi chú, status…) cần `trip.write`; `sellPrice`/`purchasePrice`
+cần `trip.price.write`; body có cả hai loại cần cả hai; body rỗng cần `trip.write`.
+Nên dispatch **member** `PATCH { sellPrice }` → 200, `PATCH { note }` → 403.
+
+Frontend: nút điều độ đọc `dispatch.write`; cột giá đọc `trip.price.read`; ô nhập
+giá **mở** khi có `trip.price.write`, **disabled** khi chỉ có `trip.price.read`
+và không gửi key giá. Người có `trip.price.write` mà không có `trip.write` vẫn
+thấy nút Sửa: form khóa mọi trường khác và chỉ gửi hai key giá. Server trả 403
+nếu body có `sellPrice`/`purchasePrice` mà caller không có `trip.price.write`;
+"giá bán bắt buộc" (422) chỉ áp cho `POST` và chỉ với caller có quyền đó.
+
 ### HEAD dứt khoát KHÔNG có
 
 * `POST /users` — tạo account
@@ -1135,14 +1173,15 @@ project-owned); mục này chỉ ghi **những gì đổi** so với trước. N
 | `POST` | `/trip-schedules` | body **không còn** `vehicleId` (schema strict — gửi vào là 422) | 422 |
 | `PATCH` | `/trip-schedules/:tripId` | như trên | 422 |
 | `GET` | `/trip-schedules` | mỗi item có `assignments[]: { id, vehicle, driver, assignedAt, started }`; **không còn** `vehicle`/`driver` ở cấp trip; `vehicleId` giữ, `@deprecated` | — |
-| `POST` | `/trip-schedules/:tripId/driver-assignments` | body `{ vehicleId, driverUserId }` — **cả hai bắt buộc** | 404 xe/tài xế · **409** xe đã ở trên trip / trip đã finished |
-| `POST` | `/trip-schedules/:tripId/driver-assignments/:assignmentId/replace` | body `{ driverUserId, reason }` | **409** assignment đã started / không active |
-| `POST` | `/trip-schedules/:tripId/driver-assignments/:assignmentId/end` | body `{ reason }` | **409** đã started |
+| `POST` | `/trip-schedules/:tripId/driver-assignments` | body `{ vehicleId, driverUserId }` — **cả hai bắt buộc**. Quyền **`dispatch.write`** (0032), không còn `trip.write` | 403 không phải phòng điều độ · 404 xe/tài xế · **409** xe đã ở trên trip / trip đã finished |
+| `POST` | `/trip-schedules/:tripId/driver-assignments/:assignmentId/replace` | body `{ driverUserId, reason }` — `dispatch.write` | **409** assignment đã started / không active |
+| `POST` | `/trip-schedules/:tripId/driver-assignments/:assignmentId/end` | body `{ reason }` — `dispatch.write` | **409** đã started |
+| `GET` | `/trip-drivers` | `dispatch.write` (0032) | 403 |
 | `POST` | `/trip-schedules/:tripId/completion-requests/:requestId/approve` | thay `…/completion/approve`; trip finished khi đây là assignment ACTIVE cuối cùng chưa duyệt | **409** không còn pending / đã quyết |
 | `POST` | `/trip-schedules/:tripId/completion-requests/:requestId/reject` | body `{ reason }` | 409 · 422 thiếu reason |
 | `GET` | `/trip-schedules/operational-board` | **ASSIGNMENT-GRAIN (ADR-0004 §2.3)**: một phần tử = một dispatch assignment ACTIVE; trip 3 xe = 3 phần tử cùng `tripId`. Trip chưa có ai → một phần tử `assignmentId: null`. Không bao giờ gộp về trip — muốn một dòng/trip dùng `GET /trip-schedules`. Mỗi phần tử: `assignmentId`, `completionRequestId`, `tripId`, `scheduledOn`, `customer`, `vehicle`, `driver`, `scheduledPickupAt/DeliveryAt`, 4 mốc thực tế, `stage`, 2 delay, `expenseDeclaration`, `accountability`, `completionAttempts`, `completionRejectionReason`. Key React theo `assignmentId ?? tripId` | 403 · 422 range |
 | `GET` | `/trip-schedules/completion-review-queue` | cùng hình dạng phần tử; một phần tử cho mỗi request còn chờ (`pending` / `rejected`) — tức theo assignment | 403 |
-| `GET` | `/driver/assignments` | thay `/driver/trips` — mọi lượt của tài xế đang đăng nhập, mỗi lượt có `assignment.id`, `vehicle` | 401 |
+| `GET` | `/driver/assignments` | thay `/driver/trips` — mọi lượt của tài xế đang đăng nhập, mỗi lượt có `assignment.id`, `vehicle`. Chỉ tài khoản `driver`; 403 `PASSWORD_CHANGE_REQUIRED` khi còn mật khẩu tạm (như mọi route driver) | 401 · 403 |
 | `GET` | `/driver/assignments/:assignmentId` | thay `/driver/trips/:tripId` | **403** không phải của mình / đã ended · 404 |
 | `POST` | `/driver/assignments/:assignmentId/execution-events` · `…/expenses` · `PATCH …/expenses/:costId` · `POST …/completion-requests` | thay các route `/driver/trips/:tripId/...` | như trên |
 

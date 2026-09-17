@@ -111,6 +111,12 @@ const PHRASES = {
   reviewDriver: { vi: 'Tài xế', en: 'Driver' },
   reviewDelayPickup: { vi: 'Trễ lấy hàng', en: 'Pickup late by' },
   reviewDelayDelivery: { vi: 'Trễ giao hàng', en: 'Delivery late by' },
+  // Shown in place of a dispatch screen to a caller without `trip.read` — a
+  // member or head of a unit that is not sales, accounting or dispatch.
+  tripNoPermission: {
+    vi: 'Tài khoản của bạn không thuộc phòng có quyền xem lịch xe.',
+    en: 'Your account is not in a department that may see the trip schedule.',
+  },
   reviewNoPermission: {
     vi: 'Bạn không có quyền duyệt hoàn tất chuyến',
     en: 'You may not decide completions',
@@ -1198,8 +1204,19 @@ const PHRASES = {
   },
   // Shown in place of the two fields to somebody who may not see prices.
   priceRestricted: {
-    vi: 'Giá cước do trưởng phòng nhập. Chuyến vẫn lưu được khi chưa có giá.',
-    en: 'Prices are entered by a department head. The trip can be saved without them.',
+    vi: 'Giá cước do điều độ nhập. Chuyến vẫn lưu được khi chưa có giá.',
+    en: 'Prices are entered by dispatch. The trip can be saved without them.',
+  },
+  // Shown at the top of the edit form to somebody who may set the prices and
+  // nothing else on the row — a dispatch member without `trip.write`.
+  priceOnlyEdit: {
+    vi: 'Bạn chỉ sửa được giá cước của chuyến này; các trường khác do trưởng phòng sửa.',
+    en: 'You can only change the prices of this trip; the other fields are corrected by a department head.',
+  },
+  // Shown above the two fields to somebody who may SEE prices but not set them.
+  priceReadOnly: {
+    vi: 'Bạn xem được giá cước; chỉ điều độ mới nhập hoặc sửa được.',
+    en: 'You can see the prices; only dispatch can enter or change them.',
   },
   fieldNote: { vi: 'Ghi chú', en: 'Note' },
   // Why the delivery control asks for a date as well as a time.

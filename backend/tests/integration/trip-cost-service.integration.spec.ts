@@ -12,7 +12,10 @@ import { ConflictError, NotFoundError, ValidationError } from '@common/errors/do
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
-import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
+import {
+  CompletionRequestRepository,
+  DriverAssignmentRepository,
+} from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
 import {
   OutsourceHireRepository,
   TripCostRepository,
@@ -103,6 +106,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       new TripCostTotalsRepository(database),
       new DriverAssignmentRepository(database),
       vehicles,
+      new CompletionRequestRepository(database),
     );
 
     author = (await new UserRepository(database).insertUser({ displayName: 'Kế Toán' })).id;

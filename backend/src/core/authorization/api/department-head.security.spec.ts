@@ -48,6 +48,7 @@ describe('department head HTTP security', () => {
     global: false,
     headOf: [],
     memberOf: [],
+    functions: [],
     mustChangeSecret: false,
     ...over,
   });

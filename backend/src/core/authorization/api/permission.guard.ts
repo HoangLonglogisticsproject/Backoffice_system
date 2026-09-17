@@ -19,6 +19,33 @@ export const SCOPE_PARAM = 'boScopeParam';
 export const REQUEST_AUTHORIZATION = 'boAuthorizationContext';
 
 /**
+ * The three steps every context-loading guard shares, written once.
+ *
+ * The caller `AuthGuard` attached — refused if missing, which is what a route
+ * that forgot `AuthGuard` looks like from here; their context read from the
+ * database on EVERY request, never cached, and attached for the handler; and
+ * the provisioning gate: a half-provisioned account may authenticate and must
+ * do nothing more, so it is refused here with the actionable error rather than
+ * a flat 403 further on. One function so that no guard can forget the gate.
+ */
+export async function loadProvisionedContext(
+  request: Request,
+  service: AuthorizationService,
+): Promise<{ user: SessionUser; authorization: AuthorizationContext }> {
+  const bag = request as unknown as Record<string, unknown>;
+  const user = bag[REQUEST_USER] as SessionUser | undefined;
+  if (!user) throw new UnauthorizedError('Authentication required.');
+
+  const authorization = await service.loadContext(user.id);
+  bag[REQUEST_AUTHORIZATION] = authorization;
+
+  if (authorization.mustChangeSecret) {
+    throw new PasswordChangeRequiredError('Password change required before using this deployment.');
+  }
+  return { user, authorization };
+}
+
+/**
  * `@RequirePermission('unit.member.read', 'departmentId')`
  *
  * The second argument names the ROUTE PARAMETER holding the target department.
@@ -64,22 +91,11 @@ export class PermissionGuard implements CanActivate {
     if (!metadata) throw new ForbiddenError('No permission declared for this route.');
 
     const request = context.switchToHttp().getRequest<Request>();
-    const user = (request as unknown as Record<string, unknown>)[REQUEST_USER] as
-      | SessionUser
-      | undefined;
-
-    if (!user) throw new UnauthorizedError('Authentication required.');
-
-    const authorization = await this.authorization.loadContext(user.id);
-    (request as unknown as Record<string, unknown>)[REQUEST_AUTHORIZATION] = authorization;
-
     // Provisioning is not finished until the temporary credential is replaced.
-    // Refused here rather than at each call site so it cannot be forgotten at
-    // one of them; the four identity endpoints that such a caller MAY use
-    // declare no permission and therefore never reach this guard.
-    if (authorization.mustChangeSecret) {
-      throw new PasswordChangeRequiredError('Password change required before using this deployment.');
-    }
+    // Refused in the shared step rather than at each call site so it cannot be
+    // forgotten at one of them; the four identity endpoints that such a caller
+    // MAY use declare no permission and therefore never reach this guard.
+    const { authorization } = await loadProvisionedContext(request, this.authorization);
 
     const departmentId = metadata.scopeParam
       ? (request.params as Record<string, string | undefined>)[metadata.scopeParam]
@@ -177,20 +193,7 @@ export class HeadOfRouteDepartmentGuard implements CanActivate {
     const allowGlobal = metadata?.allowGlobal ?? true;
 
     const request = context.switchToHttp().getRequest<Request>();
-    const user = (request as unknown as Record<string, unknown>)[REQUEST_USER] as
-      | SessionUser
-      | undefined;
-
-    if (!user) throw new UnauthorizedError('Authentication required.');
-
-    const authorization = await this.authorization.loadContext(user.id);
-    (request as unknown as Record<string, unknown>)[REQUEST_AUTHORIZATION] = authorization;
-
-    // Provisioning is not finished until the temporary credential is replaced;
-    // such a caller may do nothing but change it.
-    if (authorization.mustChangeSecret) {
-      throw new PasswordChangeRequiredError('Password change required before using this deployment.');
-    }
+    const { authorization } = await loadProvisionedContext(request, this.authorization);
 
     const departmentId = (request.params as Record<string, string | undefined>)[routeParam];
     if (!departmentId) throw new ForbiddenError('You are not allowed to do that.');
@@ -257,21 +260,7 @@ export class HeadOfTargetUserDepartmentGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
-    const user = (request as unknown as Record<string, unknown>)[REQUEST_USER] as
-      | SessionUser
-      | undefined;
-
-    if (!user) throw new UnauthorizedError('Authentication required.');
-
-    const authorization = await this.authorization.loadContext(user.id);
-    (request as unknown as Record<string, unknown>)[REQUEST_AUTHORIZATION] = authorization;
-
-    // Same gate as the other two guards: provisioning is not finished until the
-    // temporary credential is replaced. `can()` refuses such a caller anyway;
-    // raising it here gives them the actionable error instead of a flat 403.
-    if (authorization.mustChangeSecret) {
-      throw new PasswordChangeRequiredError('Password change required before using this deployment.');
-    }
+    const { authorization } = await loadProvisionedContext(request, this.authorization);
 
     const targetUserId = (request.params as Record<string, string | undefined>)['userId'];
     if (!targetUserId) throw new ForbiddenError('You are not allowed to do that.');

@@ -25,26 +25,41 @@ export type PermissionKey =
   | 'unit.member.write'
   | 'role.assign'
   | 'user.write'
-  // The trip schedule (§21). The only permissions here that ask nothing about a
-  // department: dispatch is company-wide data, so `trip.read` and `trip.create`
-  // appear for every signed-in caller, including one who is between departments.
-  // `trip.write` — correcting somebody else's row — stays global.
+  // The trip schedule (§21). Trip data belongs to the sales, accounting and
+  // dispatch functions and to the superadmin (2026-09-17): `trip.read` and
+  // `trip.create` appear for those callers and for nobody else — an HR member
+  // or head sees no board at all, and the DISPATCH menu is drawn only when
+  // `trip.read` is present. `trip.write` — correcting somebody else's row —
+  // is the superadmin or a head WITHIN one of those three functions.
   | 'trip.read'
   | 'trip.create'
   | 'trip.write'
   /**
-   * ★ THE TWO PRICES ON A TRIP ROW — what it is sold for and what it is bought
-   * for. Tier `head-anywhere` on the server: the superadmin, or the head of
-   * some department, and nobody else.
-   *
-   * ★ THE ONLY RENDER HINT ON THIS LIST THAT ALSO DECIDES WHETHER A FIELD IS
-   * COMPULSORY. Without it the form does not draw the two money inputs at all
-   * and the server REFUSES a body that carries either key — so this is not the
-   * usual "hide a button somebody could still POST to". A caller who holds it
-   * must give a selling price when creating a trip; one who does not creates
-   * the trip unpriced, and a head prices it later.
+   * ★ DISPATCHING — a lorry and its driver onto a trip, swapping, ending, and
+   * the driver list to choose from. Held by the superadmin and by every member
+   * of a department whose FUNCTION is dispatch (0032); a head of any other
+   * department does not hold it, however senior. Deliberately not `trip.write`.
+   */
+  | 'dispatch.write'
+  /**
+   * ★ SEEING THE TWO PRICES ON A TRIP ROW — what it is sold for and what it is
+   * bought for. The superadmin and everybody — head or member alike — in a
+   * sales, accounting or dispatch department; nobody else, however senior.
+   * Read only: the columns are drawn, the form shows the figures, nothing is
+   * typed.
    */
   | 'trip.price.read'
+  /**
+   * ★ SETTING THEM. The superadmin and the dispatch function (0032).
+   *
+   * ★ THE ONLY RENDER HINT ON THIS LIST THAT ALSO DECIDES WHETHER A FIELD IS
+   * COMPULSORY, AND WHICH KEYS ARE SENT. The server REFUSES a body that
+   * carries either price key from a caller without it — so this is not the
+   * usual "hide a button somebody could still POST to". A caller who holds it
+   * must give a selling price when creating a trip; one who does not creates
+   * the trip unpriced, and dispatch prices it later.
+   */
+  | 'trip.price.write'
   // The money on a trip (§21). Separate keys from `trip.*` on purpose: the
   // board is read by everybody and the amounts on it are not, so a caller
   // without `cost.read` is never sent a figure at all. All three are GLOBAL

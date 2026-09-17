@@ -14,10 +14,12 @@ import type {
  * reason `GET /departments` does: both are bounded small, and both sort by a
  * column that can be edited, which a cursor cannot survive.
  *
- * ★ ANY SIGNED-IN CALLER MAY ADD TO THEM. That asymmetry (`trip.create` to add,
- * `trip.write` to rename or retire) is deliberate: a dispatcher who cannot add
- * the customer in front of them will put the name in the cargo note instead,
- * and the catalogue gets bypassed on exactly the rows it exists to discipline.
+ * ★ WHOEVER BOOKS A TRIP MAY ADD TO THEM. `trip.create` — the superadmin and
+ * the sales, accounting and dispatch functions (0032) — adds; `trip.write`
+ * renames or retires. The asymmetry is deliberate: a dispatcher who cannot
+ * add the customer in front of them will put the name in the cargo note
+ * instead, and the catalogue gets bypassed on exactly the rows it exists to
+ * discipline.
  */
 
 export interface CreateVehicleInput {

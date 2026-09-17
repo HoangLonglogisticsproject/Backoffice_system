@@ -466,7 +466,19 @@ export function TripFormModal({
   // wrong is a 403 on save rather than a silently ignored field — which is the
   // failure mode worth having.
   const { can } = useSession();
-  const mayPrice = can('trip.price.read');
+  // ★ TWO KEYS SINCE 0032. Reading draws the two figures; WRITING is what
+  // decides whether they are typed into and whether the keys travel. Sales
+  // and accounting hold the first and not the second, so for them the fields
+  // are drawn disabled and the payload carries neither key — the server would
+  // answer 403 to a body that so much as mentioned a price from them.
+  const mayViewPrices = can('trip.price.read');
+  const mayEditPrices = can('trip.price.write');
+  // ★ PRICE-ONLY EDITING. A dispatch member prices an existing trip without
+  // holding `trip.write`; the server authorizes the patch per field, so this
+  // form sends the two price keys and nothing else, and every other control
+  // is disabled so nothing typed into it can be lost on save.
+  const mayEditTrip = can('trip.write');
+  const priceOnly = isPriceOnly(trip, mayEditTrip, mayEditPrices);
   // Correcting a place — locating it — is `trip.write`, the same key the
   // master-data screen asks for. A dispatcher without it still sees that a
   // place is not located; they just cannot fix it from here.
@@ -523,7 +535,7 @@ export function TripFormModal({
    * driver would otherwise discover at the gate. Whether a driver's reading
    * later PASSES is a different fact, decided by the server.
    */
-  const tripLocationReady = isLocated(placeAt('pickup')) && isLocated(placeAt('delivery'));
+  const tripLocationReady = bothLocated(placeAt('pickup'), placeAt('delivery'));
 
   /**
    * The place dialog, if open: which end asked for it, and — for "set up
@@ -631,20 +643,20 @@ export function TripFormModal({
       // dispatcher who fixes a refused lorry AND corrects the date in the same
       // breath expects both to land — and the first press is exactly when a
       // wrong date gets noticed, because that is when the row appears.
-      const payload = tripPayload(form, trip, mayPrice, refreshed);
-
       let tripId: string;
-      if (createdTripId === null) {
-        const saved = await saveTrip(trip, payload);
-        tripId = saved.id;
-        if (trip === null) setCreatedTripId(saved.id);
+      if (priceOnly && trip) {
+        // Only the two keys the caller may set. Anything else in the body
+        // would make the server ask for `trip.write` and refuse the whole patch.
+        await updateTripSchedule(trip.id, {
+          sellPrice: blank(form.sellPrice),
+          purchasePrice: blank(form.purchasePrice),
+        });
+        tripId = trip.id;
       } else {
-        // The trip this form created moments ago, corrected rather than
-        // recreated. PATCH is `trip.write`, the same permission the crew
-        // section already required to be drawn, so this cannot 403 for anyone
-        // who could reach a partial failure in the first place.
-        await updateTripSchedule(createdTripId, payload);
-        tripId = createdTripId;
+        tripId = await persistTrip(trip, createdTripId, tripPayload(form, trip, mayEditPrices, refreshed));
+        // A NEW trip's id is remembered so a retry corrects it rather than
+        // booking it again; on a retry this stores the same id it already holds.
+        if (trip === null) setCreatedTripId(tripId);
       }
 
       const failed = await dispatchCrew(tripId, checked, (error_) =>
@@ -709,6 +721,14 @@ export function TripFormModal({
       }
     >
       <form id={formId} onSubmit={submit} className="space-y-4">
+        {/*
+          ★ EVERYTHING THAT IS NOT A PRICE SITS IN A `fieldset`, disabled for a
+          price-only editor. A disabled control is skipped by the browser's
+          constraint validation, so the compulsory day does not block a save
+          that will not send it anyway.
+        */}
+        {priceOnly && <p className="text-xs text-gray-500">{t('priceOnlyEdit')}</p>}
+        <fieldset disabled={priceOnly} className="min-w-0 space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <label htmlFor="trip-date" className="text-sm font-medium text-gray-700">
@@ -804,9 +824,18 @@ export function TripFormModal({
           through a float, which is exactly what `NUMERIC(14,2)` on the server
           exists to prevent.
         */}
-        {mayPrice ? (
+        </fieldset>
+        {mayViewPrices ? (
           <div className="grid gap-4 sm:grid-cols-2">
-            
+            {/*
+              ★ DRAWN BUT DISABLED FOR A READER WHO MAY NOT SET THEM (0032):
+              sales and accounting see what the trip is sold and bought for,
+              and cannot type into either. Disabled rather than plain text so
+              the form reads the same for everybody who may see the figures.
+            */}
+            {!mayEditPrices && (
+              <p className="text-xs text-gray-500 sm:col-span-2">{t('priceReadOnly')}</p>
+            )}
 
             <div className="space-y-2">
               <label htmlFor="trip-purchase-price" className="text-sm font-medium text-gray-700">
@@ -822,6 +851,7 @@ export function TripFormModal({
                 id="trip-purchase-price"
                 value={form.purchasePrice}
                 onChange={(plain) => set('purchasePrice', plain)}
+                disabled={!mayEditPrices}
                 aria-describedby="trip-purchase-price-hint"
               />
               <p id="trip-purchase-price-hint" className="text-xs text-gray-500">
@@ -845,7 +875,8 @@ export function TripFormModal({
                 id="trip-sell-price"
                 value={form.sellPrice}
                 onChange={(plain) => set('sellPrice', plain)}
-                required={!editing}
+                required={!editing && mayEditPrices}
+                disabled={!mayEditPrices}
                 aria-describedby="trip-sell-price-hint"
               />
               <p id="trip-sell-price-hint" className="text-xs text-gray-500">
@@ -859,6 +890,7 @@ export function TripFormModal({
           <p className="text-xs text-gray-500">{t('priceRestricted')}</p>
         )}
 
+        <fieldset disabled={priceOnly} className="min-w-0 space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <LocationEnd
             end="pickup"
@@ -870,7 +902,7 @@ export function TripFormModal({
             value={form.pickupLocationId}
             onChange={(id) => set('pickupLocationId', id)}
             onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
-            onSetup={mayManagePlaces ? (location) => setPlaceDialog({ end: 'pickup', editing: location }) : null}
+            onSetup={setupHandlerFor(mayManagePlaces, 'pickup', setPlaceDialog)}
             address={form.pickupAddress}
             contact={form.pickupContact}
             onAddress={(value) => set('pickupAddress', value)}
@@ -886,7 +918,7 @@ export function TripFormModal({
             value={form.deliveryLocationId}
             onChange={(id) => set('deliveryLocationId', id)}
             onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
-            onSetup={mayManagePlaces ? (location) => setPlaceDialog({ end: 'delivery', editing: location }) : null}
+            onSetup={setupHandlerFor(mayManagePlaces, 'delivery', setPlaceDialog)}
             address={form.deliveryAddress}
             contact={form.deliveryContact}
             onAddress={(value) => set('deliveryAddress', value)}
@@ -1027,6 +1059,7 @@ export function TripFormModal({
           value={form.note}
           onChange={(value) => set('note', value)}
         />
+        </fieldset>
 
         {error && (
           <p role="alert" className="text-sm text-red-600">
@@ -1047,6 +1080,27 @@ export function TripFormModal({
   );
 }
 
+/**
+ * Books the trip, or corrects the one this form booked moments ago.
+ *
+ * A retry after a partial crew failure PATCHes the remembered id rather than
+ * recreating: PATCH is `trip.write`, the same permission the crew section
+ * already required to be drawn, so this cannot 403 for anyone who could reach
+ * a partial failure in the first place. Answers the id the crew is dispatched
+ * against either way.
+ */
+const persistTrip = async (
+  trip: TripScheduleWithRefs | null,
+  createdTripId: string | null,
+  payload: Parameters<typeof saveTrip>[1],
+): Promise<string> => {
+  if (createdTripId !== null) {
+    await updateTripSchedule(createdTripId, payload);
+    return createdTripId;
+  }
+  return (await saveTrip(trip, payload)).id;
+};
+
 /** What the read-only block after a choice shows: an active place, or the trip's own copy of an archived one. */
 interface ChosenPlace {
   id: string;
@@ -1064,6 +1118,31 @@ interface ChosenPlace {
  */
 const isLocated = (place: ChosenPlace | null): boolean =>
   place?.latitude != null && place?.longitude != null;
+
+/** Ready for location verification exactly when BOTH ends name a located place. */
+const bothLocated = (pickup: ChosenPlace | null, delivery: ChosenPlace | null): boolean =>
+  isLocated(pickup) && isLocated(delivery);
+
+/**
+ * Editing an existing row while holding the price keys and nothing else — a
+ * dispatch member. The form then sends the two prices and disables the rest.
+ */
+const isPriceOnly = (
+  trip: TripScheduleWithRefs | null,
+  mayEditTrip: boolean,
+  mayEditPrices: boolean,
+): boolean => trip !== null && !mayEditTrip && mayEditPrices;
+
+/**
+ * The "set up location" handler for one end, or null for a caller who may not
+ * correct places — `LocationEnd` draws no control for null.
+ */
+const setupHandlerFor = (
+  mayManagePlaces: boolean,
+  end: End,
+  open: (dialog: { end: End; editing: TripLocation | null }) => void,
+): ((location: TripLocation) => void) | null =>
+  mayManagePlaces ? (location) => open({ end, editing: location }) : null;
 
 /** The trip's readiness for location verification, in one line. Said here so the office sees it before the driver does. */
 function TripReadiness({ ready }: Readonly<{ ready: boolean }>) {

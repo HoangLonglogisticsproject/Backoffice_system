@@ -589,6 +589,7 @@ describe('execution events', () => {
     const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
     const users = drivers();
     const notifications = told();
+    const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
 
     const service = new TripExecutionService(
       database(),
@@ -598,9 +599,10 @@ describe('execution events', () => {
       vehicles as never,
       users as never,
       notifications as never,
+      requests as never,
     );
 
-    return { service, trips, assignments, events, vehicles, users, notifications };
+    return { service, trips, assignments, events, vehicles, users, notifications, requests };
   };
 
   const arriving = {
@@ -695,6 +697,74 @@ describe('execution events', () => {
     await expect(service.recordEvent(arriving)).rejects.toThrow(ConflictError);
     await expect(service.recordEvent(arriving)).rejects.toThrow(/another assignment/);
     expect(events.record).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ★ AN APPROVED TURN'S RECORD IS FINAL (DL-108). Per assignment, under the
+   * trip lock, after the idempotency answer — so a sibling turn still pending
+   * does not reopen it, and a retry of a milestone reported before the
+   * approval still gets its row.
+   */
+  describe('★ once the turn is approved', () => {
+    it('refuses a new milestone, and writes nothing', async () => {
+      const { service, events, requests } = build();
+      requests.listByAssignment.mockResolvedValue([{ state: 'approved', attemptNo: 1 }]);
+
+      await expect(service.recordEvent(arriving)).rejects.toThrow(ConflictError);
+      expect(events.record).not.toHaveBeenCalled();
+    });
+
+    it('refuses it whatever earlier attempts the turn had — an approval wins over a rejection before it', async () => {
+      const { service, events, requests } = build();
+      requests.listByAssignment.mockResolvedValue([
+        { state: 'approved', attemptNo: 2 },
+        { state: 'rejected', attemptNo: 1 },
+      ]);
+
+      await expect(service.recordEvent(arriving)).rejects.toThrow(ConflictError);
+      expect(events.record).not.toHaveBeenCalled();
+    });
+
+    it('★ still answers a retry of a milestone reported BEFORE the approval with that row', async () => {
+      const { service, events, requests } = build();
+      const stored = { id: 'event-1', driverAssignmentId: ASSIGNMENT, type: 'ARRIVED_PICKUP' };
+      events.findByClientEventId.mockResolvedValue(stored);
+      requests.listByAssignment.mockResolvedValue([{ state: 'approved', attemptNo: 1 }]);
+
+      await expect(service.recordEvent(arriving)).resolves.toEqual(stored);
+      expect(events.record).not.toHaveBeenCalled();
+      // The approval was never consulted: the answer came from the key.
+      expect(requests.listByAssignment).not.toHaveBeenCalled();
+    });
+
+    it('lets a PENDING turn keep reporting — submitting never required every milestone', async () => {
+      // A driver who lost signal at the delivery submits first and reports the
+      // mark when the phone comes back; the reviewer decides on what stands.
+      const { service, events, requests } = build();
+      requests.listByAssignment.mockResolvedValue([{ state: 'pending', attemptNo: 1 }]);
+
+      await service.recordEvent(arriving);
+
+      expect(events.record).toHaveBeenCalled();
+    });
+
+    it('lets a REJECTED turn keep reporting — that is what a rejection asks for', async () => {
+      const { service, events, requests } = build();
+      requests.listByAssignment.mockResolvedValue([{ state: 'rejected', attemptNo: 1 }]);
+
+      await service.recordEvent(arriving);
+
+      expect(events.record).toHaveBeenCalled();
+    });
+
+    it('lets a turn with no request at all report, as before', async () => {
+      const { service, events, requests } = build();
+      requests.listByAssignment.mockResolvedValue([]);
+
+      await service.recordEvent(arriving);
+
+      expect(events.record).toHaveBeenCalled();
+    });
   });
 
   it('refuses to let one driver report another driver’s assignment', async () => {
@@ -931,6 +1001,7 @@ describe('dispatch assignment', () => {
       hasLiveEvents: jest.fn().mockResolvedValue(false),
     };
     const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }) };
+    const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
     const service = new TripExecutionService(
       database(),
       trips as never,
@@ -939,8 +1010,9 @@ describe('dispatch assignment', () => {
       vehicles as never,
       users as never,
       notifications as never,
+      requests as never,
     );
-    return { service, trips, assignments, events, vehicles, users, notifications };
+    return { service, trips, assignments, events, vehicles, users, notifications, requests };
   };
 
   const pair = { vehicleId: VEHICLE, driverUserId: DRIVER };
@@ -1090,6 +1162,8 @@ describe('a driver’s declared expense', () => {
       lockActiveById: jest.fn().mockResolvedValue(activeAssignment),
     };
     const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
+    // No completion request on the turn yet — the ordinary, declarable state.
+    const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
 
     const service = new TripCostService(
       database(),
@@ -1099,9 +1173,10 @@ describe('a driver’s declared expense', () => {
       {} as never,
       assignments as never,
       vehicles as never,
+      requests as never,
     );
 
-    return { service, trips, costs, assignments, vehicles };
+    return { service, trips, costs, assignments, vehicles, requests };
   };
 
   const declaring = {
@@ -1165,6 +1240,55 @@ describe('a driver’s declared expense', () => {
     await expect(service.declareCost(declaring)).rejects.toThrow(NotFoundError);
   });
 
+  /**
+   * ★ THE EXPENSE-VS-COMPLETION RACE, CLOSED AT THE SERVICE.
+   *
+   * `submit` freezes the lines that exist and `approve` finalises them; a line
+   * declared after either would be one the reviewer never saw, or money moving
+   * on a closed turn. The UPDATE trigger cannot see an INSERT, so the refusal
+   * is here — under the same trip lock the two decisions take.
+   */
+  it('★ refuses a new line while a completion request is pending', async () => {
+    const { service, costs, requests } = build();
+    requests.listByAssignment.mockResolvedValue([{ state: 'pending', attemptNo: 1 }]);
+
+    await expect(service.declareCost(declaring)).rejects.toThrow(ConflictError);
+    expect(costs.declare).not.toHaveBeenCalled();
+  });
+
+  it('★ refuses a new line once the turn is approved, whatever came before', async () => {
+    const { service, costs, requests } = build();
+    requests.listByAssignment.mockResolvedValue([
+      { state: 'approved', attemptNo: 2 },
+      { state: 'rejected', attemptNo: 1 },
+    ]);
+
+    await expect(service.declareCost(declaring)).rejects.toThrow(ConflictError);
+    expect(costs.declare).not.toHaveBeenCalled();
+  });
+
+  it('accepts a new line after a rejection — the turn is the driver’s to correct again', async () => {
+    const { service, costs, requests } = build();
+    requests.listByAssignment.mockResolvedValue([{ state: 'rejected', attemptNo: 1 }]);
+
+    await service.declareCost(declaring);
+
+    expect(costs.declare).toHaveBeenCalled();
+  });
+
+  it('★ still answers a retry with the original line after the request went pending', async () => {
+    // The phone declared before the submit and is retrying after it: the
+    // honest answer is the line it already wrote, not a refusal.
+    const { service, costs, requests } = build();
+    costs.findByClientRequestId.mockResolvedValue({ id: 'cost-1', amount: '1500000.00', driverAssignmentId: ASSIGNMENT });
+    requests.listByAssignment.mockResolvedValue([{ state: 'pending', attemptNo: 1 }]);
+
+    const result = await service.declareCost({ ...declaring, clientRequestId: 'tap-1' });
+
+    expect(result).toEqual({ id: 'cost-1', amount: '1500000.00', driverAssignmentId: ASSIGNMENT });
+    expect(costs.declare).not.toHaveBeenCalled();
+  });
+
   it('answers a retry with the line it already wrote', async () => {
     const { service, costs } = build();
     costs.findByClientRequestId.mockResolvedValue({ id: 'cost-1', amount: '1500000.00', driverAssignmentId: ASSIGNMENT });
@@ -1214,6 +1338,7 @@ describe('correcting a declared expense', () => {
       database(),
       { exists: jest.fn() } as never,
       costs as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -1334,6 +1459,7 @@ describe('withdrawing an immutable figure', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     return { service, costs };
   };
@@ -1418,6 +1544,7 @@ describe('★ assignment eligibility and what the driver is told', () => {
     };
     const events = { findByClientEventId: jest.fn(), hasLiveEvents: jest.fn().mockResolvedValue(false) };
     const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }) };
+    const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
     const service = new TripExecutionService(
       database(),
       trips as never,
@@ -1426,6 +1553,7 @@ describe('★ assignment eligibility and what the driver is told', () => {
       vehicles as never,
       users as never,
       notifications as never,
+      requests as never,
     );
     return { service, trips, assignments, users, notifications };
   };
@@ -1562,6 +1690,7 @@ describe('★ confirming a delivery is geofenced against the DELIVERY point', ()
       vehicles as never,
       drivers() as never,
       told() as never,
+      { listByAssignment: jest.fn().mockResolvedValue([]) } as never,
     );
     return { service, events };
   };

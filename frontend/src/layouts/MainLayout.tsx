@@ -211,12 +211,14 @@ export default function MainLayout() {
               </SidebarSection>
             )}
 
-            {/* Dispatch. Shown to everybody with a session and no `can()` check,
-                because `trip.read` and `trip.create` are held by every signed-in
-                caller — a permission test here would be a condition that is
-                always true. The catalogue entry is shown for the same reason:
-                anybody may add a vehicle, and the edit controls INSIDE that
-                screen are what `trip.write` hides. */}
+            {/* ★ GATED ON `trip.read`. The board, the catalogues and the places
+                are trip data, and trip data belongs to the sales, accounting
+                and dispatch functions (2026-09-17). A member or head of any
+                other unit holds no `trip.read`, and a menu that led them to
+                three screens of 403s would be a menu that lies. The add and
+                edit controls INSIDE each screen read `trip.create` and
+                `trip.write`; the server decides regardless. */}
+            {can('trip.read') && (
             <SidebarSection title={t('dispatchSection')}>
               <NavItem
                 to="/dispatch/trip-schedule"
@@ -228,19 +230,13 @@ export default function MainLayout() {
                 icon={Warehouse}
                 label={t('tripMasterData')}
               />
-              {/* Ungated for the same reason as the two above: reading and
-                  adding a place are `trip.read`/`trip.create`, which every
-                  signed-in caller holds. The edit controls INSIDE the screen
-                  are what `trip.write` hides. */}
               <NavItem
                 to="/dispatch/locations"
                 icon={MapPin}
                 label={t('locationCatalogue')}
               />
-              {/* ★ GATED, UNLIKE THE TWO ABOVE. `trip.complete.review` is not
-                  held by every signed-in caller — it closes a trip permanently
-                  — so a link that led everybody to a screen of buttons the
-                  server refuses would be a menu that lies. The screen itself
+              {/* ★ GATED AGAIN, NARROWER. `trip.complete.review` closes a trip
+                  permanently and is the superadmin's alone; the screen itself
                   re-checks, and the server decides regardless. */}
               {can('trip.complete.review') && (
                 <NavItem
@@ -250,6 +246,7 @@ export default function MainLayout() {
                 />
               )}
             </SidebarSection>
+            )}
 
             <SidebarSection title={t('system')}>
               {/*

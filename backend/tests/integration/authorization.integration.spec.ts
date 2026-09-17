@@ -62,6 +62,8 @@ describeIntegration('Authorization against real PostgreSQL', () => {
       '0004_authorization.sql',
       '0005_identity_credential_state.sql',
       '0008_role_assignment_membership_fk_index.sql',
+      // `departments.function` — read by `loadContext` on every request (0032).
+      '0032_department_function.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -545,7 +547,50 @@ describeIntegration('Authorization against real PostgreSQL', () => {
       await memberships.enroll({ userId: person, departmentId: a.id });
 
       const context = await authorization.loadContext(person);
-      expect(context).toMatchObject({ global: false, headOf: [], memberOf: [a.id] });
+      expect(context).toMatchObject({ global: false, headOf: [], memberOf: [a.id], functions: [] });
+    });
+
+    /**
+     * ★ THE FUNCTION OF THE CALLER'S UNIT (0032), read off real rows.
+     *
+     * The column is on `departments`, the caller's relation to it is the active
+     * membership, and the context carries the join — so setting the function
+     * on the unit changes what its members may do on the very next request,
+     * with nothing cached in between.
+     */
+    it('★ carries the function of the unit the member is in, and drops it when cleared', async () => {
+      const person = await createUser('Person');
+      const a = await departments.create({ slug: 'a', name: 'A' });
+      await memberships.enroll({ userId: person, departmentId: a.id });
+
+      expect((await authorization.loadContext(person)).functions).toEqual([]);
+
+      await departments.setFunction(a.id, 'dispatch');
+      const dispatcher = await authorization.loadContext(person);
+      expect(dispatcher.functions).toEqual(['dispatch']);
+      expect(can(dispatcher, 'dispatch.write')).toBe(true);
+      expect(can(dispatcher, 'trip.price.write')).toBe(true);
+      expect(can(dispatcher, 'trip.complete.review')).toBe(false);
+
+      await departments.setFunction(a.id, null);
+      const ordinary = await authorization.loadContext(person);
+      expect(ordinary.functions).toEqual([]);
+      expect(can(ordinary, 'dispatch.write')).toBe(false);
+    });
+
+    it('★ reads the function off the ACTIVE membership only, never a past one', async () => {
+      const person = await createUser('Person');
+      const dispatch = await departments.create({ slug: 'dispatch', name: 'Dispatch' });
+      const other = await departments.create({ slug: 'other', name: 'Other' });
+      await departments.setFunction(dispatch.id, 'dispatch');
+      await memberships.enroll({ userId: person, departmentId: dispatch.id });
+      expect((await authorization.loadContext(person)).functions).toEqual(['dispatch']);
+
+      await memberships.transfer({ userId: person, toDepartmentId: other.id });
+
+      const moved = await authorization.loadContext(person);
+      expect(moved.memberOf).toEqual([other.id]);
+      expect(moved.functions).toEqual([]);
     });
 
     it('describes a user with nothing at all, fail-closed', async () => {

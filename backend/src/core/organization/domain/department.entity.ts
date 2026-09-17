@@ -14,8 +14,39 @@ export interface Department {
   slug: string;
   name: string;
   status: DepartmentStatus;
+  /**
+   * What this unit DOES, for authorization. `null` for every unit that is none
+   * of the three — which is every unit until an administrator says otherwise.
+   * See `DepartmentFunction`.
+   */
+  function: DepartmentFunction | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * ★ THE KIND OF UNIT, AS AUTHORIZATION READS IT (0032).
+ *
+ * A role is a fact about a PERSON — SuperAdmin, head of this unit. Some
+ * permissions are facts about the UNIT instead: everybody in dispatch may put a
+ * lorry on a trip, nobody in sales may, however senior. Rather than a fourth
+ * role that every dispatcher would need granted one by one, the unit carries
+ * its function and a member holds whatever that function grants
+ * (`core/authorization/domain/permission.ts`, `orFunction`).
+ *
+ * ★ THREE VALUES AND `null`, NOT AN OPEN STRING. Each value is named by a
+ * permission requirement in code, so a fourth one an administrator typed would
+ * grant nothing and mean nothing. `null` is "an ordinary unit", the default,
+ * and is what every department is until somebody sets otherwise.
+ *
+ * ⚠ NOT A DEPARTMENT NAME. Which row is "Điều độ" stays data; this only says
+ * what a row of that kind is FOR. Nothing in code matches on a slug or a name.
+ */
+export const DEPARTMENT_FUNCTIONS = ['sales', 'accounting', 'dispatch'] as const;
+export type DepartmentFunction = (typeof DEPARTMENT_FUNCTIONS)[number];
+
+export function isDepartmentFunction(value: unknown): value is DepartmentFunction {
+  return (DEPARTMENT_FUNCTIONS as readonly unknown[]).includes(value);
 }
 
 /**

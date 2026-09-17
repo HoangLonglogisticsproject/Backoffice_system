@@ -17,6 +17,7 @@ const department = (over: Partial<Department> = {}): Department => ({
   slug: 'unit-one',
   name: 'Unit One',
   status: 'active',
+  function: null,
   createdAt: new Date('2026-01-01'),
   updatedAt: new Date('2026-01-01'),
   ...over,

@@ -18,6 +18,7 @@ const department = (over: Partial<Department> = {}): Department => ({
   slug: 'unit-one',
   name: 'Unit One',
   status: 'active',
+  function: null,
   createdAt: new Date('2026-01-01'),
   updatedAt: new Date('2026-01-01'),
   ...over,
@@ -45,6 +46,7 @@ describe('DepartmentService', () => {
       findBySlug: jest.fn(),
       list: jest.fn(),
       rename: jest.fn(),
+      setFunction: jest.fn(),
       archive: jest.fn(),
     } as unknown as jest.Mocked<DepartmentRepository>;
     memberships = {
@@ -153,6 +155,94 @@ describe('DepartmentService', () => {
       departments.rename.mockResolvedValue(null);
 
       await expect(service.rename('nope', 'X')).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('update — rename and function in one transaction', () => {
+    it('renames AND sets the function inside a single transaction, on its connection', async () => {
+      const tx = { query: jest.fn() };
+      (db.transaction as jest.Mock).mockImplementation(async (work: (t: unknown) => Promise<unknown>) => work(tx));
+      departments.rename.mockResolvedValue(department({ name: 'Điều độ' }));
+      departments.setFunction.mockResolvedValue(department({ name: 'Điều độ', function: 'dispatch' }));
+
+      const updated = await service.update('dep-1', { name: 'Điều độ', function: 'dispatch' });
+
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(departments.rename).toHaveBeenCalledWith('dep-1', 'Điều độ', tx);
+      expect(departments.setFunction).toHaveBeenCalledWith('dep-1', 'dispatch', tx);
+      expect(updated).toMatchObject({ name: 'Điều độ', function: 'dispatch' });
+    });
+
+    it('★ lets a refused function take the rename down with it — the error leaves the transaction', async () => {
+      // The double runs the callback and rethrows, exactly as the real
+      // `Database.transaction` does before it issues ROLLBACK; the rename ran
+      // on that same connection, so PostgreSQL discards it. Proven against a
+      // real server in organization.integration.spec.ts.
+      departments.rename.mockResolvedValue(department({ name: 'Renamed' }));
+      departments.setFunction.mockRejectedValue(new Error('CHECK violated'));
+
+      await expect(service.update('dep-1', { name: 'Renamed', function: 'dispatch' })).rejects.toThrow(
+        'CHECK violated',
+      );
+      expect(departments.rename).toHaveBeenCalledTimes(1);
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('renames only when only a name is sent', async () => {
+      departments.rename.mockResolvedValue(department({ name: 'Renamed' }));
+
+      const updated = await service.update('dep-1', { name: 'Renamed' });
+
+      expect(updated.name).toBe('Renamed');
+      expect(departments.setFunction).not.toHaveBeenCalled();
+    });
+
+    it('sets the function only when only a function is sent — null clears it', async () => {
+      departments.setFunction.mockResolvedValue(department({ function: null }));
+
+      const updated = await service.update('dep-1', { function: null });
+
+      expect(updated.function).toBeNull();
+      expect(departments.setFunction).toHaveBeenCalledWith('dep-1', null, {});
+      expect(departments.rename).not.toHaveBeenCalled();
+    });
+
+    it('keeps the validation of each half: a blank name, an empty patch, a missing unit', async () => {
+      await expect(service.update('dep-1', { name: '  ' })).rejects.toBeInstanceOf(ValidationError);
+      await expect(service.update('dep-1', {})).rejects.toBeInstanceOf(ValidationError);
+      expect(db.transaction).not.toHaveBeenCalled();
+
+      departments.rename.mockResolvedValue(null);
+      departments.setFunction.mockResolvedValue(null);
+      await expect(service.update('nope', { name: 'X', function: 'sales' })).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+    });
+  });
+
+  describe('setFunction (0032)', () => {
+    it('sets what the unit is for, and hands back the row as stored', async () => {
+      departments.setFunction.mockResolvedValue(department({ function: 'dispatch' }));
+
+      const updated = await service.setFunction('dep-1', 'dispatch');
+
+      expect(departments.setFunction).toHaveBeenCalledWith('dep-1', 'dispatch');
+      expect(updated.function).toBe('dispatch');
+    });
+
+    it('clears it with null — an ordinary unit again', async () => {
+      departments.setFunction.mockResolvedValue(department({ function: null }));
+
+      const updated = await service.setFunction('dep-1', null);
+
+      expect(departments.setFunction).toHaveBeenCalledWith('dep-1', null);
+      expect(updated.function).toBeNull();
+    });
+
+    it('is a not-found when the unit does not exist', async () => {
+      departments.setFunction.mockResolvedValue(null);
+
+      await expect(service.setFunction('nope', 'sales')).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 });

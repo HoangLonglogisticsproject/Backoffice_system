@@ -71,8 +71,15 @@ export type OperationalBoardRecord = BoardRow;
  * assignment ever, and nothing can be submitted on an approved turn — so no
  * later attempt can exist after it. Ordering by `attempt_no DESC` therefore
  * needs no special case for approval.
+ *
+ * ⚠ A WHOLE-TABLE SHAPE, AND USED ONLY WHERE THE WHOLE TABLE IS THE QUESTION.
+ * The review queue asks "which turns have an open request" — a predicate on
+ * the latest attempt that no index on the assignment can answer — so it reads
+ * every request once (`idx_trip_completion_assignment`, ~50k rows ≈ 30 ms on
+ * a synthetic three-year set). The range board does NOT use this: see
+ * `LATEST_COMPLETION_OF_ASSIGNMENT`.
  */
-const LATEST_COMPLETION = `
+const LATEST_COMPLETION_PER_ASSIGNMENT = `
   SELECT DISTINCT ON (r.driver_assignment_id)
          r.driver_assignment_id,
          r.id               AS completion_request_id,
@@ -82,6 +89,23 @@ const LATEST_COMPLETION = `
          count(*) OVER (PARTITION BY r.driver_assignment_id) AS completion_attempts
     FROM trip_completion_requests r
    ORDER BY r.driver_assignment_id, r.attempt_no DESC`;
+
+/**
+ * The same latest attempt, for ONE assignment — the row `a` of the join it is
+ * LATERAL to. Two index probes (`idx_trip_completion_assignment`) per row
+ * instead of one pass over every request ever written.
+ */
+const LATEST_COMPLETION_OF_ASSIGNMENT = `
+  SELECT r.id               AS completion_request_id,
+         r.state            AS completion_state,
+         r.expense_declaration,
+         r.decision_reason,
+         (SELECT count(*) FROM trip_completion_requests n
+           WHERE n.driver_assignment_id = a.id) AS completion_attempts
+    FROM trip_completion_requests r
+   WHERE r.driver_assignment_id = a.id
+   ORDER BY r.attempt_no DESC
+   LIMIT 1`;
 
 /**
  * The four reported times, one row per ASSIGNMENT.
@@ -113,19 +137,30 @@ const LATEST_COMPLETION = `
  *
  * Voided events are excluded throughout: a withdrawn reading is not a reading.
  */
-const EVENTS = `
-  SELECT driver_assignment_id,
-         max(actual_at) FILTER (WHERE event_type = 'ARRIVED_PICKUP')     AS arrived_pickup_at,
+/**
+ * ★ LATERAL TO THE ASSIGNMENT ROW, NOT A WHOLE-TABLE AGGREGATE.
+ *
+ * This used to be a CTE over EVERY event ever written, grouped by assignment,
+ * and then LEFT JOINed to the month's rows. PostgreSQL cannot push `a.id`
+ * into a grouped `DISTINCT ON` subquery, so the board read the entire event
+ * history on every refresh: measured on a synthetic three-year set (235k
+ * events), 200 ms of a 285 ms request went to that scan, and it grew with
+ * history rather than with the month. Correlated on `a.id` it is one probe of
+ * `idx_trip_execution_event_assignment` per row — a few events each — and the
+ * cost is the month's, whatever the archive holds. Same output, same tie-break.
+ */
+const EVENTS_OF_ASSIGNMENT = `
+  SELECT max(actual_at) FILTER (WHERE event_type = 'ARRIVED_PICKUP')     AS arrived_pickup_at,
          max(actual_at) FILTER (WHERE event_type = 'PICKUP_CONFIRMED')   AS pickup_confirmed_at,
          max(actual_at) FILTER (WHERE event_type = 'ARRIVED_DELIVERY')   AS arrived_delivery_at,
          max(actual_at) FILTER (WHERE event_type = 'DELIVERY_CONFIRMED') AS delivery_confirmed_at
     FROM (
-      SELECT DISTINCT ON (e.driver_assignment_id, e.event_type)
-             e.driver_assignment_id, e.event_type, e.actual_at
+      SELECT DISTINCT ON (e.event_type)
+             e.event_type, e.actual_at
         FROM trip_execution_events e
-       WHERE e.voided_at IS NULL
-       ORDER BY e.driver_assignment_id,
-                e.event_type,
+       WHERE e.driver_assignment_id = a.id
+         AND e.voided_at IS NULL
+       ORDER BY e.event_type,
                 -- ★ FIRST for an arrival, LAST for a confirmation, and the two
                 -- remaining keys make the choice reproducible when instants tie.
                 CASE WHEN e.event_type IN ('ARRIVED_PICKUP', 'ARRIVED_DELIVERY')
@@ -134,8 +169,7 @@ const EVENTS = `
                      THEN e.actual_at END DESC,
                 e.recorded_at ASC,
                 e.id ASC
-    ) canonical
-   GROUP BY driver_assignment_id`;
+    ) canonical`;
 
 @Injectable()
 export class OperationalBoardRepository {
@@ -154,7 +188,7 @@ export class OperationalBoardRepository {
    */
   async listInRange(range: DateRange, executor: DatabaseQuery = this.db): Promise<BoardRow[]> {
     return executor.query<BoardRow>(
-      `${BOARD_SELECT}
+      `${RANGE_BOARD_SELECT}
         WHERE t.scheduled_on >= $1::date
           AND t.scheduled_on <= $2::date
           AND t.archived_at IS NULL
@@ -188,7 +222,7 @@ export class OperationalBoardRepository {
    */
   async listUnresolvedCompletions(executor: DatabaseQuery = this.db): Promise<BoardRow[]> {
     return executor.query<BoardRow>(
-      `${BOARD_SELECT}
+      `${QUEUE_BOARD_SELECT}
         WHERE t.archived_at IS NULL
           AND completion.completion_state IN ('pending', 'rejected')
         ORDER BY t.scheduled_on ASC, t.id ASC, a.assigned_at ASC, a.id ASC`,
@@ -210,9 +244,18 @@ export class OperationalBoardRepository {
  *
  * The lorry is the assignment's (`a.vehicle_id`), never the trip's legacy column.
  */
-const BOARD_SELECT = `
-       WITH events AS (${EVENTS}),
-            completion AS (${LATEST_COMPLETION})
+/**
+ * ★ THE COMPLETION SIDE IS THE ONE THING THE TWO READS DO DIFFERENTLY.
+ *
+ * The range board is bounded by its dates, so it probes the latest attempt per
+ * row (`LEFT JOIN LATERAL`, two index lookups each). The review queue is
+ * bounded by the completion table instead — its predicate IS "the latest
+ * attempt is open" — so it derives the latest attempt for every assignment in
+ * one pass and drives the join from there (`JOIN`, because a row with no
+ * request is by definition not in the queue). Each read names its shape;
+ * neither pays the other's cost.
+ */
+const boardSelect = (completionJoin: string): string => `
        SELECT t.id                   AS trip_id,
               t.scheduled_on::text   AS scheduled_on,
               t.pickup_at,
@@ -239,5 +282,15 @@ const BOARD_SELECT = `
                 ON a.trip_id = t.id AND a.state = 'active'
          LEFT JOIN trip_vehicles v  ON v.id = a.vehicle_id
          LEFT JOIN users u          ON u.id = a.driver_user_id
-         LEFT JOIN events           ON events.driver_assignment_id = a.id
-         LEFT JOIN completion       ON completion.driver_assignment_id = a.id`;
+         LEFT JOIN LATERAL (${EVENTS_OF_ASSIGNMENT}) events ON true
+         ${completionJoin}`;
+
+/** The range board: the latest attempt of each row, probed per row. */
+const RANGE_BOARD_SELECT = boardSelect(
+  `LEFT JOIN LATERAL (${LATEST_COMPLETION_OF_ASSIGNMENT}) completion ON true`,
+);
+
+/** The review queue: every assignment's latest attempt, derived once, then filtered. */
+const QUEUE_BOARD_SELECT = boardSelect(
+  `JOIN (${LATEST_COMPLETION_PER_ASSIGNMENT}) completion ON completion.driver_assignment_id = a.id`,
+);

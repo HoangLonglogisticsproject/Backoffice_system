@@ -16,6 +16,8 @@ import {
   PermissionGuard,
   RequirePermission,
 } from '../../../core/authorization/api/permission.guard';
+import { ProvisionedAccountGuard } from '../../../core/authorization/api/provisioned-account.guard';
+import { can } from '../../../core/authorization/domain/authorization.context';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
@@ -27,6 +29,7 @@ import { TripScheduleService, type TripBoardQuery } from '../application/trip-sc
 import { isRecordableAmount } from '../domain/trip-cost';
 import {
   canSeeTripPrices,
+  canSetTripPrices,
   redactPrices,
   redactPricesIn,
 } from '../domain/trip-price-visibility';
@@ -61,8 +64,11 @@ import {
  * somebody still holding a temporary credential read and write the board — the
  * one thing §12 of the frontend contract promises cannot happen.
  *
- *   reading, adding    trip.read / trip.create   — any finished account
- *   correcting, archiving   trip.write           — global only
+ *   reading                 trip.read            — any finished account
+ *   adding                  trip.create          — global, or the sales / accounting / dispatch function (0032)
+ *   correcting, archiving   trip.write           — global, or the head of any department
+ *   dispatching             dispatch.write       — global, or the dispatch function (0032)
+ *   pricing                 trip.price.write     — global, or the dispatch function (0032)
  *
  * The asymmetry is deliberate. The workbook let anybody type anything, which is
  * how it filled up with two spellings of the same truck; correcting somebody
@@ -181,7 +187,7 @@ const PRICE_KEYS = ['sellPrice', 'purchasePrice'] as const;
  *
  * ★ TWO DIFFERENT REFUSALS, BECAUSE THEY ARE TWO DIFFERENT MISTAKES.
  *
- *   403  A caller without `trip.price.read` sent a price key at all. Not
+ *   403  A caller without `trip.price.write` sent a price key at all. Not
  *        ignored, not stripped: silently dropping a figure somebody typed and
  *        answering 201 tells them the trip is priced when it is not. The keys
  *        are never on their form, so a body carrying one is a client that has
@@ -189,21 +195,25 @@ const PRICE_KEYS = ['sellPrice', 'purchasePrice'] as const;
  *
  *   422  A caller who MAY price a trip created one without a sell price. This
  *        is the "giá cước bán không thể để trống" rule, and it binds only the
- *        people who can see the field — a dispatcher's trip is entered unpriced
- *        and a head prices it later, exactly as a trip is entered before it has
+ *        people who can SET the field — a sales trip is entered unpriced and
+ *        dispatch prices it later, exactly as a trip is entered before it has
  *        a truck.
+ *
+ * ★ WRITE, NOT READ (0032). A head of Sales reads both figures and must not
+ * type either, so this asks `canSetTripPrices` — `trip.price.write` — while
+ * the responses below blank on `canSeeTripPrices`. Two questions, two keys.
  *
  * ⚠ THE SELL PRICE IS COMPULSORY ON CREATE ONLY. On a PATCH an absent key means
  * "leave alone", so demanding one there would make every edit to a note carry
  * the price back — and an explicit `null` stays legal, because a figure typed
- * by mistake has to be removable by whoever may see it.
+ * by mistake has to be removable by whoever may set it.
  */
 const requirePriceAuthority = (
   body: Partial<Record<(typeof PRICE_KEYS)[number], string | null>>,
   request: Request,
   { sellPriceRequired }: { sellPriceRequired: boolean },
 ): void => {
-  if (!canSeeTripPrices(authorizationOf(request))) {
+  if (!canSetTripPrices(authorizationOf(request))) {
     const sent = PRICE_KEYS.filter((key) => key in body);
     if (sent.length > 0) {
       throw new ForbiddenError(`You are not allowed to set ${sent.join(' or ')} on a trip.`);
@@ -213,6 +223,47 @@ const requirePriceAuthority = (
 
   if (sellPriceRequired && (body.sellPrice === undefined || body.sellPrice === null)) {
     throw new ValidationError('A selling price is required.');
+  }
+};
+
+/**
+ * ★ THE PATCH IS AUTHORIZED PER FIELD, NOT PER ROUTE (0032).
+ *
+ * Two different people correct a trip row for two different reasons. A shift
+ * senior fixes an address or moves the status — `trip.write`, held by any head.
+ * A dispatcher prices the run — `trip.price.write`, held by the dispatch
+ * function whether or not they head anything. One permission on the route
+ * would have to be the wider one, and then a dispatch member could not price
+ * a trip that already exists, or a head of Sales could.
+ *
+ * So the route runs no `PermissionGuard`. `ProvisionedAccountGuard` applies the
+ * provisioning gate and attaches the context; this decides from the VALIDATED
+ * body which keys are being touched and asks for exactly the permission each
+ * needs:
+ *
+ *   any key that is not a price      → `trip.write`
+ *   `sellPrice` / `purchasePrice`    → `trip.price.write`
+ *   no key at all                    → `trip.write` (the empty patch keeps its
+ *                                      old owner rather than gaining a new one)
+ *
+ * A body touching both needs both. Decided AFTER the schema, so a stray key
+ * the schema strips (`id`, `createdBy`) cannot demand a permission for a field
+ * that was never going to be written. Fail-closed: no context means no.
+ */
+const requirePatchAuthority = (body: Record<string, unknown>, request: Request): void => {
+  const authorization = authorizationOf(request);
+  if (!authorization) throw new ForbiddenError('You are not allowed to do that.');
+
+  const keys = Object.keys(body);
+  const touchesPrice = keys.some((key) => (PRICE_KEYS as readonly string[]).includes(key));
+  const touchesRow = keys.length === 0 || keys.some((key) => !(PRICE_KEYS as readonly string[]).includes(key));
+
+  if (touchesRow && !can(authorization, 'trip.write')) {
+    throw new ForbiddenError('You are not allowed to do that.');
+  }
+  if (touchesPrice && !can(authorization, 'trip.price.write')) {
+    const sent = PRICE_KEYS.filter((key) => key in body);
+    throw new ForbiddenError(`You are not allowed to set ${sent.join(' or ')} on a trip.`);
   }
 };
 
@@ -452,19 +503,25 @@ export class TripScheduleController {
     return redactPrices(trip, this.mayPrice(request));
   }
 
+  /**
+   * ★ NO `PermissionGuard` HERE, ON PURPOSE — see `requirePatchAuthority`. The
+   * permission depends on which fields the body touches, and that is known
+   * only after the schema has run. `ProvisionedAccountGuard` keeps the
+   * temporary-credential gate and attaches the context the handler decides by.
+   *
+   * ⚠ No selling price is ever demanded on a patch: an absent key means
+   * "leave alone", so demanding one would make correcting a note resend the
+   * price. Clearing it with an explicit `null` stays legal for whoever may set it.
+   */
   @Patch('trip-schedules/:tripId')
-  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.write')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, ProvisionedAccountGuard)
   async update(
     @Param('tripId', UuidParam) tripId: string,
     @Body(new ZodValidationPipe(updateTripSchema)) body: UpdateTripBody,
     @CurrentUser() actor: SessionUser,
     @Req() request: Request,
   ): Promise<TripSchedule> {
-    // ⚠ `sellPriceRequired: false` — on a patch an absent key means "leave
-    // alone", so demanding one would make correcting a note resend the price.
-    // Clearing it with an explicit `null` stays legal for whoever may see it.
-    requirePriceAuthority(body, request, { sellPriceRequired: false });
+    requirePatchAuthority(body, request);
 
     // The actor is passed because this route can move the status too — `status`
     // is a field of the patch — and every board move is recorded with whoever
@@ -536,14 +593,14 @@ export class TripScheduleController {
   /**
    * Who may be put on a trip: every live driver account, id and name.
    *
-   * ★ `trip.write`, THE SAME AUTHORITY THAT ASSIGNS. A list of the company's
+   * ★ `dispatch.write`, THE SAME AUTHORITY THAT ASSIGNS. A list of the company's
    * drivers is dispatch information; the people who hold it are the people who
    * dispatch. Declared before `trip-schedules/:tripId` as a matter of habit —
    * the prefixes differ, so the order is not load-bearing here.
    */
   @Get('trip-drivers')
   @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.write')
+  @RequirePermission('dispatch.write')
   async eligibleDrivers(): Promise<UserSummary[]> {
     return this.execution.listEligibleDrivers();
   }
@@ -586,12 +643,13 @@ export class TripScheduleController {
   /**
    * Dispatches a lorry and its driver onto a trip.
    *
-   * ★ `trip.write` — GLOBAL, OR THE HEAD OF ANY DEPARTMENT — and no new key.
-   * Dispatching is a correction to the board of exactly the kind `trip.write`
-   * already governs (who is on the row), held by the same senior people
-   * dispatch escalates to, and by nobody else: `BackofficeOnlyGuard` refuses a
-   * driver account before the permission is even asked, so a driver cannot put
-   * themselves or anybody else on a trip.
+   * ★ `dispatch.write` — GLOBAL, OR ANY MEMBER OF A DISPATCH-FUNCTION
+   * DEPARTMENT (0032) — and deliberately NOT `trip.write`. Correcting a row is
+   * seniority; putting a lorry and a driver on it is a job, held by everybody
+   * in the unit that does that job and by nobody in the units that do not,
+   * however senior. `BackofficeOnlyGuard` still refuses a driver account before
+   * the permission is even asked, so a driver cannot put themselves or anybody
+   * else on a trip.
    *
    * A trip takes any number of these. 409 when the LORRY is already on this
    * trip: replacing its driver is its own route with its own reason, so a
@@ -600,7 +658,7 @@ export class TripScheduleController {
    */
   @Post('trip-schedules/:tripId/driver-assignments')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.write')
+  @RequirePermission('dispatch.write')
   async assignDriver(
     @Param('tripId', UuidParam) tripId: string,
     @Body(new ZodValidationPipe(assignDriverSchema)) body: AssignDriverBody,
@@ -616,7 +674,7 @@ export class TripScheduleController {
    */
   @Post('trip-schedules/:tripId/driver-assignments/:assignmentId/replace')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.write')
+  @RequirePermission('dispatch.write')
   @HttpCode(HttpStatus.OK)
   async replaceDriver(
     @Param('tripId', UuidParam) tripId: string,
@@ -633,7 +691,7 @@ export class TripScheduleController {
   /** Takes one lorry and its driver off the trip, before that turn has started. */
   @Post('trip-schedules/:tripId/driver-assignments/:assignmentId/end')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.write')
+  @RequirePermission('dispatch.write')
   @HttpCode(HttpStatus.OK)
   async endAssignment(
     @Param('tripId', UuidParam) tripId: string,

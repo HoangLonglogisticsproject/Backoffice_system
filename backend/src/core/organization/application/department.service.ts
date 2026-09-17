@@ -5,7 +5,7 @@ import {
   ValidationError,
 } from '../../../common/errors/domain.error';
 import { DATABASE, type Database } from '../../../common/types/database.port';
-import { Department, normalizeSlug } from '../domain/department.entity';
+import { Department, DepartmentFunction, normalizeSlug } from '../domain/department.entity';
 import { DepartmentRepository } from '../persistence/department.repository';
 import { MembershipRepository } from '../persistence/membership.repository';
 
@@ -50,6 +50,54 @@ export class DepartmentService {
     if (!renamed) throw new NotFoundError('Department not found.');
 
     return renamed;
+  }
+
+  /**
+   * SetDepartmentFunction — what the unit is for, or `null` for none (0032).
+   *
+   * No membership check and no role check: the function is a fact about the
+   * unit, and whether anybody is in it is irrelevant to what kind of unit it
+   * is. Authorization reads it fresh on the next request, so there is nothing
+   * to invalidate.
+   */
+  async setFunction(id: string, fn: DepartmentFunction | null): Promise<Department> {
+    const updated = await this.departments.setFunction(id, fn);
+    if (!updated) throw new NotFoundError('Department not found.');
+
+    return updated;
+  }
+
+  /**
+   * UpdateDepartment — rename, set the function, or both, in ONE transaction.
+   *
+   * `PATCH /departments/:id` accepts either key or both. Two separate writes
+   * would let the first land and the second fail — a unit renamed "Điều độ"
+   * that is still not dispatch — so both statements run on one connection and
+   * commit or roll back together. Each half keeps the same validation and the
+   * same not-found answer as `rename` / `setFunction`, which stay for callers
+   * that only ever change one thing.
+   */
+  async update(
+    id: string,
+    patch: { name?: string; function?: DepartmentFunction | null },
+  ): Promise<Department> {
+    const name = patch.name?.trim();
+    if (name?.length === 0) {
+      throw new ValidationError('Department name is required.');
+    }
+    if (name === undefined && !('function' in patch)) {
+      throw new ValidationError('Nothing to change.');
+    }
+
+    return this.db.transaction(async (tx) => {
+      let department: Department | null = null;
+      if (name !== undefined) department = await this.departments.rename(id, name, tx);
+      if ('function' in patch) {
+        department = await this.departments.setFunction(id, patch.function ?? null, tx);
+      }
+      if (!department) throw new NotFoundError('Department not found.');
+      return department;
+    });
   }
 
   /**
