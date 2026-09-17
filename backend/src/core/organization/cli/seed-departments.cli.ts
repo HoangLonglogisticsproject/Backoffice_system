@@ -3,11 +3,12 @@
  *
  *   npm run dev:seed-departments
  *
- * Creates — or reclassifies — one unit per `DepartmentFunction`, so a local
- * deployment has somewhere to put a sales, an accounting and a dispatch
- * account and test `trip.*` against real rows (DL-109 / DL-110). Idempotent:
- * a unit that already exists under the slug is left alone, or has its
- * `function` set if it differs; nothing is deleted, renamed or archived.
+ * Creates — or brings back to the fixture — one unit per `DepartmentFunction`,
+ * so a local deployment has somewhere to put a sales, an accounting and a
+ * dispatch account and test `trip.*` against real rows (DL-109 / DL-110).
+ * Idempotent: a unit found under the slug is left alone when its name and
+ * function already match, otherwise both are set in one transaction; nothing
+ * is deleted or archived.
  *
  * ★ DEVELOPMENT ONLY, AND IT SAYS SO ITSELF. It refuses to run when
  * `NODE_ENV=production` (read through `AppConfig`, the one validated door).
@@ -72,15 +73,14 @@ async function main(): Promise<void> {
       const existing = await repository.findBySlug(wanted.slug);
       const action = plan(existing, wanted);
 
-      const row =
-        action === 'create'
-          ? await departments.create(wanted)
-          : action === 'update'
-            ? await departments.update((existing as Department).id, {
-                name: wanted.name,
-                function: wanted.function,
-              })
-            : (existing as Department);
+      let row: Department;
+      if (existing === null) {
+        row = await departments.create(wanted);
+      } else if (action === 'update') {
+        row = await departments.update(existing.id, { name: wanted.name, function: wanted.function });
+      } else {
+        row = existing;
+      }
 
       console.log(`${action.padEnd(12)} ${row.slug.padEnd(11)} ${row.name.padEnd(12)} function=${row.function} status=${row.status} id=${row.id}`);
     }
