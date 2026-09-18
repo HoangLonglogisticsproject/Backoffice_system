@@ -27,7 +27,7 @@ department's own identity instead?
 | `slug` | text typed by the creator, unique, **immutable** | No — it is a URL handle, not a classification: `sales`, `kinh-doanh`, `sales-hcm` and `sls` are all valid slugs for a sales unit, and a slug typed wrong cannot be corrected without recreating the unit and every membership in it |
 | `name` | display text, renamed freely | No — the rule the CEO set forbids it, and a rename would silently move permissions |
 | `status` | active / archived | Lifecycle, not kind |
-| `function` | closed set `sales · accounting · dispatch · NULL`, CHECK-constrained | **Yes** — it is the one column whose *values are named by code* (`PermissionRequirement.orFunction`), so it cannot drift from the requirement table, and it is correctable in place |
+| `function` | closed set `sales · accounting · dispatch · customer_service · NULL` (three values at 0032; `customer_service` added by 0033), CHECK-constrained | **Yes** — it is the one column whose *values are named by code* (`PermissionRequirement.orFunction`), so it cannot drift from the requirement table, and it is correctable in place |
 
 Membership (`department_memberships`) says *where a person sits* and nothing else. Roles
 (`role_assignments`) say *how senior a person is*. Neither can say *what kind of unit this
@@ -59,9 +59,10 @@ Keep `departments.function` exactly as 0032 defines it. Close the operational ga
 4. **Owner: SuperAdmin** (`unit.write` is global-only). Setting a function is configuration
    of the deployment, done once per unit, read by authorization on the next request.
 
-## 5. Production
+## 5. Production — the original rollout (2026-09-17, historical)
 
-The three existing units are reclassified once by a SuperAdmin:
+At the time of this decision the deployment held three business units. They were
+reclassified once by a SuperAdmin:
 
 ```http
 PATCH /departments/<sales-id>      { "function": "sales" }
@@ -70,12 +71,17 @@ PATCH /departments/<dispatch-id>   { "function": "dispatch" }
 ```
 
 No migration, no downtime, no history rewrite; members hold the permissions on their next
-request. `0032` is not edited.
+request. `0032` is not edited. The fourth unit (Customer Service) and the Accounting unit
+are created *with* their function through `POST /departments` — see ADR-0006 §3.
 
 ## 6. Consequences
 
 - Authorization is `User → active membership → department.function → permissions`; the
   frontend reads the resulting `permissions` from `GET /authorization/me` and nothing else.
 - A newly created business unit must be created *with* its function; the contract says so.
-- Customer Service and catalogue ownership remain deferred; adding a fourth function is one
-  value in the CHECK, one value in `DEPARTMENT_FUNCTIONS`, and a requirement row.
+- **Current function set (operative):** `sales · accounting · dispatch · customer_service ·
+  NULL`. Customer Service was deferred when this ADR was written and is **no longer**: it is a
+  function of its own since ADR-0006 / DL-113, added by migration `0033` (CHECK widened,
+  nothing seeded). Adding a further function stays what it was — one value in the CHECK, one
+  value in `DEPARTMENT_FUNCTIONS`, and a requirement row.
+- Catalogue *edit/archive* ownership remains deferred (creation was split by DL-112).

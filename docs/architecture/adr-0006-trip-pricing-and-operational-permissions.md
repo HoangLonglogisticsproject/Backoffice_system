@@ -52,10 +52,25 @@ row, catalogue edit/archive) is unchanged: a head within sales / accounting / di
 
 1. `0033` runs in the release job before the backend is replaced (CHECK only; old
    backend + new CHECK is valid, new backend + old CHECK is not — hence "migrate first").
-2. Backend, then frontend deploy. Immediately: Sales loses price visibility and vehicle
-   creation; Vận hành loses price visibility, keeps dispatch and gains nothing new.
+2. Backend, then frontend deploy. Immediately, on the units already classified:
+   - **Sales** loses `trip.price.read` and vehicle creation; keeps booking and customer /
+     location creation.
+   - **Vận hành (dispatch)** loses `trip.price.read` / `trip.price.write`; keeps
+     `dispatch.write` and `vehicle.create`; and **every member gains
+     `driver.account.request`** — it was `head-anywhere`, so only the unit's head (and
+     heads elsewhere) held it; it is now `global ∨ dispatch`, head or member alike.
+   - Heads of every *other* unit lose `driver.account.request`.
 3. SuperAdmin creates the two missing units with their function
    (`POST /departments { slug, name, function: "accounting" | "customer_service" }`)
    and moves people in (`POST /users { departmentId }` / `POST /departments/:id/members`).
 4. Authorization reads the function on the next request; the frontend reloads
    `/authorization/me`. Nothing is seeded, nothing is guessed from a name.
+5. Rollout verification, each after a reload of `/authorization/me`:
+   - a **non-head** Vận hành member: `permissions` contains `driver.account.request`,
+     `dispatch.write`, `vehicle.create` and no `trip.price.*`; `POST /driver-account-requests`
+     → 201;
+   - a Sales member: no `trip.price.*`, no `vehicle.create`; `GET /trip-schedules/:id` shows
+     `sellPrice: null`; `POST /trip-vehicles` → 403;
+   - an Accounting member (once the unit exists): `PATCH /trip-schedules/:id { sellPrice }`
+     → 200;
+   - a head of a non-business unit: `POST /driver-account-requests` → 403.

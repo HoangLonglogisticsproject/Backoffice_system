@@ -9,6 +9,7 @@ import { useSession } from '@/contexts/SessionProvider';
 import { useDepartmentMutations } from '@/hooks/organization/useDepartmentAdmin';
 import { notifyApiError, notifySuccess } from '@/utils/toast';
 import type { Department, EmployeeRosterRow } from '@/types/organization';
+import type { TranslationKey } from '@/types/translate';
 import { AddEmployeeModal } from './AddEmployeeModal';
 import { FUNCTION_LABEL } from './DepartmentFormModal';
 
@@ -69,6 +70,8 @@ export function DepartmentDetailModal({
   const mayTransfer = can('unit.member.write');
   const mayCreate = can('user.write');
   const headBusy = assignHead.isPending || revokeHead.isPending;
+  /** Appointing into an empty seat and replacing a sitting head are the same act with a different verb. */
+  const appointLabel: TranslationKey = head ? 'replaceHead' : 'assignHead';
 
   /** Appoint `headPick`; when somebody already holds it, revoke first (contract §15b). */
   const appoint = async () => {
@@ -157,7 +160,7 @@ export function DepartmentDetailModal({
                 disabled={!headPick || headBusy}
                 className="bg-blue-600 hover:bg-blue-700"
               >
-                {headBusy ? t('saving') : t(head ? 'replaceHead' : 'assignHead')}
+                {headBusy ? t('saving') : t(appointLabel)}
               </Button>
               {head && (
                 <Button type="button" variant="outline" onClick={() => void revoke()} disabled={headBusy}>

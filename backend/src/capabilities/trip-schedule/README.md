@@ -50,17 +50,20 @@ Dữ liệu chuyến thuộc **bốn phòng nghiệp vụ** (Sales, Kế toán, 
 Service) và SUPERADMIN — phòng khác (Marketing, HR, IT…) không đọc, không thêm,
 không sửa, dù là trưởng phòng (làm rõ nghiệp vụ 2026-09-17; mở rộng 2026-09-18).
 Giá bán / giá mua là của **Kế toán**: ba phòng còn lại tạo chuyến **không giá**,
-Kế toán bổ sung qua PATCH chỉ-key-giá. Trong bốn phòng đó: ai cũng đọc
-và thêm dòng; sửa, đổi trạng thái hoặc archive cần SUPERADMIN hoặc trưởng phòng;
-điều phối và nhập giá là việc của phòng Điều độ. `PATCH /trip-schedules/:id`
-phân quyền theo field: key giá → `trip.price.write`, key khác → `trip.write`.
-Customer Service **chưa** được đưa vào — quyết định còn để ngỏ.
+Kế toán bổ sung qua PATCH chỉ-key-giá. Trong bốn phòng đó: ai cũng đọc board và
+tạo chuyến; sửa, đổi trạng thái hoặc archive cần SUPERADMIN hoặc trưởng phòng
+của Sales / Kế toán / Điều phối (Customer Service **không** có `trip.write`);
+điều phối, thêm xe và đề nghị tài khoản tài xế là việc của phòng Điều phối;
+nhập giá là việc của Kế toán. `PATCH /trip-schedules/:id` phân quyền theo
+field: key giá → `trip.price.write`, key khác → `trip.write`.
 
-**Vì sao người đặt chuyến cũng thêm được vào danh mục xe/khách.** Giới hạn việc thêm
-cho quản trị viên trông có vẻ an toàn hơn nhưng không phải: người điều vận đang
-nhập một chuyến cho khách chưa có trong danh sách sẽ phải dừng lại, tìm quản trị
-viên, và đợi. Thứ họ thực sự làm là ghi tên khách vào ô ghi chú — và danh mục bị
-đi vòng đúng ở những dòng nó sinh ra để kỷ luật.
+**Vì sao người đặt chuyến cũng thêm được khách / địa điểm — nhưng không thêm xe
+(DL-112).** Giới hạn việc thêm khách cho quản trị viên trông có vẻ an toàn hơn
+nhưng không phải: người đang nhập một chuyến cho khách chưa có trong danh sách sẽ
+phải dừng lại, tìm quản trị viên, và đợi. Thứ họ thực sự làm là ghi tên khách vào
+ô ghi chú — và danh mục bị đi vòng đúng ở những dòng nó sinh ra để kỷ luật. Đội
+xe thì khác: xe là tài sản vận hành, `vehicle.create` chỉ của Điều phối và
+SUPERADMIN, để người đặt chuyến không "bịa" ra một chiếc xe rồi đưa lên chuyến.
 
 **Vì sao sửa vẫn là quản trị.** Đổi tên một khách hàng thay đổi ý nghĩa của mọi
 chuyến trong quá khứ đã trỏ tới nó. Đó là quản trị, không phải nhập liệu — nên
@@ -80,19 +83,23 @@ phòng nào sở hữu. Trưởng phòng Sales sửa được một chuyến kh�
 và ở đây nó được chấp nhận: trưởng phòng chính là người điều vận tìm đến khi gõ
 sai một dòng.
 
-### ★ `global | orFunction` — lịch xe không thuộc phòng nào, nhưng thuộc ba *chức năng*
+### ★ `global | orFunction` — lịch xe không thuộc phòng nào, nhưng thuộc bốn *chức năng*
 
 `PERMISSION_REQUIREMENT` trước đây chỉ có `'head' | 'member' | 'global'` — ba
 quan hệ với một **phòng ban**. Lịch xe không thuộc phòng nào: xe là của công ty,
 khách là của công ty, và điều vận không phải một đơn vị ai đó là thành viên. Gán
 nó vào một phòng nào đó là bịa ra một sự thật.
 
-Thứ nó thuộc về là **chức năng** của phòng (`departments.function`, 0032):
-`trip.read` · `trip.create` · `trip.price.read` là `{ tier: 'global',
-orFunction: ['sales', 'accounting', 'dispatch'] }` — SuperAdmin, hoặc bất kỳ
-thành viên (head lẫn member) của một phòng mang một trong ba function đó. Phòng
-không có function, và driver không có membership, mang `functions: []` và không
-bao giờ qua được. Không còn key nào ở bậc `'any'`; architecture test giữ điều đó.
+Thứ nó thuộc về là **chức năng** của phòng (`departments.function`, 0032/0033):
+`trip.read` · `trip.create` · `customer.create` · `location.create` là
+`{ tier: 'global', orFunction: ['sales', 'accounting', 'dispatch',
+'customer_service'] }` — SuperAdmin, hoặc bất kỳ thành viên (head lẫn member)
+của một phòng mang một trong bốn function đó. `trip.price.read` /
+`trip.price.write` chỉ liệt kê `accounting`; `vehicle.create` ·
+`dispatch.write` · `driver.account.request` chỉ liệt kê `dispatch` (DL-111 /
+DL-112). Phòng không có function, và driver không có membership, mang
+`functions: []` và không bao giờ qua được. Không còn key nào ở bậc `'any'`;
+architecture test giữ điều đó.
 
 Các route vẫn đi qua `PermissionGuard` chứ không chạy bằng `AuthGuard` trần — vì
 `PermissionGuard` (và `ProvisionedAccountGuard` ở Driver Portal) là nơi từ chối

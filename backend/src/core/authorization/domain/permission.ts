@@ -73,12 +73,13 @@ export const PERMISSIONS = [
    * ★ SEE THE TWO PRICES ON A TRIP ROW: what the customer is charged and what
    * the carrier is paid.
    *
-   * ★ READING ONLY, SINCE 0032. This key used to gate writing too, on the
-   * argument that a holder who may type a figure must be able to read it back.
-   * That argument still holds — and it holds in ONE direction: everybody who
-   * may write may read. The reverse is what the business refused: sales and
-   * accounting read the figures and must not set them. So `trip.price.write`
-   * is its own key, and every requirement that grants it also grants this one.
+   * ★ READING ONLY, SINCE 0032; ACCOUNTING'S AND THE SUPERADMIN'S SINCE DL-111.
+   * This key used to gate writing too, on the argument that a holder who may
+   * type a figure must be able to read it back. That argument still holds,
+   * in ONE direction: everybody who may write may read — a test pins it. The
+   * two keys stay separate so that reading and setting can be granted apart
+   * again without touching a route. Sales, customer service and dispatch book
+   * the run and hold neither: they see `null` where the figures are.
    *
    * ⚠ SEPARATE FROM `cost.read`, WHICH IS A DIFFERENT LEDGER AT A DIFFERENT
    * TIER. `cost.*` covers `trip_costs` and `trip_outsource_hires` — many
@@ -91,7 +92,7 @@ export const PERMISSIONS = [
    * ★ SET OR CLEAR THE TWO PRICES. Gates the `sellPrice` / `purchasePrice`
    * keys of the create and patch bodies: a caller without it who sends either
    * is refused, not silently stripped. Held by a GLOBAL caller and by the
-   * DISPATCH function.
+   * ACCOUNTING function (DL-111).
    */
   'trip.price.write',
 
@@ -122,11 +123,12 @@ export const PERMISSIONS = [
    * carries no route that could. Approving is `user.write`, which is `'global'`
    * and which no department head holds — that separation is the whole design.
    *
-   * ★ ONE KEY, NOT ONE PER DEPARTMENT. Operations and Accounting were named
-   * separately in the requirement, but they are the same act by the same kind
-   * of person: a head, proposing. `'head-anywhere'` says exactly that and stays
-   * true when a third department starts hiring drivers. Keys named after
-   * departments would turn the org chart into the permission set.
+   * ★ ONE KEY, AND IT IS THE DISPATCH FUNCTION'S (DL-111). Proposing a driver
+   * is the work of the unit that hires and runs drivers — every member of a
+   * dispatch-function department, head or not, and a global administrator.
+   * It was `'head-anywhere'` once (any head could propose); the business
+   * narrowed it. Still one key rather than one per department: the org chart
+   * is not the permission set.
    */
   'driver.account.request',
 ] as const;

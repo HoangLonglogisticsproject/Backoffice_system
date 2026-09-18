@@ -72,9 +72,13 @@ export interface DepartmentDirectory extends ResourceState {
   reload: () => void;
 }
 
+/** A query's failure as the one error type the screens branch on; a network-level throw has no status. */
+const asApiError = (failed: Error): ApiError =>
+  isApiError(failed) ? failed : new ApiError(0, undefined, 'Unexpected error.');
+
 const stateOf = (queries: UseQueryResult<unknown, Error>[], sessionLoading: boolean): ResourceState => {
-  const failed = queries.find((query) => query.error)?.error ?? null;
-  const error = failed ? (isApiError(failed) ? failed : new ApiError(0, undefined, 'Unexpected error.')) : null;
+  const failed = queries.find((query) => query.error)?.error;
+  const error = failed ? asApiError(failed) : null;
   return {
     loading: sessionLoading || queries.some((query) => query.isFetching),
     error,
