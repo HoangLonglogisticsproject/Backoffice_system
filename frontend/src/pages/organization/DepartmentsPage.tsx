@@ -65,7 +65,9 @@ export default function DepartmentsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {directory.rows.map((row) => (
+            {/* The row is a JOIN of two reads; if either failed, half a row
+                (a unit with "no head, 0 members") would read as a fact. */}
+            {!directory.error && directory.rows.map((row) => (
               <DepartmentRow
                 key={row.department.id}
                 row={row}

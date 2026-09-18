@@ -186,6 +186,15 @@ describe('DepartmentsPage', () => {
       expect(screen.queryByRole('button', { name: 'Thêm phòng' })).toBeNull();
     });
 
+    it('★ draws no row when the roster half of the join failed — a unit with "0 members" would be a lie', async () => {
+      fetchEmployeeRoster.mockRejectedValue(new ApiError(500, undefined, 'boom'));
+      renderPage();
+
+      expect(await screen.findByText('Không tải được dữ liệu.')).toBeInTheDocument();
+      expect(screen.queryByText('Phòng Sales')).toBeNull();
+      expect(screen.queryByText('Chưa có phòng ban nào.')).toBeNull();
+    });
+
     it('renders any other failure as an error, not a blank table', async () => {
       fetchDepartments.mockRejectedValue(new ApiError(500, undefined, 'boom'));
       renderPage();
