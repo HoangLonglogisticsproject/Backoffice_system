@@ -26,10 +26,11 @@ export const canSeeTripPrices = (authorization: AuthorizationContext | undefined
 /**
  * May this caller SET what a trip is sold and bought for?
  *
- * ★ A NARROWER KEY THAN READING (0032). Sales and accounting read the figures;
- * only dispatch and a global administrator type them. The write path asks this
- * and the read path asks `canSeeTripPrices`, so the two questions cannot be
- * collapsed back into one by a later edit to either.
+ * ★ A SEPARATE KEY FROM READING. Today both are accounting's and the global
+ * administrator's (DL-111); they stay two keys so that reading and setting
+ * can be granted apart again without touching a route. The write path asks
+ * this and the read path asks `canSeeTripPrices`, so the two questions cannot
+ * be collapsed back into one by a later edit to either.
  */
 export const canSetTripPrices = (authorization: AuthorizationContext | undefined): boolean =>
   authorization !== undefined && can(authorization, 'trip.price.write');

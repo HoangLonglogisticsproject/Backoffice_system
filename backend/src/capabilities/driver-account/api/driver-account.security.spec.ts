@@ -77,19 +77,28 @@ describe('driver-account HTTP security', () => {
     context = asContext({ userId: BOSS, global: true });
   };
 
-  /** Head of Operations — a DEPARTMENT_HEAD, which is all the model has. */
+  /** Head of Operations — the DISPATCH function, which is what proposes drivers (DL-111). */
   const asOperationsHead = () => {
     sessionUserId = OPS_HEAD;
     accountType = 'employee';
-    context = asContext({ userId: OPS_HEAD, headOf: [OPS_DEPT], memberOf: [OPS_DEPT] });
+    context = asContext({ userId: OPS_HEAD, headOf: [OPS_DEPT], memberOf: [OPS_DEPT], functions: ['dispatch'] });
   };
 
+  /** A plain member of Operations — same function, no headship, same right to propose. */
+  const asOperationsMember = () => {
+    sessionUserId = MEMBER;
+    accountType = 'employee';
+    context = asContext({ userId: MEMBER, memberOf: [OPS_DEPT], functions: ['dispatch'] });
+  };
+
+  /** Head of Accounting — senior, and NOT the unit that hires drivers. */
   const asAccountingHead = () => {
     sessionUserId = ACC_HEAD;
     accountType = 'employee';
-    context = asContext({ userId: ACC_HEAD, headOf: [ACC_DEPT], memberOf: [ACC_DEPT] });
+    context = asContext({ userId: ACC_HEAD, headOf: [ACC_DEPT], memberOf: [ACC_DEPT], functions: ['accounting'] });
   };
 
+  /** A member of a unit with no function at all. */
   const asOrdinaryMember = () => {
     sessionUserId = MEMBER;
     accountType = 'employee';
@@ -303,9 +312,13 @@ describe('driver-account HTTP security', () => {
 
   // ============================================================== 3,4 · request ==
 
+  /**
+   * ★ PROPOSING IS THE DISPATCH FUNCTION'S (DL-111) — member or head alike.
+   * An Accounting head, however senior, is refused below with the members.
+   */
   describe.each([
     ['an Operations head', asOperationsHead],
-    ['an Accounting head', asAccountingHead],
+    ['an Operations member', asOperationsMember],
   ])('%s', (_label, become) => {
     beforeEach(() => become());
 
@@ -368,6 +381,32 @@ describe('driver-account HTTP security', () => {
       expect(drivers.list).not.toHaveBeenCalled();
       expect(drivers.get).not.toHaveBeenCalled();
       expect(drivers.setStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  // ======================================================= 4b · other functions ==
+
+  /**
+   * ★ SENIORITY ELSEWHERE PROPOSES NOTHING. `driver.account.request` used to
+   * be `head-anywhere`; the business narrowed it to the dispatch function, so
+   * the head of Accounting — who once could — is refused like any member.
+   */
+  describe('an Accounting head', () => {
+    beforeEach(() => asAccountingHead());
+
+    it('★ may NOT propose a driver any more, and reaches no service', async () => {
+      const response = await authed('post', REQUESTS).send(newDriver);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(drivers.request).not.toHaveBeenCalled();
+    });
+
+    it('has no proposals to read back either', async () => {
+      const response = await authed('get', `${REQUESTS}/mine`);
+
+      expect(response.status).toBe(403);
+      expect(drivers.listMine).not.toHaveBeenCalled();
     });
   });
 

@@ -106,13 +106,13 @@ describe('can()', () => {
     // department. What decides is the FUNCTION of the caller's own unit —
     // seniority elsewhere buys nothing, and a head of an ordinary department
     // neither reads the board nor books on it (0032).
-    it.each(['trip.read', 'trip.create'] as const)(
-      '★ grants %s to the three booking functions and the superadmin — and to nobody else',
+    it.each(['trip.read', 'trip.create', 'customer.create', 'location.create'] as const)(
+      '★ grants %s to the four booking functions and the superadmin — and to nobody else',
       (key) => {
         for (const caller of [memberOfA(), headOfA(), context()]) {
           expect(can(caller, key)).toBe(false);
         }
-        for (const fn of ['sales', 'accounting', 'dispatch'] as const) {
+        for (const fn of ['sales', 'accounting', 'dispatch', 'customer_service'] as const) {
           expect(can(context({ memberOf: [A], functions: [fn] }), key)).toBe(true);
           expect(can(context({ headOf: [A], memberOf: [A], functions: [fn] }), key)).toBe(true);
         }
@@ -166,13 +166,15 @@ describe('can()', () => {
      * 0026 takes that back for both figures. The board is still company-wide;
      * what the run is sold and bought for is not.
      */
-    it('★ shows a trip price to the booking functions and the superadmin — never to a head elsewhere', () => {
+    it('★ shows a trip price to accounting and the superadmin — never to a head elsewhere, never to sales', () => {
       expect(can(memberOfA(), 'trip.price.read')).toBe(false);
       expect(can(context(), 'trip.price.read')).toBe(false);
       // The head of an ordinary unit used to see them; the 2026-09-17
       // clarification closed that. Seniority is not price visibility.
       expect(can(headOfA(), 'trip.price.read')).toBe(false);
-      expect(can(context({ memberOf: [A], functions: ['sales'] }), 'trip.price.read')).toBe(true);
+      // Sales books the run and never sees the figure (DL-111).
+      expect(can(context({ memberOf: [A], functions: ['sales'] }), 'trip.price.read')).toBe(false);
+      expect(can(context({ memberOf: [A], functions: ['accounting'] }), 'trip.price.read')).toBe(true);
       expect(can(superadmin(), 'trip.price.read')).toBe(true);
     });
 
@@ -300,16 +302,12 @@ describe('grantedPermissions()', () => {
     expect(grantedPermissions(superadmin()).sort()).toEqual([...PERMISSIONS].sort());
   });
 
-  it('lists what a head holds somewhere, including correcting the board', () => {
+  it('lists what a head of an ordinary unit holds — its own roster, and nothing of the board', () => {
     expect(grantedPermissions(headOfA()).sort()).toEqual([
-      // ★ PROPOSING A DRIVER, BUT NOT CREATING ONE. `driver.account.request` is
-      // `head-anywhere`, so every head holds it; `user.write` is `global` and
-      // stays absent from this list, which is what keeps the proposal separate
-      // from the decision.
-      'driver.account.request',
       // ★ NOTHING OF THE BOARD: not `trip.read`, not `trip.price.read`, not
-      // `trip.write`. A head of an ordinary unit sees no trip and corrects
-      // none (business clarification 2026-09-17).
+      // `trip.write` (business clarification 2026-09-17) — and no longer
+      // `driver.account.request` either: proposing a driver is the dispatch
+      // function's, not any head's (DL-111).
       'unit.member.read',
       'unit.read',
     ]);
@@ -325,11 +323,11 @@ describe('grantedPermissions()', () => {
     expect(grantedPermissions(context())).toEqual([]);
   });
 
-  it('★ lists the board, and correcting it, for a head of a booking function', () => {
+  it('★ lists the board, and correcting it, for a head of a booking function — and no price', () => {
     expect(grantedPermissions(context({ headOf: [A], memberOf: [A], functions: ['sales'] })).sort()).toEqual([
-      'driver.account.request',
+      'customer.create',
+      'location.create',
       'trip.create',
-      'trip.price.read',
       'trip.read',
       'trip.write',
       'unit.member.read',
@@ -350,9 +348,9 @@ describe('grantedPermissions()', () => {
  * name rather than in a corner of the HTTP suite.
  */
 describe('★ head and member of one function hold the same trip.create / trip.read / trip.price.read', () => {
-  const KEYS = ['trip.create', 'trip.read', 'trip.price.read'] as const;
+  const KEYS = ['trip.create', 'trip.read', 'customer.create', 'location.create'] as const;
 
-  it.each(['sales', 'accounting', 'dispatch'] as const)('%s: head === member, and both are granted', (fn) => {
+  it.each(['sales', 'accounting', 'dispatch', 'customer_service'] as const)('%s: head === member, and both are granted', (fn) => {
     const member = context({ memberOf: [A], functions: [fn] });
     const head = context({ headOf: [A], memberOf: [A], functions: [fn] });
     for (const key of KEYS) {
@@ -389,11 +387,15 @@ describe('★ orFunction — permissions a department FUNCTION grants', () => {
   const accountingHead = () => context({ headOf: [B], memberOf: [B], functions: ['accounting'] });
   const salesperson = () => context({ memberOf: [B], functions: ['sales'] });
   const salesHead = () => context({ headOf: [B], memberOf: [B], functions: ['sales'] });
+  const customerService = () => context({ memberOf: [B], functions: ['customer_service'] });
+  const customerServiceHead = () => context({ headOf: [B], memberOf: [B], functions: ['customer_service'] });
 
-  it('grants dispatch to a member whose department is the dispatch unit', () => {
+  it('grants dispatch to a member whose department is the dispatch unit — and not the prices', () => {
     expect(can(dispatcher(), 'dispatch.write')).toBe(true);
-    expect(can(dispatcher(), 'trip.price.write')).toBe(true);
-    expect(can(dispatcher(), 'trip.price.read')).toBe(true);
+    expect(can(dispatcher(), 'vehicle.create')).toBe(true);
+    expect(can(dispatcher(), 'driver.account.request')).toBe(true);
+    expect(can(dispatcher(), 'trip.price.write')).toBe(false);
+    expect(can(dispatcher(), 'trip.price.read')).toBe(false);
   });
 
   it('★ grants it as an OR — the head of the dispatch unit holds it, and heads elsewhere do not', () => {
@@ -415,41 +417,64 @@ describe('★ orFunction — permissions a department FUNCTION grants', () => {
     expect(can(salesperson(), 'dispatch.write')).toBe(false);
     expect(can(salesperson(), 'trip.price.write')).toBe(false);
     expect(can(accountant(), 'dispatch.write')).toBe(false);
-    expect(can(accountant(), 'trip.price.write')).toBe(false);
+    expect(can(accountant(), 'vehicle.create')).toBe(false);
+    expect(can(dispatcher(), 'trip.price.write')).toBe(false);
   });
 
   it('★ grants a permission whose function list names the caller’s function among others', () => {
-    // `trip.price.read` lists three functions; each one alone is enough.
-    expect(can(salesperson(), 'trip.price.read')).toBe(true);
-    expect(can(accountant(), 'trip.price.read')).toBe(true);
-    expect(can(dispatcher(), 'trip.price.read')).toBe(true);
+    // `trip.create` lists four functions; each one alone is enough.
+    expect(can(salesperson(), 'trip.create')).toBe(true);
+    expect(can(accountant(), 'trip.create')).toBe(true);
+    expect(can(dispatcher(), 'trip.create')).toBe(true);
+    expect(can(customerService(), 'trip.create')).toBe(true);
   });
 
-  it('★ lets accounting READ the prices without letting it WRITE them', () => {
+  it('★ lets accounting READ and WRITE the prices — member and head alike (DL-111)', () => {
     expect(can(accountant(), 'trip.price.read')).toBe(true);
-    expect(can(accountant(), 'trip.price.write')).toBe(false);
+    expect(can(accountant(), 'trip.price.write')).toBe(true);
     expect(can(accountingHead(), 'trip.price.read')).toBe(true);
-    expect(can(accountingHead(), 'trip.price.write')).toBe(false);
+    expect(can(accountingHead(), 'trip.price.write')).toBe(true);
   });
 
-  it('★ lets sales READ the prices — member and head alike — and never write them', () => {
-    expect(can(salesperson(), 'trip.price.read')).toBe(true);
-    expect(can(salesHead(), 'trip.price.read')).toBe(true);
-    expect(can(salesperson(), 'trip.price.write')).toBe(false);
-    expect(can(salesHead(), 'trip.price.write')).toBe(false);
-  });
-
-  it('★ shows the prices to every named function and to nobody with none', () => {
-    for (const caller of [salesperson(), salesHead(), accountant(), accountingHead(), dispatcher(), dispatchHead(), superadmin()]) {
-      expect(can(caller, 'trip.price.read')).toBe(true);
+  it('★ shows the prices to nobody who books without accounting — sales, dispatch, customer service, head or member', () => {
+    for (const caller of [
+      salesperson(),
+      salesHead(),
+      dispatcher(),
+      dispatchHead(),
+      customerService(),
+      customerServiceHead(),
+      context(),
+      memberOfA(),
+      headOfA(),
+    ]) {
+      expect(can(caller, 'trip.price.read')).toBe(false);
+      expect(can(caller, 'trip.price.write')).toBe(false);
     }
-    // A driver, and a member of an ordinary unit: no function, no head, no price.
-    expect(can(context(), 'trip.price.read')).toBe(false);
-    expect(can(memberOfA(), 'trip.price.read')).toBe(false);
+    expect(can(superadmin(), 'trip.price.read')).toBe(true);
+  });
+
+  it('★ the fleet: dispatch adds a lorry, the other booking functions file customers and places only (DL-112)', () => {
+    for (const caller of [salesperson(), salesHead(), accountant(), accountingHead(), customerService(), customerServiceHead()]) {
+      expect(can(caller, 'customer.create')).toBe(true);
+      expect(can(caller, 'location.create')).toBe(true);
+      expect(can(caller, 'vehicle.create')).toBe(false);
+      expect(can(caller, 'driver.account.request')).toBe(false);
+    }
+    expect(can(dispatcher(), 'customer.create')).toBe(true);
+    expect(can(dispatcher(), 'location.create')).toBe(true);
+    expect(can(dispatcher(), 'vehicle.create')).toBe(true);
+  });
+
+  it('★ customer service books and reads, and corrects nothing — trip.write did not widen', () => {
+    expect(can(customerService(), 'trip.read')).toBe(true);
+    expect(can(customerServiceHead(), 'trip.read')).toBe(true);
+    expect(can(customerServiceHead(), 'trip.write')).toBe(false);
+    expect(can(customerServiceHead(), 'dispatch.write')).toBe(false);
   });
 
   it('★ never reaches trip.complete.review by function — dispatch is not its own reviewer', () => {
-    for (const caller of [dispatcher(), dispatchHead(), accountant(), accountingHead(), salesperson(), salesHead()]) {
+    for (const caller of [dispatcher(), dispatchHead(), accountant(), accountingHead(), salesperson(), salesHead(), customerService(), customerServiceHead()]) {
       expect(can(caller, 'trip.complete.review')).toBe(false);
     }
   });
@@ -491,26 +516,34 @@ describe('★ orFunction — permissions a department FUNCTION grants', () => {
 
   it('★ advertises exactly what it grants, so the client draws what the server accepts', () => {
     expect(grantedPermissions(dispatcher()).sort()).toEqual([
+      'customer.create',
       'dispatch.write',
+      'driver.account.request',
+      'location.create',
+      'trip.create',
+      'trip.read',
+      'unit.read',
+      'vehicle.create',
+    ]);
+    expect(grantedPermissions(accountant()).sort()).toEqual([
+      'customer.create',
+      'location.create',
       'trip.create',
       'trip.price.read',
       'trip.price.write',
       'trip.read',
       'unit.read',
     ]);
-    expect(grantedPermissions(accountant()).sort()).toEqual([
-      'trip.create',
-      'trip.price.read',
-      'trip.read',
-      'unit.read',
-    ]);
-    // A salesperson advertises the price READ and nothing else beyond an
-    // ordinary member.
-    expect(grantedPermissions(salesperson()).sort()).toEqual([
-      'trip.create',
-      'trip.price.read',
-      'trip.read',
-      'unit.read',
-    ]);
+    // A salesperson and a customer-service agent advertise booking and the two
+    // catalogues they file into — no price, no fleet, no driver proposal.
+    for (const caller of [salesperson(), customerService()]) {
+      expect(grantedPermissions(caller).sort()).toEqual([
+        'customer.create',
+        'location.create',
+        'trip.create',
+        'trip.read',
+        'unit.read',
+      ]);
+    }
   });
 });

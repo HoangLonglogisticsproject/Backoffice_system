@@ -1,5 +1,5 @@
 import { httpClient } from './client';
-import type { Department } from '@/types/organization';
+import type { Department, DepartmentFunction } from '@/types/organization';
 
 /**
  * Reading one department (contract §5).
@@ -35,5 +35,36 @@ export async function fetchDepartment(departmentId: string): Promise<Department>
  */
 export async function fetchDepartments(): Promise<Department[]> {
   const { data } = await httpClient.get<Department[]>('/departments');
+  return data;
+}
+
+export interface CreateDepartmentInput {
+  slug: string;
+  name: string;
+  /** Absent or `null` creates an ordinary unit (contract §5). */
+  function?: DepartmentFunction | null;
+}
+
+/** `POST /departments` → 201 (contract §5). GLOBAL only; `slug` is immutable afterwards. */
+export async function createDepartment(input: CreateDepartmentInput): Promise<Department> {
+  const { data } = await httpClient.post<Department>('/departments', input);
+  return data;
+}
+
+export interface UpdateDepartmentInput {
+  name?: string;
+  /** `null` CLEARS the function; an absent key leaves it alone (contract §5). */
+  function?: DepartmentFunction | null;
+}
+
+/** `PATCH /departments/:id` → 200 (contract §5). Both keys land in one transaction. */
+export async function updateDepartment(
+  departmentId: string,
+  input: UpdateDepartmentInput,
+): Promise<Department> {
+  const { data } = await httpClient.patch<Department>(
+    `/departments/${encodeURIComponent(departmentId)}`,
+    input,
+  );
   return data;
 }

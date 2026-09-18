@@ -285,7 +285,7 @@ mọi session, disable account. Người đó lập tức mất phiên và khôn
 | `GET /departments` | **chỉ GLOBAL** | 200 |
 | `GET /departments/:id` | member của phòng đó, hoặc GLOBAL | 200 |
 | `POST /departments` | GLOBAL | 201 |
-| `PATCH /departments/:id` | GLOBAL | 200 — body `{ name?, function? }`; `function` ∈ `sales · accounting · dispatch · null`, quyết định thành viên phòng đó có `dispatch.write` / `trip.price.*` không (0032) |
+| `PATCH /departments/:id` | GLOBAL | 200 — body `{ name?, function? }`; `function` ∈ `sales · accounting · dispatch · customer_service · null`, quyết định thành viên phòng đó giữ quyền Trip nào (0032, 0033, §14) |
 | `POST /departments/:id/archive` | GLOBAL | 200 |
 
 ⚠️ `GET /departments` **không có scope**, nên chỉ GLOBAL qua được. HEAD và MEMBER
@@ -296,7 +296,7 @@ nhận **403**. Đừng dùng nó để dựng menu — lấy id từ `/authoriz
 // GET /departments — 200
 [
   { "id": "60630e75-…", "slug": "finance", "name": "Finance", "status": "active",
-    "function": "accounting",   // sales · accounting · dispatch · null (0032, §14)
+    "function": "accounting",   // sales · accounting · dispatch · customer_service · null (0032/0033, §14)
     "createdAt": "2026-08-18T08:34:22.918Z", "updatedAt": "2026-08-18T08:34:22.918Z" }
 ]
 ```
@@ -307,7 +307,7 @@ nhận **403**. Đừng dùng nó để dựng menu — lấy id từ `/authoriz
 // một phòng NGHIỆP VỤ được tạo KÈM function ngay từ đầu (DL-110), để không có
 // khoảng "đã tạo nhưng chưa là sales" trong đó thành viên không có quyền Trip:
 { "slug": "sales", "name": "Kinh doanh", "function": "sales" }
-// function ∈ sales · accounting · dispatch; bỏ trống hoặc null = phòng thường.
+// function ∈ sales · accounting · dispatch · customer_service; bỏ trống hoặc null = phòng thường.
 // Phòng đã tồn tại: `PATCH /departments/:id { "function": ... }`.
 ```
 
@@ -846,32 +846,44 @@ là nhãn suy ra để hiển thị.
 ### Quyền theo **chức năng phòng** (0032) — `departments.function`
 
 Một số quyền không phụ thuộc head/member mà phụ thuộc phòng của người gọi **làm
-gì**. SuperAdmin đặt `function` cho phòng (`sales · accounting · dispatch · null`)
-qua `PATCH /departments/:id`; mọi thành viên active của phòng đó — head lẫn
-member — giữ quyền tương ứng. Không có role `DISPATCHER`; driver không có
-membership nên không bao giờ giữ các quyền này.
+gì**. SuperAdmin đặt `function` cho phòng (`sales · accounting · dispatch ·
+customer_service · null`) khi tạo (`POST /departments`) hoặc qua `PATCH
+/departments/:id`; mọi thành viên active của phòng đó — head lẫn member — giữ
+quyền tương ứng. Không có role `DISPATCHER`; driver không có membership nên
+không bao giờ giữ các quyền này.
 
-**Từ 2026-09-17: dữ liệu Trip chỉ thuộc ba phòng chức năng + SuperAdmin.**
+**Từ 2026-09-17: dữ liệu Trip chỉ thuộc các phòng chức năng + SuperAdmin.**
 `DEPARTMENT_HEAD` **không** tự có trip visibility: head phòng Marketing/HR/IT
 không đọc Trip, không đọc giá, không sửa Trip. `trip.write` = head **và** phòng
-thuộc `sales|accounting|dispatch`. Frontend ẩn toàn bộ mục ĐIỀU PHỐI và ba màn
-hình dispatch khi `permissions` không có `trip.read`. **Customer Service chưa
-được đưa vào** — quyết định nghiệp vụ còn để ngỏ, không có function `customer-service`.
+thuộc `sales|accounting|dispatch` (không mở cho `customer_service`). Frontend ẩn
+toàn bộ mục ĐIỀU PHỐI và ba màn hình dispatch khi `permissions` không có `trip.read`.
 
-| Permission | SUPERADMIN | phòng `dispatch` | phòng `accounting` | phòng `sales` | head phòng khác | member phòng khác |
-|---|---|---|---|---|---|---|
-| `trip.read` (board, detail, history, events, assignments, completion list, catalogue xe/khách/địa điểm) | ✓ | ✓ | ✓ | ✓ | **✗** | ✗ |
-| `trip.create` (tạo Trip; thêm xe/khách/địa điểm) | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
-| `trip.write` (sửa/status/archive/catalogue) — **head trong phòng chức năng** | ✓ | chỉ head | chỉ head | chỉ head | **✗** | ✗ |
-| `dispatch.write` (assign/replace/end, `GET /trip-drivers`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
-| `trip.price.read` | ✓ | ✓ | ✓ | ✓ | **✗** | ✗ |
-| `trip.price.write` (`sellPrice`/`purchasePrice` trong body) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
-| `trip.complete.review` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+**Policy 2026-09-18 (DL-111 · DL-112 · DL-113).** Bốn phòng nghiệp vụ đặt chuyến:
+`sales · accounting · dispatch · customer_service`. **Giá chỉ của Kế toán** (đọc và
+ghi); Sales / CS / Điều phối tạo chuyến **không giá**, Kế toán bổ sung sau. Master
+data tách khỏi `trip.create`: `customer.create` · `location.create` cho cả bốn
+phòng, `vehicle.create` chỉ Điều phối. `driver.account.request` chỉ Điều phối.
+
+| Permission | SUPERADMIN | `dispatch` | `accounting` | `sales` | `customer_service` | head phòng khác | member phòng khác |
+|---|---|---|---|---|---|---|---|
+| `trip.read` (board, detail, history, events, assignments, completion list, catalogue xe/khách/địa điểm) | ✓ | ✓ | ✓ | ✓ | ✓ | **✗** | ✗ |
+| `trip.create` (chỉ tạo Trip) | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| `customer.create` (`POST /trip-customers`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| `location.create` (`POST /trip-locations`, `POST /trip-customers/:id/locations`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| `vehicle.create` (`POST /trip-vehicles`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `trip.write` (sửa/status/archive Trip; sửa/archive catalogue) — **head trong phòng chức năng** | ✓ | chỉ head | chỉ head | chỉ head | **✗** | **✗** | ✗ |
+| `dispatch.write` (assign/replace/end, `GET /trip-drivers`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `driver.account.request` (`POST /driver-account-requests`, `/mine`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `trip.price.read` | ✓ | **✗** | ✓ | **✗** | ✗ | ✗ | ✗ |
+| `trip.price.write` (`sellPrice`/`purchasePrice` trong body) | ✓ | **✗** | ✓ | ✗ | ✗ | ✗ | ✗ |
+| `trip.complete.review` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 **`PATCH /trip-schedules/:id` được phân quyền theo field**, không theo route:
 key thường (địa chỉ, ghi chú, status…) cần `trip.write`; `sellPrice`/`purchasePrice`
 cần `trip.price.write`; body có cả hai loại cần cả hai; body rỗng cần `trip.write`.
-Nên dispatch **member** `PATCH { sellPrice }` → 200, `PATCH { note }` → 403.
+Nên kế toán **member** `PATCH { sellPrice }` → 200, `PATCH { note }` → 403.
+`POST /trip-schedules` từ Sales / CS / Điều phối mà có key giá → **403**, không strip;
+Kế toán và SuperAdmin `POST` phải có `sellPrice` (422 nếu thiếu), `purchasePrice` tuỳ chọn.
 
 Frontend: nút điều độ đọc `dispatch.write`; cột giá đọc `trip.price.read`; ô nhập
 giá **mở** khi có `trip.price.write`, **disabled** khi chỉ có `trip.price.read`

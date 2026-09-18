@@ -64,11 +64,11 @@ import {
  * somebody still holding a temporary credential read and write the board — the
  * one thing §12 of the frontend contract promises cannot happen.
  *
- *   reading                 trip.read            — any finished account
- *   adding                  trip.create          — global, or the sales / accounting / dispatch function (0032)
- *   correcting, archiving   trip.write           — global, or the head of any department
+ *   reading                 trip.read            — global, or a booking function (sales / accounting / dispatch / customer service)
+ *   adding                  trip.create          — global, or a booking function (0032, DL-111)
+ *   correcting, archiving   trip.write           — global, or the head of a sales / accounting / dispatch unit
  *   dispatching             dispatch.write       — global, or the dispatch function (0032)
- *   pricing                 trip.price.write     — global, or the dispatch function (0032)
+ *   pricing                 trip.price.write     — global, or the accounting function (DL-111)
  *
  * The asymmetry is deliberate. The workbook let anybody type anything, which is
  * how it filled up with two spellings of the same truck; correcting somebody
@@ -230,11 +230,12 @@ const requirePriceAuthority = (
  * ★ THE PATCH IS AUTHORIZED PER FIELD, NOT PER ROUTE (0032).
  *
  * Two different people correct a trip row for two different reasons. A shift
- * senior fixes an address or moves the status — `trip.write`, held by any head.
- * A dispatcher prices the run — `trip.price.write`, held by the dispatch
- * function whether or not they head anything. One permission on the route
- * would have to be the wider one, and then a dispatch member could not price
- * a trip that already exists, or a head of Sales could.
+ * senior fixes an address or moves the status — `trip.write`, held by a head
+ * within a booking function. An accountant prices the run — `trip.price.write`,
+ * held by the accounting function whether or not they head anything (DL-111).
+ * One permission on the route would have to be the wider one, and then an
+ * accounting member could not price a trip that already exists, or a head of
+ * Sales could.
  *
  * So the route runs no `PermissionGuard`. `ProvisionedAccountGuard` applies the
  * provisioning gate and attaches the context; this decides from the VALIDATED

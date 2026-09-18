@@ -19,8 +19,13 @@ const unit = (over: Partial<Department> = {}): Department => ({
 
 describe('dev:seed-departments', () => {
   it('names exactly one unit per department function, and nothing else', () => {
-    expect(DEV_DEPARTMENTS.map((d) => d.function).sort()).toEqual(['accounting', 'dispatch', 'sales']);
-    expect(new Set(DEV_DEPARTMENTS.map((d) => d.slug)).size).toBe(3);
+    expect(DEV_DEPARTMENTS.map((d) => d.function).sort()).toEqual([
+      'accounting',
+      'customer_service',
+      'dispatch',
+      'sales',
+    ]);
+    expect(new Set(DEV_DEPARTMENTS.map((d) => d.slug)).size).toBe(4);
   });
 
   it('creates a missing unit, leaves a matching one alone, and brings a drifted one back', () => {
@@ -33,11 +38,12 @@ describe('dev:seed-departments', () => {
     expect(plan(unit({ name: 'Kinh doanh' }), wanted)).toBe('update');
   });
 
-  it('uses the business terms: Sales, Kế toán, Điều phối', () => {
+  it('uses the business terms: Sales, Kế toán, Điều phối, Customer Service', () => {
     expect(DEV_DEPARTMENTS.map((d) => [d.slug, d.name])).toEqual([
       ['sales', 'Sales'],
       ['accounting', 'Kế toán'],
       ['dispatch', 'Điều phối'],
+      ['customer-service', 'Customer Service'],
     ]);
   });
 });

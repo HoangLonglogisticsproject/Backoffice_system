@@ -124,10 +124,18 @@ report "B6  không đọc process.env.X ngoài validate" \
 #
 # 'crm' vẫn giữ ranh giới hai đầu — ba ký tự quá ngắn, bỏ ranh giới ra là nó
 # sẽ khớp vào giữa những định danh không liên quan.
+#
+# ★ NGOẠI LỆ THEO TÊN FILE, như B6 — không glob. Hai registry của foundation
+# đặt TÊN cho năng lực nghiệp vụ mà không diễn giải chúng: bảng permission
+# key (`customer.create`) và tập `DepartmentFunction` (`customer_service`,
+# DL-112 / DL-113). Chúng là token đóng, được guard so sánh theo chuỗi; không
+# có repository, entity hay luật nào về "customer" trong core. Spec khẳng định
+# đúng các token đó đi kèm. Một file mới rò rỉ chữ này vẫn đỏ.
 report "B7  foundation ↛ từ vựng nghiệp vụ" \
   "$(grep -rinE "(customer|invoice|shipment|warehouse|recruitment|\bcrm\b)" \
        --include=*.ts src/core src/common src/infrastructure src/config 2>/dev/null \
-     | grep -vE "$COMMENT_LINE")"
+     | grep -vE "$COMMENT_LINE" \
+     | grep -vE "^(src/core/authorization/domain/permission\.ts|src/core/authorization/domain/authorization\.context\.spec\.ts|src/core/organization/domain/department\.entity\.ts|src/core/organization/api/organization\.security\.spec\.ts|src/core/organization/cli/seed-departments\.cli\.ts|src/core/organization/cli/seed-departments\.cli\.spec\.ts):")"
 
 # --- B8 ── chỉ MỘT thư mục infrastructure, ở gốc src ------------------------
 # `src/infrastructure/` = hạ tầng kỹ thuật của TOÀN HỆ THỐNG (driver database,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ComponentProps } from 'react';
 import { MapPin, Plus } from 'lucide-react';
 import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
@@ -467,13 +467,13 @@ export function TripFormModal({
   // failure mode worth having.
   const { can } = useSession();
   // ★ TWO KEYS SINCE 0032. Reading draws the two figures; WRITING is what
-  // decides whether they are typed into and whether the keys travel. Sales
-  // and accounting hold the first and not the second, so for them the fields
-  // are drawn disabled and the payload carries neither key — the server would
-  // answer 403 to a body that so much as mentioned a price from them.
+  // decides whether they are typed into and whether the keys travel. Today
+  // both are accounting's (DL-111); a holder of the first without the second
+  // gets the fields drawn disabled and a payload carrying neither key — the
+  // server would answer 403 to a body that so much as mentioned a price.
   const mayViewPrices = can('trip.price.read');
   const mayEditPrices = can('trip.price.write');
-  // ★ PRICE-ONLY EDITING. A dispatch member prices an existing trip without
+  // ★ PRICE-ONLY EDITING. An accounting member prices an existing trip without
   // holding `trip.write`; the server authorizes the patch per field, so this
   // form sends the two price keys and nothing else, and every other control
   // is disabled so nothing typed into it can be lost on save.
@@ -483,6 +483,11 @@ export function TripFormModal({
   // master-data screen asks for. A dispatcher without it still sees that a
   // place is not located; they just cannot fix it from here.
   const mayManagePlaces = can('trip.write');
+  // Filing a new customer or a new place from inside the form — one key each
+  // (DL-112). Without the key the control is not drawn; the server refuses
+  // the POST regardless of what the client draws.
+  const mayCreateCustomer = can('customer.create');
+  const mayCreatePlace = can('location.create');
   const [form, setForm] = useState<FormState>(emptyForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -791,6 +796,10 @@ export function TripFormModal({
             )}
             value={form.customerId}
             onChange={chooseCustomer}
+            // ★ `customer.create`, NOT `trip.create` (DL-112): booking a run
+            // and filing a customer are two keys, and a caller with only the
+            // first gets a list with no "+". The server refuses the POST anyway.
+            canCreate={mayCreateCustomer}
             onCreate={async (name) => {
               const created = await createTripCustomer({ name });
               onCatalogueChanged();
@@ -825,70 +834,15 @@ export function TripFormModal({
           exists to prevent.
         */}
         </fieldset>
-        {mayViewPrices ? (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {/*
-              ★ DRAWN BUT DISABLED FOR A READER WHO MAY NOT SET THEM (0032):
-              sales and accounting see what the trip is sold and bought for,
-              and cannot type into either. Disabled rather than plain text so
-              the form reads the same for everybody who may see the figures.
-            */}
-            {!mayEditPrices && (
-              <p className="text-xs text-gray-500 sm:col-span-2">{t('priceReadOnly')}</p>
-            )}
-
-            <div className="space-y-2">
-              <label htmlFor="trip-purchase-price" className="text-sm font-medium text-gray-700">
-                {t('fieldPurchasePrice')}
-              </label>
-              {/*
-                ★ AND THIS ONE IS NOT `required`, WHICH IS THE POINT OF SPLITTING
-                THEM. Most runs go on our own lorries and are not bought from
-                anybody, so an empty buying price is the ordinary case rather
-                than an unfinished form.
-              */}
-              <MoneyInput
-                id="trip-purchase-price"
-                value={form.purchasePrice}
-                onChange={(plain) => set('purchasePrice', plain)}
-                disabled={!mayEditPrices}
-                aria-describedby="trip-purchase-price-hint"
-              />
-              <p id="trip-purchase-price-hint" className="text-xs text-gray-500">
-                {t('purchasePriceHint')}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="trip-sell-price" className="text-sm font-medium text-gray-700">
-                {t('fieldSellPrice')}
-              </label>
-              {/*
-                ★ `required` ON CREATE ONLY, WHICH IS THE HALF OF THE RULE THE
-                BROWSER CAN ENFORCE. A trip is priced when it is booked, so the
-                figure is compulsory the first time — the server answers 422
-                without it. On an EDIT the field may be emptied, because a price
-                typed by mistake has to be removable by whoever may see it, and
-                the PATCH route accepts an explicit clear.
-              */}
-              <MoneyInput
-                id="trip-sell-price"
-                value={form.sellPrice}
-                onChange={(plain) => set('sellPrice', plain)}
-                required={!editing && mayEditPrices}
-                disabled={!mayEditPrices}
-                aria-describedby="trip-sell-price-hint"
-              />
-              <p id="trip-sell-price-hint" className="text-xs text-gray-500">
-                {t('sellPriceHint')}
-              </p>
-            </div>
-          </div>
-        ) : (
-          // Says the trip is saveable without a price, and does NOT say whether
-          // this one has one. See the note above.
-          <p className="text-xs text-gray-500">{t('priceRestricted')}</p>
-        )}
+        <TripPriceFields
+          mayView={mayViewPrices}
+          mayEdit={mayEditPrices}
+          editing={editing}
+          sellPrice={form.sellPrice}
+          purchasePrice={form.purchasePrice}
+          onSellPrice={(plain) => set('sellPrice', plain)}
+          onPurchasePrice={(plain) => set('purchasePrice', plain)}
+        />
 
         <fieldset disabled={priceOnly} className="min-w-0 space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -901,6 +855,7 @@ export function TripFormModal({
             chosen={placeAt('pickup')}
             value={form.pickupLocationId}
             onChange={(id) => set('pickupLocationId', id)}
+            canAdd={mayCreatePlace}
             onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
             onSetup={setupHandlerFor(mayManagePlaces, 'pickup', setPlaceDialog)}
             address={form.pickupAddress}
@@ -917,6 +872,7 @@ export function TripFormModal({
             chosen={placeAt('delivery')}
             value={form.deliveryLocationId}
             onChange={(id) => set('deliveryLocationId', id)}
+            canAdd={mayCreatePlace}
             onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
             onSetup={setupHandlerFor(mayManagePlaces, 'delivery', setPlaceDialog)}
             address={form.deliveryAddress}
@@ -977,80 +933,16 @@ export function TripFormModal({
             dispatch panel's job, where a change can be ended with a reason and
             keep its history. */}
         {!editing && mayDispatch && (
-          <fieldset className="space-y-3 rounded-lg border border-gray-200 p-3">
-            <legend className="px-1 text-sm font-medium text-gray-700">{t('dispatchTitle')}</legend>
-
-            {crew.map((row, index) => (
-              <div key={row.key} className="space-y-1">
-                <div className="flex items-end gap-2">
-                  <div className="grid flex-1 gap-3 sm:grid-cols-2">
-                    <div className="space-y-1">
-                      <label
-                        htmlFor={`trip-crew-vehicle-${index}`}
-                        className="text-sm font-medium text-gray-700"
-                      >
-                        {t('fieldVehicle')}
-                      </label>
-                      <select
-                        id={`trip-crew-vehicle-${index}`}
-                        value={row.vehicleId}
-                        onChange={(event) => setCrewAt(row.key, { vehicleId: event.target.value })}
-                        className="h-9 w-full rounded-lg border border-input bg-white px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                      >
-                        <option value="">{t('dispatchSelectVehicle')}</option>
-                        {vehicles
-                          // Its OWN choice always stays: a select cannot show a
-                          // value it has no option for.
-                          .filter(
-                            (vehicle) =>
-                              vehicle.id === row.vehicleId || !takenVehicleIds.has(vehicle.id),
-                          )
-                          .map((vehicle) => (
-                            <option key={vehicle.id} value={vehicle.id}>
-                              {formatPlate(vehicle.plate)}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    <DriverSelect
-                      id={`trip-crew-driver-${index}`}
-                      value={row.driverUserId}
-                      onChange={(value) => setCrewAt(row.key, { driverUserId: value })}
-                      options={drivers.data ?? []}
-                      loading={drivers.isLoading}
-                      // The row says what is wrong, in its own words — see `checkCrew`.
-                      required={false}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => removeCrew(row.key)}
-                  >
-                    {t('dispatchRemove')}
-                  </Button>
-                </div>
-                {row.error && (
-                  <p role="alert" className="text-sm text-red-600">
-                    {row.error}
-                  </p>
-                )}
-              </div>
-            ))}
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={addCrew}
-              disabled={vehicles.length === 0}
-            >
-              <Plus className="h-4 w-4" />
-              {t('dispatchAdd')}
-            </Button>
-          </fieldset>
+          <CrewFields
+            crew={crew}
+            vehicles={vehicles}
+            takenVehicleIds={takenVehicleIds}
+            drivers={drivers.data ?? []}
+            driversLoading={drivers.isLoading}
+            onChangeRow={setCrewAt}
+            onRemoveRow={removeCrew}
+            onAddRow={addCrew}
+          />
         )}
 
         <TextArea
@@ -1077,6 +969,199 @@ export function TripFormModal({
         />
       ) : null}
     </Modal>
+  );
+}
+
+/**
+ * ★ THE TWO PRICES, DRAWN ONLY FOR SOMEBODY WHO MAY SEE THEM.
+ *
+ * Not disabled, not blanked — absent. A disabled field would tell a booker
+ * that a figure exists and is being withheld, and the server goes to some
+ * trouble not to disclose even that: it sends `null` for both to such a
+ * caller, so an unpriced trip and a priced one look identical from here.
+ *
+ * ★ DRAWN BUT DISABLED FOR A READER WHO MAY NOT SET THEM: `trip.price.read`
+ * without `trip.price.write` sees the figures and cannot type into either.
+ *
+ * ★ `MoneyInput`, NOT `type="number"`, on both. The state IS the payload — a
+ * plain decimal string — and the grouping comes from `formatWithCommas`. A
+ * number input would hand back a value the browser had already put through
+ * a float, which is exactly what `NUMERIC(14,2)` on the server exists to
+ * prevent.
+ */
+function TripPriceFields({
+  mayView,
+  mayEdit,
+  editing,
+  sellPrice,
+  purchasePrice,
+  onSellPrice,
+  onPurchasePrice,
+}: Readonly<{
+  mayView: boolean;
+  mayEdit: boolean;
+  editing: boolean;
+  sellPrice: string;
+  purchasePrice: string;
+  onSellPrice: (plain: string) => void;
+  onPurchasePrice: (plain: string) => void;
+}>) {
+  const { t } = useLanguage();
+
+  if (!mayView) {
+    // Says the trip is saveable without a price, and does NOT say whether
+    // this one has one. See the note above.
+    return <p className="text-xs text-gray-500">{t('priceRestricted')}</p>;
+  }
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      {!mayEdit && <p className="text-xs text-gray-500 sm:col-span-2">{t('priceReadOnly')}</p>}
+
+      <div className="space-y-2">
+        <label htmlFor="trip-purchase-price" className="text-sm font-medium text-gray-700">
+          {t('fieldPurchasePrice')}
+        </label>
+        {/*
+          ★ AND THIS ONE IS NOT `required`, WHICH IS THE POINT OF SPLITTING
+          THEM. Most runs go on our own lorries and are not bought from
+          anybody, so an empty buying price is the ordinary case rather
+          than an unfinished form.
+        */}
+        <MoneyInput
+          id="trip-purchase-price"
+          value={purchasePrice}
+          onChange={onPurchasePrice}
+          disabled={!mayEdit}
+          aria-describedby="trip-purchase-price-hint"
+        />
+        <p id="trip-purchase-price-hint" className="text-xs text-gray-500">
+          {t('purchasePriceHint')}
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <label htmlFor="trip-sell-price" className="text-sm font-medium text-gray-700">
+          {t('fieldSellPrice')}
+        </label>
+        {/*
+          ★ `required` ON CREATE ONLY, WHICH IS THE HALF OF THE RULE THE
+          BROWSER CAN ENFORCE. A trip is priced when it is booked, so the
+          figure is compulsory the first time — the server answers 422
+          without it. On an EDIT the field may be emptied, because a price
+          typed by mistake has to be removable by whoever may set it, and
+          the PATCH route accepts an explicit clear.
+        */}
+        <MoneyInput
+          id="trip-sell-price"
+          value={sellPrice}
+          onChange={onSellPrice}
+          required={!editing && mayEdit}
+          disabled={!mayEdit}
+          aria-describedby="trip-sell-price-hint"
+        />
+        <p id="trip-sell-price-hint" className="text-xs text-gray-500">
+          {t('sellPriceHint')}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Phương tiện điều độ" — the pairs typed alongside a NEW trip.
+ *
+ * ★ AN INPUT SURFACE AND NOTHING ELSE (ADR-0004). On save each row becomes
+ * its own `POST /trip-schedules/:id/driver-assignments`, the same canonical
+ * path the dispatch panel uses; the trip body carries no lorry. A row shows
+ * its own refusal beside it — see `checkCrew` in the form.
+ */
+function CrewFields({
+  crew,
+  vehicles,
+  takenVehicleIds,
+  drivers,
+  driversLoading,
+  onChangeRow,
+  onRemoveRow,
+  onAddRow,
+}: Readonly<{
+  crew: CrewRow[];
+  vehicles: TripVehicle[];
+  /** Lorries already on another row of this form — offered nowhere else. */
+  takenVehicleIds: ReadonlySet<string>;
+  drivers: ComponentProps<typeof DriverSelect>['options'];
+  driversLoading: boolean;
+  onChangeRow: (key: string, patch: Partial<CrewRow>) => void;
+  onRemoveRow: (key: string) => void;
+  onAddRow: () => void;
+}>) {
+  const { t } = useLanguage();
+
+  return (
+    <fieldset className="space-y-3 rounded-lg border border-gray-200 p-3">
+      <legend className="px-1 text-sm font-medium text-gray-700">{t('dispatchTitle')}</legend>
+
+      {crew.map((row, index) => (
+        <div key={row.key} className="space-y-1">
+          <div className="flex items-end gap-2">
+            <div className="grid flex-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label htmlFor={`trip-crew-vehicle-${index}`} className="text-sm font-medium text-gray-700">
+                  {t('fieldVehicle')}
+                </label>
+                <select
+                  id={`trip-crew-vehicle-${index}`}
+                  value={row.vehicleId}
+                  onChange={(event) => onChangeRow(row.key, { vehicleId: event.target.value })}
+                  className="h-9 w-full rounded-lg border border-input bg-white px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <option value="">{t('dispatchSelectVehicle')}</option>
+                  {vehicles
+                    // Its OWN choice always stays: a select cannot show a
+                    // value it has no option for.
+                    .filter((vehicle) => vehicle.id === row.vehicleId || !takenVehicleIds.has(vehicle.id))
+                    .map((vehicle) => (
+                      <option key={vehicle.id} value={vehicle.id}>
+                        {formatPlate(vehicle.plate)}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <DriverSelect
+                id={`trip-crew-driver-${index}`}
+                value={row.driverUserId}
+                onChange={(value) => onChangeRow(row.key, { driverUserId: value })}
+                options={drivers}
+                loading={driversLoading}
+                // The row says what is wrong, in its own words — see `checkCrew`.
+                required={false}
+              />
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => onRemoveRow(row.key)}>
+              {t('dispatchRemove')}
+            </Button>
+          </div>
+          {row.error && (
+            <p role="alert" className="text-sm text-red-600">
+              {row.error}
+            </p>
+          )}
+        </div>
+      ))}
+
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="gap-2"
+        onClick={onAddRow}
+        disabled={vehicles.length === 0}
+      >
+        <Plus className="h-4 w-4" />
+        {t('dispatchAdd')}
+      </Button>
+    </fieldset>
   );
 }
 
@@ -1220,6 +1305,7 @@ function LocationEnd({
   chosen,
   value,
   onChange,
+  canAdd,
   onAdd,
   onSetup,
   address,
@@ -1237,6 +1323,8 @@ function LocationEnd({
   chosen: ChosenPlace | null;
   value: string | null;
   onChange: (id: string | null) => void;
+  /** May this caller add a place (`location.create`)? False draws no control. */
+  canAdd: boolean;
   onAdd: () => void;
   /** Opens the place dialog on an unlocated ACTIVE place. `null` for a caller who may not correct places. */
   onSetup: ((location: TripLocation) => void) | null;
@@ -1280,15 +1368,17 @@ function LocationEnd({
           ))}
         </select>
         {/* A step lighter than the picker: adding a place is the exception, choosing one is the job. */}
-        <Button
-          type="button"
-          variant="ghost"
-          className="shrink-0 text-gray-600"
-          disabled={customerId === null}
-          onClick={onAdd}
-        >
-          {t('addLocation')}
-        </Button>
+        {canAdd && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="shrink-0 text-gray-600"
+            disabled={customerId === null}
+            onClick={onAdd}
+          >
+            {t('addLocation')}
+          </Button>
+        )}
       </div>
 
       {customerId !== null && locations.length === 0 ? (

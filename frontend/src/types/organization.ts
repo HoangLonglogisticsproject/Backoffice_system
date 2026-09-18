@@ -14,7 +14,13 @@ export type DepartmentStatus = 'active' | 'archived';
  * ordinary unit. Set by a global administrator through `PATCH /departments/:id`
  * with `{ function }`; never inferred from the name.
  */
-export type DepartmentFunction = 'sales' | 'accounting' | 'dispatch';
+/**
+ * The closed set, as a runtime list so a form can offer exactly these and a
+ * type so nothing else typechecks. Mirrors `DEPARTMENT_FUNCTIONS` on the
+ * server (0032 / 0033); `null` — an ordinary unit — is not a member of it.
+ */
+export const DEPARTMENT_FUNCTIONS = ['sales', 'accounting', 'dispatch', 'customer_service'] as const;
+export type DepartmentFunction = (typeof DEPARTMENT_FUNCTIONS)[number];
 
 /** `GET /departments/:departmentId` (§5). */
 export interface Department {

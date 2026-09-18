@@ -128,7 +128,9 @@ describe('TripMasterDataPage', () => {
     updateTripCustomer.mockReset().mockResolvedValue(customer());
     archiveTripVehicle.mockReset().mockResolvedValue(vehicle({ status: 'archived' }));
     archiveTripCustomer.mockReset().mockResolvedValue(customer({ status: 'archived' }));
-    useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+    useSession.mockReset().mockReturnValue(
+      session(['trip.read', 'vehicle.create', 'customer.create', 'location.create', 'trip.write']),
+    );
   });
 
   describe('the two catalogues', () => {
@@ -177,17 +179,29 @@ describe('TripMasterDataPage', () => {
   });
 
   describe('what each caller is offered', () => {
-    it('offers "add" to anybody holding trip.create', async () => {
-      useSession.mockReturnValue(session(['trip.read', 'trip.create']));
+    it('offers "add vehicle" to a holder of vehicle.create', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'vehicle.create']));
       renderPage();
 
       expect(await screen.findByRole('button', { name: 'Thêm xe' })).toBeTruthy();
     });
 
+    it('★ offers a booker without vehicle.create the customer "add" and not the vehicle one (DL-112)', async () => {
+      // A salesperson: files customers, never a lorry. The server refuses the
+      // POST regardless; the control is simply not drawn.
+      useSession.mockReturnValue(session(['trip.read', 'customer.create', 'location.create']));
+      renderPage();
+      await screen.findByText('51D-65233');
+      expect(screen.queryByRole('button', { name: 'Thêm xe' })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Khách hàng' }));
+      expect(await screen.findByRole('button', { name: 'Thêm khách hàng' })).toBeTruthy();
+    });
+
     it('★ offers no edit or archive control without trip.write', async () => {
-      // Adding is `trip.create` and everybody has it; RENAMING changes what
-      // every past trip appears to say, which is why it is not the same tier.
-      useSession.mockReturnValue(session(['trip.read', 'trip.create']));
+      // Adding is `vehicle.create`; RENAMING changes what every past trip
+      // appears to say, which is why it is not the same key.
+      useSession.mockReturnValue(session(['trip.read', 'vehicle.create']));
       renderPage();
       await screen.findByText('51D-65233');
 
@@ -237,7 +251,7 @@ describe('TripMasterDataPage', () => {
       ...over,
     });
 
-    const openPlaces = async (permissions = ['trip.read', 'trip.create', 'trip.write']) => {
+    const openPlaces = async (permissions = ['trip.read', 'location.create', 'trip.write']) => {
       useSession.mockReturnValue(session(permissions));
       fetchTripCustomers.mockResolvedValue([customer()]);
       renderPage();
@@ -367,7 +381,7 @@ describe('TripMasterDataPage', () => {
 
     it('★ offers no "add" under a retired customer, while its places stay readable', async () => {
       fetchTripLocations.mockResolvedValue([location()]);
-      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+      useSession.mockReturnValue(session(['trip.read', 'location.create', 'trip.write']));
       fetchTripCustomers.mockResolvedValue([customer({ status: 'archived' })]);
       renderPage();
       fireEvent.click(await screen.findByRole('button', { name: 'Khách hàng' }));

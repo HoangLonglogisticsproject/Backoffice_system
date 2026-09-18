@@ -57,7 +57,7 @@ export default function LocationCataloguePage() {
   const locations = useAllTripLocations(includeArchived);
 
   const canManage = can('trip.write');
-  const canAdd = can('trip.create');
+  const canAdd = can('location.create');
 
   /**
    * ★ THE DIALOG'S STATE IS WHAT IT IS FOR, NOT A PAIR OF BOOLEANS. `null` is

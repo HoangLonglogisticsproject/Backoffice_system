@@ -17,10 +17,15 @@ interface CatalogueSelectProps {
   options: CatalogueOption[];
   value: string | null;
   onChange: (id: string | null) => void;
-  /** Adds a row to the catalogue and returns it. Any signed-in caller may. */
+  /** Adds a row to the catalogue and returns it. */
   onCreate: (label: string) => Promise<CatalogueOption>;
   newPlaceholder: string;
   disabled?: boolean;
+  /**
+   * May this caller add a row (`customer.create`, DL-112)? False draws no
+   * "+": the list stays a list. The server refuses the POST regardless.
+   */
+  canCreate?: boolean;
 }
 
 /**
@@ -51,6 +56,7 @@ export function CatalogueSelect({
   onCreate,
   newPlaceholder,
   disabled = false,
+  canCreate = true,
 }: Readonly<CatalogueSelectProps>) {
   const { t } = useLanguage();
   const [adding, setAdding] = useState(false);
@@ -60,7 +66,7 @@ export function CatalogueSelect({
 
   const create = async () => {
     const trimmed = draft.trim();
-    if (trimmed === '') return;
+    if (trimmed === '' || !canCreate) return;
 
     setBusy(true);
     setError(null);
@@ -111,25 +117,27 @@ export function CatalogueSelect({
           ))}
         </select>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-9 gap-1 px-2 text-gray-600"
-          onClick={() => {
-            setAdding((open) => !open);
-            setError(null);
-          }}
-          disabled={disabled}
-          aria-expanded={adding}
-          aria-controls={`${id}-new`}
-        >
-          <Plus className="h-4 w-4" />
-          <span className="sr-only">{placeholder}</span>
-        </Button>
+        {canCreate && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 gap-1 px-2 text-gray-600"
+            onClick={() => {
+              setAdding((open) => !open);
+              setError(null);
+            }}
+            disabled={disabled}
+            aria-expanded={adding}
+            aria-controls={`${id}-new`}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="sr-only">{placeholder}</span>
+          </Button>
+        )}
       </div>
 
-      {adding && (
+      {adding && canCreate && (
         <div id={`${id}-new`} className="flex items-stretch gap-2">
           <Input
             value={draft}
