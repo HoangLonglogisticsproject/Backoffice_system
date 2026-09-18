@@ -66,10 +66,10 @@ cookie
 | `unit.read` | target ∈ `memberOf` |
 | `unit.member.read` | target ∈ `headOf` |
 | `unit.write` · `unit.member.write` · `role.assign` · `user.write` | chỉ `global` |
-| `trip.read` · `trip.create` · `trip.price.read` | `global` **hoặc** phòng có `function ∈ {sales, accounting, dispatch}` |
-| `trip.write` | `head-anywhere` **và** phòng có `function ∈ {sales, accounting, dispatch}` (`withinFunction`) |
-| `driver.account.request` | `head-anywhere` — head của phòng bất kỳ |
-| `dispatch.write` · `trip.price.write` | `global` **hoặc** phòng có `function = 'dispatch'` |
+| `trip.read` · `trip.create` · `customer.create` · `location.create` | `global` **hoặc** phòng có `function ∈ {sales, accounting, dispatch, customer_service}` |
+| `trip.write` | `head-anywhere` **và** phòng có `function ∈ {sales, accounting, dispatch}` (`withinFunction`) — không mở cho `customer_service` |
+| `dispatch.write` · `vehicle.create` · `driver.account.request` | `global` **hoặc** phòng có `function = 'dispatch'` |
+| `trip.price.read` · `trip.price.write` | `global` **hoặc** phòng có `function = 'accounting'` (DL-111) |
 | `cost.*` · `trip.complete.review` | chỉ `global` — **không có** `orFunction`, architecture test giữ |
 
 **`orFunction` / `withinFunction` (0032).** Một requirement là

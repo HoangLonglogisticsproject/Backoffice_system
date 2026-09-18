@@ -76,6 +76,7 @@ Không có Docker? Bất kỳ PostgreSQL nào cũng được — `docker-compose
 | `0030_shared_trip_locations.sql` | project | `trip_locations.customer_id` nullable = địa điểm **dùng chung** · `uq_trip_location_shared_name (name_key) WHERE active AND customer_id IS NULL` · `province`/`district`/`ward` · `idx_trip_location_catalogue` |
 | `0031_two_tier_administrative_units.sql` | project | **không đổi cấu trúc** — chỉ `COMMENT ON COLUMN` sáu cột hành chính. Đính chính phần lý lẽ của `0030`: hệ 2 cấp sau sáp nhập 01/07/2025 (34 tỉnh/thành → phường/xã), `district*` thành **legacy chỉ-đọc**, không backfill |
 | `0032_department_function.sql` | core | `departments.function TEXT NULL` + CHECK `sales · accounting · dispatch`. Chức năng của phòng, để authorization cấp `dispatch.write` / `trip.price.write` theo **phòng** thay vì theo trưởng phòng. **Không seed, không đặt tên phòng nào** — SuperAdmin đặt qua `PATCH /departments/:id` |
+| `0033_department_function_customer_service.sql` | core | Mở rộng CHECK `departments_function` thêm `customer_service` (DROP IF EXISTS + ADD trong một transaction). Không đổi dòng nào, không seed; `0032` giữ nguyên |
 
 VALIDATE CONSTRAINT `active_has_vehicle` **chưa commit** — chỉ viết khi audit
 production cho Case B = 0, và nó lấy số kế tiếp còn trống. Xem `deploy/README.md`.

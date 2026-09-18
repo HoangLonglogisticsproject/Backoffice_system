@@ -843,7 +843,7 @@ describe('TripSchedulePage', () => {
   });
 
   describe('moving a trip along the board', () => {
-    const write = ['trip.read', 'trip.create', 'trip.write'];
+    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
 
     it('★ changes the status from the row, through the status endpoint', async () => {
       // Not through the edit form and not through the full PATCH: that would
@@ -1032,7 +1032,7 @@ describe('TripSchedulePage', () => {
    * trip. These cases pin what the form offers and what it sends.
    */
   describe('★ the trip form names the customer’s places', () => {
-    const write = ['trip.read', 'trip.create', 'trip.write'];
+    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
     const place = (over: Record<string, unknown> = {}) => ({
       id: 'l1',
       customerId: 'c9',
@@ -1570,7 +1570,7 @@ describe('TripSchedulePage', () => {
   });
 
   describe('★ editing a trip whose customer has been retired', () => {
-    const write = ['trip.read', 'trip.create', 'trip.write'];
+    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
 
     // The board still joins the name, because the read does not filter the
     // catalogue by status — only the OPTIONS list does. The lorry is on the
@@ -1929,7 +1929,7 @@ describe('TripSchedulePage', () => {
    */
   describe('★ the two prices on a trip', () => {
     /** Dispatch: may correct a row, sees the prices AND sets them (0032). */
-    const write = ['trip.read', 'trip.create', 'trip.write', 'trip.price.read', 'trip.price.write'];
+    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write', 'trip.price.read', 'trip.price.write'];
     /** A caller who adds trips and sees no money at all. */
     const dispatcher = ['trip.read', 'trip.create'];
     /** Accounting, or a sales head: sees the two figures and may not touch them. */
@@ -2208,7 +2208,7 @@ describe('TripSchedulePage', () => {
  * for the pickup and for the delivery.
  */
 describe('★ an existing trip and its snapshot', () => {
-  const write = ['trip.read', 'trip.create', 'trip.write'];
+  const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
   const master = (over: Record<string, unknown> = {}) => ({
     id: 'la',
     customerId: 'c1',

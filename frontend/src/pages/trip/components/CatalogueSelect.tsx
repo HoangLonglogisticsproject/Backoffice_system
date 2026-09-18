@@ -17,8 +17,12 @@ interface CatalogueSelectProps {
   options: CatalogueOption[];
   value: string | null;
   onChange: (id: string | null) => void;
-  /** Adds a row to the catalogue and returns it. Any signed-in caller may. */
-  onCreate: (label: string) => Promise<CatalogueOption>;
+  /**
+   * Adds a row to the catalogue and returns it. Absent for a caller who may
+   * not add one (`customer.create`, DL-112): the "+" is not drawn, the list
+   * stays a list. The server refuses the POST regardless.
+   */
+  onCreate?: (label: string) => Promise<CatalogueOption>;
   newPlaceholder: string;
   disabled?: boolean;
 }
@@ -60,7 +64,7 @@ export function CatalogueSelect({
 
   const create = async () => {
     const trimmed = draft.trim();
-    if (trimmed === '') return;
+    if (trimmed === '' || !onCreate) return;
 
     setBusy(true);
     setError(null);
@@ -111,25 +115,27 @@ export function CatalogueSelect({
           ))}
         </select>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-9 gap-1 px-2 text-gray-600"
-          onClick={() => {
-            setAdding((open) => !open);
-            setError(null);
-          }}
-          disabled={disabled}
-          aria-expanded={adding}
-          aria-controls={`${id}-new`}
-        >
-          <Plus className="h-4 w-4" />
-          <span className="sr-only">{placeholder}</span>
-        </Button>
+        {onCreate && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 gap-1 px-2 text-gray-600"
+            onClick={() => {
+              setAdding((open) => !open);
+              setError(null);
+            }}
+            disabled={disabled}
+            aria-expanded={adding}
+            aria-controls={`${id}-new`}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="sr-only">{placeholder}</span>
+          </Button>
+        )}
       </div>
 
-      {adding && (
+      {adding && onCreate && (
         <div id={`${id}-new`} className="flex items-stretch gap-2">
           <Input
             value={draft}

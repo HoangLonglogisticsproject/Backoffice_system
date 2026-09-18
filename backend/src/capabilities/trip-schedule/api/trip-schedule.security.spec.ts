@@ -17,6 +17,7 @@ import { SESSION_COOKIE } from '../../../core/identity/api/session.cookie';
 import { SessionService } from '../../../core/identity/application/session.service';
 import { BackofficeOnlyGuard } from '../../../core/identity/api/backoffice-only.guard';
 import type { AccountType } from '../../../core/users/domain/user.entity';
+import type { DepartmentFunction } from '../../../core/organization/domain/department.entity';
 import { TripCatalogueService } from '../application/trip-catalogue.service';
 import { OperationalBoardService } from '../application/operational-board.service';
 import { TripExecutionService } from '../application/trip-execution.service';
@@ -74,6 +75,7 @@ describe('trip-schedule HTTP security', () => {
     archiveCustomer: jest.Mock;
     listLocations: jest.Mock;
     createLocation: jest.Mock;
+    createSharedLocation: jest.Mock;
     updateLocation: jest.Mock;
     archiveLocation: jest.Mock;
   }
@@ -173,6 +175,7 @@ describe('trip-schedule HTTP security', () => {
       archiveCustomer: jest.fn().mockResolvedValue({ id: CUSTOMER, name: 'WWL' }),
       listLocations: jest.fn().mockResolvedValue([]),
       createLocation: jest.fn().mockResolvedValue({ id: LOCATION, customerId: CUSTOMER }),
+      createSharedLocation: jest.fn().mockResolvedValue({ id: LOCATION, customerId: null }),
       updateLocation: jest.fn().mockResolvedValue({ id: LOCATION, customerId: CUSTOMER }),
       archiveLocation: jest.fn().mockResolvedValue({ id: LOCATION, customerId: CUSTOMER, status: 'archived' }),
     };
@@ -717,14 +720,14 @@ describe('trip-schedule HTTP security', () => {
     });
 
     /**
-     * ★ THE DISPATCH FUNCTION — THE CALLERS WHO MAY SET THE FIGURES (0032).
+     * ★ THE ACCOUNTING FUNCTION — THE CALLERS WHO MAY SET THE FIGURES (DL-111).
      *
      * Member and head alike: the grant is the department's function, not the
      * person's seniority. Every case below runs for both.
      */
     describe.each([
-      ['a dispatch member', () => asContext({ memberOf: [DEPT], functions: ['dispatch'] })],
-      ['the dispatch head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['dispatch'] })],
+      ['an accounting member', () => asContext({ memberOf: [DEPT], functions: ['accounting'] })],
+      ['the accounting head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['accounting'] })],
     ])('%s — may set the prices', (_label, caller) => {
       beforeEach(() => {
         context = caller();
@@ -773,7 +776,7 @@ describe('trip-schedule HTTP security', () => {
 
       /**
        * ★ THE PATCH IS AUTHORIZED PER FIELD. Pricing an existing trip is
-       * `trip.price.write`, which the dispatch MEMBER holds without holding
+       * `trip.price.write`, which the accounting MEMBER holds without holding
        * `trip.write`; so a body carrying only the two price keys goes through
        * for member and head alike.
        */
@@ -789,7 +792,7 @@ describe('trip-schedule HTTP security', () => {
         expect(patch).toEqual(price);
       });
 
-      it('★ corrects the ROW only with `trip.write` — a member of dispatch is refused, its head is not', async () => {
+      it('★ corrects the ROW only with `trip.write` — a member of accounting is refused, its head is not', async () => {
         const note = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
         // A price beside a note: the row half needs `trip.write`, so the whole
         // patch is refused for the member. Nothing is written half-way.
@@ -825,26 +828,34 @@ describe('trip-schedule HTTP security', () => {
     });
 
     /**
-     * ★ SALES AND ACCOUNTING READ, MEMBER OR HEAD; NEITHER WRITES (0032).
+     * ★ SALES, CUSTOMER SERVICE AND DISPATCH BOOK THE RUN AND NEVER SEE A
+     * FIGURE (DL-111) — member or head. The board and the detail still
+     * answer 200: the two prices are blanked, not the row.
      */
     describe.each([
-      ['an accounting member', () => asContext({ memberOf: [DEPT], functions: ['accounting'] })],
-      ['the accounting head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['accounting'] })],
       ['a sales member', () => asContext({ memberOf: [DEPT], functions: ['sales'] })],
       ['the sales head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['sales'] })],
-    ])('%s', (_label, caller) => {
+      ['a customer-service member', () => asContext({ memberOf: [DEPT], functions: ['customer_service'] })],
+      ['the customer-service head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['customer_service'] })],
+      ['a dispatch member', () => asContext({ memberOf: [DEPT], functions: ['dispatch'] })],
+      ['the dispatch head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['dispatch'] })],
+    ])('%s — books, never prices', (_label, caller) => {
       beforeEach(() => {
         context = caller();
       });
 
-      it('★ reads both figures, on the detail and on the board', async () => {
+      it('★ is shown NEITHER figure, on the detail or on the board — and no digit of either leaks', async () => {
         const detail = await authed('get', `/trip-schedules/${TRIP}`).expect(200);
-        expect(detail.body.sellPrice).toBe('4500000.00');
-        expect(detail.body.purchasePrice).toBe('3000000.00');
+        expect(detail.body.sellPrice).toBeNull();
+        expect(detail.body.purchasePrice).toBeNull();
+        expect(JSON.stringify(detail.body)).not.toContain('4500000');
+        expect(JSON.stringify(detail.body)).not.toContain('3000000');
 
         const board = await authed('get', '/trip-schedules').expect(200);
         const [row] = board.body.items as Record<string, unknown>[];
-        expect(row?.['sellPrice']).toBe('4500000.00');
+        expect(row?.['sellPrice']).toBeNull();
+        expect(row?.['purchasePrice']).toBeNull();
+        expect(JSON.stringify(board.body)).not.toContain('4500000');
       });
 
       it('★ creates a trip, unpriced', async () => {
@@ -870,17 +881,17 @@ describe('trip-schedule HTTP security', () => {
         ['a selling price', { sellPrice: '4500000' }],
         ['a buying price', { purchasePrice: '3000000' }],
         ['a cleared selling price', { sellPrice: null }],
-      ])('★ is refused %s on the patch route — reading is not setting', async (_what, price) => {
+      ])('★ is refused %s on the patch route — not stripped, refused', async (_what, price) => {
         const response = await authed('patch', `/trip-schedules/${TRIP}`).send(price);
 
         expect(response.status).toBe(403);
         expect(trips.update).not.toHaveBeenCalled();
       });
 
-      it('patches an ordinary field only as a head — the row half is `trip.write`', async () => {
+      it('patches an ordinary field only with `trip.write` — a head within sales / dispatch, never customer service', async () => {
         const response = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
 
-        expect(response.status).toBe(context.headOf.length > 0 ? 200 : 403);
+        expect(response.status).toBe(can_(context, 'trip.write') ? 200 : 403);
       });
     });
 
@@ -996,11 +1007,12 @@ describe('trip-schedule HTTP security', () => {
   // ============================================== ★ WHO MAY BOOK A TRIP ==
 
   /**
-   * ★ `trip.create` IS A FUNCTION'S KEY (0032). Sales, accounting and dispatch
-   * book runs — member or head. A member or head of any other unit reads the
-   * board and does not book on it; the superadmin always may; a driver is
-   * refused at the boundary. The same key gates the catalogues, so the same
-   * answer holds for adding a lorry or a customer.
+   * ★ `trip.create` IS A FUNCTION'S KEY (0032, DL-111). Sales, accounting,
+   * dispatch and customer service book runs — member or head. A member or
+   * head of any other unit neither reads the board nor books on it; the
+   * superadmin always may; a driver is refused at the boundary. The
+   * catalogues have keys of their own (DL-112): every booking function files
+   * a customer and a place; only dispatch and the superadmin add a lorry.
    */
   describe('★ who may book a trip', () => {
     const booking = { scheduledOn: '2026-08-04' };
@@ -1012,6 +1024,8 @@ describe('trip-schedule HTTP security', () => {
       ['the accounting head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['accounting'] })],
       ['a dispatch member', () => asContext({ memberOf: [DEPT], functions: ['dispatch'] })],
       ['the dispatch head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['dispatch'] })],
+      ['a customer-service member', () => asContext({ memberOf: [DEPT], functions: ['customer_service'] })],
+      ['the customer-service head', () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: ['customer_service'] })],
       ['a global administrator', () => asContext({ global: true })],
     ])('%s', (_label, caller) => {
       beforeEach(() => {
@@ -1019,9 +1033,9 @@ describe('trip-schedule HTTP security', () => {
       });
 
       it('books a trip, and the row records the SESSION as its author', async () => {
-        // A dispatch caller and the superadmin must give a selling price; the
-        // other two functions may not send one. Neither fact is what this case
-        // is about, so the body is the one shape every caller here accepts.
+        // Accounting and the superadmin must give a selling price; the other
+        // functions may not send one. Neither fact is what this case is
+        // about, so the body is the one shape every caller here accepts.
         const price = can_(context, 'trip.price.write') ? { sellPrice: '4500000' } : {};
         await authed('post', '/trip-schedules')
           .send({ ...booking, ...price, createdBy: 'somebody-else' })
@@ -1032,12 +1046,31 @@ describe('trip-schedule HTTP security', () => {
         );
       });
 
-      it('adds a vehicle and a customer to the catalogues', async () => {
-        await authed('post', '/trip-vehicles').send({ plate: '50H-49266' }).expect(201);
+      it('★ files a customer and a place — every booking function does (DL-112)', async () => {
         await authed('post', '/trip-customers').send({ name: 'WWL' }).expect(201);
-        expect(catalogue.createVehicle).toHaveBeenCalledWith(
-          expect.objectContaining({ plate: '50H-49266', createdBy: ACTOR }),
+        await authed('post', '/trip-locations').send({ name: 'Kho chung', address: 'KCN Sóng Thần' }).expect(201);
+        await authed('post', `/trip-customers/${CUSTOMER}/locations`)
+          .send({ name: 'Kho VIỄN ĐẠT', address: 'Thủ Dầu Một' })
+          .expect(201);
+        expect(catalogue.createCustomer).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'WWL', createdBy: ACTOR }),
         );
+        expect(catalogue.createSharedLocation).toHaveBeenCalled();
+        expect(catalogue.createLocation).toHaveBeenCalled();
+      });
+
+      it('★ adds a lorry ONLY as dispatch or the superadmin — the fleet is not a booking side-effect', async () => {
+        const response = await authed('post', '/trip-vehicles').send({ plate: '50H-49266' });
+
+        if (can_(context, 'vehicle.create')) {
+          expect(response.status).toBe(201);
+          expect(catalogue.createVehicle).toHaveBeenCalledWith(
+            expect.objectContaining({ plate: '50H-49266', createdBy: ACTOR }),
+          );
+        } else {
+          expect(response.status).toBe(403);
+          expect(catalogue.createVehicle).not.toHaveBeenCalled();
+        }
       });
     });
 
@@ -1083,6 +1116,126 @@ describe('trip-schedule HTTP security', () => {
 
       expect(response.status).toBe(403);
       expect(trips.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================== ★ THE MATRIX, CALLER BY CALLER ==
+
+  /**
+   * ★ THE POLICY OF 2026-09-18 (DL-111 / DL-112), ONE ROW PER KIND OF CALLER.
+   * Every cell is asserted, allowed and refused alike, so a later edit to one
+   * requirement fails here by the caller's name. Completion review and the
+   * driver proposal live in their own controllers and are pinned in their
+   * own suites with the same callers.
+   */
+  describe('★ the permission matrix', () => {
+    const priced = { ...storedTrip, sellPrice: '4500000.00', purchasePrice: '3000000.00' };
+    const ASSIGN = ['post', `/trip-schedules/${TRIP}/driver-assignments`] as const;
+
+    interface Row {
+      trip: boolean;
+      customer: boolean;
+      location: boolean;
+      vehicle: boolean;
+      priceRead: boolean;
+      priceWrite: boolean;
+      dispatch: boolean;
+    }
+    const ALL: Row = { trip: true, customer: true, location: true, vehicle: true, priceRead: true, priceWrite: true, dispatch: true };
+    const NONE: Row = { trip: false, customer: false, location: false, vehicle: false, priceRead: false, priceWrite: false, dispatch: false };
+    const BOOKS: Row = { ...NONE, trip: true, customer: true, location: true };
+
+    const member = (fn?: DepartmentFunction) => () => asContext({ memberOf: [DEPT], functions: fn ? [fn] : [] });
+    const head = (fn?: DepartmentFunction) => () => asContext({ headOf: [DEPT], memberOf: [DEPT], functions: fn ? [fn] : [] });
+
+    describe.each<[string, () => AuthorizationContext, Row]>([
+      ['the superadmin', () => asContext({ global: true }), ALL],
+      ['an accounting member', member('accounting'), { ...BOOKS, priceRead: true, priceWrite: true }],
+      ['the accounting head', head('accounting'), { ...BOOKS, priceRead: true, priceWrite: true }],
+      ['a sales member', member('sales'), BOOKS],
+      ['the sales head', head('sales'), BOOKS],
+      ['a customer-service member', member('customer_service'), BOOKS],
+      ['the customer-service head', head('customer_service'), BOOKS],
+      ['a dispatch member', member('dispatch'), { ...BOOKS, vehicle: true, dispatch: true }],
+      ['the dispatch head', head('dispatch'), { ...BOOKS, vehicle: true, dispatch: true }],
+      ['a member of another unit', member(), NONE],
+      ['the head of another unit', head(), NONE],
+    ])('%s', (_label, caller, row) => {
+      beforeEach(() => {
+        context = caller();
+        trips.findById.mockResolvedValue(priced);
+        trips.create.mockResolvedValue(priced);
+        trips.update.mockResolvedValue(priced);
+      });
+
+      const expectStatus = (allowed: boolean, status: number, refused = 403) => (allowed ? status : refused);
+
+      it(`trip create → ${row.trip ? 201 : 403}`, async () => {
+        const price = row.priceWrite ? { sellPrice: '4500000' } : {};
+        const response = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04', ...price });
+        expect(response.status).toBe(expectStatus(row.trip, 201));
+      });
+
+      it(`customer create → ${row.customer ? 201 : 403}`, async () => {
+        const response = await authed('post', '/trip-customers').send({ name: 'WWL' });
+        expect(response.status).toBe(expectStatus(row.customer, 201));
+      });
+
+      it(`location create → ${row.location ? 201 : 403}`, async () => {
+        const shared = await authed('post', '/trip-locations').send({ name: 'Kho', address: 'Q9' });
+        const owned = await authed('post', `/trip-customers/${CUSTOMER}/locations`).send({ name: 'Kho', address: 'Q9' });
+        expect([shared.status, owned.status]).toEqual([expectStatus(row.location, 201), expectStatus(row.location, 201)]);
+      });
+
+      it(`vehicle create → ${row.vehicle ? 201 : 403}`, async () => {
+        const response = await authed('post', '/trip-vehicles').send({ plate: '50H-49266' });
+        expect(response.status).toBe(expectStatus(row.vehicle, 201));
+        if (!row.vehicle) expect(catalogue.createVehicle).not.toHaveBeenCalled();
+      });
+
+      it(`price read → ${row.priceRead ? 'figures' : row.trip ? 'blanked' : 403}`, async () => {
+        const response = await authed('get', `/trip-schedules/${TRIP}`);
+        if (!row.trip) {
+          expect(response.status).toBe(403);
+        } else {
+          expect(response.status).toBe(200);
+          expect(response.body.sellPrice).toBe(row.priceRead ? '4500000.00' : null);
+        }
+        if (!row.priceRead) expect(JSON.stringify(response.body)).not.toContain('4500000');
+      });
+
+      it(`price write → ${row.priceWrite ? 200 : 403}`, async () => {
+        const response = await authed('patch', `/trip-schedules/${TRIP}`).send({ sellPrice: '4500000' });
+        expect(response.status).toBe(expectStatus(row.priceWrite, 200));
+        if (!row.priceWrite) expect(trips.update).not.toHaveBeenCalled();
+      });
+
+      it(`dispatch → ${row.dispatch ? 201 : 403}`, async () => {
+        const response = await authed(...ASSIGN).send({ vehicleId: VEHICLE, driverUserId: DRIVER_USER });
+        expect(response.status).toBe(expectStatus(row.dispatch, 201));
+        if (!row.dispatch) expect(execution.assign).not.toHaveBeenCalled();
+      });
+    });
+
+    it('★ a driver account: every cell is 403 at the boundary, whatever the context claims', async () => {
+      accountType = 'driver';
+      context = asContext({ global: true });
+
+      for (const [method, path, body] of [
+        ['post', '/trip-schedules', { scheduledOn: '2026-08-04', sellPrice: '1' }],
+        ['post', '/trip-customers', { name: 'WWL' }],
+        ['post', '/trip-locations', { name: 'Kho', address: 'Q9' }],
+        ['post', '/trip-vehicles', { plate: '50H-49266' }],
+        ['get', `/trip-schedules/${TRIP}`, {}],
+        ['patch', `/trip-schedules/${TRIP}`, { sellPrice: '1' }],
+        ['post', `/trip-schedules/${TRIP}/driver-assignments`, { vehicleId: VEHICLE, driverUserId: DRIVER_USER }],
+      ] as const) {
+        const response = await authed(method, path).send(body);
+        expect([path, response.status]).toEqual([path, 403]);
+      }
+      for (const mock of [...Object.values(trips), ...Object.values(catalogue), ...Object.values(execution)]) {
+        expect(mock).not.toHaveBeenCalled();
+      }
     });
   });
 

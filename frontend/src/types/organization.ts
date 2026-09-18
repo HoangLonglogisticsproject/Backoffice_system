@@ -14,7 +14,7 @@ export type DepartmentStatus = 'active' | 'archived';
  * ordinary unit. Set by a global administrator through `PATCH /departments/:id`
  * with `{ function }`; never inferred from the name.
  */
-export type DepartmentFunction = 'sales' | 'accounting' | 'dispatch';
+export type DepartmentFunction = 'sales' | 'accounting' | 'dispatch' | 'customer_service';
 
 /** `GET /departments/:departmentId` (§5). */
 export interface Department {

@@ -447,6 +447,18 @@ describe('organization HTTP security', () => {
         });
       });
 
+      it('★ creates a customer-service unit — the fourth function (0033)', async () => {
+        await authed('post', '/departments')
+          .send({ slug: 'cs', name: 'Customer Service', function: 'customer_service' })
+          .expect(201);
+        await authed('patch', `/departments/${A}`).send({ function: 'customer_service' }).expect(200);
+
+        expect(departments.create).toHaveBeenCalledWith(
+          expect.objectContaining({ function: 'customer_service' }),
+        );
+        expect(departments.update).toHaveBeenCalledWith(A, { function: 'customer_service' });
+      });
+
       it('refuses a function the business did not name at creation, before the service runs', async () => {
         await authed('post', '/departments')
           .send({ slug: 'mk', name: 'Marketing', function: 'marketing' })

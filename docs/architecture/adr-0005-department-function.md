@@ -1,6 +1,8 @@
 # ADR-0005 — `departments.function` is the unit's business classification, and it stays
 
 **Status:** **ACCEPTED** — no new migration; `0032` stands as applied.
+**Amended 2026-09-18** by [ADR-0006](adr-0006-trip-pricing-and-operational-permissions.md): a
+fourth function, `customer_service`, added by migration `0033` (CHECK widened, nothing else).
 
 **Date:** 2026-09-17 · **Decided by:** engineering, on the CEO's authorization rules of
 2026-09-17 (DL-101, DL-109).

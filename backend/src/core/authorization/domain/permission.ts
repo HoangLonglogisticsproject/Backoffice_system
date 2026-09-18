@@ -26,11 +26,25 @@ export const PERMISSIONS = [
   /** See the trip schedule, and the vehicle / customer catalogues behind it. */
   'trip.read',
   /**
-   * Add a row to the trip schedule, or a vehicle / customer / place to the
-   * catalogues. Held by a GLOBAL caller and by the SALES, ACCOUNTING and
-   * DISPATCH functions — see the requirement table.
+   * Add a row to the trip schedule — and ONLY that. Held by a GLOBAL caller
+   * and by the four booking functions; see the requirement table.
+   *
+   * ★ NO LONGER THE CATALOGUES. Adding a customer, a place or a lorry used to
+   * ride on this key, which handed the fleet to everybody who books a run.
+   * The business split them (DL-112): `customer.create`, `location.create`
+   * and `vehicle.create` below, each with its own holders.
    */
   'trip.create',
+  /** Add a customer to the catalogue. The four booking functions, and GLOBAL. */
+  'customer.create',
+  /** Add a place — a customer's own or a shared one. Same holders as `customer.create`. */
+  'location.create',
+  /**
+   * Add a lorry to the fleet. GLOBAL and the DISPATCH function only: the
+   * fleet is an operational asset, and sales, accounting or customer service
+   * booking a run must not be able to invent a lorry to put on it.
+   */
+  'vehicle.create',
   /**
    * Edit, restatus or archive a trip row — including rows somebody else wrote —
    * and correct the catalogues behind it. Held by a GLOBAL caller and by the
@@ -226,6 +240,18 @@ export interface PermissionRequirement {
   withinFunction?: readonly DepartmentFunction[];
 }
 
+/**
+ * The units that BOOK runs, and therefore see the board and file the customers
+ * and places a booking needs. One list, so the four keys that share it cannot
+ * drift apart by a hand edit to one of them.
+ */
+const BOOKING_FUNCTIONS: readonly DepartmentFunction[] = [
+  'sales',
+  'accounting',
+  'dispatch',
+  'customer_service',
+];
+
 export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRequirement>> = {
   'unit.read': { tier: 'member' },
   'unit.member.read': { tier: 'head' },
@@ -235,27 +261,36 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'user.write': { tier: 'global' },
 
   /**
-   * ★ THE BOARD BELONGS TO THE THREE BOOKING FUNCTIONS, AND TO NOBODY ELSE
-   * (business clarification 2026-09-17). Sales, accounting and dispatch read
-   * it — member or head; a member or head of Marketing, HR, IT or any other
-   * unit does not, however senior; a driver has no function and reads their
-   * own turns through `/driver` instead. 'global' as the tier so that no
-   * seniority elsewhere grants it: visibility is a function of the unit, never
-   * of head-or-member. Customer Service is deliberately NOT listed — its
-   * access is a deferred business decision, not an omission.
+   * ★ THE BOARD BELONGS TO THE FOUR BOOKING FUNCTIONS, AND TO NOBODY ELSE
+   * (business rule 2026-09-18, DL-111). Sales, accounting, dispatch and
+   * customer service read it — member or head; a member or head of Marketing,
+   * HR, IT or any other unit does not, however senior; a driver has no
+   * function and reads their own turns through `/driver` instead. 'global' as
+   * the tier so that no seniority elsewhere grants it: visibility is a
+   * function of the unit, never of head-or-member.
    */
-  'trip.read': { tier: 'global', orFunction: ['sales', 'accounting', 'dispatch'] },
+  'trip.read': { tier: 'global', orFunction: BOOKING_FUNCTIONS },
 
   /**
-   * ★ BOOKING A TRIP IS A JOB, NOT A RIGHT OF EVERY ACCOUNT (0032). The three
-   * functions the business named — sales, accounting, dispatch — book runs;
-   * a member or head of Marketing, HR or IT does not, and a driver has no
-   * function at all. 'global' as the tier so that no seniority elsewhere in
-   * the company grants it; the function list is the whole grant. The same key
-   * still gates adding a lorry, a customer or a place to the catalogues —
-   * the people who book runs are the people who need a new customer on file.
+   * ★ BOOKING A TRIP IS A JOB, NOT A RIGHT OF EVERY ACCOUNT (0032). The four
+   * functions the business named book runs; a member or head of Marketing,
+   * HR or IT does not, and a driver has no function at all. 'global' as the
+   * tier so that no seniority elsewhere in the company grants it; the
+   * function list is the whole grant.
    */
-  'trip.create': { tier: 'global', orFunction: ['sales', 'accounting', 'dispatch'] },
+  'trip.create': { tier: 'global', orFunction: BOOKING_FUNCTIONS },
+
+  /**
+   * ★ THE CATALOGUES, SPLIT FROM BOOKING (DL-112). Whoever books a run needs a
+   * new customer or a new place on file without stopping to find an
+   * administrator — that argument still holds, so customers and places follow
+   * the booking functions. The FLEET does not: a lorry is an operational
+   * asset that dispatch owns, and a salesperson who could add one could put
+   * an unknown lorry on tomorrow's run.
+   */
+  'customer.create': { tier: 'global', orFunction: BOOKING_FUNCTIONS },
+  'location.create': { tier: 'global', orFunction: BOOKING_FUNCTIONS },
+  'vehicle.create': { tier: 'global', orFunction: ['dispatch'] },
 
   /**
    * ★ CORRECTING THE BOARD IS SENIORITY WITHIN A BOOKING FUNCTION. The
@@ -279,12 +314,13 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'dispatch.write': { tier: 'global', orFunction: ['dispatch'] },
 
   /**
-   * ★ READING THE PRICES: a global administrator and everybody in SALES,
-   * ACCOUNTING or DISPATCH — member or head alike — and nobody else. A head
-   * of any other unit used to see them under 'head-anywhere'; the business
-   * clarification of 2026-09-17 closed that: price visibility follows the
-   * unit's function, never seniority. The three functions all SEE the two
-   * figures; only one of them SETS them (`trip.price.write` below).
+   * ★ THE PRICES ARE ACCOUNTING'S (business rule 2026-09-18, DL-111). A global
+   * administrator and everybody in the ACCOUNTING function — member or head
+   * alike — see and set what a trip is sold and bought for. Sales, customer
+   * service and dispatch book the run and neither see nor type a figure:
+   * their trips are created unpriced and accounting prices them afterwards
+   * through the per-field patch. Both keys carry the same list on purpose,
+   * and a test pins that whoever may write may read.
    *
    * ★ WHY NOT 'head'. That tier asks for a target department, and a trip
    * belongs to none — the same reason `trip.write` above is 'head-anywhere'.
@@ -296,20 +332,10 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
    * one tier. `cost.*` is the company's cost BASE — every fuel line and every
    * carrier hire — and stays at the tightest tier until somebody decides who
    * should hold it. These two columns are the commercial terms of one booking,
-   * which the people arranging and accounting for that booking have to see.
-   *
-   * ★ DISPATCH IS LISTED HERE TOO, NOT ONLY ON THE WRITE KEY. Whoever may set
-   * a figure must be able to read it back, or the form refuses to show them
-   * what they just saved. The two lists are kept in step by hand and pinned
-   * by a test.
+   * which the people accounting for that booking have to see.
    */
-  'trip.price.read': { tier: 'global', orFunction: ['sales', 'accounting', 'dispatch'] },
-
-  /**
-   * ★ SETTING THE PRICES: a global administrator and the DISPATCH function.
-   * Nobody else — not a head of Sales, not accounting, however senior.
-   */
-  'trip.price.write': { tier: 'global', orFunction: ['dispatch'] },
+  'trip.price.read': { tier: 'global', orFunction: ['accounting'] },
+  'trip.price.write': { tier: 'global', orFunction: ['accounting'] },
 
   /**
    * ★ MONEY IS 'global' — THE MOST RESTRICTIVE TIER — AND THIS IS A DELIBERATE
@@ -359,14 +385,14 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'trip.complete.review': { tier: 'global' },
 
   /**
-   * ★ `head-anywhere`, WHICH IS THE TIER THIS CASE WAS BUILT FOR.
-   *
-   * A driver belongs to no department, so there is no unit to name and no
-   * target to scope against — asking for one would refuse every head at the
-   * guard. Heading ANY department is the whole test, and an ordinary member
-   * fails it, which is what the specification asks for.
+   * ★ PROPOSING A DRIVER IS DISPATCH'S JOB (business rule 2026-09-18, DL-111).
+   * It used to be `head-anywhere` — any department head could put a name
+   * forward. The business narrowed it to the unit that actually hires and
+   * runs drivers: the DISPATCH function, member or head, and a global
+   * administrator. Approving stays `user.write`, which is global — the
+   * separation between proposing and provisioning is unchanged.
    */
-  'driver.account.request': { tier: 'head-anywhere' },
+  'driver.account.request': { tier: 'global', orFunction: ['dispatch'] },
 };
 
 export function isPermissionKey(value: string): value is PermissionKey {

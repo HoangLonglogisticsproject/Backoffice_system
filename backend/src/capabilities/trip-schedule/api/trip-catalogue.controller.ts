@@ -30,13 +30,19 @@ import type {
 /**
  * The trucks and the customers, as rows rather than as text typed into a cell.
  *
- * ★ WHY ANY DISPATCHER MAY ADD A ROW HERE. Restricting creation to
- * administrators looks safer and is not: a dispatcher entering a trip for a
- * customer that is not yet in the list would have to stop, find an
+ * ★ WHY EVERY BOOKING FUNCTION MAY ADD A CUSTOMER OR A PLACE HERE. Restricting
+ * creation to administrators looks safer and is not: somebody entering a trip
+ * for a customer that is not yet in the list would have to stop, find an
  * administrator, and wait. What they would actually do is put the customer's
  * name in the cargo note — and the catalogue would be bypassed on exactly the
  * rows it exists to discipline. Adding is cheap and reversible; renaming
  * changes what every past trip appears to say, so THAT is `trip.write`.
+ *
+ * ★ AND WHY THE FLEET IS DIFFERENT (DL-112). A lorry is an operational asset:
+ * `vehicle.create` is dispatch's and the superadmin's, so sales, accounting
+ * and customer service — who book runs and file customers — cannot invent a
+ * lorry to put on one. Three keys, `customer.create` · `location.create` ·
+ * `vehicle.create`, none of them `trip.create`.
  *
  * ⚠ NEITHER LIST IS PAGINATED, deliberately. Both are bounded small — a fleet
  * and a customer book — and both sort by a MUTABLE column, which ADR-0002 §4
@@ -157,7 +163,7 @@ export class TripCatalogueController {
 
   @Post('trip-vehicles')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.create')
+  @RequirePermission('vehicle.create')
   async createVehicle(
     @Body(new ZodValidationPipe(createVehicleSchema)) body: CreateVehicleBody,
     @CurrentUser() actor: SessionUser,
@@ -198,7 +204,7 @@ export class TripCatalogueController {
 
   @Post('trip-customers')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.create')
+  @RequirePermission('customer.create')
   async createCustomer(
     @Body(new ZodValidationPipe(createCustomerSchema)) body: CreateCustomerBody,
     @CurrentUser() actor: SessionUser,
@@ -238,8 +244,9 @@ export class TripCatalogueController {
   // there is nothing for it to lie about.
   //
   // Same permissions throughout, and the same as the customer catalogue:
-  // reading is `trip.read`, adding is `trip.create`, changing is `trip.write` —
-  // and `BackofficeOnlyGuard` keeps every one of them from a driver account.
+  // reading is `trip.read`, adding is `location.create`, changing is
+  // `trip.write` — and `BackofficeOnlyGuard` keeps every one of them from a
+  // driver account.
 
   @Get('trip-locations')
   @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
@@ -253,7 +260,7 @@ export class TripCatalogueController {
   /** Creates a SHARED place. A customer's own goes through the route below. */
   @Post('trip-locations')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.create')
+  @RequirePermission('location.create')
   async createSharedLocation(
     @Body(new ZodValidationPipe(createLocationSchema)) body: CreateLocationBody,
     @CurrentUser() actor: SessionUser,
@@ -293,7 +300,7 @@ export class TripCatalogueController {
 
   @Post('trip-customers/:customerId/locations')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.create')
+  @RequirePermission('location.create')
   async createLocation(
     @Param('customerId', UuidParam) customerId: string,
     @Body(new ZodValidationPipe(createLocationSchema)) body: CreateLocationBody,

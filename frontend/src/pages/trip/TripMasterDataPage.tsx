@@ -89,7 +89,10 @@ export default function TripMasterDataPage() {
   const [locationsFor, setLocationsFor] = useState<CatalogueRowData | null>(null);
 
   const canManage = can('trip.write');
-  const canAdd = can('trip.create');
+  // ★ ONE KEY PER CATALOGUE (DL-112). Every booking function files customers
+  // and places; only dispatch and the superadmin add a lorry to the fleet.
+  const canAdd = can(tab === 'vehicles' ? 'vehicle.create' : 'customer.create');
+  const canAddPlace = can('location.create');
 
   // Both lists, from one hook — this is the screen that passes `includeArchived`,
   // because it is the only one where a retired row is something to look at
@@ -215,7 +218,7 @@ export default function TripMasterDataPage() {
           customer={{ id: locationsFor.id, name: locationsFor.label }}
           // A retired customer takes no new places; the server refuses them
           // too. Its existing places stay readable.
-          canAdd={canAdd && locationsFor.status === 'active'}
+          canAdd={canAddPlace && locationsFor.status === 'active'}
           canManage={canManage}
           onClose={() => setLocationsFor(null)}
         />

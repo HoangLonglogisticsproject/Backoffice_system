@@ -42,7 +42,7 @@ export interface Department {
  * ⚠ NOT A DEPARTMENT NAME. Which row is "Điều độ" stays data; this only says
  * what a row of that kind is FOR. Nothing in code matches on a slug or a name.
  */
-export const DEPARTMENT_FUNCTIONS = ['sales', 'accounting', 'dispatch'] as const;
+export const DEPARTMENT_FUNCTIONS = ['sales', 'accounting', 'dispatch', 'customer_service'] as const;
 export type DepartmentFunction = (typeof DEPARTMENT_FUNCTIONS)[number];
 
 export function isDepartmentFunction(value: unknown): value is DepartmentFunction {

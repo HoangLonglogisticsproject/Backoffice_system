@@ -35,17 +35,22 @@ Index là lớp thứ hai, không phải lớp thứ nhất.
 ## Quyền — bất đối xứng, và cố ý
 
 ```
-trip.read         global | function sales·accounting·dispatch   — board, detail, history, events, assignments, completion list, danh mục
-trip.create       global | function sales·accounting·dispatch   (0032) — thêm chuyến, xe, khách, địa điểm
-trip.write        'head-anywhere' & function sales·accounting·dispatch — SUPERADMIN, hoặc trưởng phòng CỦA MỘT PHÒNG CHỨC NĂNG
+trip.read         global | function sales·accounting·dispatch·customer_service — board, detail, history, events, assignments, completion list, danh mục
+trip.create       global | function sales·accounting·dispatch·customer_service — CHỈ thêm chuyến (DL-111)
+customer.create   global | function sales·accounting·dispatch·customer_service — POST /trip-customers (DL-112)
+location.create   global | function sales·accounting·dispatch·customer_service — POST /trip-locations, /trip-customers/:id/locations
+vehicle.create    global | function dispatch                                  — POST /trip-vehicles: đội xe là của điều phối
+trip.write        'head-anywhere' & function sales·accounting·dispatch — SUPERADMIN, hoặc trưởng phòng CỦA MỘT PHÒNG CHỨC NĂNG (không mở cho customer_service)
 dispatch.write    global | function dispatch     (0032) — assign / replace / end / danh sách tài xế
-trip.price.read   global | function sales·accounting·dispatch
-trip.price.write  global | function dispatch     — key giá trong body POST / PATCH
+trip.price.read   global | function accounting   (DL-111) — Sales / CS / Điều phối không thấy giá
+trip.price.write  global | function accounting   — key giá trong body POST / PATCH
 ```
 
-Dữ liệu chuyến thuộc **ba phòng nghiệp vụ** (Kinh doanh, Kế toán, Điều độ) và
-SUPERADMIN — phòng khác (Marketing, HR, IT…) không đọc, không thêm, không sửa,
-dù là trưởng phòng (làm rõ nghiệp vụ 2026-09-17). Trong ba phòng đó: ai cũng đọc
+Dữ liệu chuyến thuộc **bốn phòng nghiệp vụ** (Sales, Kế toán, Điều phối, Customer
+Service) và SUPERADMIN — phòng khác (Marketing, HR, IT…) không đọc, không thêm,
+không sửa, dù là trưởng phòng (làm rõ nghiệp vụ 2026-09-17; mở rộng 2026-09-18).
+Giá bán / giá mua là của **Kế toán**: ba phòng còn lại tạo chuyến **không giá**,
+Kế toán bổ sung qua PATCH chỉ-key-giá. Trong bốn phòng đó: ai cũng đọc
 và thêm dòng; sửa, đổi trạng thái hoặc archive cần SUPERADMIN hoặc trưởng phòng;
 điều phối và nhập giá là việc của phòng Điều độ. `PATCH /trip-schedules/:id`
 phân quyền theo field: key giá → `trip.price.write`, key khác → `trip.write`.

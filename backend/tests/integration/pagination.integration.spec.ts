@@ -71,6 +71,7 @@ describeIntegration('keyset pagination against real PostgreSQL', () => {
       '0002_users_updated_at.sql',
       '0003_organization.sql',
       '0032_department_function.sql',
+      '0033_department_function_customer_service.sql',
       '0004_authorization.sql',
       '0005_identity_credential_state.sql',
       '0006_membership_change_requests.sql',

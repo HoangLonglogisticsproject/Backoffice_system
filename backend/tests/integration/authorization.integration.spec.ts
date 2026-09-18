@@ -64,6 +64,7 @@ describeIntegration('Authorization against real PostgreSQL', () => {
       '0008_role_assignment_membership_fk_index.sql',
       // `departments.function` — read by `loadContext` on every request (0032).
       '0032_department_function.sql',
+      '0033_department_function_customer_service.sql',
     ]) {
       await pool.query(await readFile(join(migrations, file), 'utf8'));
     }
@@ -569,8 +570,20 @@ describeIntegration('Authorization against real PostgreSQL', () => {
       const dispatcher = await authorization.loadContext(person);
       expect(dispatcher.functions).toEqual(['dispatch']);
       expect(can(dispatcher, 'dispatch.write')).toBe(true);
-      expect(can(dispatcher, 'trip.price.write')).toBe(true);
+      expect(can(dispatcher, 'vehicle.create')).toBe(true);
+      // The prices are accounting's (DL-111): dispatch neither sees nor sets them.
+      expect(can(dispatcher, 'trip.price.write')).toBe(false);
+      expect(can(dispatcher, 'trip.price.read')).toBe(false);
       expect(can(dispatcher, 'trip.complete.review')).toBe(false);
+
+      // ★ THE FOURTH FUNCTION, OFF A REAL ROW (0033): books and files, no price, no fleet.
+      await departments.setFunction(a.id, 'customer_service');
+      const agent = await authorization.loadContext(person);
+      expect(agent.functions).toEqual(['customer_service']);
+      expect(can(agent, 'trip.create')).toBe(true);
+      expect(can(agent, 'customer.create')).toBe(true);
+      expect(can(agent, 'vehicle.create')).toBe(false);
+      expect(can(agent, 'trip.price.read')).toBe(false);
 
       await departments.setFunction(a.id, null);
       const ordinary = await authorization.loadContext(person);

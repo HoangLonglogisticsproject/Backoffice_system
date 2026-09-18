@@ -39,6 +39,7 @@ export const DEV_DEPARTMENTS: readonly SeedUnit[] = [
   { slug: 'sales', name: 'Sales', function: 'sales' },
   { slug: 'accounting', name: 'Kế toán', function: 'accounting' },
   { slug: 'dispatch', name: 'Điều phối', function: 'dispatch' },
+  { slug: 'customer-service', name: 'Customer Service', function: 'customer_service' },
 ];
 
 export type SeedAction = 'create' | 'update' | 'keep';

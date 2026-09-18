@@ -467,13 +467,13 @@ export function TripFormModal({
   // failure mode worth having.
   const { can } = useSession();
   // ★ TWO KEYS SINCE 0032. Reading draws the two figures; WRITING is what
-  // decides whether they are typed into and whether the keys travel. Sales
-  // and accounting hold the first and not the second, so for them the fields
-  // are drawn disabled and the payload carries neither key — the server would
-  // answer 403 to a body that so much as mentioned a price from them.
+  // decides whether they are typed into and whether the keys travel. Today
+  // both are accounting's (DL-111); a holder of the first without the second
+  // gets the fields drawn disabled and a payload carrying neither key — the
+  // server would answer 403 to a body that so much as mentioned a price.
   const mayViewPrices = can('trip.price.read');
   const mayEditPrices = can('trip.price.write');
-  // ★ PRICE-ONLY EDITING. A dispatch member prices an existing trip without
+  // ★ PRICE-ONLY EDITING. An accounting member prices an existing trip without
   // holding `trip.write`; the server authorizes the patch per field, so this
   // form sends the two price keys and nothing else, and every other control
   // is disabled so nothing typed into it can be lost on save.
@@ -483,6 +483,11 @@ export function TripFormModal({
   // master-data screen asks for. A dispatcher without it still sees that a
   // place is not located; they just cannot fix it from here.
   const mayManagePlaces = can('trip.write');
+  // Filing a new customer or a new place from inside the form — one key each
+  // (DL-112). Without the key the control is not drawn; the server refuses
+  // the POST regardless of what the client draws.
+  const mayCreateCustomer = can('customer.create');
+  const mayCreatePlace = can('location.create');
   const [form, setForm] = useState<FormState>(emptyForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -791,11 +796,18 @@ export function TripFormModal({
             )}
             value={form.customerId}
             onChange={chooseCustomer}
-            onCreate={async (name) => {
-              const created = await createTripCustomer({ name });
-              onCatalogueChanged();
-              return { id: created.id, label: created.name };
-            }}
+            // ★ `customer.create`, NOT `trip.create` (DL-112): booking a run
+            // and filing a customer are two keys, and a caller with only the
+            // first gets a list with no "+". The server refuses the POST anyway.
+            onCreate={
+              mayCreateCustomer
+                ? async (name) => {
+                    const created = await createTripCustomer({ name });
+                    onCatalogueChanged();
+                    return { id: created.id, label: created.name };
+                  }
+                : undefined
+            }
           />
         </div>
 
@@ -901,7 +913,7 @@ export function TripFormModal({
             chosen={placeAt('pickup')}
             value={form.pickupLocationId}
             onChange={(id) => set('pickupLocationId', id)}
-            onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
+            onAdd={mayCreatePlace ? () => setPlaceDialog({ end: 'pickup', editing: null }) : null}
             onSetup={setupHandlerFor(mayManagePlaces, 'pickup', setPlaceDialog)}
             address={form.pickupAddress}
             contact={form.pickupContact}
@@ -917,7 +929,7 @@ export function TripFormModal({
             chosen={placeAt('delivery')}
             value={form.deliveryLocationId}
             onChange={(id) => set('deliveryLocationId', id)}
-            onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
+            onAdd={mayCreatePlace ? () => setPlaceDialog({ end: 'delivery', editing: null }) : null}
             onSetup={setupHandlerFor(mayManagePlaces, 'delivery', setPlaceDialog)}
             address={form.deliveryAddress}
             contact={form.deliveryContact}
@@ -1237,7 +1249,8 @@ function LocationEnd({
   chosen: ChosenPlace | null;
   value: string | null;
   onChange: (id: string | null) => void;
-  onAdd: () => void;
+  /** Opens the new-place dialog, or null for a caller without `location.create` — no control is drawn. */
+  onAdd: (() => void) | null;
   /** Opens the place dialog on an unlocated ACTIVE place. `null` for a caller who may not correct places. */
   onSetup: ((location: TripLocation) => void) | null;
   address: string;
@@ -1280,15 +1293,17 @@ function LocationEnd({
           ))}
         </select>
         {/* A step lighter than the picker: adding a place is the exception, choosing one is the job. */}
-        <Button
-          type="button"
-          variant="ghost"
-          className="shrink-0 text-gray-600"
-          disabled={customerId === null}
-          onClick={onAdd}
-        >
-          {t('addLocation')}
-        </Button>
+        {onAdd && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="shrink-0 text-gray-600"
+            disabled={customerId === null}
+            onClick={onAdd}
+          >
+            {t('addLocation')}
+          </Button>
+        )}
       </div>
 
       {customerId !== null && locations.length === 0 ? (

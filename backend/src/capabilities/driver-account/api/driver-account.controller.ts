@@ -81,14 +81,14 @@ type RejectInput = z.infer<typeof rejectSchema>;
  *   GET    /driver-accounts/:userId            user.write             'global'
  *   PATCH  /driver-accounts/:userId            user.write             'global'
  *   PATCH  /driver-accounts/:userId/status     user.write             'global'
- *   POST   /driver-account-requests            driver.account.request 'head-anywhere'
+ *   POST   /driver-account-requests            driver.account.request global | function dispatch (DL-111)
  *   GET    /driver-account-requests            user.write             'global'
- *   GET    /driver-account-requests/mine       driver.account.request 'head-anywhere'
+ *   GET    /driver-account-requests/mine       driver.account.request global | function dispatch (DL-111)
  *   POST   /driver-account-requests/:id/approve  user.write           'global'
  *   POST   /driver-account-requests/:id/reject   user.write           'global'
  *
- * A head can reach the second and fourth and nothing else. There is no route
- * they hold that creates an account, so "propose" cannot be escalated into
+ * A dispatch member or head can reach the proposal routes and nothing else.
+ * There is no route they hold that creates an account, so "propose" cannot be escalated into
  * "create" by calling a different endpoint — which is what makes this
  * server-side enforcement rather than a hidden button.
  */

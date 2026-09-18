@@ -33,6 +33,15 @@ export type PermissionKey =
   // is the superadmin or a head WITHIN one of those three functions.
   | 'trip.read'
   | 'trip.create'
+  /**
+   * ★ THE CATALOGUES, ONE KEY EACH (DL-112). `trip.create` books a run and
+   * nothing else. Every booking function files customers and places;
+   * only dispatch and the superadmin add a lorry to the fleet — so the
+   * "add vehicle" control and the "add customer" control read DIFFERENT keys.
+   */
+  | 'customer.create'
+  | 'location.create'
+  | 'vehicle.create'
   | 'trip.write'
   /**
    * ★ DISPATCHING — a lorry and its driver onto a trip, swapping, ending, and
@@ -43,14 +52,13 @@ export type PermissionKey =
   | 'dispatch.write'
   /**
    * ★ SEEING THE TWO PRICES ON A TRIP ROW — what it is sold for and what it is
-   * bought for. The superadmin and everybody — head or member alike — in a
-   * sales, accounting or dispatch department; nobody else, however senior.
-   * Read only: the columns are drawn, the form shows the figures, nothing is
-   * typed.
+   * bought for. The superadmin and everybody — head or member alike — in an
+   * ACCOUNTING department (DL-111); sales, customer service and dispatch book
+   * the run and never see a figure. The columns are drawn only for a holder.
    */
   | 'trip.price.read'
   /**
-   * ★ SETTING THEM. The superadmin and the dispatch function (0032).
+   * ★ SETTING THEM. The superadmin and the accounting function (DL-111).
    *
    * ★ THE ONLY RENDER HINT ON THIS LIST THAT ALSO DECIDES WHETHER A FIELD IS
    * COMPULSORY, AND WHICH KEYS ARE SENT. The server REFUSES a body that
@@ -74,9 +82,9 @@ export type PermissionKey =
   // without the wider. GLOBAL, because the contract reserves it to one actor.
   | 'trip.complete.review'
   /**
-   * ★ PROPOSE A DRIVER ACCOUNT, AND NOTHING MORE. Tier `head-anywhere` on the
-   * server: any department head holds it. It does not create an account —
-   * approving is `user.write`, which is global.
+   * ★ PROPOSE A DRIVER ACCOUNT, AND NOTHING MORE. The superadmin and the
+   * dispatch function (DL-111) — the unit that hires and runs drivers. It does
+   * not create an account — approving is `user.write`, which is global.
    */
   | 'driver.account.request';
 

@@ -59,24 +59,40 @@ describe('★ the two price keys agree with each other', () => {
     expect(write.tier).toBe('global');
   });
 
-  it('dispatch may write prices AND dispatch lorries — the same function, both keys', () => {
-    expect(PERMISSION_REQUIREMENT['trip.price.write'].orFunction).toEqual(['dispatch']);
-    expect(PERMISSION_REQUIREMENT['dispatch.write'].orFunction).toEqual(['dispatch']);
+  it('★ the prices are accounting’s, read and write — and nobody who books sees them (DL-111)', () => {
+    expect(PERMISSION_REQUIREMENT['trip.price.read']).toEqual({ tier: 'global', orFunction: ['accounting'] });
+    expect(PERMISSION_REQUIREMENT['trip.price.write']).toEqual({ tier: 'global', orFunction: ['accounting'] });
+    for (const fn of ['sales', 'dispatch', 'customer_service'] as const) {
+      expect(PERMISSION_REQUIREMENT['trip.price.read'].orFunction).not.toContain(fn);
+      expect(PERMISSION_REQUIREMENT['trip.price.write'].orFunction).not.toContain(fn);
+    }
+  });
+
+  it('dispatch dispatches lorries and proposes drivers — the same function, both keys', () => {
+    expect(PERMISSION_REQUIREMENT['dispatch.write']).toEqual({ tier: 'global', orFunction: ['dispatch'] });
+    expect(PERMISSION_REQUIREMENT['driver.account.request']).toEqual({ tier: 'global', orFunction: ['dispatch'] });
   });
 });
 
-describe('★ booking a trip belongs to the three functions, and to no seniority', () => {
-  // Booking, reading the board and reading its prices: the same three
+describe('★ booking a trip belongs to the four functions, and to no seniority', () => {
+  const BOOKING = ['sales', 'accounting', 'dispatch', 'customer_service'];
+
+  // Booking, reading the board, filing a customer or a place: the same four
   // functions, never head-anywhere, never member, never "any".
-  it.each(['trip.create', 'trip.read', 'trip.price.read'] as const)(
-    '★ %s is global or one of sales / accounting / dispatch — no seniority reads or books',
+  it.each(['trip.create', 'trip.read', 'customer.create', 'location.create'] as const)(
+    '★ %s is global or one of sales / accounting / dispatch / customer service — no seniority reads or books',
     (key) => {
-      expect(PERMISSION_REQUIREMENT[key]).toEqual({
-        tier: 'global',
-        orFunction: ['sales', 'accounting', 'dispatch'],
-      });
+      expect(PERMISSION_REQUIREMENT[key]).toEqual({ tier: 'global', orFunction: BOOKING });
     },
   );
+
+  it('★ the fleet is dispatch’s: vehicle.create names dispatch and nobody who merely books (DL-112)', () => {
+    expect(PERMISSION_REQUIREMENT['vehicle.create']).toEqual({ tier: 'global', orFunction: ['dispatch'] });
+  });
+
+  it('★ customer service corrects nothing — trip.write did not widen with the fourth function', () => {
+    expect(PERMISSION_REQUIREMENT['trip.write'].withinFunction).not.toContain('customer_service');
+  });
 
   it('★ trip.write is a head WITHIN a booking function — a head elsewhere corrects nothing', () => {
     expect(PERMISSION_REQUIREMENT['trip.write']).toEqual({
