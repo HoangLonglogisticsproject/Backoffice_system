@@ -1,5 +1,10 @@
 import { httpClient } from './client';
-import type { EmployeeDetail, EmployeeRosterRow, MembershipStatus } from '@/types/organization';
+import type {
+  DepartmentMembership,
+  EmployeeDetail,
+  EmployeeRosterRow,
+  MembershipStatus,
+} from '@/types/organization';
 import type { Page, PageRequest } from '@/types/pagination';
 
 /**
@@ -79,6 +84,23 @@ export async function fetchEmployeeRoster(
  * A 403 is a normal outcome to render: a head reaching somebody who has moved to
  * another unit is refused by design, not by accident.
  */
+/**
+ * `POST /departments/:id/members` → 201 (contract §6). A TRANSFER, never an
+ * "add": the person's current membership ends and a new one opens in the
+ * route's department, in one transaction. GLOBAL only; a head goes through
+ * the approval path instead.
+ */
+export async function transferMember(
+  departmentId: string,
+  userId: string,
+): Promise<DepartmentMembership> {
+  const { data } = await httpClient.post<DepartmentMembership>(
+    `/departments/${encodeURIComponent(departmentId)}/members`,
+    { userId },
+  );
+  return data;
+}
+
 export async function fetchEmployeeDetail(userId: string): Promise<EmployeeDetail> {
   const { data } = await httpClient.get<EmployeeDetail>(
     `/users/${encodeURIComponent(userId)}/memberships`,

@@ -47,3 +47,16 @@ export async function assignDepartmentHead(
   );
   return data;
 }
+
+/**
+ * `DELETE /departments/:id/head` → 200 (contract §15b). Ends the active head
+ * assignment; the person stays a member. Replacing a head is this, then
+ * `assignDepartmentHead` — two calls, because the unique index refuses two
+ * active heads and no single call can be made to commute.
+ */
+export async function revokeDepartmentHead(departmentId: string): Promise<DepartmentHead> {
+  const { data } = await httpClient.delete<DepartmentHead>(
+    `/departments/${encodeURIComponent(departmentId)}/head`,
+  );
+  return data;
+}
