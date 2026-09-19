@@ -283,6 +283,38 @@ export const envSchema = z.object({
     .string()
     .min(1)
     .default('HoangLongLogistics-Backoffice (https://hoanglonglti.com)'),
+
+  /**
+   * The bearer secret the AI PLATFORM presents when it calls this backend's
+   * internal read-model routes (ADR-0007). One direction only: what THIS
+   * backend presents to the AI is a different secret, held by the AI's own
+   * environment. Two secrets, so a leak on one side does not open the other.
+   *
+   * ★ OPTIONAL WITH AN EMPTY DEFAULT, AND EMPTY MEANS CLOSED. No internal
+   * route exists yet (Phase 1b), so requiring it would refuse to boot every
+   * deployment for a door that is not there. `ServiceAuthGuard` treats an
+   * empty secret as "match nothing", so leaving it unset later is a closed
+   * door rather than an open one. When set, it must be a generated value.
+   */
+  SERVICE_TOKEN_AI_TO_BACKEND: z
+    .string()
+    .default('')
+    .refine((value) => value.length === 0 || value.length >= 32, {
+      message: 'SERVICE_TOKEN_AI_TO_BACKEND must be at least 32 characters when set — generate it, never type it',
+    }),
+
+  /**
+   * The HMAC-SHA256 key this backend signs a user's trusted context with
+   * before calling the AI on their behalf (ADR-0007 §H). Separate from both
+   * bearer secrets. Same optional-but-closed shape as above: unset means the
+   * signer refuses to sign, never that it signs with nothing.
+   */
+  TRUSTED_CONTEXT_SECRET: z
+    .string()
+    .default('')
+    .refine((value) => value.length === 0 || value.length >= 32, {
+      message: 'TRUSTED_CONTEXT_SECRET must be at least 32 characters when set — generate it, never type it',
+    }),
 });
 
 export type Env = z.infer<typeof envSchema>;

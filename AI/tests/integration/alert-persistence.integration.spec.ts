@@ -1,0 +1,401 @@
+import { Pool } from 'pg';
+import { InvalidTransitionError, ValidationError } from '@common/errors/domain.error';
+import type { Database } from '@common/types/database.port';
+import { AlertService } from '@core/alert/application/alert.service';
+import { SYSTEM_ACTOR } from '@core/alert/domain/actor';
+import { dedupeKeyOf } from '@core/alert/domain/dedupe';
+import { AlertHistoryRepository } from '@core/alert/persistence/alert-history.repository';
+import { AlertRepository } from '@core/alert/persistence/alert.repository';
+import { ScanRunRepository } from '@core/alert/persistence/scan-run.repository';
+import {
+  TEST_URL,
+  describeIntegration,
+  migrateTestSchema,
+  openTestSchema,
+  poolAsDatabase,
+  signal,
+} from '../helpers/integration-database';
+
+/**
+ * The Alert aggregate against a REAL PostgreSQL: dedupe by partial unique
+ * index, DISMISSED-suppresses, transition + history in one transaction, one
+ * winner under concurrency, and the CHECKs that keep the row honest.
+ */
+const SCHEMA = 'ai_itest_alerts';
+
+const USER_A = '11111111-1111-4111-8111-111111111111';
+const USER_B = '22222222-2222-4222-8222-222222222222';
+
+describeIntegration('Alert persistence against real PostgreSQL', () => {
+  jest.setTimeout(30_000);
+
+  let pool: Pool;
+  let db: Database;
+  let alerts: AlertRepository;
+  let history: AlertHistoryRepository;
+  let scanRuns: ScanRunRepository;
+  let service: AlertService;
+
+  beforeAll(async () => {
+    pool = await openTestSchema(TEST_URL as string, SCHEMA);
+    await migrateTestSchema(pool, SCHEMA);
+    db = poolAsDatabase(pool);
+    alerts = new AlertRepository(db);
+    history = new AlertHistoryRepository(db);
+    scanRuns = new ScanRunRepository(db);
+    service = new AlertService(db, alerts, history);
+  });
+
+  afterAll(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
+    await pool.end();
+  });
+
+  beforeEach(async () => {
+    await pool.query('TRUNCATE alert_transition_history, alerts, scan_runs');
+  });
+
+  const rowCount = async (dedupeKey: string): Promise<number> => {
+    const rows = await pool.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM alerts WHERE dedupe_key = $1',
+      [dedupeKey],
+    );
+    return rows.rows[0]?.n ?? 0;
+  };
+
+  describe('dedupe — one LIVE incident per key', () => {
+    it('opens a new incident and writes its birth row in history', async () => {
+      const s = signal();
+      const { alert, created } = await service.recordSignal(s, { scanRunId: null, correlationId: 'c-1' });
+
+      expect(created).toBe(true);
+      expect(alert.status).toBe('open');
+      expect(alert.dedupeKey).toBe(dedupeKeyOf(s));
+      expect(alert.occurrenceCount).toBe(1);
+      expect(alert.evidenceVersion).toBe(1);
+      expect(alert.confidence).toBeNull();
+
+      const born = await history.listByAlert(alert.id);
+      expect(born).toHaveLength(1);
+      expect(born[0]).toMatchObject({
+        fromStatus: null,
+        toStatus: 'open',
+        actorType: 'system',
+        actorId: null,
+        correlationId: 'c-1',
+      });
+    });
+
+    it('an OPEN duplicate refreshes the row: no second row, no second history entry', async () => {
+      const s = signal({ severity: 'warning', summary: 'first' });
+      const first = await service.recordSignal(s);
+
+      const again = await service.recordSignal({ ...s, severity: 'high', summary: 'second' });
+
+      expect(again.created).toBe(false);
+      expect(again.alert.id).toBe(first.alert.id);
+      expect(again.alert.severity).toBe('high');
+      expect(again.alert.summary).toBe('second');
+      expect(again.alert.occurrenceCount).toBe(2);
+      expect(again.alert.lastSeenAt.getTime()).toBeGreaterThanOrEqual(first.alert.lastSeenAt.getTime());
+      expect(await rowCount(dedupeKeyOf(s))).toBe(1);
+      expect(await history.listByAlert(first.alert.id)).toHaveLength(1);
+    });
+
+    it('an ACKNOWLEDGED duplicate refreshes evidence and keeps the status', async () => {
+      const s = signal();
+      const { alert } = await service.recordSignal(s);
+      await service.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } });
+
+      const again = await service.recordSignal({ ...s, evidence: { observed: true, count: 2 } });
+
+      expect(again.created).toBe(false);
+      expect(again.alert.status).toBe('acknowledged');
+      expect(again.alert.evidence).toEqual({ observed: true, count: 2 });
+      expect(await rowCount(dedupeKeyOf(s))).toBe(1);
+    });
+
+    it('a DISMISSED duplicate is SUPPRESSED: evidence and severity move, status does not, no new row', async () => {
+      const s = signal({ severity: 'warning' });
+      const { alert } = await service.recordSignal(s);
+      await service.transition({
+        alertId: alert.id,
+        to: 'dismissed',
+        actor: { type: 'user', id: USER_A },
+        reason: 'Known, handled offline.',
+      });
+
+      const again = await service.recordSignal({ ...s, severity: 'high' });
+
+      expect(again.created).toBe(false);
+      expect(again.alert.id).toBe(alert.id);
+      expect(again.alert.status).toBe('dismissed');
+      expect(again.alert.severity).toBe('high');
+      expect(again.alert.dismissedReason).toBe('Known, handled offline.');
+      expect(await rowCount(dedupeKeyOf(s))).toBe(1);
+    });
+
+    it('after RESOLVED the same key opens a NEW incident', async () => {
+      const s = signal();
+      const first = await service.recordSignal(s);
+      await service.resolveBySystem({ alertId: first.alert.id, scanRunId: null });
+
+      const second = await service.recordSignal(s);
+
+      expect(second.created).toBe(true);
+      expect(second.alert.id).not.toBe(first.alert.id);
+      expect(second.alert.occurrenceCount).toBe(1);
+      expect(await rowCount(dedupeKeyOf(s))).toBe(2);
+    });
+
+    it('two concurrent upserts of one key produce one row', async () => {
+      const s = signal();
+      const results = await Promise.all([service.recordSignal(s), service.recordSignal(s)]);
+
+      expect(results.filter((r) => r.created)).toHaveLength(1);
+      expect(await rowCount(dedupeKeyOf(s))).toBe(1);
+    });
+  });
+
+  describe('lifecycle — status change and history commit together', () => {
+    it('acknowledge, then dismiss, then system-resolve — each with its history row', async () => {
+      const { alert } = await service.recordSignal(signal());
+
+      const acked = await service.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } });
+      expect(acked.status).toBe('acknowledged');
+      expect(acked.acknowledgedBy).toBe(USER_A);
+      expect(acked.acknowledgedAt).not.toBeNull();
+
+      const dismissed = await service.transition({
+        alertId: alert.id,
+        to: 'dismissed',
+        actor: { type: 'user', id: USER_B },
+        reason: '  Duplicate of another incident.  ',
+      });
+      expect(dismissed.status).toBe('dismissed');
+      expect(dismissed.dismissedBy).toBe(USER_B);
+      expect(dismissed.dismissedReason).toBe('Duplicate of another incident.');
+
+      const resolved = await service.resolveBySystem({ alertId: alert.id, scanRunId: null, correlationId: 'run-9' });
+      expect(resolved.status).toBe('resolved');
+      expect(resolved.resolvedBy).toBeNull();
+      expect(resolved.resolutionKind).toBe('system_cleared');
+
+      const story = await history.listByAlert(alert.id);
+      expect(story.map((h) => [h.fromStatus, h.toStatus, h.actorType, h.actorId])).toEqual([
+        [null, 'open', 'system', null],
+        ['open', 'acknowledged', 'user', USER_A],
+        ['acknowledged', 'dismissed', 'user', USER_B],
+        ['dismissed', 'resolved', 'system', null],
+      ]);
+      expect(story[2]?.reason).toBe('Duplicate of another incident.');
+      expect(story[3]?.correlationId).toBe('run-9');
+    });
+
+    it('a user resolution names the user', async () => {
+      const { alert } = await service.recordSignal(signal());
+      const resolved = await service.transition({ alertId: alert.id, to: 'resolved', actor: { type: 'user', id: USER_A } });
+      expect(resolved.resolutionKind).toBe('user');
+      expect(resolved.resolvedBy).toBe(USER_A);
+    });
+
+    it('refuses to dismiss without a reason, and writes nothing', async () => {
+      const { alert } = await service.recordSignal(signal());
+
+      await expect(
+        service.transition({ alertId: alert.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: '   ' }),
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      expect((await alerts.findById(alert.id))?.status).toBe('open');
+      expect(await history.listByAlert(alert.id)).toHaveLength(1);
+    });
+
+    it('refuses a user moving dismissed → resolved, and a system moving anything → acknowledged', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await service.transition({ alertId: alert.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: 'r' });
+
+      await expect(
+        service.transition({ alertId: alert.id, to: 'resolved', actor: { type: 'user', id: USER_A } }),
+      ).rejects.toBeInstanceOf(InvalidTransitionError);
+      await expect(
+        service.transition({ alertId: alert.id, to: 'acknowledged', actor: SYSTEM_ACTOR }),
+      ).rejects.toBeInstanceOf(InvalidTransitionError);
+
+      expect((await alerts.findById(alert.id))?.status).toBe('dismissed');
+    });
+
+    it('never reopens: resolved is terminal for everybody', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await service.resolveBySystem({ alertId: alert.id, scanRunId: null });
+
+      for (const to of ['acknowledged', 'dismissed', 'resolved'] as const) {
+        await expect(
+          service.transition({ alertId: alert.id, to, actor: { type: 'user', id: USER_A }, reason: 'r' }),
+        ).rejects.toBeInstanceOf(InvalidTransitionError);
+      }
+      await expect(service.resolveBySystem({ alertId: alert.id, scanRunId: null })).rejects.toBeInstanceOf(
+        InvalidTransitionError,
+      );
+    });
+
+    it('two users acknowledging at once: one winner, one 409, one history row', async () => {
+      const { alert } = await service.recordSignal(signal());
+
+      const outcomes = await Promise.allSettled([
+        service.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } }),
+        service.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_B } }),
+      ]);
+
+      const won = outcomes.filter((o) => o.status === 'fulfilled');
+      const lost = outcomes.filter((o) => o.status === 'rejected');
+      expect(won).toHaveLength(1);
+      expect(lost).toHaveLength(1);
+      expect((lost[0] as PromiseRejectedResult).reason).toBeInstanceOf(InvalidTransitionError);
+
+      const story = await history.listByAlert(alert.id);
+      expect(story.filter((h) => h.toStatus === 'acknowledged')).toHaveLength(1);
+    });
+
+    it('when the history row cannot be written, the status change is rolled back with it', async () => {
+      const { alert } = await service.recordSignal(signal());
+
+      const brokenHistory = {
+        record: async () => {
+          throw new Error('history unavailable');
+        },
+        listByAlert: () => history.listByAlert(alert.id),
+      } as unknown as AlertHistoryRepository;
+      const fragile = new AlertService(db, alerts, brokenHistory);
+
+      await expect(
+        fragile.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } }),
+      ).rejects.toThrow('history unavailable');
+
+      expect((await alerts.findById(alert.id))?.status).toBe('open');
+      expect((await alerts.findById(alert.id))?.acknowledgedAt).toBeNull();
+    });
+
+    it('moves updated_at on every update, by trigger', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await pool.query("SELECT pg_sleep(0.01)");
+      const acked = await service.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } });
+      expect(acked.updatedAt.getTime()).toBeGreaterThan(alert.updatedAt.getTime());
+      expect(acked.createdAt.getTime()).toBe(alert.createdAt.getTime());
+    });
+  });
+
+  describe('the database refuses what the domain refuses', () => {
+    it('a history row with a system actor AND an actor id, or a user actor WITHOUT one', async () => {
+      const { alert } = await service.recordSignal(signal());
+
+      await expect(
+        pool.query(
+          "INSERT INTO alert_transition_history (alert_id, from_status, to_status, actor_type, actor_id) VALUES ($1, 'open', 'resolved', 'system', $2)",
+          [alert.id, USER_A],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        pool.query(
+          "INSERT INTO alert_transition_history (alert_id, from_status, to_status, actor_type, actor_id) VALUES ($1, 'open', 'acknowledged', 'user', NULL)",
+          [alert.id],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+    });
+
+    it('a dismissal without a reason, at the row level', async () => {
+      const { alert } = await service.recordSignal(signal());
+
+      await expect(
+        pool.query(
+          "UPDATE alerts SET status = 'dismissed', dismissed_at = now(), dismissed_by = $2, dismissed_reason = '  ' WHERE id = $1",
+          [alert.id, USER_A],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+    });
+
+    it('a status that does not match its timestamps', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await expect(
+        pool.query("UPDATE alerts SET status = 'resolved' WHERE id = $1", [alert.id]),
+      ).rejects.toMatchObject({ code: '23514' });
+    });
+
+    it('a resolution with the wrong actor shape', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await expect(
+        pool.query(
+          "UPDATE alerts SET status = 'resolved', resolved_at = now(), resolution_kind = 'system_cleared', resolved_by = $2 WHERE id = $1",
+          [alert.id, USER_A],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+    });
+  });
+
+  describe('listing and summary', () => {
+    it('pages newest-activity-first by keyset and honours the status filter', async () => {
+      const opened = [];
+      for (let i = 0; i < 5; i += 1) {
+        opened.push((await service.recordSignal(signal({ detectorCode: `D${i}` }))).alert);
+      }
+      await service.transition({ alertId: opened[0]!.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } });
+
+      const page1 = await service.list({ statuses: ['open', 'acknowledged'], limit: 2 });
+      expect(page1.items).toHaveLength(2);
+      expect(page1.hasMore).toBe(true);
+
+      const page2 = await service.list({ statuses: ['open', 'acknowledged'], limit: 2, cursor: page1.nextCursor as string });
+      const page3 = await service.list({ statuses: ['open', 'acknowledged'], limit: 2, cursor: page2.nextCursor as string });
+
+      const seen = [...page1.items, ...page2.items, ...page3.items].map((a) => a.id);
+      expect(new Set(seen).size).toBe(5);
+      expect(page3.hasMore).toBe(false);
+
+      const onlyAcked = await service.list({ statuses: ['acknowledged'], limit: 50 });
+      expect(onlyAcked.items.map((a) => a.id)).toEqual([opened[0]!.id]);
+    });
+
+    it('counts live incidents by status and severity, ignoring resolved ones', async () => {
+      const a = (await service.recordSignal(signal({ severity: 'high' }))).alert;
+      const b = (await service.recordSignal(signal({ severity: 'warning' }))).alert;
+      (await service.recordSignal(signal({ severity: 'warning' }))).alert;
+      await service.transition({ alertId: a.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: 'r' });
+      await service.resolveBySystem({ alertId: b.id, scanRunId: null });
+
+      expect(await service.summary()).toEqual({
+        open: 1,
+        acknowledged: 0,
+        dismissed: 1,
+        bySeverity: { info: 0, warning: 1, high: 1, critical: 0 },
+      });
+    });
+  });
+
+  describe('scan_runs foundation', () => {
+    it('starts running and finishes once', async () => {
+      const run = await scanRuns.start({
+        detectorCode: 'TEST_DETECTOR',
+        detectorVersion: 1,
+        phase: 'discovery',
+        configSnapshot: { leadTime: '2h' },
+        correlationId: 'tick-1',
+      });
+      expect(run.outcome).toBe('running');
+      expect(run.finishedAt).toBeNull();
+
+      const done = await scanRuns.finish(run.id, { outcome: 'succeeded', candidates: 3, signals: 1, created: 1 });
+      expect(done).toMatchObject({ outcome: 'succeeded', candidates: 3, signals: 1, created: 1, updated: 0 });
+      expect(done?.finishedAt).not.toBeNull();
+
+      // A second finish is a no-op, not a rewrite of history.
+      expect(await scanRuns.finish(run.id, { outcome: 'failed', error: 'late' })).toBeNull();
+      expect((await scanRuns.findById(run.id))?.outcome).toBe('succeeded');
+    });
+
+    it('refuses a finished run without a finished_at, and vice versa', async () => {
+      await expect(
+        pool.query("INSERT INTO scan_runs (detector_code, detector_version, phase, outcome) VALUES ('X', 1, 'discovery', 'succeeded')"),
+      ).rejects.toMatchObject({ code: '23514' });
+    });
+  });
+});
