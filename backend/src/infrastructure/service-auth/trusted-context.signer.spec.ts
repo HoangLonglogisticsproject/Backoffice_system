@@ -1,6 +1,8 @@
 import type { AppConfig } from '../../config/app.config';
 import {
   signTrustedContext,
+  TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS,
+  TRUSTED_CONTEXT_MAX_TTL_SECONDS,
   TRUSTED_CONTEXT_TTL_SECONDS,
   TrustedContextSigner,
   verifyTrustedContext,
@@ -26,6 +28,25 @@ describe('trusted context signer', () => {
     expect(payload?.exp).toBe(nowSeconds + 5);
   });
 
+  it("refuses to issue a token that outlives the verifier's maximum — the contract is short-lived", () => {
+    expect(() => signer(secret).issue(claims, { now, ttlSeconds: TRUSTED_CONTEXT_MAX_TTL_SECONDS + 1 })).toThrow(
+      /lives at most/,
+    );
+    expect(() => signer(secret).issue(claims, { now, ttlSeconds: 0 })).toThrow(/lives at most/);
+    expect(verifyTrustedContext(signer(secret).issue(claims, { now, ttlSeconds: TRUSTED_CONTEXT_MAX_TTL_SECONDS }), secret, now)).not.toBeNull();
+  });
+
+  it("mirrors the verifier's window: future iat beyond skew, over-long life, expired beyond skew", () => {
+    const base = { ...claims, aud: 'ai' as const };
+    const s = (iat: number, exp: number) => signTrustedContext({ ...base, iat, exp }, secret);
+
+    expect(verifyTrustedContext(s(nowSeconds + TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS + 1, nowSeconds + 90), secret, now)).toBeNull();
+    expect(verifyTrustedContext(s(nowSeconds + TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS, nowSeconds + 90), secret, now)).not.toBeNull();
+    expect(verifyTrustedContext(s(nowSeconds, nowSeconds + TRUSTED_CONTEXT_MAX_TTL_SECONDS + 1), secret, now)).toBeNull();
+    expect(verifyTrustedContext(s(nowSeconds - 120, nowSeconds - TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS - 1), secret, now)).toBeNull();
+    expect(verifyTrustedContext(s(nowSeconds - 60, nowSeconds - TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS + 1), secret, now)).not.toBeNull();
+  });
+
   it('refuses to sign when the secret is not configured — no silent unsigned context', () => {
     expect(() => signer('').issue(claims)).toThrow(/TRUSTED_CONTEXT_SECRET/);
   });
@@ -33,7 +54,9 @@ describe('trusted context signer', () => {
   it('what it signs, only the same secret verifies', () => {
     const token = signer(secret).issue(claims, { now });
     expect(verifyTrustedContext(token, 'another-secret-of-at-least-32-characters', now)).toBeNull();
-    expect(verifyTrustedContext(token, secret, new Date(now.getTime() + 61_000))).toBeNull();
+    // 61 s after issue is 1 s past expiry — inside the 30 s skew, so still accepted; 91 s is not.
+    expect(verifyTrustedContext(token, secret, new Date(now.getTime() + 61_000))).not.toBeNull();
+    expect(verifyTrustedContext(token, secret, new Date(now.getTime() + 91_000))).toBeNull();
     expect(verifyTrustedContext(`${token}x`, secret, now)).toBeNull();
   });
 

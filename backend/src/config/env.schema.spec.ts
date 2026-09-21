@@ -8,6 +8,22 @@ import { validateEnv } from './env.schema';
 describe('validateEnv', () => {
   const valid = { DATABASE_URL: 'postgres://u:p@localhost:5432/db' };
 
+  describe('AI Platform service-auth secrets (ADR-0007)', () => {
+    // Optional so no existing deployment refuses to boot; empty means the
+    // door is CLOSED, which ServiceAuthGuard and TrustedContextSigner enforce.
+    it('default to empty when absent', () => {
+      const env = validateEnv(valid);
+      expect(env.SERVICE_TOKEN_AI_TO_BACKEND).toBe('');
+      expect(env.TRUSTED_CONTEXT_SECRET).toBe('');
+    });
+
+    it('refuse a short value once set — a typed value is not a secret', () => {
+      expect(() => validateEnv({ ...valid, SERVICE_TOKEN_AI_TO_BACKEND: 'short' })).toThrow(/at least 32/);
+      expect(() => validateEnv({ ...valid, TRUSTED_CONTEXT_SECRET: 'x'.repeat(31) })).toThrow(/at least 32/);
+      expect(validateEnv({ ...valid, TRUSTED_CONTEXT_SECRET: 'x'.repeat(32) }).TRUSTED_CONTEXT_SECRET).toHaveLength(32);
+    });
+  });
+
   it('applies defaults for everything optional', () => {
     const env = validateEnv(valid);
     expect(env.NODE_ENV).toBe('development');

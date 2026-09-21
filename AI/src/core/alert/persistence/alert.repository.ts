@@ -141,6 +141,20 @@ export class AlertRepository {
    * ★ ON CONFLICT NEVER TOUCHES `status`. A dismissed incident stays dismissed
    * (suppressed) while its evidence, severity and `last_seen_at` keep moving,
    * which is exactly what "suppress until the condition clears" means.
+   *
+   * ★ `occurrence_count` COUNTS SCAN RUNS, NOT UPSERTS. It answers "how many
+   * distinct scan runs have observed this incident", so a retried page, a
+   * duplicate signal or two workers in the same run add nothing. Decided in
+   * SQL against the row's committed `last_scan_run_id`, under the row lock
+   * `ON CONFLICT` takes — a read-then-write in the service would race.
+   *
+   *   incoming run == last_scan_run_id   → +0
+   *   incoming run != last_scan_run_id   → +1, last_scan_run_id := incoming
+   *   incoming run IS NULL               → +0, last_scan_run_id unchanged
+   *
+   * A NULL run is an observation with no run identity (bootstrap, a manual
+   * probe, Phase 1a tests). It cannot claim to be a new scan, so it never
+   * counts and never erases the run that last saw the incident.
    */
   async upsert(
     signal: AlertSignal,
@@ -155,8 +169,15 @@ export class AlertRepository {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $14)
        ON CONFLICT (dedupe_key) WHERE ${LIVE_PREDICATE}
        DO UPDATE SET
-         last_seen_at     = now(),
-         occurrence_count = alerts.occurrence_count + 1,
+         -- GREATEST, not now(): now() is the TRANSACTION start. A worker that
+         -- began before the inserting one and then lost the race would write a
+         -- last_seen_at EARLIER than first_seen_at and trip alerts_seen_order.
+         -- Found by the concurrent-upsert test, not by reasoning.
+         last_seen_at     = GREATEST(alerts.last_seen_at, now()),
+         occurrence_count = alerts.occurrence_count
+                            + CASE WHEN EXCLUDED.last_scan_run_id IS NULL
+                                     OR EXCLUDED.last_scan_run_id = alerts.last_scan_run_id
+                                   THEN 0 ELSE 1 END,
          detector_version = EXCLUDED.detector_version,
          severity         = EXCLUDED.severity,
          title            = EXCLUDED.title,

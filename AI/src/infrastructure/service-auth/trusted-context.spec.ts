@@ -1,5 +1,11 @@
 import { TrustedContextError } from '../../common/errors/domain.error';
-import { signTrustedContext, verifyTrustedContext, type TrustedContext } from './trusted-context';
+import {
+  signTrustedContext,
+  TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS,
+  TRUSTED_CONTEXT_MAX_TTL_SECONDS,
+  verifyTrustedContext,
+  type TrustedContext,
+} from './trusted-context';
 
 describe('trusted context (HMAC-SHA256)', () => {
   const secret = 'a-test-secret-of-at-least-32-characters!!';
@@ -43,13 +49,48 @@ describe('trusted context (HMAC-SHA256)', () => {
     expect(() => verifyTrustedContext(token, secret, now)).toThrow(TrustedContextError);
   });
 
-  it('refuses an expired token, and one whose exp is exactly now', () => {
-    expect(() =>
-      verifyTrustedContext(signTrustedContext(payload({ iat: nowSeconds - 120, exp: nowSeconds - 60 }), secret), secret, now),
-    ).toThrow(TrustedContextError);
-    expect(() =>
-      verifyTrustedContext(signTrustedContext(payload({ exp: nowSeconds }), secret), secret, now),
-    ).toThrow(TrustedContextError);
+  describe('the time window', () => {
+    const skew = TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS;
+    const maxTtl = TRUSTED_CONTEXT_MAX_TTL_SECONDS;
+    const verify = (iat: number, exp: number) =>
+      verifyTrustedContext(signTrustedContext(payload({ iat, exp }), secret), secret, now);
+
+    it("accepts the signer's ordinary 60-second token", () => {
+      expect(verify(nowSeconds, nowSeconds + 60).exp).toBe(nowSeconds + 60);
+    });
+
+    it('refuses a token expired beyond the clock skew', () => {
+      expect(() => verify(nowSeconds - 120, nowSeconds - 60)).toThrow(TrustedContextError);
+      expect(() => verify(nowSeconds - 100, nowSeconds - skew)).toThrow(TrustedContextError);
+    });
+
+    it('forgives an expiry inside the clock skew — two hosts, two clocks', () => {
+      expect(verify(nowSeconds - 60, nowSeconds - skew + 1).sub).toBe(payload().sub);
+      expect(verify(nowSeconds - 60, nowSeconds).sub).toBe(payload().sub);
+    });
+
+    it('refuses an iat further in the future than the clock skew', () => {
+      expect(() => verify(nowSeconds + skew + 1, nowSeconds + skew + 61)).toThrow(TrustedContextError);
+      expect(() => verify(nowSeconds + 3_600, nowSeconds + 3_660)).toThrow(TrustedContextError);
+    });
+
+    it('accepts an iat slightly in the future, inside the skew', () => {
+      expect(verify(nowSeconds + skew, nowSeconds + skew + 60).iat).toBe(nowSeconds + skew);
+      expect(verify(nowSeconds + 5, nowSeconds + 65).iat).toBe(nowSeconds + 5);
+    });
+
+    it('refuses a well-signed token that declares a life longer than the maximum', () => {
+      expect(() => verify(nowSeconds, nowSeconds + maxTtl + 1)).toThrow(TrustedContextError);
+      expect(() => verify(nowSeconds - 3_600, nowSeconds + 3_600)).toThrow(TrustedContextError);
+      // The maximum itself is admitted; the contract is "at most".
+      expect(verify(nowSeconds, nowSeconds + maxTtl).exp).toBe(nowSeconds + maxTtl);
+    });
+
+    it('a long-lived token is refused even while now falls inside its own window', () => {
+      // iat in the past, exp in the future, signature valid — still refused,
+      // because MAX_TTL is about what the token CLAIMS, not where now falls.
+      expect(() => verify(nowSeconds - maxTtl, nowSeconds + maxTtl)).toThrow(TrustedContextError);
+    });
   });
 
   it('refuses an issued-after-expiry token', () => {

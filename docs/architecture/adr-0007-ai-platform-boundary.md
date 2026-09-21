@@ -36,7 +36,7 @@ Alerts are a different kind of thing from the operational record: they are *opin
 
 1. **Human authorization is the backend's alone.** Session cookie → `AuthGuard` → `CsrfGuard` → `@RequirePermission(...)`. The AI has no `can()` and never recomputes a permission.
 2. **Service authentication is per direction.** Backend → AI presents `SERVICE_TOKEN_BACKEND_TO_AI`; AI → Backend presents `SERVICE_TOKEN_AI_TO_BACKEND`. Two secrets, constant-time comparison over SHA-256 digests, one refusal message, never logged. An unset secret closes the door.
-3. **A user's lifecycle action carries a signed, short-lived trusted context** — `v1.<payload>.<HMAC-SHA256>` over `{ sub, perms, fn, aud:'ai', iat, exp, cid }`, signed by the backend with `TRUSTED_CONTEXT_SECRET` (a third secret), verified by the AI for signature, audience and expiry. The AI records `sub` as actor and `cid` for correlation. `perms` and `fn` travel from day one for Phase 2's retrieval pre-filter but drive no decision in Phase 1.
+3. **A user's lifecycle action carries a signed, short-lived trusted context** — `v1.<payload>.<HMAC-SHA256>` over `{ sub, perms, fn, aud:'ai', iat, exp, cid }`, signed by the backend with `TRUSTED_CONTEXT_SECRET` (a third secret). It is **not a user session token**: it is a *short-lived signed delegation context*, minted only **after** the backend has authenticated the session and authorized the relevant `PermissionKey`, and the AI never uses it to re-run business authorization. The AI verifies signature, shape, `aud`, and the time window — `iat ≤ now + 30 s`, `exp > now − 30 s`, `iat ≤ exp`, `exp − iat ≤ 300 s` — so a well-signed token with an abnormal lifetime is refused whoever signed it; the signer issues 60 s and refuses to issue above the maximum. The AI records `sub` as actor and `cid` for correlation. `perms` and `fn` travel from day one for Phase 2's retrieval pre-filter but drive no decision in Phase 1.
 
 Network isolation — the AI publishes no host port; the reverse proxy answers 404 for `/api/internal/` — is defence in depth, never the boundary. Plain `X-User-Role` / `X-User-Scope` headers are not a trust model and are not used.
 
@@ -76,7 +76,9 @@ No reopen. No snooze in v1. `resolved` is terminal. Dismissal requires a reason.
 
 ### 2.8 DISMISSED = suppress until the condition clears (CEO, Option B)
 
-The partial unique index `uq_alert_live_dedupe ON alerts (dedupe_key) WHERE status IN ('open','acknowledged','dismissed')` admits **one live incident per key, including a dismissed one**. Discovery landing on a dismissed key refreshes evidence, severity, `last_seen_at` and `occurrence_count` and **does not change the status**. Only a verified Resolution run moves `dismissed → resolved`. A condition that returns after `resolved` opens a new row.
+The partial unique index `uq_alert_live_dedupe ON alerts (dedupe_key) WHERE status IN ('open','acknowledged','dismissed')` admits **one live incident per key, including a dismissed one**. Discovery landing on a dismissed key refreshes evidence, severity and `last_seen_at` and **does not change the status**. Only a verified Resolution run moves `dismissed → resolved`. A condition that returns after `resolved` opens a new row.
+
+**`occurrence_count` is the number of distinct scan runs that observed the incident — not the number of upserts.** The first observation is 1. A run that retries a page, sees the subject twice, or runs on two workers adds nothing (`incoming scan_run_id = last_scan_run_id → +0`). A different run adds exactly one and becomes `last_scan_run_id`. An observation with no run identity (`NULL`) never counts and never overwrites the last run. The decision is made in the `ON CONFLICT … DO UPDATE` clause against the committed row, under the row lock the conflict takes — never as a read in the service followed by a write.
 
 ### 2.9 Transition history and the actor model
 

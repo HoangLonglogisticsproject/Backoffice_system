@@ -57,7 +57,18 @@ payload = {
   cid:   string          // correlation id của request gốc
 }
 ```
-AI verify: chữ ký (constant-time, độ dài trước) → shape → `aud === 'ai'` → `exp > now` → `iat ≤ exp`. Mọi thất bại → `401 { error: { code: 'INVALID_TRUSTED_CONTEXT' } }`, verify **trước** khi tra alert. Backend: `TrustedContextSigner.issue()` (`backend/src/infrastructure/service-auth/trusted-context.signer.ts`), từ chối ký khi secret rỗng. Không phải JWT, không phải session, không đăng nhập được ai.
+**Bản chất:** KHÔNG phải user session token. Là *short-lived signed delegation context*, chỉ được tạo SAU KHI backend đã (1) authenticate session và (2) authorize `PermissionKey` tương ứng cho action đó. AI không dùng nó để chạy lại business authorization — chỉ ghi `sub` làm actor, `cid` làm correlation.
+
+AI verify, theo thứ tự: chữ ký (constant-time, so độ dài trước) → shape → `aud === 'ai'` → cửa sổ thời gian:
+
+| Điều kiện | Hằng số |
+|---|---|
+| `iat ≤ now + skew` (không đến từ tương lai) | skew = **30 s** |
+| `exp > now − skew` (chưa hết hạn, tha thứ lệch giờ) | |
+| `iat ≤ exp` | |
+| `exp − iat ≤ maxTtl` (token tự khai sống ngắn, bất kể ai ký) | maxTtl = **300 s** |
+
+Signer phát hành TTL **60 s** mặc định và từ chối phát hành TTL > maxTtl. Mọi thất bại → `401 { error: { code: 'INVALID_TRUSTED_CONTEXT' } }` cùng một message, verify **trước** khi tra alert. Backend: `TrustedContextSigner.issue()` (`backend/src/infrastructure/service-auth/trusted-context.signer.ts`), từ chối ký khi secret rỗng. Không phải JWT, không phải session, không đăng nhập được ai. Không log token, chữ ký, secret hay payload.
 
 ## 6. Error envelope
 
@@ -99,6 +110,8 @@ Base: AI service, `Authorization: Bearer SERVICE_TOKEN_BACKEND_TO_AI` trên **m�
 `Alert` = các trường của `ai.alerts` dạng camelCase (`id, detectorCode, detectorVersion, sourceType, subjectType, subjectId, tripId, severity, status, title, summary, evidence, evidenceVersion, dedupeKey, firstSeenAt, lastSeenAt, occurrenceCount, acknowledgedAt/By, dismissedAt/By/Reason, resolvedAt/By, resolutionKind, firstScanRunId, lastScanRunId, resolvedScanRunId, confidence, createdAt, updatedAt`). `history[]` = `{ id, alertId, fromStatus, toStatus, actorType: 'user' \| 'system', actorId, reason, scanRunId, correlationId, createdAt }`, cũ nhất trước. Actor chỉ là UUID: backend join `UserSummary` khi trả ra frontend (ADR-0001).
 
 Không có route tạo alert. Không có route system-resolve — đường system là application-internal (`AlertService.resolveBySystem`).
+
+**`occurrence_count`** = số **scan run khác nhau** đã quan sát incident, không phải số lần upsert. Insert đầu = 1; cùng `scan_run_id` (retry, duplicate, worker song song) → không tăng; `scan_run_id` khác → +1 và `lastScanRunId` đổi; quan sát không có run (`null`) → không tăng, không đổi `lastScanRunId`. Quyết định trong SQL (`ON CONFLICT … DO UPDATE`), an toàn concurrency.
 
 ## 10. Backend read-model boundary (Phase 1b — CHƯA implement, chỉ nguyên tắc)
 

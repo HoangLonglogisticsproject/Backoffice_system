@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 
   first_seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- The number of DISTINCT SCAN RUNS that observed this incident — not the
+  -- number of times a signal arrived. A run that retries or sees the subject
+  -- twice adds nothing; the upsert decides against `last_scan_run_id` in SQL.
   occurrence_count    INTEGER     NOT NULL DEFAULT 1 CHECK (occurrence_count >= 1),
 
   acknowledged_at     TIMESTAMPTZ,

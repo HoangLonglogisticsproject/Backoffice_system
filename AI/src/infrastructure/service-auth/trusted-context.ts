@@ -24,6 +24,21 @@ import { TrustedContextError } from '../../common/errors/domain.error';
 export const TRUSTED_CONTEXT_AUDIENCE = 'ai' as const;
 const VERSION = 'v1';
 
+/**
+ * Time window the verifier tolerates around `now`, in seconds. Two hosts on
+ * one compose network do not drift by more than this; a token whose `iat` is
+ * further in the future than this was not minted by a clock we trust.
+ */
+export const TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS = 30;
+
+/**
+ * The longest lifetime a token may DECLARE, in seconds. The signer issues 60;
+ * a well-signed token claiming a day is a token minted by something other
+ * than the signer, or by a signer somebody has edited — refused either way.
+ * Short-lived is the contract, not a default.
+ */
+export const TRUSTED_CONTEXT_MAX_TTL_SECONDS = 300;
+
 export const trustedContextSchema = z.object({
   /** The backend user id. Snapshotted by the AI as actor; never looked up. */
   sub: z.string().uuid(),
@@ -56,9 +71,16 @@ export function signTrustedContext(payload: TrustedContext, secret: string): str
 /**
  * Verifies a token or throws `TrustedContextError` (→ 401).
  *
- * Signature first, then shape, then audience and expiry. The signature check
- * is constant-time on equal-length buffers; a length mismatch is refused
- * before comparing, which leaks only that the token is malformed.
+ * Signature first, then shape, then audience, then the time window:
+ *
+ *   iat <= now + skew          not minted in the future
+ *   exp >  now - skew          not expired (a little drift forgiven)
+ *   iat <= exp                 well-formed
+ *   exp - iat <= MAX_TTL       declares a short life, whoever signed it
+ *
+ * The signature check is constant-time on equal-length buffers; a length
+ * mismatch is refused before comparing, which leaks only that the token is
+ * malformed. Every refusal is the same error with the same message.
  */
 export function verifyTrustedContext(token: unknown, secret: string, now: Date = new Date()): TrustedContext {
   const refuse = (): never => {
@@ -87,8 +109,11 @@ export function verifyTrustedContext(token: unknown, secret: string, now: Date =
   if (!result.success) return refuse();
 
   const nowSeconds = Math.floor(now.getTime() / 1000);
-  if (result.data.exp <= nowSeconds) return refuse();
-  if (result.data.iat > result.data.exp) return refuse();
+  const { iat, exp } = result.data;
+  if (iat > nowSeconds + TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS) return refuse();
+  if (exp <= nowSeconds - TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS) return refuse();
+  if (iat > exp) return refuse();
+  if (exp - iat > TRUSTED_CONTEXT_MAX_TTL_SECONDS) return refuse();
 
   return result.data;
 }

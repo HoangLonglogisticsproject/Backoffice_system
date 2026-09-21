@@ -33,6 +33,15 @@ const VERSION = 'v1';
 /** Default lifetime. Long enough for one hop, short enough that replay is a stopwatch problem. */
 export const TRUSTED_CONTEXT_TTL_SECONDS = 60;
 
+/**
+ * The AI verifier's time window, mirrored here so the signer cannot issue a
+ * token the verifier will refuse: `exp - iat` above MAX_TTL is rejected on
+ * the other side whatever the signature says, and `issue()` refuses first.
+ * Skew is what the verifier forgives around `now` in either direction.
+ */
+export const TRUSTED_CONTEXT_MAX_TTL_SECONDS = 300;
+export const TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS = 30;
+
 export interface TrustedContext {
   sub: string;
   perms: readonly string[];
@@ -75,7 +84,12 @@ export function verifyTrustedContext(token: string, secret: string, now: Date = 
     return null;
   }
   if (parsed.aud !== TRUSTED_CONTEXT_AUDIENCE) return null;
-  if (typeof parsed.exp !== 'number' || parsed.exp <= Math.floor(now.getTime() / 1000)) return null;
+  if (typeof parsed.iat !== 'number' || typeof parsed.exp !== 'number') return null;
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  if (parsed.iat > nowSeconds + TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS) return null;
+  if (parsed.exp <= nowSeconds - TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS) return null;
+  if (parsed.iat > parsed.exp) return null;
+  if (parsed.exp - parsed.iat > TRUSTED_CONTEXT_MAX_TTL_SECONDS) return null;
   return parsed;
 }
 
@@ -88,13 +102,19 @@ export class TrustedContextSigner {
     claims: { sub: string; perms: readonly string[]; fn: readonly string[]; cid: string },
     options: { now?: Date; ttlSeconds?: number } = {},
   ): string {
+    const ttl = options.ttlSeconds ?? TRUSTED_CONTEXT_TTL_SECONDS;
+    if (ttl <= 0 || ttl > TRUSTED_CONTEXT_MAX_TTL_SECONDS) {
+      throw new Error(
+        `A trusted context lives at most ${TRUSTED_CONTEXT_MAX_TTL_SECONDS}s; ${ttl}s was requested.`,
+      );
+    }
     const iat = Math.floor((options.now ?? new Date()).getTime() / 1000);
     return signTrustedContext(
       {
         ...claims,
         aud: TRUSTED_CONTEXT_AUDIENCE,
         iat,
-        exp: iat + (options.ttlSeconds ?? TRUSTED_CONTEXT_TTL_SECONDS),
+        exp: iat + ttl,
       },
       this.config.trustedContextSecret,
     );

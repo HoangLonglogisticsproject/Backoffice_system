@@ -96,7 +96,8 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
       expect(again.alert.id).toBe(first.alert.id);
       expect(again.alert.severity).toBe('high');
       expect(again.alert.summary).toBe('second');
-      expect(again.alert.occurrenceCount).toBe(2);
+      // No run identity on either observation: seen again, not counted again.
+      expect(again.alert.occurrenceCount).toBe(1);
       expect(again.alert.lastSeenAt.getTime()).toBeGreaterThanOrEqual(first.alert.lastSeenAt.getTime());
       expect(await rowCount(dedupeKeyOf(s))).toBe(1);
       expect(await history.listByAlert(first.alert.id)).toHaveLength(1);
@@ -154,6 +155,123 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
 
       expect(results.filter((r) => r.created)).toHaveLength(1);
       expect(await rowCount(dedupeKeyOf(s))).toBe(1);
+    });
+  });
+
+  describe('occurrence_count — distinct scan runs, not upserts', () => {
+    const run = () => scanRuns.start({ detectorCode: 'TEST_DETECTOR', detectorVersion: 1, phase: 'discovery' });
+
+    it('starts at 1 on the first observation, with first and last run recorded', async () => {
+      const r1 = await run();
+      const { alert } = await service.recordSignal(signal(), { scanRunId: r1.id });
+      expect(alert.occurrenceCount).toBe(1);
+      expect(alert.firstScanRunId).toBe(r1.id);
+      expect(alert.lastScanRunId).toBe(r1.id);
+    });
+
+    it('does not count the same run twice — a retried page or a duplicate signal adds nothing', async () => {
+      const r1 = await run();
+      const s = signal();
+      await service.recordSignal(s, { scanRunId: r1.id });
+
+      const again = await service.recordSignal({ ...s, severity: 'high' }, { scanRunId: r1.id });
+      expect(again.created).toBe(false);
+      expect(again.alert.occurrenceCount).toBe(1);
+      expect(again.alert.severity).toBe('high');
+      expect(again.alert.lastScanRunId).toBe(r1.id);
+    });
+
+    it('stays at 1 however many times one run sees the subject', async () => {
+      const r1 = await run();
+      const s = signal();
+      let last = (await service.recordSignal(s, { scanRunId: r1.id })).alert;
+      for (let i = 0; i < 5; i += 1) {
+        last = (await service.recordSignal(s, { scanRunId: r1.id })).alert;
+      }
+      expect(last.occurrenceCount).toBe(1);
+      expect(last.lastSeenAt.getTime()).toBeGreaterThanOrEqual(last.firstSeenAt.getTime());
+    });
+
+    it('counts exactly one more when a DIFFERENT run observes the incident, and moves last_scan_run_id', async () => {
+      const r1 = await run();
+      const r2 = await run();
+      const s = signal();
+      const first = await service.recordSignal(s, { scanRunId: r1.id });
+
+      const second = await service.recordSignal(s, { scanRunId: r2.id });
+      expect(second.alert.occurrenceCount).toBe(2);
+      expect(second.alert.firstScanRunId).toBe(r1.id);
+      expect(second.alert.lastScanRunId).toBe(r2.id);
+      expect(second.alert.id).toBe(first.alert.id);
+
+      const r3 = await run();
+      expect((await service.recordSignal(s, { scanRunId: r3.id })).alert.occurrenceCount).toBe(3);
+    });
+
+    it('two concurrent upserts in the SAME run count that run once', async () => {
+      const r1 = await run();
+      const s = signal();
+
+      const results = await Promise.all([
+        service.recordSignal(s, { scanRunId: r1.id }),
+        service.recordSignal(s, { scanRunId: r1.id }),
+        service.recordSignal(s, { scanRunId: r1.id }),
+      ]);
+
+      expect(results.filter((r) => r.created)).toHaveLength(1);
+      const final = await alerts.findById(results[0]!.alert.id);
+      expect(final?.occurrenceCount).toBe(1);
+      expect(final?.lastScanRunId).toBe(r1.id);
+      expect(await rowCount(dedupeKeyOf(s))).toBe(1);
+    });
+
+    it('a DISMISSED incident follows the same rule: same run +0, new run +1, status untouched', async () => {
+      const r1 = await run();
+      const r2 = await run();
+      const s = signal();
+      const { alert } = await service.recordSignal(s, { scanRunId: r1.id });
+      await service.transition({ alertId: alert.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: 'r' });
+
+      const sameRun = await service.recordSignal(s, { scanRunId: r1.id });
+      expect(sameRun.alert.status).toBe('dismissed');
+      expect(sameRun.alert.occurrenceCount).toBe(1);
+
+      const newRun = await service.recordSignal(s, { scanRunId: r2.id });
+      expect(newRun.alert.status).toBe('dismissed');
+      expect(newRun.alert.occurrenceCount).toBe(2);
+      expect(newRun.alert.lastScanRunId).toBe(r2.id);
+    });
+
+    describe('a NULL scan run — an observation with no run identity', () => {
+      it('never counts and never erases the run that last saw the incident', async () => {
+        const r1 = await run();
+        const s = signal();
+        await service.recordSignal(s, { scanRunId: r1.id });
+
+        const noRun = await service.recordSignal(s, { scanRunId: null });
+        expect(noRun.alert.occurrenceCount).toBe(1);
+        expect(noRun.alert.lastScanRunId).toBe(r1.id);
+      });
+
+      it('repeated NULL observations stay at 1 (bootstrap / pre-scan)', async () => {
+        const s = signal();
+        await service.recordSignal(s);
+        await service.recordSignal(s);
+        const third = await service.recordSignal(s);
+        expect(third.alert.occurrenceCount).toBe(1);
+        expect(third.alert.firstScanRunId).toBeNull();
+        expect(third.alert.lastScanRunId).toBeNull();
+      });
+
+      it('the first REAL run after a NULL birth counts as a new run', async () => {
+        const s = signal();
+        await service.recordSignal(s);
+        const r1 = await run();
+        const seen = await service.recordSignal(s, { scanRunId: r1.id });
+        expect(seen.alert.occurrenceCount).toBe(2);
+        expect(seen.alert.firstScanRunId).toBeNull();
+        expect(seen.alert.lastScanRunId).toBe(r1.id);
+      });
     });
   });
 
