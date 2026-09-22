@@ -9,6 +9,7 @@ import { InternalAlertController } from '@core/alert/api/internal-alert.controll
 import { AlertService } from '@core/alert/application/alert.service';
 import { AlertHistoryRepository } from '@core/alert/persistence/alert-history.repository';
 import { AlertRepository } from '@core/alert/persistence/alert.repository';
+import { ScanRunRepository } from '@core/alert/persistence/scan-run.repository';
 import { DatabaseService } from '@infrastructure/database/database.service';
 import { ServiceAuthGuard } from '@infrastructure/service-auth/service-auth.guard';
 import { signTrustedContext } from '@infrastructure/service-auth/trusted-context';
@@ -37,6 +38,7 @@ describeIntegration('Internal Alert API against real PostgreSQL', () => {
   let app: INestApplication;
   let pool: Pool;
   let service: AlertService;
+  let scanRuns: ScanRunRepository;
 
   const context = (overrides: Partial<Parameters<typeof signTrustedContext>[0]> = {}): string => {
     const now = Math.floor(Date.now() / 1000);
@@ -68,6 +70,7 @@ describeIntegration('Internal Alert API against real PostgreSQL', () => {
         { provide: DATABASE, useExisting: DatabaseService },
         AlertRepository,
         AlertHistoryRepository,
+        ScanRunRepository,
         AlertService,
         ServiceAuthGuard,
         TrustedContextVerifier,
@@ -78,6 +81,7 @@ describeIntegration('Internal Alert API against real PostgreSQL', () => {
     app.useGlobalFilters(new DomainErrorFilter());
     await app.init();
     service = moduleRef.get(AlertService);
+    scanRuns = moduleRef.get(ScanRunRepository);
   });
 
   afterAll(async () => {
@@ -87,7 +91,7 @@ describeIntegration('Internal Alert API against real PostgreSQL', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE alert_transition_history, alerts, scan_runs');
+    await pool.query('TRUNCATE alert_scan_observations, alert_transition_history, alerts, scan_runs');
   });
 
   describe('service authentication', () => {
@@ -116,7 +120,9 @@ describeIntegration('Internal Alert API against real PostgreSQL', () => {
     it('lists live alerts by default, newest activity first, paged', async () => {
       const a = (await service.recordSignal(signal({ detectorCode: 'A' }))).alert;
       const b = (await service.recordSignal(signal({ detectorCode: 'B' }))).alert;
-      await service.resolveBySystem({ alertId: b.id, scanRunId: null });
+      const verified = await scanRuns.start({ detectorCode: 'B', detectorVersion: 1, phase: 'resolution' });
+      await scanRuns.finish(verified.id, { outcome: 'succeeded' });
+      await service.resolveBySystem({ alertId: b.id, scanRunId: verified.id });
       const c = (await service.recordSignal(signal({ detectorCode: 'C' }))).alert;
 
       const res = await authed(request(app.getHttpServer()).get('/internal/v1/alerts?limit=1')).expect(200);

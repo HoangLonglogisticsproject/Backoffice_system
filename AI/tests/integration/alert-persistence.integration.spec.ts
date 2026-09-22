@@ -1,9 +1,10 @@
 import { Pool } from 'pg';
-import { InvalidTransitionError, ValidationError } from '@common/errors/domain.error';
+import { ConflictError, InvalidTransitionError, ValidationError } from '@common/errors/domain.error';
 import type { Database } from '@common/types/database.port';
 import { AlertService } from '@core/alert/application/alert.service';
 import { SYSTEM_ACTOR } from '@core/alert/domain/actor';
 import { dedupeKeyOf } from '@core/alert/domain/dedupe';
+import type { ScanOutcome, ScanPhase } from '@core/alert/domain/scan-run';
 import { AlertHistoryRepository } from '@core/alert/persistence/alert-history.repository';
 import { AlertRepository } from '@core/alert/persistence/alert.repository';
 import { ScanRunRepository } from '@core/alert/persistence/scan-run.repository';
@@ -18,13 +19,15 @@ import {
 
 /**
  * The Alert aggregate against a REAL PostgreSQL: dedupe by partial unique
- * index, DISMISSED-suppresses, transition + history in one transaction, one
- * winner under concurrency, and the CHECKs that keep the row honest.
+ * index, DISMISSED-suppresses, distinct-scan-run counting by primary key,
+ * transition + history in one transaction, one winner under concurrency, the
+ * system-resolution invariant, and the CHECKs that keep the row honest.
  */
 const SCHEMA = 'ai_itest_alerts';
 
 const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
+const DETECTOR = 'TEST_DETECTOR';
 
 describeIntegration('Alert persistence against real PostgreSQL', () => {
   jest.setTimeout(30_000);
@@ -43,7 +46,7 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
     alerts = new AlertRepository(db);
     history = new AlertHistoryRepository(db);
     scanRuns = new ScanRunRepository(db);
-    service = new AlertService(db, alerts, history);
+    service = new AlertService(db, alerts, history, scanRuns);
   });
 
   afterAll(async () => {
@@ -52,16 +55,37 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE alert_transition_history, alerts, scan_runs');
+    await pool.query('TRUNCATE alert_scan_observations, alert_transition_history, alerts, scan_runs');
   });
 
   const rowCount = async (dedupeKey: string): Promise<number> => {
-    const rows = await pool.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM alerts WHERE dedupe_key = $1',
-      [dedupeKey],
-    );
+    const rows = await pool.query<{ n: number }>('SELECT count(*)::int AS n FROM alerts WHERE dedupe_key = $1', [
+      dedupeKey,
+    ]);
     return rows.rows[0]?.n ?? 0;
   };
+
+  const observationsOf = async (alertId: string): Promise<string[]> => {
+    const rows = await pool.query<{ scan_run_id: string }>(
+      'SELECT scan_run_id FROM alert_scan_observations WHERE alert_id = $1 ORDER BY observed_at, scan_run_id',
+      [alertId],
+    );
+    return rows.rows.map((r) => r.scan_run_id);
+  };
+
+  /** A run in the given state. `succeeded` resolution runs are what the system resolves with. */
+  const run = async (
+    phase: ScanPhase = 'discovery',
+    outcome: ScanOutcome = 'running',
+    detectorCode = DETECTOR,
+  ): Promise<string> => {
+    const started = await scanRuns.start({ detectorCode, detectorVersion: 1, phase });
+    if (outcome !== 'running') await scanRuns.finish(started.id, { outcome });
+    return started.id;
+  };
+  const verifiedResolution = (detectorCode = DETECTOR) => run('resolution', 'succeeded', detectorCode);
+
+  // ----------------------------------------------------------------- dedupe --
 
   describe('dedupe — one LIVE incident per key', () => {
     it('opens a new incident and writes its birth row in history', async () => {
@@ -77,13 +101,7 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
 
       const born = await history.listByAlert(alert.id);
       expect(born).toHaveLength(1);
-      expect(born[0]).toMatchObject({
-        fromStatus: null,
-        toStatus: 'open',
-        actorType: 'system',
-        actorId: null,
-        correlationId: 'c-1',
-      });
+      expect(born[0]).toMatchObject({ fromStatus: null, toStatus: 'open', actorType: 'system', actorId: null, correlationId: 'c-1' });
     });
 
     it('an OPEN duplicate refreshes the row: no second row, no second history entry', async () => {
@@ -119,12 +137,7 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
     it('a DISMISSED duplicate is SUPPRESSED: evidence and severity move, status does not, no new row', async () => {
       const s = signal({ severity: 'warning' });
       const { alert } = await service.recordSignal(s);
-      await service.transition({
-        alertId: alert.id,
-        to: 'dismissed',
-        actor: { type: 'user', id: USER_A },
-        reason: 'Known, handled offline.',
-      });
+      await service.transition({ alertId: alert.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: 'Known, handled offline.' });
 
       const again = await service.recordSignal({ ...s, severity: 'high' });
 
@@ -139,7 +152,7 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
     it('after RESOLVED the same key opens a NEW incident', async () => {
       const s = signal();
       const first = await service.recordSignal(s);
-      await service.resolveBySystem({ alertId: first.alert.id, scanRunId: null });
+      await service.resolveBySystem({ alertId: first.alert.id, scanRunId: await verifiedResolution() });
 
       const second = await service.recordSignal(s);
 
@@ -158,99 +171,125 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
     });
   });
 
-  describe('occurrence_count — distinct scan runs, not upserts', () => {
-    const run = () => scanRuns.start({ detectorCode: 'TEST_DETECTOR', detectorVersion: 1, phase: 'discovery' });
+  // ------------------------------------------------------- occurrence_count --
 
-    it('starts at 1 on the first observation, with first and last run recorded', async () => {
-      const r1 = await run();
-      const { alert } = await service.recordSignal(signal(), { scanRunId: r1.id });
+  describe('occurrence_count — distinct scan runs, enforced by alert_scan_observations', () => {
+    it('first A → 1, with the observation and first/last run recorded', async () => {
+      const a = await run();
+      const { alert } = await service.recordSignal(signal(), { scanRunId: a });
       expect(alert.occurrenceCount).toBe(1);
-      expect(alert.firstScanRunId).toBe(r1.id);
-      expect(alert.lastScanRunId).toBe(r1.id);
+      expect(alert.firstScanRunId).toBe(a);
+      expect(alert.lastScanRunId).toBe(a);
+      expect(await observationsOf(alert.id)).toEqual([a]);
     });
 
-    it('does not count the same run twice — a retried page or a duplicate signal adds nothing', async () => {
-      const r1 = await run();
+    it('A, A, A → 1 — a retried page or a duplicate signal adds nothing', async () => {
+      const a = await run();
       const s = signal();
-      await service.recordSignal(s, { scanRunId: r1.id });
-
-      const again = await service.recordSignal({ ...s, severity: 'high' }, { scanRunId: r1.id });
-      expect(again.created).toBe(false);
-      expect(again.alert.occurrenceCount).toBe(1);
-      expect(again.alert.severity).toBe('high');
-      expect(again.alert.lastScanRunId).toBe(r1.id);
-    });
-
-    it('stays at 1 however many times one run sees the subject', async () => {
-      const r1 = await run();
-      const s = signal();
-      let last = (await service.recordSignal(s, { scanRunId: r1.id })).alert;
-      for (let i = 0; i < 5; i += 1) {
-        last = (await service.recordSignal(s, { scanRunId: r1.id })).alert;
-      }
+      let last = (await service.recordSignal(s, { scanRunId: a })).alert;
+      for (let i = 0; i < 2; i += 1) last = (await service.recordSignal({ ...s, severity: 'high' }, { scanRunId: a })).alert;
       expect(last.occurrenceCount).toBe(1);
-      expect(last.lastSeenAt.getTime()).toBeGreaterThanOrEqual(last.firstSeenAt.getTime());
+      expect(last.severity).toBe('high');
+      expect(await observationsOf(last.id)).toEqual([a]);
     });
 
-    it('counts exactly one more when a DIFFERENT run observes the incident, and moves last_scan_run_id', async () => {
-      const r1 = await run();
-      const r2 = await run();
+    it('A, B → 2, and last_scan_run_id moves to B while first stays A', async () => {
+      const a = await run();
+      const b = await run();
       const s = signal();
-      const first = await service.recordSignal(s, { scanRunId: r1.id });
-
-      const second = await service.recordSignal(s, { scanRunId: r2.id });
-      expect(second.alert.occurrenceCount).toBe(2);
-      expect(second.alert.firstScanRunId).toBe(r1.id);
-      expect(second.alert.lastScanRunId).toBe(r2.id);
+      const first = await service.recordSignal(s, { scanRunId: a });
+      const second = await service.recordSignal(s, { scanRunId: b });
       expect(second.alert.id).toBe(first.alert.id);
-
-      const r3 = await run();
-      expect((await service.recordSignal(s, { scanRunId: r3.id })).alert.occurrenceCount).toBe(3);
+      expect(second.alert.occurrenceCount).toBe(2);
+      expect(second.alert.firstScanRunId).toBe(a);
+      expect(second.alert.lastScanRunId).toBe(b);
     });
 
-    it('two concurrent upserts in the SAME run count that run once', async () => {
-      const r1 = await run();
+    it('A, B, A → 2 — a delayed retry from A is the same run, not a new one', async () => {
+      const a = await run();
+      const b = await run();
       const s = signal();
+      await service.recordSignal(s, { scanRunId: a });
+      await service.recordSignal(s, { scanRunId: b });
+      const late = await service.recordSignal(s, { scanRunId: a });
+      expect(late.alert.occurrenceCount).toBe(2);
+      expect(late.alert.lastScanRunId).toBe(a);
+      expect((await observationsOf(late.alert.id)).sort()).toEqual([a, b].sort());
+    });
 
-      const results = await Promise.all([
-        service.recordSignal(s, { scanRunId: r1.id }),
-        service.recordSignal(s, { scanRunId: r1.id }),
-        service.recordSignal(s, { scanRunId: r1.id }),
-      ]);
+    it('A, B, A, B → 2, and a third run C → 3', async () => {
+      const [a, b, c] = [await run(), await run(), await run()];
+      const s = signal();
+      for (const r of [a, b, a, b]) await service.recordSignal(s, { scanRunId: r });
+      expect((await service.recordSignal(s, { scanRunId: b })).alert.occurrenceCount).toBe(2);
+      expect((await service.recordSignal(s, { scanRunId: c })).alert.occurrenceCount).toBe(3);
+    });
+
+    it('three concurrent upserts in the SAME run C count that run once', async () => {
+      const c = await run();
+      const s = signal();
+      const results = await Promise.all([1, 2, 3].map(() => service.recordSignal(s, { scanRunId: c })));
 
       expect(results.filter((r) => r.created)).toHaveLength(1);
       const final = await alerts.findById(results[0]!.alert.id);
       expect(final?.occurrenceCount).toBe(1);
-      expect(final?.lastScanRunId).toBe(r1.id);
+      expect(await observationsOf(final!.id)).toEqual([c]);
       expect(await rowCount(dedupeKeyOf(s))).toBe(1);
     });
 
-    it('a DISMISSED incident follows the same rule: same run +0, new run +1, status untouched', async () => {
-      const r1 = await run();
-      const r2 = await run();
+    it('concurrent DISTINCT runs C and D each count exactly once — whichever opens the incident', async () => {
+      const c = await run();
+      const d = await run();
       const s = signal();
-      const { alert } = await service.recordSignal(s, { scanRunId: r1.id });
+      const results = await Promise.all([
+        service.recordSignal(s, { scanRunId: c }),
+        service.recordSignal(s, { scanRunId: d }),
+        service.recordSignal(s, { scanRunId: c }),
+        service.recordSignal(s, { scanRunId: d }),
+      ]);
+
+      expect(results.filter((r) => r.created)).toHaveLength(1);
+      const final = await alerts.findById(results[0]!.alert.id);
+      expect(final?.occurrenceCount).toBe(2);
+      expect((await observationsOf(final!.id)).sort()).toEqual([c, d].sort());
+    });
+
+    it('a DISMISSED incident: A, B, A keeps dismissed and counts 2', async () => {
+      const a = await run();
+      const b = await run();
+      const s = signal();
+      const { alert } = await service.recordSignal(s, { scanRunId: a });
       await service.transition({ alertId: alert.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: 'r' });
 
-      const sameRun = await service.recordSignal(s, { scanRunId: r1.id });
-      expect(sameRun.alert.status).toBe('dismissed');
-      expect(sameRun.alert.occurrenceCount).toBe(1);
+      for (const [r, expected] of [
+        [a, 1],
+        [b, 2],
+        [a, 2],
+      ] as const) {
+        const seen = await service.recordSignal(s, { scanRunId: r });
+        expect(seen.alert.status).toBe('dismissed');
+        expect(seen.alert.occurrenceCount).toBe(expected);
+      }
+    });
 
-      const newRun = await service.recordSignal(s, { scanRunId: r2.id });
-      expect(newRun.alert.status).toBe('dismissed');
-      expect(newRun.alert.occurrenceCount).toBe(2);
-      expect(newRun.alert.lastScanRunId).toBe(r2.id);
+    it('the database itself refuses a second observation of the same (alert, run)', async () => {
+      const a = await run();
+      const { alert } = await service.recordSignal(signal(), { scanRunId: a });
+      await expect(
+        pool.query('INSERT INTO alert_scan_observations (alert_id, scan_run_id) VALUES ($1, $2)', [alert.id, a]),
+      ).rejects.toMatchObject({ code: '23505' });
     });
 
     describe('a NULL scan run — an observation with no run identity', () => {
-      it('never counts and never erases the run that last saw the incident', async () => {
-        const r1 = await run();
+      it('never counts, records no observation, and never erases the run that last saw the incident', async () => {
+        const a = await run();
         const s = signal();
-        await service.recordSignal(s, { scanRunId: r1.id });
+        await service.recordSignal(s, { scanRunId: a });
 
         const noRun = await service.recordSignal(s, { scanRunId: null });
         expect(noRun.alert.occurrenceCount).toBe(1);
-        expect(noRun.alert.lastScanRunId).toBe(r1.id);
+        expect(noRun.alert.lastScanRunId).toBe(a);
+        expect(await observationsOf(noRun.alert.id)).toEqual([a]);
       });
 
       it('repeated NULL observations stay at 1 (bootstrap / pre-scan)', async () => {
@@ -261,19 +300,22 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
         expect(third.alert.occurrenceCount).toBe(1);
         expect(third.alert.firstScanRunId).toBeNull();
         expect(third.alert.lastScanRunId).toBeNull();
+        expect(await observationsOf(third.alert.id)).toEqual([]);
       });
 
       it('the first REAL run after a NULL birth counts as a new run', async () => {
         const s = signal();
         await service.recordSignal(s);
-        const r1 = await run();
-        const seen = await service.recordSignal(s, { scanRunId: r1.id });
+        const a = await run();
+        const seen = await service.recordSignal(s, { scanRunId: a });
         expect(seen.alert.occurrenceCount).toBe(2);
         expect(seen.alert.firstScanRunId).toBeNull();
-        expect(seen.alert.lastScanRunId).toBe(r1.id);
+        expect(seen.alert.lastScanRunId).toBe(a);
       });
     });
   });
+
+  // -------------------------------------------------------------- lifecycle --
 
   describe('lifecycle — status change and history commit together', () => {
     it('acknowledge, then dismiss, then system-resolve — each with its history row', async () => {
@@ -294,10 +336,12 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
       expect(dismissed.dismissedBy).toBe(USER_B);
       expect(dismissed.dismissedReason).toBe('Duplicate of another incident.');
 
-      const resolved = await service.resolveBySystem({ alertId: alert.id, scanRunId: null, correlationId: 'run-9' });
+      const runId = await verifiedResolution();
+      const resolved = await service.resolveBySystem({ alertId: alert.id, scanRunId: runId, correlationId: 'run-9' });
       expect(resolved.status).toBe('resolved');
       expect(resolved.resolvedBy).toBeNull();
       expect(resolved.resolutionKind).toBe('system_cleared');
+      expect(resolved.resolvedScanRunId).toBe(runId);
 
       const story = await history.listByAlert(alert.id);
       expect(story.map((h) => [h.fromStatus, h.toStatus, h.actorType, h.actorId])).toEqual([
@@ -308,6 +352,7 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
       ]);
       expect(story[2]?.reason).toBe('Duplicate of another incident.');
       expect(story[3]?.correlationId).toBe('run-9');
+      expect(story[3]?.scanRunId).toBe(runId);
     });
 
     it('a user resolution names the user', async () => {
@@ -335,25 +380,25 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
       await expect(
         service.transition({ alertId: alert.id, to: 'resolved', actor: { type: 'user', id: USER_A } }),
       ).rejects.toBeInstanceOf(InvalidTransitionError);
-      await expect(
-        service.transition({ alertId: alert.id, to: 'acknowledged', actor: SYSTEM_ACTOR }),
-      ).rejects.toBeInstanceOf(InvalidTransitionError);
+      await expect(service.transition({ alertId: alert.id, to: 'acknowledged', actor: SYSTEM_ACTOR })).rejects.toBeInstanceOf(
+        InvalidTransitionError,
+      );
 
       expect((await alerts.findById(alert.id))?.status).toBe('dismissed');
     });
 
     it('never reopens: resolved is terminal for everybody', async () => {
       const { alert } = await service.recordSignal(signal());
-      await service.resolveBySystem({ alertId: alert.id, scanRunId: null });
+      await service.resolveBySystem({ alertId: alert.id, scanRunId: await verifiedResolution() });
 
       for (const to of ['acknowledged', 'dismissed', 'resolved'] as const) {
         await expect(
           service.transition({ alertId: alert.id, to, actor: { type: 'user', id: USER_A }, reason: 'r' }),
         ).rejects.toBeInstanceOf(InvalidTransitionError);
       }
-      await expect(service.resolveBySystem({ alertId: alert.id, scanRunId: null })).rejects.toBeInstanceOf(
-        InvalidTransitionError,
-      );
+      await expect(
+        service.resolveBySystem({ alertId: alert.id, scanRunId: await verifiedResolution() }),
+      ).rejects.toBeInstanceOf(InvalidTransitionError);
     });
 
     it('two users acknowledging at once: one winner, one 409, one history row', async () => {
@@ -383,7 +428,7 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
         },
         listByAlert: () => history.listByAlert(alert.id),
       } as unknown as AlertHistoryRepository;
-      const fragile = new AlertService(db, alerts, brokenHistory);
+      const fragile = new AlertService(db, alerts, brokenHistory, scanRuns);
 
       await expect(
         fragile.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } }),
@@ -424,9 +469,7 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
         await a.query('COMMIT');
         const afterA = await pool.query<{ u: Date }>('SELECT updated_at AS u FROM alerts WHERE id = $1', [alert.id]);
 
-        // The scenario is real: A's transaction clock is behind B's persisted value…
         expect(startedA.rows[0]!.t.getTime()).toBeLessThan(afterB.rows[0]!.u.getTime());
-        // …and the trigger still refused to go backwards.
         expect(afterA.rows[0]!.u.getTime()).toBeGreaterThanOrEqual(afterB.rows[0]!.u.getTime());
         expect((await alerts.findById(alert.id))?.title).toBe('a');
       } finally {
@@ -435,6 +478,94 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
       }
     });
   });
+
+  // ------------------------------------------------------ system resolution --
+
+  describe('resolveBySystem — the run is the evidence, and it is checked', () => {
+    const untouched = async (alertId: string): Promise<void> => {
+      expect((await alerts.findById(alertId))?.status).toBe('open');
+      expect(await history.listByAlert(alertId)).toHaveLength(1);
+    };
+
+    it('refuses a missing run id before touching the database', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await expect(service.resolveBySystem({ alertId: alert.id, scanRunId: null as unknown as string })).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+      await expect(service.resolveBySystem({ alertId: alert.id, scanRunId: '' })).rejects.toBeInstanceOf(ValidationError);
+      await untouched(alert.id);
+    });
+
+    it('refuses a run that does not exist', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await expect(service.resolveBySystem({ alertId: alert.id, scanRunId: USER_B })).rejects.toBeInstanceOf(ConflictError);
+      await untouched(alert.id);
+    });
+
+    it('refuses a DISCOVERY run, even a succeeded one', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await expect(
+        service.resolveBySystem({ alertId: alert.id, scanRunId: await run('discovery', 'succeeded') }),
+      ).rejects.toBeInstanceOf(ConflictError);
+      await untouched(alert.id);
+    });
+
+    it.each(['running', 'failed', 'partial', 'abandoned'] as const)(
+      'refuses a resolution run whose outcome is %s — a scan that did not finish proved nothing',
+      async (outcome) => {
+        const { alert } = await service.recordSignal(signal());
+        await expect(
+          service.resolveBySystem({ alertId: alert.id, scanRunId: await run('resolution', outcome) }),
+        ).rejects.toBeInstanceOf(ConflictError);
+        await untouched(alert.id);
+      },
+    );
+
+    it("refuses a succeeded resolution run of ANOTHER detector", async () => {
+      const { alert } = await service.recordSignal(signal());
+      await expect(
+        service.resolveBySystem({ alertId: alert.id, scanRunId: await verifiedResolution('OTHER_DETECTOR') }),
+      ).rejects.toBeInstanceOf(ConflictError);
+      await untouched(alert.id);
+    });
+
+    it('resolves with a succeeded resolution run of the matching detector, recording the run in history', async () => {
+      const { alert } = await service.recordSignal(signal());
+      const runId = await verifiedResolution();
+      const resolved = await service.resolveBySystem({ alertId: alert.id, scanRunId: runId, correlationId: 'tick-3' });
+      expect(resolved.status).toBe('resolved');
+      expect(resolved.resolutionKind).toBe('system_cleared');
+      expect(resolved.resolvedScanRunId).toBe(runId);
+      const last = (await history.listByAlert(alert.id)).at(-1);
+      expect(last).toMatchObject({ toStatus: 'resolved', actorType: 'system', actorId: null, scanRunId: runId, correlationId: 'tick-3' });
+    });
+
+    it('the system cannot resolve through the user door, however it asks', async () => {
+      const { alert } = await service.recordSignal(signal());
+      await expect(
+        service.transition({ alertId: alert.id, to: 'resolved', actor: SYSTEM_ACTOR, scanRunId: await verifiedResolution() }),
+      ).rejects.toBeInstanceOf(InvalidTransitionError);
+      await untouched(alert.id);
+    });
+
+    it('rolls the resolution back when the history row cannot be written', async () => {
+      const { alert } = await service.recordSignal(signal());
+      const brokenHistory = {
+        record: async () => {
+          throw new Error('history unavailable');
+        },
+      } as unknown as AlertHistoryRepository;
+      const fragile = new AlertService(db, alerts, brokenHistory, scanRuns);
+
+      await expect(fragile.resolveBySystem({ alertId: alert.id, scanRunId: await verifiedResolution() })).rejects.toThrow(
+        'history unavailable',
+      );
+      expect((await alerts.findById(alert.id))?.status).toBe('open');
+      expect((await alerts.findById(alert.id))?.resolvedAt).toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------ DB CHECKs --
 
   describe('the database refuses what the domain refuses', () => {
     it('a history row with a system actor AND an actor id, or a user actor WITHOUT one', async () => {
@@ -457,7 +588,6 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
 
     it('a dismissal without a reason, at the row level', async () => {
       const { alert } = await service.recordSignal(signal());
-
       await expect(
         pool.query(
           "UPDATE alerts SET status = 'dismissed', dismissed_at = now(), dismissed_by = $2, dismissed_reason = '  ' WHERE id = $1",
@@ -468,9 +598,9 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
 
     it('a status that does not match its timestamps', async () => {
       const { alert } = await service.recordSignal(signal());
-      await expect(
-        pool.query("UPDATE alerts SET status = 'resolved' WHERE id = $1", [alert.id]),
-      ).rejects.toMatchObject({ code: '23514' });
+      await expect(pool.query("UPDATE alerts SET status = 'resolved' WHERE id = $1", [alert.id])).rejects.toMatchObject({
+        code: '23514',
+      });
     });
 
     it('a resolution with the wrong actor shape', async () => {
@@ -484,12 +614,12 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
     });
   });
 
+  // ------------------------------------------------------- list / summary --
+
   describe('listing and summary', () => {
     it('pages newest-activity-first by keyset and honours the status filter', async () => {
       const opened = [];
-      for (let i = 0; i < 5; i += 1) {
-        opened.push((await service.recordSignal(signal({ detectorCode: `D${i}` }))).alert);
-      }
+      for (let i = 0; i < 5; i += 1) opened.push((await service.recordSignal(signal({ detectorCode: `D${i}` }))).alert);
       await service.transition({ alertId: opened[0]!.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } });
 
       const page1 = await service.list({ statuses: ['open', 'acknowledged'], limit: 2 });
@@ -510,9 +640,9 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
     it('counts live incidents by status and severity, ignoring resolved ones', async () => {
       const a = (await service.recordSignal(signal({ severity: 'high' }))).alert;
       const b = (await service.recordSignal(signal({ severity: 'warning' }))).alert;
-      (await service.recordSignal(signal({ severity: 'warning' }))).alert;
+      await service.recordSignal(signal({ severity: 'warning' }));
       await service.transition({ alertId: a.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: 'r' });
-      await service.resolveBySystem({ alertId: b.id, scanRunId: null });
+      await service.resolveBySystem({ alertId: b.id, scanRunId: await verifiedResolution() });
 
       expect(await service.summary()).toEqual({
         open: 1,
@@ -523,25 +653,26 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
     });
   });
 
+  // -------------------------------------------------------------- scan_runs --
+
   describe('scan_runs foundation', () => {
     it('starts running and finishes once', async () => {
-      const run = await scanRuns.start({
-        detectorCode: 'TEST_DETECTOR',
+      const started = await scanRuns.start({
+        detectorCode: DETECTOR,
         detectorVersion: 1,
         phase: 'discovery',
         configSnapshot: { leadTime: '2h' },
         correlationId: 'tick-1',
       });
-      expect(run.outcome).toBe('running');
-      expect(run.finishedAt).toBeNull();
+      expect(started.outcome).toBe('running');
+      expect(started.finishedAt).toBeNull();
 
-      const done = await scanRuns.finish(run.id, { outcome: 'succeeded', candidates: 3, signals: 1, created: 1 });
+      const done = await scanRuns.finish(started.id, { outcome: 'succeeded', candidates: 3, signals: 1, created: 1 });
       expect(done).toMatchObject({ outcome: 'succeeded', candidates: 3, signals: 1, created: 1, updated: 0 });
       expect(done?.finishedAt).not.toBeNull();
 
-      // A second finish is a no-op, not a rewrite of history.
-      expect(await scanRuns.finish(run.id, { outcome: 'failed', error: 'late' })).toBeNull();
-      expect((await scanRuns.findById(run.id))?.outcome).toBe('succeeded');
+      expect(await scanRuns.finish(started.id, { outcome: 'failed', error: 'late' })).toBeNull();
+      expect((await scanRuns.findById(started.id))?.outcome).toBe('succeeded');
     });
 
     it('refuses a finished run without a finished_at, and vice versa', async () => {

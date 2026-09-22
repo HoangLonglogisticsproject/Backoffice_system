@@ -111,7 +111,9 @@ Base: AI service, `Authorization: Bearer SERVICE_TOKEN_BACKEND_TO_AI` trên **m�
 
 Không có route tạo alert. Không có route system-resolve — đường system là application-internal (`AlertService.resolveBySystem`).
 
-**`occurrence_count`** = số **scan run khác nhau** đã quan sát incident, không phải số lần upsert. Insert đầu = 1; cùng `scan_run_id` (retry, duplicate, worker song song) → không tăng; `scan_run_id` khác → +1 và `lastScanRunId` đổi; quan sát không có run (`null`) → không tăng, không đổi `lastScanRunId`. Quyết định trong SQL (`ON CONFLICT … DO UPDATE`), an toàn concurrency.
+**`occurrence_count`** = số **scan run khác nhau** đã quan sát incident, không phải số lần upsert — được PostgreSQL bảo đảm bằng khoá chính `ai.alert_scan_observations (alert_id, scan_run_id)`. Insert đầu = 1; cùng run (retry, duplicate, worker song song) → không tăng; run khác → +1; **A, B, A → 2** (retry trễ của A vẫn là A); A, B, A, B → 2; hai run khác nhau chạy đồng thời → mỗi run đúng một lần; `lastScanRunId` = run thấy incident gần nhất. Quan sát không có run (`null`) → không ghi observation, không tăng, không đổi `lastScanRunId`. Không có SELECT-rồi-quyết-định ở service.
+
+**System resolution** (`AlertService.resolveBySystem`, application-internal, không có HTTP route): bắt buộc `scanRunId`; trong cùng transaction phải có run tồn tại, `phase='resolution'`, `outcome='succeeded'`, `detector_code` trùng alert, và alert đang ở trạng thái cho phép system resolve. Sai bất kỳ điều nào → không đổi alert, không ghi history (`409 CONFLICT` / `INVALID_ALERT_TRANSITION` / `422`). Actor `system` bị từ chối ở cửa `transition()` của người dùng.
 
 ## 10. Backend read-model boundary (Phase 1b — CHƯA implement, chỉ nguyên tắc)
 

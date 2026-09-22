@@ -78,7 +78,7 @@ No reopen. No snooze in v1. `resolved` is terminal. Dismissal requires a reason.
 
 The partial unique index `uq_alert_live_dedupe ON alerts (dedupe_key) WHERE status IN ('open','acknowledged','dismissed')` admits **one live incident per key, including a dismissed one**. Discovery landing on a dismissed key refreshes evidence, severity and `last_seen_at` and **does not change the status**. Only a verified Resolution run moves `dismissed → resolved`. A condition that returns after `resolved` opens a new row.
 
-**`occurrence_count` is the number of distinct scan runs that observed the incident — not the number of upserts.** The first observation is 1. A run that retries a page, sees the subject twice, or runs on two workers adds nothing (`incoming scan_run_id = last_scan_run_id → +0`). A different run adds exactly one and becomes `last_scan_run_id`. An observation with no run identity (`NULL`) never counts and never overwrites the last run. The decision is made in the `ON CONFLICT … DO UPDATE` clause against the committed row, under the row lock the conflict takes — never as a read in the service followed by a write.
+**`occurrence_count` is the number of distinct scan runs that observed the incident — not the number of upserts — and the distinctness is a fact PostgreSQL enforces.** `ai.alert_scan_observations (alert_id, scan_run_id)` has a primary key on the pair; the count moves only when `INSERT … ON CONFLICT DO NOTHING` on that table actually lands, in the same statement as the increment, in the same transaction as the upsert, under the alert's row lock. Hence: first run A → 1; A, A, A → 1; A, B → 2; **A, B, A → 2** (a late retry of A is still A); A, B, A, B → 2; two workers in one run → counted once; two distinct runs racing → each once. A dismissed incident follows the same rule and stays dismissed. An observation with no run identity (`NULL`) records nothing, never counts, and never overwrites `last_scan_run_id`; the opener of an incident always counts as 1, run identity or not. No `SELECT`-then-decide exists in the service.
 
 ### 2.9 Transition history and the actor model
 
@@ -87,6 +87,8 @@ The partial unique index `uq_alert_live_dedupe ON alerts (dedupe_key) WHERE stat
 ### 2.10 Discovery ≠ Resolution (invariant M)
 
 Discovery scans candidate windows, produces positive signals and upserts by dedupe key. Resolution enumerates live alerts, re-fetches the canonical subject state by id, evaluates the current condition and resolves **only when that state was successfully verified**. A failed, partial or malformed scan never means a condition disappeared. `ai.scan_runs` carries the outcome (`running | succeeded | partial | failed | abandoned`) that this rests on. Phase 1a ships the table; Phase 1b ships the engine.
+
+**The persistence layer holds the invariant, not the engine's discipline.** `AlertService.resolveBySystem` requires a non-null `scanRunId` and, inside the same transaction as the update, checks that the run exists, has `phase = 'resolution'`, `outcome = 'succeeded'`, and `detector_code` equal to the alert's — then that the alert admits a system resolution. Any failure leaves the alert and its history untouched. The system actor is refused at the user transition door, so this is the only path to `system_cleared`. There is no HTTP route for it.
 
 ### 2.11 Backend read models supply FACTS; the AI owns ALERT POLICY
 
@@ -107,6 +109,7 @@ No queue or broker (Redis, BullMQ, Kafka, RabbitMQ). No cron package. No chatbot
 - Two copies of small shared contracts (cursor, errors, trusted context) with a test on each side, instead of a shared package the repository has no tooling for.
 - The backend gains an `infrastructure/service-auth` module with no consumer until Phase 1b/1c — the boundary exists before the first route that crosses it.
 - `affected.sh` gains a third classification; a change under `/AI` runs the `ai` job and deploys nothing.
+- SonarCloud duplication (`.sonarcloud.properties`): the copied infrastructure files — migration runner, pool adapter, keyset cursor, env schema, health probe, integration-test harness — are excluded from copy-paste detection only, because they duplicate the backend's on purpose to keep the boundary. Nothing under `AI/src/core` is excluded and no rule is disabled. Repeated literals inside PostgreSQL `CHECK (… IN (…))` constraints are accepted as canonical values of a declarative constraint, not extracted.
 - Retention needs `DELETE`, so `ai.*` carries **no** deny-delete trigger (a deviation from the backend's history tables); the guarantee is GRANT plus the A7 boundary rule.
 
 ## 4. Alternatives rejected

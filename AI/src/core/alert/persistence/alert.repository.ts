@@ -106,7 +106,8 @@ const toAlert = (row: AlertRow): Alert => ({
 });
 
 /** The predicate of `uq_alert_live_dedupe`, spelled for `ON CONFLICT`. */
-const LIVE_PREDICATE = `status IN (${LIVE_STATUSES.map((s) => `'${s}'`).join(', ')})`;
+const quoted = (value: string): string => "'" + value + "'";
+const LIVE_PREDICATE = 'status IN (' + LIVE_STATUSES.map(quoted).join(', ') + ')';
 
 export interface AlertListQuery {
   statuses: readonly AlertStatus[];
@@ -142,19 +143,11 @@ export class AlertRepository {
    * (suppressed) while its evidence, severity and `last_seen_at` keep moving,
    * which is exactly what "suppress until the condition clears" means.
    *
-   * ★ `occurrence_count` COUNTS SCAN RUNS, NOT UPSERTS. It answers "how many
-   * distinct scan runs have observed this incident", so a retried page, a
-   * duplicate signal or two workers in the same run add nothing. Decided in
-   * SQL against the row's committed `last_scan_run_id`, under the row lock
-   * `ON CONFLICT` takes — a read-then-write in the service would race.
-   *
-   *   incoming run == last_scan_run_id   → +0
-   *   incoming run != last_scan_run_id   → +1, last_scan_run_id := incoming
-   *   incoming run IS NULL               → +0, last_scan_run_id unchanged
-   *
-   * A NULL run is an observation with no run identity (bootstrap, a manual
-   * probe, Phase 1a tests). It cannot claim to be a new scan, so it never
-   * counts and never erases the run that last saw the incident.
+   * ★ THIS STATEMENT NEVER TOUCHES `occurrence_count` ON CONFLICT. Counting
+   * distinct scan runs is `observe()`'s job, against `alert_scan_observations`;
+   * the two run in the caller's transaction, and the row lock this statement
+   * takes is what serialises them. `last_scan_run_id` records the run that
+   * saw the incident most recently; a NULL run (no identity) never overwrites it.
    */
   async upsert(
     signal: AlertSignal,
@@ -174,10 +167,6 @@ export class AlertRepository {
          -- last_seen_at EARLIER than first_seen_at and trip alerts_seen_order.
          -- Found by the concurrent-upsert test, not by reasoning.
          last_seen_at     = GREATEST(alerts.last_seen_at, now()),
-         occurrence_count = alerts.occurrence_count
-                            + CASE WHEN EXCLUDED.last_scan_run_id IS NULL
-                                     OR EXCLUDED.last_scan_run_id = alerts.last_scan_run_id
-                                   THEN 0 ELSE 1 END,
          detector_version = EXCLUDED.detector_version,
          severity         = EXCLUDED.severity,
          title            = EXCLUDED.title,
@@ -208,6 +197,49 @@ export class AlertRepository {
     const row = rows[0];
     if (!row) throw new Error('Upsert returned no row.');
     return { alert: toAlert(row), created: row.inserted };
+  }
+
+  /**
+   * Records that `scanRunId` observed the alert, and counts the run if — and
+   * only if — this is the first time that pair is seen.
+   *
+   * ★ EXACT DISTINCTNESS, ENFORCED BY THE PRIMARY KEY. `INSERT … ON CONFLICT
+   * DO NOTHING` returns a row only when the observation actually landed; the
+   * `UPDATE` in the same statement fires only on that row. A, B, A therefore
+   * counts 2, A, A, A counts 1, and two workers in one run count it once —
+   * decided by PostgreSQL, never by a read in the service.
+   *
+   * `created` is the upsert's own answer, from the same transaction: the row
+   * that opened the incident already counts its opener (`DEFAULT 1`), so the
+   * observation is recorded but not counted again.
+   *
+   * Returns whether the observation was new.
+   */
+  async observe(
+    alertId: string,
+    scanRunId: string,
+    created: boolean,
+    executor: DatabaseQuery,
+  ): Promise<boolean> {
+    const rows = await executor.query<{ observed: boolean }>(
+      `WITH observed AS (
+         INSERT INTO alert_scan_observations (alert_id, scan_run_id)
+         VALUES ($1, $2)
+         ON CONFLICT (alert_id, scan_run_id) DO NOTHING
+         RETURNING alert_id
+       ),
+       counted AS (
+         UPDATE alerts
+            SET occurrence_count = occurrence_count + 1
+          WHERE id = $1
+            AND NOT $3::boolean
+            AND EXISTS (SELECT 1 FROM observed)
+          RETURNING id
+       )
+       SELECT EXISTS (SELECT 1 FROM observed) AS observed`,
+      [alertId, scanRunId, created],
+    );
+    return rows[0]?.observed === true;
   }
 
   async findById(id: string, executor: DatabaseQuery = this.db): Promise<Alert | null> {

@@ -84,8 +84,11 @@ CREATE TABLE IF NOT EXISTS alerts (
   first_seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- The number of DISTINCT SCAN RUNS that observed this incident — not the
-  -- number of times a signal arrived. A run that retries or sees the subject
-  -- twice adds nothing; the upsert decides against `last_scan_run_id` in SQL.
+  -- number of times a signal arrived. Backed by `alert_scan_observations`
+  -- below: it moves only when a (alert, run) pair is recorded for the first
+  -- time, so a retry, a duplicate, two workers, or a run arriving late after
+  -- another (A, B, A) can never count twice. Starts at 1 for the observation
+  -- that opened the incident, even one without a run identity.
   occurrence_count    INTEGER     NOT NULL DEFAULT 1 CHECK (occurrence_count >= 1),
 
   acknowledged_at     TIMESTAMPTZ,
@@ -209,6 +212,25 @@ CREATE TABLE IF NOT EXISTS alert_transition_history (
 
 CREATE INDEX IF NOT EXISTS idx_alert_history_alert
   ON alert_transition_history (alert_id, created_at DESC);
+
+-- ------------------------------------------------- alert_scan_observations --
+--
+-- One row per (alert, scan run) that observed it. THIS is what
+-- `occurrence_count` counts: the primary key makes "distinct scan runs" a fact
+-- PostgreSQL enforces, so a retried page, a duplicate signal, two workers in
+-- one run, or a run arriving late after another (A, B, A) can never be counted
+-- twice — the count moves only when the INSERT here actually lands.
+--
+-- No FK to `scan_runs`: runs are pruned on a shorter cycle than alerts. The FK
+-- to `alerts` CASCADES, so pruning an alert takes its observations with it;
+-- PostgreSQL runs that cascade as the referencing table's owner, so the
+-- retention role needs no grant on this table (proven by the privilege suite).
+CREATE TABLE IF NOT EXISTS alert_scan_observations (
+  alert_id     UUID        NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+  scan_run_id  UUID        NOT NULL,
+  observed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (alert_id, scan_run_id)
+);
 
 -- --------------------------------------------------------------- scan_runs --
 --
