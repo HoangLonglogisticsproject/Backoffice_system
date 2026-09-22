@@ -33,6 +33,8 @@ describe('trusted context signer', () => {
       /lives at most/,
     );
     expect(() => signer(secret).issue(claims, { now, ttlSeconds: 0 })).toThrow(/lives at most/);
+    expect(() => signer(secret).issue(claims, { now, ttlSeconds: 300 })).toThrow(/lives at most/);
+    expect(TRUSTED_CONTEXT_MAX_TTL_SECONDS).toBe(TRUSTED_CONTEXT_TTL_SECONDS);
     expect(verifyTrustedContext(signer(secret).issue(claims, { now, ttlSeconds: TRUSTED_CONTEXT_MAX_TTL_SECONDS }), secret, now)).not.toBeNull();
   });
 

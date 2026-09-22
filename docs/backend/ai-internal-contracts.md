@@ -66,9 +66,9 @@ AI verify, theo thứ tự: chữ ký (constant-time, so độ dài trước) �
 | `iat ≤ now + skew` (không đến từ tương lai) | skew = **30 s** |
 | `exp > now − skew` (chưa hết hạn, tha thứ lệch giờ) | |
 | `iat ≤ exp` | |
-| `exp − iat ≤ maxTtl` (token tự khai sống ngắn, bất kể ai ký) | maxTtl = **300 s** |
+| `exp − iat ≤ maxTtl` (token tự khai sống ngắn, bất kể ai ký) | maxTtl = **60 s** |
 
-Signer phát hành TTL **60 s** mặc định và từ chối phát hành TTL > maxTtl. Mọi thất bại → `401 { error: { code: 'INVALID_TRUSTED_CONTEXT' } }` cùng một message, verify **trước** khi tra alert. Backend: `TrustedContextSigner.issue()` (`backend/src/infrastructure/service-auth/trusted-context.signer.ts`), từ chối ký khi secret rỗng. Không phải JWT, không phải session, không đăng nhập được ai. Không log token, chữ ký, secret hay payload.
+Signer phát hành TTL **60 s** (= maxTtl) và từ chối TTL ≤ 0 hoặc > 60 s. Skew 30 s là dung sai đồng hồ giữa hai host, KHÔNG phải quyền phát hành token sống lâu hơn: một token bình thường được chấp nhận tối đa 60 s đời sống khai báo + 30 s lệch giờ. Mọi thất bại → `401 { error: { code: 'INVALID_TRUSTED_CONTEXT' } }` cùng một message, verify **trước** khi tra alert. Backend: `TrustedContextSigner.issue()` (`backend/src/infrastructure/service-auth/trusted-context.signer.ts`), từ chối ký khi secret rỗng. Không phải JWT, không phải session, không đăng nhập được ai. Không log token, chữ ký, secret hay payload.
 
 ## 6. Error envelope
 

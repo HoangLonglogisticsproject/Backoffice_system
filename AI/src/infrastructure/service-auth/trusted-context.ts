@@ -32,12 +32,14 @@ const VERSION = 'v1';
 export const TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS = 30;
 
 /**
- * The longest lifetime a token may DECLARE, in seconds. The signer issues 60;
- * a well-signed token claiming a day is a token minted by something other
- * than the signer, or by a signer somebody has edited — refused either way.
- * Short-lived is the contract, not a default.
+ * The longest lifetime a token may DECLARE (`exp - iat`), in seconds. Equal
+ * to what the signer issues: a well-signed token claiming more was minted by
+ * something other than the signer, or by a signer somebody has edited, and is
+ * refused either way. Clock skew is tolerance for two clocks, not permission
+ * to declare a longer life — so a normal token is accepted for at most
+ * 60 s of declared life plus 30 s of drift, never for five minutes.
  */
-export const TRUSTED_CONTEXT_MAX_TTL_SECONDS = 300;
+export const TRUSTED_CONTEXT_MAX_TTL_SECONDS = 60;
 
 export const trustedContextSchema = z.object({
   /** The backend user id. Snapshotted by the AI as actor; never looked up. */

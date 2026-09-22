@@ -79,11 +79,15 @@ describe('trusted context (HMAC-SHA256)', () => {
       expect(verify(nowSeconds + 5, nowSeconds + 65).iat).toBe(nowSeconds + 5);
     });
 
-    it('refuses a well-signed token that declares a life longer than the maximum', () => {
-      expect(() => verify(nowSeconds, nowSeconds + maxTtl + 1)).toThrow(TrustedContextError);
+    it("the maximum declared life IS the signer's 60 seconds — skew buys no extra life", () => {
+      expect(maxTtl).toBe(60);
+    });
+
+    it('accepts a 60 s signed lifetime and refuses 61 s, 300 s and anything longer', () => {
+      expect(verify(nowSeconds, nowSeconds + 60).exp).toBe(nowSeconds + 60);
+      expect(() => verify(nowSeconds, nowSeconds + 61)).toThrow(TrustedContextError);
+      expect(() => verify(nowSeconds, nowSeconds + 300)).toThrow(TrustedContextError);
       expect(() => verify(nowSeconds - 3_600, nowSeconds + 3_600)).toThrow(TrustedContextError);
-      // The maximum itself is admitted; the contract is "at most".
-      expect(verify(nowSeconds, nowSeconds + maxTtl).exp).toBe(nowSeconds + maxTtl);
     });
 
     it('a long-lived token is refused even while now falls inside its own window', () => {

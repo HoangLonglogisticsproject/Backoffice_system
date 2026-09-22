@@ -39,7 +39,7 @@ export const TRUSTED_CONTEXT_TTL_SECONDS = 60;
  * the other side whatever the signature says, and `issue()` refuses first.
  * Skew is what the verifier forgives around `now` in either direction.
  */
-export const TRUSTED_CONTEXT_MAX_TTL_SECONDS = 300;
+export const TRUSTED_CONTEXT_MAX_TTL_SECONDS = 60;
 export const TRUSTED_CONTEXT_CLOCK_SKEW_SECONDS = 30;
 
 export interface TrustedContext {

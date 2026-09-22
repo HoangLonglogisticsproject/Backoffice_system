@@ -393,12 +393,46 @@ describeIntegration('Alert persistence against real PostgreSQL', () => {
       expect((await alerts.findById(alert.id))?.acknowledgedAt).toBeNull();
     });
 
-    it('moves updated_at on every update, by trigger', async () => {
+    it('moves updated_at forward on every update, by trigger, and never touches created_at', async () => {
       const { alert } = await service.recordSignal(signal());
-      await pool.query("SELECT pg_sleep(0.01)");
+      await pool.query('SELECT pg_sleep(0.01)');
       const acked = await service.transition({ alertId: alert.id, to: 'acknowledged', actor: { type: 'user', id: USER_A } });
       expect(acked.updatedAt.getTime()).toBeGreaterThan(alert.updatedAt.getTime());
       expect(acked.createdAt.getTime()).toBe(alert.createdAt.getTime());
+
+      const dismissed = await service.transition({ alertId: alert.id, to: 'dismissed', actor: { type: 'user', id: USER_A }, reason: 'r' });
+      expect(dismissed.updatedAt.getTime()).toBeGreaterThanOrEqual(acked.updatedAt.getTime());
+    });
+
+    it('updated_at cannot move backwards when an EARLIER-started transaction commits LATER', async () => {
+      // now() is the transaction start. A writes second but began first, so a
+      // now()-based trigger would persist an updated_at EARLIER than B's.
+      const { alert } = await service.recordSignal(signal());
+      const a = await pool.connect();
+      const b = await pool.connect();
+      try {
+        await a.query('BEGIN');
+        const startedA = await a.query<{ t: Date }>('SELECT now() AS t');
+        await pool.query('SELECT pg_sleep(0.02)');
+
+        await b.query('BEGIN');
+        await b.query("UPDATE alerts SET title = 'b' WHERE id = $1", [alert.id]);
+        await b.query('COMMIT');
+        const afterB = await pool.query<{ u: Date }>('SELECT updated_at AS u FROM alerts WHERE id = $1', [alert.id]);
+
+        await a.query("UPDATE alerts SET title = 'a' WHERE id = $1", [alert.id]);
+        await a.query('COMMIT');
+        const afterA = await pool.query<{ u: Date }>('SELECT updated_at AS u FROM alerts WHERE id = $1', [alert.id]);
+
+        // The scenario is real: A's transaction clock is behind B's persisted value…
+        expect(startedA.rows[0]!.t.getTime()).toBeLessThan(afterB.rows[0]!.u.getTime());
+        // …and the trigger still refused to go backwards.
+        expect(afterA.rows[0]!.u.getTime()).toBeGreaterThanOrEqual(afterB.rows[0]!.u.getTime());
+        expect((await alerts.findById(alert.id))?.title).toBe('a');
+      } finally {
+        a.release();
+        b.release();
+      }
     });
   });
 

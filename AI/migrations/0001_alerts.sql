@@ -22,12 +22,20 @@
 -- check on source.
 
 -- ------------------------------------------------------------- updated_at --
--- Schema-local copy of the backend's trigger function (0002). Unqualified, so
--- it is created in the AI schema and does not depend on `public` holding one.
+-- Schema-local, unqualified, so it lands in the AI schema and does not depend
+-- on `public` holding the backend's (0002).
+--
+-- ★ MONOTONIC, UNLIKE THE BACKEND'S. `now()` is the TRANSACTION start time.
+-- Two workers upsert the same alert; the one that BEGAN earlier commits
+-- later, and with `now()` its `updated_at` would land BEFORE the value the
+-- other worker already persisted — a timestamp that moves backwards. Found
+-- by the concurrent-upsert test on `last_seen_at`; this closes the same hole
+-- for `updated_at`. `clock_timestamp()` is the wall clock at execution, and
+-- GREATEST guarantees the column never decreases even if two clocks disagree.
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.updated_at = now();
+  NEW.updated_at = GREATEST(OLD.updated_at, clock_timestamp());
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
