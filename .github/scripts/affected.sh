@@ -155,6 +155,7 @@ self_test() {
   local frontend_src=frontend/src/App.tsx
   local ai_src=AI/src/main.ts
   local ai_ci=ci_ai=true
+  local no_ai_ci=ci_ai=false
   local unclassified=weird-new-thing.py
 
   check() {
@@ -196,15 +197,15 @@ self_test() {
   check 'AI src is not reported unknown'    'unknown='             "$ai_src"
   check 'AI migration is AI, not backend'   "$be=false"  'AI/migrations/0001_alerts.sql'
   check 'AI migration sets no backup flag'  'migrations=false'      'AI/migrations/0001_alerts.sql'
-  check 'AI README is docs'                 'ci_ai=false'           'AI/README.md'
-  check 'backend src -> no AI CI'           'ci_ai=false'           "$backend_src"
-  check 'frontend src -> no AI CI'          'ci_ai=false'           "$frontend_src"
+  check 'AI README is docs'                 "$no_ai_ci"           'AI/README.md'
+  check 'backend src -> no AI CI'           "$no_ai_ci"           "$backend_src"
+  check 'frontend src -> no AI CI'          "$no_ai_ci"           "$frontend_src"
   check 'workflow runs AI CI'               "$ai_ci"                "$workflow"
   check 'workflow deploys no AI'            'deploy_ai=false'       "$workflow"
   check '.nvmrc widens to AI'               "$ai_ci"                '.nvmrc'
   check 'unclassified -> AI'                "$ai_ci"                "$unclassified"
   check 'sonar config is docs'              "$be=false"  '.sonarcloud.properties'
-  check 'sonar config runs no AI CI'        'ci_ai=false'           '.sonarcloud.properties'
+  check 'sonar config runs no AI CI'        "$no_ai_ci"           '.sonarcloud.properties'
 
   echo "deploy/ belongs to the backend runtime"
   check 'Dockerfile -> backend'             "$be=true"   'deploy/backend.Dockerfile'
