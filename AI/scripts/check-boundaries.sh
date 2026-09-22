@@ -19,6 +19,8 @@ cd "$(dirname "$0")/.." || exit 2
 # vựng (A5, A7, A8) bỏ qua chúng: một checker vấp vào chính tài liệu của nó là
 # checker sẽ bị tắt.
 readonly COMMENT_LINE=':[0-9]+: *(\*|//|/\*|--)'
+# Spec files are exempt from the layer rules: a spec may import what it tests.
+readonly SPEC_FILE='\.spec\.ts'
 
 fail=0
 report() {
@@ -50,21 +52,21 @@ report "A2  AI ↛ frontend/src" \
 # Luật nghiệp vụ thuần: chạy được trong test không có Nest, HTTP, PostgreSQL.
 report "A3  domain ↛ @nestjs · pg · express · infrastructure · persistence · api" \
   "$(grep -rnE "from '(@nestjs|pg|express|[^']*/(infrastructure|persistence|api)/)" --include=*.ts \
-       src/core/*/domain 2>/dev/null | grep -v '\.spec\.ts')"
+       src/core/*/domain 2>/dev/null | grep -v "$SPEC_FILE")"
 
 # --- A4 ── application/ không biết HTTP -------------------------------------
 # Use-case gọi được từ controller hôm nay và từ engine ngày mai mà không học
 # status code là gì. Nest DI (@Injectable, @Inject) được phép; express thì không.
 report "A4  application ↛ express · api" \
   "$(grep -rnE "from '(express|@nestjs/platform-express|[^']*/api/)" --include=*.ts \
-       src/core/*/application 2>/dev/null | grep -v '\.spec\.ts')"
+       src/core/*/application 2>/dev/null | grep -v "$SPEC_FILE")"
 
 # --- A5 ── persistence không tự mở transaction ------------------------------
 # Transaction boundary thuộc application: chỉ tầng đó biết status change và
 # history row phải cùng commit. (Backend B11.)
 report "A5  persistence ↛ tự mở transaction" \
   "$(grep -rn "\.transaction(" --include=*.ts src/core/*/persistence 2>/dev/null \
-     | grep -v '\.spec\.ts' | grep -vE "$COMMENT_LINE")"
+     | grep -v "$SPEC_FILE" | grep -vE "$COMMENT_LINE")"
 
 # --- A6 ── không đọc biến môi trường mà không qua validate ------------------
 # `process.env.X` / `process.env['X']` bị cấm; truyền cả `process.env` cho
@@ -78,14 +80,14 @@ report "A6  không đọc process.env.X ngoài validate" \
 # allowlist dưới đây — không glob. Hôm nay allowlist rỗng.
 report "A7  runtime ↛ DELETE" \
   "$(grep -rniE "delete[[:space:]]+from" --include=*.ts src 2>/dev/null \
-     | grep -v '\.spec\.ts' | grep -vE "$COMMENT_LINE")"
+     | grep -v "$SPEC_FILE" | grep -vE "$COMMENT_LINE")"
 
 # --- A8 ── không tham chiếu schema public -----------------------------------
 # Không FK, không SELECT, không JOIN vào public.*: dữ liệu vận hành đến qua
 # read API của backend. Soi src/ và migrations/, bỏ comment.
 report "A8  src · migrations ↛ public.*" \
   "$(grep -rniE "\bpublic\." --include=*.ts --include=*.sql src migrations 2>/dev/null \
-     | grep -v '\.spec\.ts' | grep -vE "$COMMENT_LINE")"
+     | grep -v "$SPEC_FILE" | grep -vE "$COMMENT_LINE")"
 
 # --- A9 ── src ↛ integration spec -------------------------------------------
 # Spec cần PostgreSQL sống ở tests/; một *.integration.spec.ts trong src/ sẽ

@@ -324,7 +324,12 @@ jobs:
       TRUSTED_CONTEXT_SECRET: ci-only-trusted-context-secret-000000000000
 
     steps:
+      # `persist-credentials: false`: nothing in this job talks to GitHub after
+      # the checkout, so the token has no business living in .git/config for
+      # the migrate, check, build and test steps that follow.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:

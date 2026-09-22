@@ -35,6 +35,7 @@ classify() {
     # -- documentation and editor furniture: no build, no runtime, no deploy --
     docs/*|__screenshots__/*|.vscode/*|.claude/*)          echo docs ;;
     README.md|.editorconfig|.gitignore|LICENSE)            echo docs ;;
+    .sonarcloud.properties)                                echo docs ;;
     frontend/README.md|backend/README.md|deploy/README.md) echo docs ;;
     AI/README.md)                                          echo docs ;;
     deploy/env.example)                                    echo docs ;;
@@ -153,6 +154,7 @@ self_test() {
   local backend_src=backend/src/main.ts
   local frontend_src=frontend/src/App.tsx
   local ai_src=AI/src/main.ts
+  local ai_ci=ci_ai=true
   local unclassified=weird-new-thing.py
 
   check() {
@@ -187,7 +189,7 @@ self_test() {
   check 'backend src -> NOT frontend'       "$fe=false" "$backend_src"
 
   echo "the AI Platform is a third application, not an unknown"
-  check 'AI src -> AI CI'                   'ci_ai=true'            "$ai_src"
+  check 'AI src -> AI CI'                   "$ai_ci"                "$ai_src"
   check 'AI src -> AI deploy flag'          'deploy_ai=true'        "$ai_src"
   check 'AI src -> NOT backend'             "$be=false"  "$ai_src"
   check 'AI src -> NOT frontend'            "$fe=false" "$ai_src"
@@ -197,10 +199,12 @@ self_test() {
   check 'AI README is docs'                 'ci_ai=false'           'AI/README.md'
   check 'backend src -> no AI CI'           'ci_ai=false'           "$backend_src"
   check 'frontend src -> no AI CI'          'ci_ai=false'           "$frontend_src"
-  check 'workflow runs AI CI'               'ci_ai=true'            "$workflow"
+  check 'workflow runs AI CI'               "$ai_ci"                "$workflow"
   check 'workflow deploys no AI'            'deploy_ai=false'       "$workflow"
-  check '.nvmrc widens to AI'               'ci_ai=true'            '.nvmrc'
-  check 'unclassified -> AI'                'ci_ai=true'            "$unclassified"
+  check '.nvmrc widens to AI'               "$ai_ci"                '.nvmrc'
+  check 'unclassified -> AI'                "$ai_ci"                "$unclassified"
+  check 'sonar config is docs'              "$be=false"  '.sonarcloud.properties'
+  check 'sonar config runs no AI CI'        'ci_ai=false'           '.sonarcloud.properties'
 
   echo "deploy/ belongs to the backend runtime"
   check 'Dockerfile -> backend'             "$be=true"   'deploy/backend.Dockerfile'
