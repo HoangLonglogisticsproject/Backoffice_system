@@ -210,6 +210,14 @@ report "B13 runtime ↛ DELETE"                  "$(grep -rniE "delete[[:space:]
 # một bài test không bao giờ chạy, mà không ai thấy đỏ ở đâu cả.
 report "B14 src ↛ integration spec"   "$(find src -name '*.integration.spec.ts' 2>/dev/null)"
 
+# --- B15 ── backend ↛ /AI ---------------------------------------------------
+# /AI là một ứng dụng riêng (ADR-0007). Backend nói với nó qua HTTP có service
+# auth, không bao giờ qua import. Rule đối xứng nằm ở AI/scripts/check-boundaries.sh
+# (A1). Soi cả src/ và tests/: một spec kéo runner của AI qua đường tương đối
+# cũng là vi phạm.
+report "B15 backend ↛ AI/" \
+  "$(grep -rnE "^\s*(import|export).*from '[^']*(\.\./)+AI/" --include=*.ts src tests 2>/dev/null)"
+
 echo
 if [[ $fail -eq 0 ]]; then
   printf '\033[32mTất cả ranh giới đều sạch.\033[0m\n'

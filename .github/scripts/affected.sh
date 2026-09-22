@@ -35,7 +35,9 @@ classify() {
     # -- documentation and editor furniture: no build, no runtime, no deploy --
     docs/*|__screenshots__/*|.vscode/*|.claude/*)          echo docs ;;
     README.md|.editorconfig|.gitignore|LICENSE)            echo docs ;;
+    .sonarcloud.properties)                                echo docs ;;
     frontend/README.md|backend/README.md|deploy/README.md) echo docs ;;
+    AI/README.md)                                          echo docs ;;
     deploy/env.example)                                    echo docs ;;
 
     # -- the pipeline describing itself --
@@ -65,6 +67,12 @@ classify() {
     #    README and env.example were already claimed by the docs rules above.
     deploy/*)                                              echo backend ;;
 
+    # -- the AI Platform: a third application (ADR-0007). Its own CI job; it
+    #    deploys nothing yet, so `deploy_ai` is emitted for the day it does and
+    #    read by nobody today. It must NOT fall through to `unknown`, which
+    #    would redeploy both other halves for a change that touched neither.
+    AI/*)                                                  echo ai ;;
+
     *)                                                     echo unknown ;;
   esac
 }
@@ -73,6 +81,7 @@ classify() {
 summarise() {
   frontend=false
   backend=false
+  ai=false
   migrations=false
   ci=false
   shared=false
@@ -89,25 +98,27 @@ summarise() {
     case "$kind" in
       frontend)   frontend=true ;;
       backend)    backend=true ;;
+      ai)         ai=true ;;
       migrations) backend=true; migrations=true ;;
       shared)     shared=true ;;
       ci)         ci=true ;;
       docs)       : ;;
-      unknown)    unknown="${unknown}${file} "; frontend=true; backend=true ;;
+      unknown)    unknown="${unknown}${file} "; frontend=true; backend=true; ai=true ;;
       # A kind `classify` can return but this switch does not know about. It
       # cannot happen today; if someone adds one and forgets to handle it here,
       # the safe reading is the same as `unknown` — widen and say so, never
       # silently drop the file.
-      *)          unknown="${unknown}${file} "; frontend=true; backend=true ;;
+      *)          unknown="${unknown}${file} "; frontend=true; backend=true; ai=true ;;
     esac
   done
 
-  # `shared` widens both halves. `ci` widens validation only — never deployment.
-  if [[ "$shared" == true ]]; then frontend=true; backend=true; fi
+  # `shared` widens every application. `ci` widens validation only — never deployment.
+  if [[ "$shared" == true ]]; then frontend=true; backend=true; ai=true; fi
 
   ci_frontend="$frontend"
   ci_backend="$backend"
-  if [[ "$ci" == true ]]; then ci_frontend=true; ci_backend=true; fi
+  ci_ai="$ai"
+  if [[ "$ci" == true ]]; then ci_frontend=true; ci_backend=true; ci_ai=true; fi
 
   # The contract between the two halves is what this suite measures, so either
   # side moving is reason enough to re-measure it.
@@ -116,9 +127,11 @@ summarise() {
 
   echo "deploy_frontend=$frontend"
   echo "deploy_backend=$backend"
+  echo "deploy_ai=$ai"
   echo "migrations=$migrations"
   echo "ci_frontend=$ci_frontend"
   echo "ci_backend=$ci_backend"
+  echo "ci_ai=$ci_ai"
   echo "ci_integration=$ci_integration"
   echo "unknown=${unknown% }"
 }
@@ -140,6 +153,9 @@ self_test() {
   local workflow=.github/workflows/ci.yml
   local backend_src=backend/src/main.ts
   local frontend_src=frontend/src/App.tsx
+  local ai_src=AI/src/main.ts
+  local ai_ci=ci_ai=true
+  local no_ai_ci=ci_ai=false
   local unclassified=weird-new-thing.py
 
   check() {
@@ -172,6 +188,24 @@ self_test() {
   check 'vercel.json is frontend'           "$fe=true"  'frontend/vercel.json'
   check 'backend src -> backend'            "$be=true"   "$backend_src"
   check 'backend src -> NOT frontend'       "$fe=false" "$backend_src"
+
+  echo "the AI Platform is a third application, not an unknown"
+  check 'AI src -> AI CI'                   "$ai_ci"                "$ai_src"
+  check 'AI src -> AI deploy flag'          'deploy_ai=true'        "$ai_src"
+  check 'AI src -> NOT backend'             "$be=false"  "$ai_src"
+  check 'AI src -> NOT frontend'            "$fe=false" "$ai_src"
+  check 'AI src is not reported unknown'    'unknown='             "$ai_src"
+  check 'AI migration is AI, not backend'   "$be=false"  'AI/migrations/0001_alerts.sql'
+  check 'AI migration sets no backup flag'  'migrations=false'      'AI/migrations/0001_alerts.sql'
+  check 'AI README is docs'                 "$no_ai_ci"           'AI/README.md'
+  check 'backend src -> no AI CI'           "$no_ai_ci"           "$backend_src"
+  check 'frontend src -> no AI CI'          "$no_ai_ci"           "$frontend_src"
+  check 'workflow runs AI CI'               "$ai_ci"                "$workflow"
+  check 'workflow deploys no AI'            'deploy_ai=false'       "$workflow"
+  check '.nvmrc widens to AI'               "$ai_ci"                '.nvmrc'
+  check 'unclassified -> AI'                "$ai_ci"                "$unclassified"
+  check 'sonar config is docs'              "$be=false"  '.sonarcloud.properties'
+  check 'sonar config runs no AI CI'        "$no_ai_ci"           '.sonarcloud.properties'
 
   echo "deploy/ belongs to the backend runtime"
   check 'Dockerfile -> backend'             "$be=true"   'deploy/backend.Dockerfile'

@@ -63,6 +63,16 @@ export class AppConfig {
     return this.config.get('SSE_MAX_CONNECTIONS', { infer: true });
   }
 
+  /** What the AI Platform must present on internal routes. Empty = closed. Never log it. */
+  get serviceTokenAiToBackend(): string {
+    return this.config.get('SERVICE_TOKEN_AI_TO_BACKEND', { infer: true });
+  }
+
+  /** The key trusted user contexts are signed with. Empty = the signer refuses. Never log it. */
+  get trustedContextSecret(): string {
+    return this.config.get('TRUSTED_CONTEXT_SECRET', { infer: true });
+  }
+
   get isProduction(): boolean {
     return this.nodeEnv === 'production';
   }
