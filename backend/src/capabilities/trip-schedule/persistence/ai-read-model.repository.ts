@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database } from '../../../common/types/database.port';
-import { decodeCursor, toPage, type CursorAnchored, type Page } from '../../../common/pagination/cursor';
+import { decodeCursor, toPage, type Page } from '../../../common/pagination/cursor';
 import type {
   AssignmentFacts,
   CompletionRequestFacts,

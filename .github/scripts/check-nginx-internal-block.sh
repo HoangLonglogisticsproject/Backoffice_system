@@ -116,7 +116,7 @@ for pair in "public.conf opsystem.hoanglonglti.com" "bo-api.conf bo-api.hoanglon
   fi
 done
 
-if [ "$status" -ne 0 ]; then
+if [[ "$status" -ne 0 ]]; then
   echo "✘ the internal namespace is reachable through a public host"
   exit 1
 fi

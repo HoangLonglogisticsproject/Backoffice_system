@@ -85,10 +85,19 @@ describe('AI read-model HTTP security', () => {
     });
 
     it("refuses the OTHER direction's token — two secrets, two doors", async () => {
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         .get(`${lists[0]}?before=${BEFORE}`)
-        .set('Authorization', `Bearer ${OTHER_DIRECTION}`)
-        .expect(401);
+        .set('Authorization', `Bearer ${OTHER_DIRECTION}`);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        error: { code: 'UNAUTHORIZED', message: 'Service authentication required.' },
+      });
+      // The backend→AI secret opens the backend→AI door and no other, so the
+      // read model must not have been touched — and the rejected secret must
+      // not come back in the answer.
+      expect(readModel.unassignedTrips).not.toHaveBeenCalled();
+      expect(JSON.stringify(response.body)).not.toContain(OTHER_DIRECTION);
     });
 
     it('is not opened by a session cookie — there is no human path in here', async () => {
@@ -110,8 +119,17 @@ describe('AI read-model HTTP security', () => {
     });
 
     it('refuses a limit above the contract maximum rather than clamping it', async () => {
-      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&limit=201`)).expect(422);
-      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&limit=0`)).expect(422);
+      const tooMany = await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&limit=201`));
+      const none = await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&limit=0`));
+
+      expect(tooMany.status).toBe(422);
+      expect(none.status).toBe(422);
+      expect(tooMany.body.error.code).toBe('VALIDATION_FAILED');
+      expect(tooMany.body.error.details).toHaveProperty('limit');
+      expect(none.body.error.details).toHaveProperty('limit');
+      // Refused, not quietly clamped: a caller asking for 201 rows has
+      // misunderstood the contract, and handing back 200 hides that.
+      expect(readModel.unassignedTrips).not.toHaveBeenCalled();
     });
 
     it('passes the optional `after` bound through, so a caller can walk one band at a time', async () => {
@@ -167,15 +185,28 @@ describe('AI read-model HTTP security', () => {
     it('★ accepts the single-point band [t, t], and only when BOTH ends are closed', async () => {
       // A caller asking for one exact instant is asking something answerable;
       // the same bounds with either end open are asking for nothing at all.
-      await authed(
+      const closed = await authed(
         request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${BEFORE}&afterInclusive=true`),
-      ).expect(200);
-      await authed(
+      );
+      const upperOpen = await authed(
         request(app.getHttpServer()).get(
           `${lists[0]}?before=${BEFORE}&after=${BEFORE}&afterInclusive=true&beforeInclusive=false`,
         ),
-      ).expect(422);
-      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${BEFORE}`)).expect(422);
+      );
+      const lowerOpen = await authed(
+        request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${BEFORE}`),
+      );
+
+      expect(closed.status).toBe(200);
+      expect(upperOpen.status).toBe(422);
+      expect(lowerOpen.status).toBe(422);
+      expect(upperOpen.body.error.details).toHaveProperty('after');
+      expect(lowerOpen.body.error.details).toHaveProperty('after');
+      // Exactly one of the three described a range that can hold anything.
+      expect(readModel.unassignedTrips).toHaveBeenCalledTimes(1);
+      expect(readModel.unassignedTrips).toHaveBeenCalledWith(
+        expect.objectContaining({ before: new Date(BEFORE), after: new Date(BEFORE), afterInclusive: true }),
+      );
     });
 
     it('refuses a band that could never contain anything', async () => {
@@ -188,7 +219,14 @@ describe('AI read-model HTTP security', () => {
     });
 
     it('refuses an unparsable `after`', async () => {
-      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=whenever`)).expect(422);
+      const response = await authed(
+        request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=whenever`),
+      );
+
+      expect(response.status).toBe(422);
+      expect(response.body.error.code).toBe('VALIDATION_FAILED');
+      expect(response.body.error.details).toHaveProperty('after');
+      expect(readModel.unassignedTrips).not.toHaveBeenCalled();
     });
 
     it('passes the window, the limit and the cursor through untouched', async () => {

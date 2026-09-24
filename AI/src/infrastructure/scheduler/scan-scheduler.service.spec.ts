@@ -216,7 +216,7 @@ describe('ScanSchedulerService', () => {
       const before = engine.discover.mock.calls.length;
       await jest.advanceTimersByTimeAsync(5 * 60_000);
 
-      expect(engine.discover.mock.calls.length).toBe(before);
+      expect(engine.discover.mock.calls).toHaveLength(before);
       expect(lock.close).toHaveBeenCalled();
     });
 
