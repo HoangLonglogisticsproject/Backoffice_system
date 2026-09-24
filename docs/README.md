@@ -21,6 +21,7 @@
 | Đặt file test | [`architecture/test-placement.md`](architecture/test-placement.md) |
 | **`/AI`** · alert · detector · RAG · ranh giới Backend ↔ AI | [`architecture/adr-0007-ai-platform-boundary.md`](architecture/adr-0007-ai-platform-boundary.md) — đọc trước; hợp đồng service-to-service ở [`backend/ai-internal-contracts.md`](backend/ai-internal-contracts.md) |
 | **Alert engine Phase 1b** · read model · scan · detector D1/D2/D3 | [`architecture/adr-0008-operational-alert-engine.md`](architecture/adr-0008-operational-alert-engine.md) — xây trên ADR-0007, không sửa nó |
+| AI đi lên production bằng đường nào · nhánh `ai/integration` | [`operations/ai-platform-branch-strategy-and-readiness.md`](operations/ai-platform-branch-strategy-and-readiness.md) — luồng nhánh + cổng production-readiness |
 | Bảo mật · triển khai · trước khi lên production | [`operations/`](operations/) |
 | **Driver Portal** | [`domains/driver-portal/`](domains/driver-portal/) — đọc `contract.md` trước, rồi `design.md`, `decisions.md` khi cần trace |
 
