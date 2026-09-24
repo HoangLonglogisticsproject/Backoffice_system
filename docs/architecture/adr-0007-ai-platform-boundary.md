@@ -140,10 +140,17 @@ consume the whole budget on every run and a trip leaving in ninety minutes would
 evaluated — the alert that matters most would be the one that never fires.
 
 A detector therefore returns candidate **bands** in priority order, and Discovery walks
-them under one shared budget. D1 asks for `(now, now + lead]` first and `(-∞, now]`
-second. The bands are half-open and adjacent, so a pickup at exactly `now` falls in the
-overdue band and in exactly one of them. The backend gained an optional, purely technical
-`after` bound to express this; it still knows nothing about what two hours means.
+them under one shared budget. D1 asks for `[now, now + lead]` first and `(-∞, now)`
+second. The cut at `now` is **closed on the approaching side**: a pickup due this very
+instant is the most urgent candidate the detector can see, and leaving it at the head of
+the overdue backlog would starve exactly the case the ordering exists to protect.
+
+The backend gained optional, purely technical range bounds to express this: `after`, and
+an inclusivity flag for each end. Which side of a boundary instant matters is a statement
+about urgency, so it belongs to the detector; the read model only needs to be able to say
+it. The alternative — nudging a bound by a millisecond — encodes the decision as an
+epsilon nobody can read and the database does not necessarily share. The backend still
+knows nothing about what two hours means, nor which side of the cut is the urgent one.
 
 This is scan ORDERING, not policy. The predicate is unchanged, overdue trips remain
 candidates for ever, and no retention window or cutoff is invented. A band left unwalked

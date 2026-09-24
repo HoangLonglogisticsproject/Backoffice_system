@@ -155,13 +155,23 @@ bao giờ** được đánh giá — lỗi liveness, không phải chậm. Vì v
 
 | Band | Range | Thứ tự |
 |---|---|---|
-| `approaching` | `(now, now + 2h]` | **trước** |
-| `overdue` | `(-∞, now]` | sau |
+| `approaching` | `[now, now + 2h]` | **trước** |
+| `overdue` | `(-∞, now)` | sau |
 
-Hai band nửa-mở và liền nhau: `pickup_at = now` thuộc đúng band `overdue` (đã đến giờ
-lấy hàng = quá hạn, không phải sắp tới), không trùng, không sót. Predicate của detector
-**không đổi**; chỉ thứ tự tiêu ngân sách đổi. Không có retention/window cutoff nào được
-tự đặt: chuyến quá hạn vẫn là candidate vĩnh viễn.
+★ **`pickup_at = now` thuộc band `approaching`.** Chuyến đến giờ lấy hàng **ngay lúc
+này** là candidate cấp bách nhất; để nó ở đầu band tồn đọng là bỏ đói đúng trường hợp mà
+thứ tự quét sinh ra để bảo vệ. Vết cắt tại `now` vì vậy **đóng ở phía approaching, mở ở
+phía overdue**: hai band phân hoạch chính xác — mọi `pickup_at` thuộc đúng một band,
+không trùng, không sót — và không phải dịch mốc thời gian đi 1ms để nói điều đó.
+
+Predicate của detector **không đổi**; chỉ thứ tự tiêu ngân sách đổi. Không có
+retention/window cutoff nào được tự đặt: chuyến quá hạn vẫn là candidate vĩnh viễn.
+
+**Range bounds là kỹ thuật thuần tuý.** Backend nhận `before`, `after` và hai cờ
+`beforeInclusive` / `afterInclusive` (mặc định: `before` đóng, `after` mở → `(after,
+before]`). Cờ chỉ nhận đúng `true` hoặc `false`; giá trị khác → `422`. Range rỗng →
+`422`, không trả về trang rỗng. Backend **không biết** 2h, không biết severity, không
+biết bên nào của vết cắt là cấp bách.
 
 Page budget **dùng chung** cho cả hai band: band đầu tiêu trước. Hết budget → run
 `partial` kèm tên band chưa đi hết (hoặc chưa tới). Không bao giờ báo `succeeded` khi

@@ -113,7 +113,14 @@ export class ScanSchedulerService implements OnApplicationBootstrap, OnApplicati
         detector,
         (window, cursor, cid) =>
           this.backend.unassignedTrips(
-            { before: window.before, after: window.after, limit: this.settings.readModelPageSize, cursor },
+            {
+              before: window.before,
+              beforeInclusive: window.beforeInclusive,
+              after: window.after,
+              afterInclusive: window.afterInclusive,
+              limit: this.settings.readModelPageSize,
+              cursor,
+            },
             cid,
           ),
         correlationId,
@@ -138,7 +145,14 @@ export class ScanSchedulerService implements OnApplicationBootstrap, OnApplicati
         detector,
         (window, cursor, cid) =>
           this.backend.unstartedAssignments(
-            { before: window.before, after: window.after, limit: this.settings.readModelPageSize, cursor },
+            {
+              before: window.before,
+              beforeInclusive: window.beforeInclusive,
+              after: window.after,
+              afterInclusive: window.afterInclusive,
+              limit: this.settings.readModelPageSize,
+              cursor,
+            },
             cid,
           ),
         correlationId,
@@ -163,7 +177,14 @@ export class ScanSchedulerService implements OnApplicationBootstrap, OnApplicati
         detector,
         (window, cursor, cid) =>
           this.backend.pendingCompletions(
-            { before: window.before, after: window.after, limit: this.settings.readModelPageSize, cursor },
+            {
+              before: window.before,
+              beforeInclusive: window.beforeInclusive,
+              after: window.after,
+              afterInclusive: window.afterInclusive,
+              limit: this.settings.readModelPageSize,
+              cursor,
+            },
             cid,
           ),
         correlationId,

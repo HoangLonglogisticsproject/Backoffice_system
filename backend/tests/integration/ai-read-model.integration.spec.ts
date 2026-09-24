@@ -280,8 +280,8 @@ describeIntegration('AI read models against real PostgreSQL', () => {
       expect([...seen].sort()).toEqual([...ids].sort());
     });
 
-    describe('★ the (after, before] band — half-open, so bands chain without a gap or a repeat', () => {
-      it('excludes the lower bound and includes the upper one', async () => {
+    describe('★ the band — each bound carries its own inclusivity, so bands chain exactly', () => {
+      it('by default excludes the lower bound and includes the upper one', async () => {
         const atLowerBound = await createTrip({ pickupAt: hours(1) });
         const inside = await createTrip({ pickupAt: hours(2) });
         const atUpperBound = await createTrip({ pickupAt: hours(3) });
@@ -293,24 +293,66 @@ describeIntegration('AI read models against real PostgreSQL', () => {
         expect(band.items.map((t) => t.tripId)).not.toContain(atLowerBound);
       });
 
-      it('★ two adjacent bands see every trip exactly once — none lost at the join, none repeated', async () => {
-        // `now` is hours(0). The detector asks for (now, now+2h] and then
-        // (-inf, now]; a trip at exactly `now` must appear in one of them.
+      it('a closed lower bound admits the instant the open one excludes', async () => {
+        const atBound = await createTrip({ pickupAt: hours(1) });
+        await createTrip({ pickupAt: hours(4) });
+
+        const open = await service.unassignedTrips({ after: hours(1), before: hours(3), limit: 50 });
+        const closed = await service.unassignedTrips({
+          after: hours(1),
+          afterInclusive: true,
+          before: hours(3),
+          limit: 50,
+        });
+
+        expect(open.items.map((t) => t.tripId)).toEqual([]);
+        expect(closed.items.map((t) => t.tripId)).toEqual([atBound]);
+      });
+
+      it('an open upper bound excludes the instant the closed one admits', async () => {
+        const atBound = await createTrip({ pickupAt: hours(3) });
+
+        const closed = await service.unassignedTrips({ after: hours(1), before: hours(3), limit: 50 });
+        const open = await service.unassignedTrips({
+          after: hours(1),
+          before: hours(3),
+          beforeInclusive: false,
+          limit: 50,
+        });
+
+        expect(closed.items.map((t) => t.tripId)).toEqual([atBound]);
+        expect(open.items.map((t) => t.tripId)).toEqual([]);
+      });
+
+      it('★ the two D1 bands see every trip exactly once, and `pickup_at = now` is in the APPROACHING one', async () => {
+        // `now` is hours(0). D1 asks for [now, now+2h] and then (-inf, now).
+        // The trip due this very instant is the one the ordering exists to
+        // protect, so it must be in the FIRST band, not at the head of the
+        // backlog in the second.
         const overdue = await createTrip({ pickupAt: hours(-5) });
+        // One millisecond before `now` — the smallest interval this fixture's
+        // JS `Date` can express, and enough to sit on the other side of the cut.
+        const justBefore = await createTrip({ pickupAt: new Date(NOW.getTime() - 1) });
         const exactlyNow = await createTrip({ pickupAt: hours(0) });
         const soon = await createTrip({ pickupAt: hours(1) });
         const atLead = await createTrip({ pickupAt: hours(2) });
         const beyondLead = await createTrip({ pickupAt: hours(3) });
 
-        const approaching = await service.unassignedTrips({ after: hours(0), before: hours(2), limit: 50 });
-        const overdueBand = await service.unassignedTrips({ before: hours(0), limit: 50 });
+        const approaching = await service.unassignedTrips({
+          after: hours(0),
+          afterInclusive: true,
+          before: hours(2),
+          limit: 50,
+        });
+        const overdueBand = await service.unassignedTrips({ before: hours(0), beforeInclusive: false, limit: 50 });
 
-        expect(approaching.items.map((t) => t.tripId)).toEqual([soon, atLead]);
-        expect(overdueBand.items.map((t) => t.tripId)).toEqual([overdue, exactlyNow]);
+        expect(approaching.items.map((t) => t.tripId)).toEqual([exactlyNow, soon, atLead]);
+        expect(overdueBand.items.map((t) => t.tripId).sort()).toEqual([overdue, justBefore].sort());
+        expect(overdueBand.items.map((t) => t.tripId)).not.toContain(exactlyNow);
 
         const seen = [...approaching.items, ...overdueBand.items].map((t) => t.tripId);
         expect(new Set(seen).size).toBe(seen.length); // no repeat
-        expect(seen).toEqual(expect.arrayContaining([overdue, exactlyNow, soon, atLead]));
+        expect(seen).toEqual(expect.arrayContaining([overdue, justBefore, exactlyNow, soon, atLead]));
         expect(seen).not.toContain(beyondLead); // the rule would not alert on it anyway
       });
 

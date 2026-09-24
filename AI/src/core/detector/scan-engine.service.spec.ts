@@ -183,8 +183,8 @@ describe('ScanEngineService', () => {
       const twoBand = (): Detector<Facts> =>
         detector({
           candidateWindows: () => [
-            { label: 'approaching', after: NOW, before: new Date(NOW.getTime() + 7_200_000) },
-            { label: 'overdue', before: NOW },
+            { label: 'approaching', after: NOW, afterInclusive: true, before: new Date(NOW.getTime() + 7_200_000) },
+            { label: 'overdue', before: NOW, beforeInclusive: false },
           ],
         });
 
@@ -209,11 +209,18 @@ describe('ScanEngineService', () => {
 
         expect(fetch).toHaveBeenNthCalledWith(
           1,
-          { label: 'approaching', after: NOW, before: new Date(NOW.getTime() + 7_200_000) },
+          { label: 'approaching', after: NOW, afterInclusive: true, before: new Date(NOW.getTime() + 7_200_000) },
           null,
           'cid-bounds',
         );
-        expect(fetch).toHaveBeenNthCalledWith(2, { label: 'overdue', before: NOW }, null, 'cid-bounds');
+        // Including the inclusivity flags: the engine forwards the band the
+        // detector declared, whole, and decides nothing about its edges.
+        expect(fetch).toHaveBeenNthCalledWith(
+          2,
+          { label: 'overdue', before: NOW, beforeInclusive: false },
+          null,
+          'cid-bounds',
+        );
       });
 
       it('★ THE STARVATION CASE: an endless overdue band cannot hide the approaching one', async () => {

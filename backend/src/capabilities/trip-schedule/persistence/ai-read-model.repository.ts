@@ -157,23 +157,42 @@ const toCompletion = (row: CompletionRow): CompletionRequestFacts => ({
 
 export interface WindowQuery {
   /**
-   * The anchor range, as the half-open interval `(after, before]`.
+   * The anchor range. Each bound carries its own inclusivity, so the caller
+   * can express `(a, b]`, `[a, b]`, `(-inf, b)` or any other combination.
    *
-   * ★ HALF-OPEN SO RANGES CHAIN WITHOUT A GAP OR AN OVERLAP. A caller that
-   * wants to walk one band before another asks for `(-inf, t]` and then
-   * `(t, t + something]`: a row whose anchor is exactly `t` belongs to the
-   * first and only the first. Two inclusive bounds would return it twice;
-   * two exclusive ones would lose it.
+   * ★ THE CALLER OWNS THE CUT, BECAUSE ONLY THE CALLER KNOWS WHICH SIDE OF IT
+   * MATTERS. Ranges still have to chain without a gap or an overlap, but
+   * which band a row exactly ON the boundary belongs to is a decision about
+   * that row's meaning — and meaning is the AI's, not this repository's. A
+   * fixed `(after, before]` forced every caller into one answer and made the
+   * other one reachable only by nudging a timestamp, which is how a scan
+   * ends up silently losing or double-counting the row at the join.
    *
-   * Both are TECHNICAL bounds the caller computes. This side never knows what
-   * they mean — it does not know what "two hours before pickup" is, only how
-   * to return rows inside an interval.
+   * These are TECHNICAL bounds the caller computes. This side does not know
+   * what "two hours before pickup" is, only how to return rows in an interval.
    */
   before: Date;
+  /** Is `before` itself in the range? Default `true`. */
+  beforeInclusive?: boolean;
   after?: Date;
+  /** Is `after` itself in the range? Default `false`. */
+  afterInclusive?: boolean;
   limit: number;
   cursor?: string;
 }
+
+/**
+ * The comparison operators for a window's bounds.
+ *
+ * The operator is chosen from a BOOLEAN and is one of four fixed literals —
+ * no caller text ever reaches the statement. Comparing against an operator
+ * held in a parameter instead (`... OR ($n AND anchor = $1)`) would be
+ * parameterised but would also cost the index scan these lists depend on.
+ */
+const bounds = (query: WindowQuery): { upper: string; lower: string } => ({
+  upper: query.beforeInclusive === false ? '<' : '<=',
+  lower: query.afterInclusive === true ? '>=' : '>',
+});
 
 export interface SubjectIds {
   tripIds: readonly string[];
@@ -186,8 +205,8 @@ export class AiReadModelRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * Trips with no active assignment whose pickup instant lies in
-   * `(after, before]`. Archived and finished trips are out (they are not
+   * Trips with no active assignment whose pickup instant lies in the window
+   * the caller described. Archived and finished trips are out (they are not
    * work); trips with no `pickup_at` are out because the detector this feeds
    * keys on that instant alone (CEO: no `scheduled_on` fallback). Ordered by
    * `(pickup_at, id)` ascending — the soonest first WITHIN the band the
@@ -195,14 +214,15 @@ export class AiReadModelRepository {
    */
   async unassignedTrips(query: WindowQuery): Promise<Page<TripFacts>> {
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+    const { upper, lower } = bounds(query);
     const rows = await this.db.query<TripRow & { cursor_at: string }>(
       `SELECT ${TRIP_FACTS}, t.pickup_at::text AS cursor_at
        ${TRIP_FROM}
        WHERE t.archived_at IS NULL
          AND t.status <> 'finished'
          AND t.pickup_at IS NOT NULL
-         AND t.pickup_at <= $1::timestamptz
-         AND ($2::timestamptz IS NULL OR t.pickup_at > $2::timestamptz)
+         AND t.pickup_at ${upper} $1::timestamptz
+         AND ($2::timestamptz IS NULL OR t.pickup_at ${lower} $2::timestamptz)
          AND NOT EXISTS (SELECT 1 FROM trip_driver_assignments da
                           WHERE da.trip_id = t.id AND da.state = 'active')
          AND ($3::timestamptz IS NULL OR (t.pickup_at, t.id) > ($3::timestamptz, $4::uuid))
@@ -224,6 +244,7 @@ export class AiReadModelRepository {
    */
   async unstartedAssignments(query: WindowQuery): Promise<Page<AssignmentFacts>> {
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+    const { upper, lower } = bounds(query);
     const rows = await this.db.query<AssignmentRow & { cursor_at: string }>(
       `SELECT ${ASSIGNMENT_FACTS}, t.pickup_at::text AS cursor_at
        ${ASSIGNMENT_FROM}
@@ -231,8 +252,8 @@ export class AiReadModelRepository {
          AND t.archived_at IS NULL
          AND t.status <> 'finished'
          AND t.pickup_at IS NOT NULL
-         AND t.pickup_at <= $1::timestamptz
-         AND ($2::timestamptz IS NULL OR t.pickup_at > $2::timestamptz)
+         AND t.pickup_at ${upper} $1::timestamptz
+         AND ($2::timestamptz IS NULL OR t.pickup_at ${lower} $2::timestamptz)
          AND NOT EXISTS (SELECT 1 FROM trip_execution_events e
                           WHERE e.driver_assignment_id = a.id AND e.voided_at IS NULL)
          AND ($3::timestamptz IS NULL OR (t.pickup_at, a.id) > ($3::timestamptz, $4::uuid))
@@ -249,12 +270,13 @@ export class AiReadModelRepository {
   /** Pending completion requests submitted at or before the window, oldest first. */
   async pendingCompletions(query: WindowQuery): Promise<Page<CompletionRequestFacts>> {
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+    const { upper, lower } = bounds(query);
     const rows = await this.db.query<CompletionRow & { cursor_at: string }>(
       `SELECT ${COMPLETION_FACTS}, r.submitted_at::text AS cursor_at
        ${COMPLETION_FROM}
        WHERE r.state = 'pending'
-         AND r.submitted_at <= $1::timestamptz
-         AND ($2::timestamptz IS NULL OR r.submitted_at > $2::timestamptz)
+         AND r.submitted_at ${upper} $1::timestamptz
+         AND ($2::timestamptz IS NULL OR r.submitted_at ${lower} $2::timestamptz)
          AND ($3::timestamptz IS NULL OR (r.submitted_at, r.id) > ($3::timestamptz, $4::uuid))
        ORDER BY r.submitted_at ASC, r.id ASC
        LIMIT $5`,

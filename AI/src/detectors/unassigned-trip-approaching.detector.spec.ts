@@ -1,6 +1,7 @@
 import { DetectorSettings } from '../config/detector-settings';
 import type { AppConfig } from '../config/app.config';
 import type { TripFacts } from '../infrastructure/backend-client/read-model.types';
+import type { CandidateWindow } from '../core/detector/detector.contract';
 import { UnassignedTripApproachingDetector } from './unassigned-trip-approaching.detector';
 
 /**
@@ -154,36 +155,70 @@ describe('UNASSIGNED_TRIP_APPROACHING_EXECUTION', () => {
 
   describe('★ the candidate bands — approaching first, so it cannot be starved', () => {
     const windows = () => detectorWith().candidateWindows(NOW);
+    const LEAD = 2 * HOUR;
+
+    /**
+     * Band membership as the READ MODEL computes it, from the same four
+     * fields the request carries. The detector declares an interval; this is
+     * what that interval means to the side that runs the query, so a
+     * boundary test here asserts the partition rather than the wording.
+     */
+    const contains = (band: CandidateWindow, pickupAt: Date): boolean => {
+      const at = pickupAt.getTime();
+      const underUpper = band.beforeInclusive === false ? at < band.before.getTime() : at <= band.before.getTime();
+      if (!underUpper) return false;
+      if (band.after === undefined) return true;
+      return band.afterInclusive === true ? at >= band.after.getTime() : at > band.after.getTime();
+    };
+
+    const bandsFor = (pickupAt: Date): string[] => windows().filter((band) => contains(band, pickupAt)).map((b) => b.label);
 
     it('asks for two bands, the approaching one FIRST', () => {
       expect(windows().map((w) => w.label)).toEqual(['approaching', 'overdue']);
     });
 
-    it('the approaching band is (now, now + lead]', () => {
+    it('the approaching band is [now, now + lead] — both ends closed', () => {
       const [approaching] = windows();
       expect(approaching!.after?.toISOString()).toBe(NOW.toISOString());
-      expect(approaching!.before.toISOString()).toBe(new Date(NOW.getTime() + 2 * HOUR).toISOString());
+      expect(approaching!.afterInclusive).toBe(true);
+      expect(approaching!.before.toISOString()).toBe(new Date(NOW.getTime() + LEAD).toISOString());
+      expect(approaching!.beforeInclusive).toBeUndefined(); // the default, which is inclusive
     });
 
-    it('the overdue band is everything at or before now, unbounded below', () => {
+    it('the overdue band is everything strictly before now, unbounded below', () => {
       const overdue = windows()[1];
       expect(overdue!.before.toISOString()).toBe(NOW.toISOString());
+      expect(overdue!.beforeInclusive).toBe(false);
       expect(overdue!.after).toBeUndefined();
     });
 
-    it('★ the bands are adjacent and half-open: `pickup_at = now` belongs to exactly one', () => {
-      const [approaching, overdue] = windows();
-      // (now, now+lead] and (-inf, now] meet at `now` and do not overlap:
-      // `now` is excluded from the first and included in the second.
-      expect(approaching!.after!.getTime()).toBe(overdue!.before.getTime());
+    it('★ A. `pickup_at = now` is APPROACHING, and is not overdue', () => {
+      // The whole point of the correction: a trip due this instant is the
+      // most urgent candidate there is, and it must not sit behind a backlog.
+      expect(bandsFor(NOW)).toEqual(['approaching']);
     });
 
-    it('together they still cover every candidate the predicate admits', () => {
-      const [approaching, overdue] = windows();
-      // Nothing between the two bands, and nothing above the lead that the
-      // rule would have alerted on anyway.
-      expect(overdue!.before.getTime()).toBe(approaching!.after!.getTime());
-      expect(approaching!.before.getTime()).toBe(NOW.getTime() + 2 * HOUR);
+    it('★ B. one millisecond before now is OVERDUE, and only overdue', () => {
+      expect(bandsFor(new Date(NOW.getTime() - 1))).toEqual(['overdue']);
+    });
+
+    it('★ C. `pickup_at = now + lead` is APPROACHING — the far end is closed too', () => {
+      expect(bandsFor(new Date(NOW.getTime() + LEAD))).toEqual(['approaching']);
+      // and the rule agrees with the band: exactly two hours out already alerts.
+      expect(detectorWith().evaluate(trip({ pickupAt: new Date(NOW.getTime() + LEAD) }), NOW)).not.toBeNull();
+    });
+
+    it('★ D. beyond the lead is in NEITHER band', () => {
+      expect(bandsFor(new Date(NOW.getTime() + LEAD + 1))).toEqual([]);
+      // and would not have alerted anyway, so discovery loses nothing.
+      expect(detectorWith().evaluate(trip({ pickupAt: new Date(NOW.getTime() + LEAD + 1) }), NOW)).toBeNull();
+    });
+
+    it('the two bands partition the line: no gap, no overlap, at any offset', () => {
+      const offsets = [-30 * HOUR, -HOUR, -1000, -1, 0, 1, 1000, HOUR, LEAD - 1, LEAD];
+      for (const offset of offsets) {
+        expect(bandsFor(new Date(NOW.getTime() + offset))).toHaveLength(1);
+      }
     });
   });
 

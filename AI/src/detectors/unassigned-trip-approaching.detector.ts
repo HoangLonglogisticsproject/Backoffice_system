@@ -56,22 +56,27 @@ export class UnassignedTripApproachingDetector implements Detector<TripFacts> {
    * a trip leaving in ninety minutes would never be looked at. The alert that
    * matters most would be the one that never fires.
    *
-   * So the scan walks `(now, now + lead]` first — the trips somebody can
-   * still do something about — and only then `(-inf, now]`. The predicate is
+   * So the scan walks `[now, now + lead]` first — the trips somebody can
+   * still do something about — and only then `(-inf, now)`. The predicate is
    * untouched; what changed is the order a bounded scan spends its budget in.
    *
-   * The bands are half-open and adjacent, so a pickup at exactly `now` falls
-   * in the overdue band and in only one of them: at `now` the pickup is DUE,
-   * not approaching.
+   * ★ `pickup_at == now` IS IN THE FIRST BAND. A trip due this very instant
+   * is the most urgent thing this detector can see, and putting it at the
+   * head of the overdue band would let a large backlog starve exactly the
+   * candidate the ordering exists to protect. So the cut at `now` is closed
+   * on the approaching side and open on the overdue one: the two bands
+   * partition the line exactly, every pickup is in one of them, none is in
+   * both, and no instant had to be nudged to say so.
    */
   candidateWindows(now: Date): CandidateWindow[] {
     return [
       {
         label: 'approaching',
         after: now,
+        afterInclusive: true,
         before: new Date(now.getTime() + this.settings.unassignedTripWarningLeadMs),
       },
-      { label: 'overdue', before: now },
+      { label: 'overdue', before: now, beforeInclusive: false },
     ];
   }
 

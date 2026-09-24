@@ -17,22 +17,33 @@ import type { AlertSignal } from '../alert/domain/alert';
  */
 
 /**
- * A band of the read model's anchor for Discovery to walk, in the backend's
- * terms: the half-open interval `(after, before]`.
+ * A band of the read model's anchor for Discovery to walk: an interval whose
+ * two bounds each carry their own inclusivity.
  *
  * ★ A DETECTOR MAY ASK FOR SEVERAL, IN PRIORITY ORDER, AND THAT IS SCAN
  * ORDERING RATHER THAN POLICY. The rule that decides whether a subject is a
  * problem does not change; what changes is which candidates a bounded scan
  * looks at FIRST. Without it, one band can consume the whole page budget
  * every run and another is never reached — a liveness bug, not a slow one.
+ *
+ * ★ THE DETECTOR DECIDES WHICH SIDE OF THE CUT THE BOUNDARY INSTANT IS ON,
+ * because that is a statement about urgency and urgency is the detector's
+ * subject. Adjacent bands must still partition exactly — no gap, no overlap
+ * — and the flags are what make both halves of that expressible. The
+ * alternative, moving a bound by a millisecond, encodes the decision as an
+ * epsilon nobody can read and the database does not necessarily share.
  */
 export interface CandidateWindow {
   /** A short name for the log line: `approaching`, `overdue`, `all`. */
   label: string;
-  /** Upper bound of the anchor, INCLUSIVE. */
+  /** Upper bound of the anchor. */
   before: Date;
-  /** Lower bound of the anchor, EXCLUSIVE. Absent means unbounded below. */
+  /** Is `before` itself in the band? Default `true`. */
+  beforeInclusive?: boolean;
+  /** Lower bound of the anchor. Absent means unbounded below. */
   after?: Date;
+  /** Is `after` itself in the band? Default `false`. */
+  afterInclusive?: boolean;
 }
 
 export interface Detector<Facts> {

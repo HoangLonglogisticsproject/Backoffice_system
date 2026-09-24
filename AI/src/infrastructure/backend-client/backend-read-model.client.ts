@@ -43,10 +43,14 @@ export class ReadModelError extends Error {
 }
 
 export interface PageRequest {
-  /** Upper bound of the anchor, inclusive. */
+  /** Upper bound of the anchor. */
   before: Date;
-  /** Lower bound, exclusive. The backend reads the pair as `(after, before]`. */
+  /** Is `before` itself in the range? The backend defaults it to `true`. */
+  beforeInclusive?: boolean;
+  /** Lower bound. Absent means unbounded below. */
   after?: Date;
+  /** Is `after` itself in the range? The backend defaults it to `false`. */
+  afterInclusive?: boolean;
   limit: number;
   cursor?: string | null;
 }
@@ -117,6 +121,11 @@ export class BackendReadModelClient {
       limit: String(request.limit),
     });
     if (request.after) query.set('after', request.after.toISOString());
+    // Sent only when the caller has an opinion, so the wire stays quiet for
+    // the ordinary `(after, before]` and the two flags are visible in a log
+    // exactly when they are what makes the request different.
+    if (request.beforeInclusive !== undefined) query.set('beforeInclusive', String(request.beforeInclusive));
+    if (request.afterInclusive !== undefined) query.set('afterInclusive', String(request.afterInclusive));
     if (request.cursor) query.set('cursor', request.cursor);
 
     const payload = await this.send(`${BASE_PATH}/${path}?${query.toString()}`, correlationId, { method: 'GET' });

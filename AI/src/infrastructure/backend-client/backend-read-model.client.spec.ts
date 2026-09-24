@@ -82,6 +82,26 @@ describe('BackendReadModelClient', () => {
       expect(page.nextCursor).toBe('c1');
     });
 
+    it('★ puts each bound’s inclusivity on the wire, and only when the caller set it', async () => {
+      let seenUrl = '';
+      stub(async (url) => {
+        seenUrl = url;
+        return respond({ items: [], nextCursor: null, hasMore: false });
+      });
+
+      await clientWith().unassignedTrips(
+        { before: BEFORE, after: BEFORE, afterInclusive: true, limit: 10 },
+        'cid-band',
+      );
+      expect(seenUrl).toContain('afterInclusive=true');
+      // Unsaid is not the same as `true`: the backend applies its own default,
+      // and sending one we did not mean would be us deciding for it.
+      expect(seenUrl).not.toContain('beforeInclusive=');
+
+      await clientWith().unassignedTrips({ before: BEFORE, beforeInclusive: false, limit: 10 }, 'cid-band');
+      expect(seenUrl).toContain('beforeInclusive=false');
+    });
+
     it('omits the cursor on a first page', async () => {
       let seenUrl = '';
       stub(async (url) => {

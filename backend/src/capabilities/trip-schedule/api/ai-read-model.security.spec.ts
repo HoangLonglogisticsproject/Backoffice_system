@@ -119,10 +119,63 @@ describe('AI read-model HTTP security', () => {
       await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${after}`)).expect(200);
       expect(readModel.unassignedTrips).toHaveBeenCalledWith({
         before: new Date(BEFORE),
+        beforeInclusive: undefined,
         after: new Date(after),
+        afterInclusive: undefined,
         limit: 50,
         cursor: undefined,
       });
+    });
+
+    it('carries each bound’s inclusivity, so the caller owns the instant at the join', async () => {
+      const after = '2026-09-24T06:00:00.000Z';
+      await authed(
+        request(app.getHttpServer()).get(
+          `${lists[0]}?before=${BEFORE}&after=${after}&afterInclusive=true&beforeInclusive=false`,
+        ),
+      ).expect(200);
+      expect(readModel.unassignedTrips).toHaveBeenCalledWith({
+        before: new Date(BEFORE),
+        beforeInclusive: false,
+        after: new Date(after),
+        afterInclusive: true,
+        limit: 50,
+        cursor: undefined,
+      });
+    });
+
+    it('leaves both flags undefined when the caller says nothing, so the default band is unchanged', async () => {
+      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}`)).expect(200);
+      expect(readModel.unassignedTrips).toHaveBeenCalledWith({
+        before: new Date(BEFORE),
+        beforeInclusive: undefined,
+        after: undefined,
+        afterInclusive: undefined,
+        limit: 50,
+        cursor: undefined,
+      });
+    });
+
+    it('refuses a flag that is not exactly true or false — no truthiness at a trust boundary', async () => {
+      const response = await authed(
+        request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&beforeInclusive=yes`),
+      ).expect(422);
+      expect(response.body.error.details).toHaveProperty('beforeInclusive');
+      expect(readModel.unassignedTrips).not.toHaveBeenCalled();
+    });
+
+    it('★ accepts the single-point band [t, t], and only when BOTH ends are closed', async () => {
+      // A caller asking for one exact instant is asking something answerable;
+      // the same bounds with either end open are asking for nothing at all.
+      await authed(
+        request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${BEFORE}&afterInclusive=true`),
+      ).expect(200);
+      await authed(
+        request(app.getHttpServer()).get(
+          `${lists[0]}?before=${BEFORE}&after=${BEFORE}&afterInclusive=true&beforeInclusive=false`,
+        ),
+      ).expect(422);
+      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${BEFORE}`)).expect(422);
     });
 
     it('refuses a band that could never contain anything', async () => {
@@ -142,6 +195,9 @@ describe('AI read-model HTTP security', () => {
       await authed(request(app.getHttpServer()).get(`${lists[1]}?before=${BEFORE}&limit=7&cursor=abc`)).expect(200);
       expect(readModel.unstartedAssignments).toHaveBeenCalledWith({
         before: new Date(BEFORE),
+        beforeInclusive: undefined,
+        after: undefined,
+        afterInclusive: undefined,
         limit: 7,
         cursor: 'abc',
       });
@@ -151,6 +207,9 @@ describe('AI read-model HTTP security', () => {
       await authed(request(app.getHttpServer()).get(`${lists[2]}?before=${BEFORE}&cursor=`)).expect(200);
       expect(readModel.pendingCompletions).toHaveBeenCalledWith({
         before: new Date(BEFORE),
+        beforeInclusive: undefined,
+        after: undefined,
+        afterInclusive: undefined,
         limit: 50,
         cursor: undefined,
       });

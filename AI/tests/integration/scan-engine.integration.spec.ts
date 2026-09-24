@@ -105,12 +105,18 @@ describeIntegration('Scan engine against real PostgreSQL', () => {
    * and would be lying about what the real read model does, which filters on
    * `(after, before]` in SQL.
    */
+  /** Band membership exactly as the read model's SQL computes it. */
+  const inBand = (window: CandidateWindow, trip: TripFacts): boolean => {
+    const at = trip.pickupAt!.getTime();
+    const underUpper = window.beforeInclusive === false ? at < window.before.getTime() : at <= window.before.getTime();
+    if (!underUpper) return false;
+    if (window.after === undefined) return true;
+    return window.afterInclusive === true ? at >= window.after.getTime() : at > window.after.getTime();
+  };
+
   const onePage = (items: TripFacts[]) =>
     jest.fn(async (window: CandidateWindow): Promise<FactsPage<TripFacts>> => ({
-      items: items.filter((trip) => {
-        const at = trip.pickupAt!.getTime();
-        return at <= window.before.getTime() && (window.after === undefined || at > window.after.getTime());
-      }),
+      items: items.filter((trip) => inBand(window, trip)),
       nextCursor: null,
       hasMore: false,
     }));
@@ -143,6 +149,44 @@ describeIntegration('Scan engine against real PostgreSQL', () => {
   };
 
   describe('discovery', () => {
+    it('★ E. an exact-now pickup survives an overdue backlog deeper than the page budget', async () => {
+      // The starvation case with a REAL database behind it. The overdue band
+      // never runs out — as a genuine backlog does not — and the one trip
+      // whose pickup is this very instant sits in the approaching band. If
+      // the cut at `now` fell the other way, this trip would be at the head
+      // of the backlog and the budget would be gone before its page.
+      let backlog = 0;
+      const fetch = jest.fn(async (window: CandidateWindow): Promise<FactsPage<TripFacts>> => {
+        if (window.label === 'approaching') {
+          return { items: [problem(TRIP_A, 0)], nextCursor: null, hasMore: false };
+        }
+        backlog += 1;
+        // A distinct, always-positive overdue trip per page, and always more.
+        const id = `aaaaaaaa-0000-4000-8000-${String(backlog).padStart(12, '0')}`;
+        return { items: [problem(id, -60 * 24)], nextCursor: `page-${backlog}`, hasMore: true };
+      });
+
+      const report = await engine.discover(detector, fetch, 'cid-exact-now');
+
+      // The urgent trip was seen, and alerted, in THIS run.
+      const urgent = await alertRow(TRIP_A);
+      expect(urgent).toMatchObject({ status: 'open', occurrence_count: 1, severity: 'warning' });
+      // The approaching band was asked for first, and exactly once.
+      expect(fetch.mock.calls[0]![0].label).toBe('approaching');
+      expect(fetch.mock.calls.filter((call) => call[0].label === 'approaching')).toHaveLength(1);
+
+      // One observation, not one per band or one per page.
+      const { rows } = await pool.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM alert_scan_observations WHERE alert_id = $1',
+        [urgent!.id],
+      );
+      expect(rows[0]!.n).toBe(1);
+
+      // The backlog still remains, so the run is honest about being partial.
+      expect(report.outcome).toBe('partial');
+      expect(report.error).toContain('overdue');
+    });
+
     it('creates an alert for a positive, with a birth history row and one observation', async () => {
       const report = await engine.discover(detector, onePage([problem(TRIP_A)]), 'cid-1');
 
