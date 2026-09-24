@@ -123,7 +123,9 @@ Everything else is **not decided, and therefore has no default**. Phase 1b makes
 | `SCAN_INTERVAL` | the scheduler does not arm; the Alert API still serves |
 | the backend URL or the AI→backend token | the scheduler does not arm |
 
-Durations are written with a unit (`2h`, `30m`) and parsed at boot: a bare number is ambiguous by a factor of a thousand and is refused.
+Durations are written with a unit (`2h`, `30m`) and parsed at boot: a bare number is ambiguous by a factor of a thousand and is refused. An **empty** value is read as absent, not as malformed — a compose file written `SCAN_INTERVAL: ${SCAN_INTERVAL}` renders the empty string when the host variable is not exported, and refusing to boot on it would take the Alert API down over a variable that only governs scanning. A value that is present but is not a duration is still a boot error.
+
+`SCAN_INTERVAL` additionally has a floor of **1 s**. This is a guard rail, not a cadence: one tick is three detectors times two phases, each taking the advisory lock and making backend requests bounded by `BACKEND_TIMEOUT`, so an interval below a second issues ticks faster than a single round trip can finish and the scheduler degenerates into the hot loop the unit requirement exists to prevent. **The operational scan cadence remains undecided and has no default anywhere.**
 
 ### 2.12a Scheduling and exclusion (Phase 1b)
 
@@ -156,6 +158,12 @@ This is scan ORDERING, not policy. The predicate is unchanged, overdue trips rem
 candidates for ever, and no retention window or cutoff is invented. A band left unwalked
 because the budget ran out is reported as `partial`, naming the band.
 
+### 2.12c The internal namespace is refused by the edge, in any case
+
+`/internal/v1/*` is what the backend and the AI Platform say to each other over the compose network. On every public host it must be unreachable *before* authentication is consulted — the service token is the second line, not the first.
+
+nginx prefix matching is case-SENSITIVE, so `location ^~ /api/internal/` alone let `/api/Internal/v1/...` fall through to the general `/api/` proxy, whose trailing `proxy_pass .../` strips `/api/` and hands `/Internal/v1/...` to Express, which matches routes case-INSENSITIVELY by default. Both public configs therefore also carry `location ~* ^/api/internal(/|$)`, which beats a plain prefix location in nginx's matching order. `.github/scripts/check-nginx-internal-block.sh` runs the real configs in a container and proves it with requests rather than with reasoning about that order.
+
 ### 2.13 What is deliberately absent
 
 No queue or broker (Redis, BullMQ, Kafka, RabbitMQ). No cron package. No chatbot, no conversational surface. No RAG, LLM SDK, embedding provider, vector index or pgvector in Phase 1 — pgvector is the *preferred Phase-2 candidate*, not a dependency, and the PostgreSQL image does not change until the Phase-2 gate (image support, provisioning, backup behaviour, resource usage, a real approved corpus) is passed. Engineering documents (ADRs, READMEs, migrations) are never ingested into production operational retrieval.
@@ -168,7 +176,7 @@ No queue or broker (Redis, BullMQ, Kafka, RabbitMQ). No cron package. No chatbot
 - The backend gains an `infrastructure/service-auth` module with no consumer until Phase 1b/1c — the boundary exists before the first route that crosses it.
 - `affected.sh` gains a third classification; a change under `/AI` runs the `ai` job and deploys nothing.
 - SonarCloud duplication (`.sonarcloud.properties`): the copied infrastructure files — migration runner, pool adapter, keyset cursor, env schema, health probe, integration-test harness — are excluded from copy-paste detection only, because they duplicate the backend's on purpose to keep the boundary. Nothing under `AI/src/core` is excluded and no rule is disabled. Repeated literals inside PostgreSQL `CHECK (… IN (…))` constraints are accepted as canonical values of a declarative constraint, not extracted.
-- Phase 1b adds one table (`ai.alert_scan_observations` was Phase 1a; nothing new in 1b) and no migration at all: the scan engine writes only through the Phase 1a aggregate.
+- Phase 1b adds **no** table and **no** migration. The alert tables, including `ai.alert_scan_observations`, all came with Phase 1a; the scan engine writes only through that existing aggregate.
 - Retention needs `DELETE`, so `ai.*` carries **no** deny-delete trigger (a deviation from the backend's history tables); the guarantee is GRANT plus the A7 boundary rule.
 
 ## 4. Alternatives rejected

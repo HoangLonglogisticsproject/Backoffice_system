@@ -1,6 +1,24 @@
 import { z } from 'zod';
 import { SCHEMA_NAME_PATTERN } from '../common/database/schema-name';
-import { duration } from './duration';
+import { durationOr, optionalDuration } from './duration';
+
+/**
+ * The floor under `SCAN_INTERVAL`, in milliseconds.
+ *
+ * ★ THIS IS NOT THE SCAN CADENCE, AND IT IS NOT A POLICY VALUE. How often the
+ * engine should scan in production is still TBD and deliberately has no
+ * default anywhere in this codebase. This is the point below which a
+ * configuration is not a cadence at all but a hot loop: one tick is three
+ * detectors times two phases, each taking an advisory lock and making
+ * backend requests bounded by `BACKEND_TIMEOUT` (10s by default), so an
+ * interval under a second issues ticks faster than a single network round
+ * trip can finish. `inFlight` would skip most of them and the rest would run
+ * back to back — which is exactly the failure `duration.ts` refuses bare
+ * numbers to avoid, arriving instead through `SCAN_INTERVAL=0s`.
+ *
+ * One second, therefore: the smallest interval that is still an interval.
+ */
+export const MIN_SCAN_INTERVAL_MS = 1_000;
 
 /**
  * The deployment's environment, validated once at boot.
@@ -140,39 +158,48 @@ export const envSchema = z.object({
     }),
 
   /** How long one read-model request may take before it is a failed scan. */
-  BACKEND_TIMEOUT: duration('BACKEND_TIMEOUT').default('10s'),
+  BACKEND_TIMEOUT: durationOr('BACKEND_TIMEOUT', '10s'),
 
   /**
    * ★ NOT APPROVED, SO NOT DEFAULTED. How often the engine scans is a
    * business decision nobody has taken. Unset = the scheduler does not arm
    * and says so at boot; the Alert API still serves.
+   *
+   * The floor below is a GUARD RAIL, NOT A CADENCE — see `MIN_SCAN_INTERVAL_MS`.
    */
-  SCAN_INTERVAL: duration('SCAN_INTERVAL').optional(),
+  SCAN_INTERVAL: optionalDuration('SCAN_INTERVAL').refine(
+    (milliseconds) => milliseconds === undefined || (milliseconds as number) >= MIN_SCAN_INTERVAL_MS,
+    {
+      message:
+        `SCAN_INTERVAL must be at least ${MIN_SCAN_INTERVAL_MS}ms — this is a technical floor that ` +
+        'prevents a scheduler hot loop, NOT the operational scan cadence, which is still unapproved',
+    },
+  ),
 
   /**
    * How long after boot the first tick fires. Defaulted to `0s` because that
    * is the ABSENCE of a delay rather than a chosen one — the lock makes an
    * immediate tick safe even while another replica is mid-deploy.
    */
-  SCAN_INITIAL_DELAY: duration('SCAN_INITIAL_DELAY').default('0s'),
+  SCAN_INITIAL_DELAY: durationOr('SCAN_INITIAL_DELAY', '0s'),
 
   /** D1 — CEO-approved (2026-09-19): two hours before pickup. */
-  DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD: duration('DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD').default('2h'),
+  DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD: durationOr('DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD', '2h'),
   /** D1 HIGH band — TBD. Unset = this detector never raises `high`. */
-  DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD: duration('DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD').optional(),
+  DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD: optionalDuration('DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD'),
 
   /**
    * D2 — NOT APPROVED. How long after pickup an unstarted assignment is a
    * problem. Unset = D2 is DISABLED, which is not the same as a zero grace.
    */
-  DETECTOR_STALE_START_GRACE: duration('DETECTOR_STALE_START_GRACE').optional(),
+  DETECTOR_STALE_START_GRACE: optionalDuration('DETECTOR_STALE_START_GRACE'),
   /** D2 HIGH band — TBD. */
-  DETECTOR_STALE_START_HIGH_AFTER: duration('DETECTOR_STALE_START_HIGH_AFTER').optional(),
+  DETECTOR_STALE_START_HIGH_AFTER: optionalDuration('DETECTOR_STALE_START_HIGH_AFTER'),
 
   /** D3 — CEO-approved (2026-09-19): twelve hours pending. */
-  DETECTOR_COMPLETION_REVIEW_WARNING_AFTER: duration('DETECTOR_COMPLETION_REVIEW_WARNING_AFTER').default('12h'),
+  DETECTOR_COMPLETION_REVIEW_WARNING_AFTER: durationOr('DETECTOR_COMPLETION_REVIEW_WARNING_AFTER', '12h'),
   /** D3 HIGH band — TBD. */
-  DETECTOR_COMPLETION_REVIEW_HIGH_AFTER: duration('DETECTOR_COMPLETION_REVIEW_HIGH_AFTER').optional(),
+  DETECTOR_COMPLETION_REVIEW_HIGH_AFTER: optionalDuration('DETECTOR_COMPLETION_REVIEW_HIGH_AFTER'),
 
   /**
    * Technical sizes, not policy: how big a read-model page is and how many

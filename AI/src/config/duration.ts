@@ -46,5 +46,26 @@ export const duration = (name: string) =>
     return milliseconds;
   });
 
+/**
+ * An environment variable that arrived empty is UNSET, not malformed.
+ *
+ * ★ THIS IS A REAL DEPLOYMENT SHAPE, NOT A CONVENIENCE. A compose file
+ * written `SCAN_INTERVAL: ${SCAN_INTERVAL}` renders the empty string when the
+ * host variable is not exported, and `docker compose` does not distinguish
+ * that from a deliberate empty value. Without this the service refuses to
+ * boot on a variable whose documented meaning when absent is "not armed" —
+ * and the Alert API, which has nothing to do with scanning, goes down with
+ * it. A value that is present but not a duration is still an error.
+ */
+const blankIsUnset = (value: unknown): unknown =>
+  typeof value === 'string' && value.trim().length === 0 ? undefined : value;
+
+/** `duration()`, where empty means the variable was never set. */
+export const optionalDuration = (name: string) => z.preprocess(blankIsUnset, duration(name).optional());
+
+/** `duration()`, where empty means "use the approved default". */
+export const durationOr = (name: string, fallback: string) =>
+  z.preprocess(blankIsUnset, duration(name).default(fallback));
+
 /** For log lines and evidence, where seconds read better than milliseconds. */
 export const toSeconds = (milliseconds: number): number => Math.round(milliseconds / 1_000);
