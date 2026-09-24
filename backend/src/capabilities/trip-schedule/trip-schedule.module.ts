@@ -3,6 +3,10 @@ import { AuthorizationModule } from '../../core/authorization/authorization.modu
 import { IdentityModule } from '../../core/identity/identity.module';
 import { UsersModule } from '../../core/users/users.module';
 import { NotificationModule } from '../notification/notification.module';
+import { ServiceAuthModule } from '../../infrastructure/service-auth/service-auth.module';
+import { AiReadModelController } from './api/ai-read-model.controller';
+import { AiReadModelService } from './application/ai-read-model.service';
+import { AiReadModelRepository } from './persistence/ai-read-model.repository';
 import { ActiveAssignmentGuard } from './api/active-assignment.guard';
 import { DriverPortalController } from './api/driver-portal.controller';
 import { TripCatalogueController } from './api/trip-catalogue.controller';
@@ -51,13 +55,16 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
   // `UsersModule` for driver eligibility — is this account a live driver —
   // and `NotificationModule` because an assignment is something the driver
   // has to be told about, inside the transaction that made it.
-  imports: [AuthorizationModule, IdentityModule, UsersModule, NotificationModule],
+  // `ServiceAuthModule` for the one controller a MACHINE calls: the AI
+  // Platform's read models (ADR-0007). It carries no human guard at all.
+  imports: [AuthorizationModule, IdentityModule, UsersModule, NotificationModule, ServiceAuthModule],
   controllers: [
     TripScheduleController,
     TripCatalogueController,
     TripCostController,
     DriverPortalController,
     TripCompletionController,
+    AiReadModelController,
   ],
   providers: [
     TripScheduleService,
@@ -67,6 +74,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     TripCompletionService,
     DriverPortalService,
     OperationalBoardService,
+    AiReadModelService,
     ActiveAssignmentGuard,
     TripScheduleRepository,
     TripVehicleRepository,
@@ -81,6 +89,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     CompletionRequestRepository,
     DriverTripReadModelRepository,
     OperationalBoardRepository,
+    AiReadModelRepository,
   ],
   exports: [
     TripScheduleService,

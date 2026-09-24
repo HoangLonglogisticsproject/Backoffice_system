@@ -282,7 +282,7 @@ jobs:
       # is the shape they should all take.
       - name: Assert no integration test was skipped
         working-directory: backend
-        run: node ../.github/scripts/assert-tests-ran.mjs jest-integration-results.json 250 "backend integration"
+        run: node ../.github/scripts/assert-tests-ran.mjs jest-integration-results.json 700 "backend integration"
 
   # -------------------------------------------------------------------- ai --
   #
@@ -385,7 +385,7 @@ jobs:
       # spec file is wide, so losing a file to a discovery mistake fails here.
       - name: Assert no test was skipped
         working-directory: AI
-        run: node ../.github/scripts/assert-tests-ran.mjs jest-results.json 120 "ai"
+        run: node ../.github/scripts/assert-tests-ran.mjs jest-results.json 240 "ai"
 
       # Real PostgreSQL: migrations, dedupe, transactions, the internal API,
       # and the ROLE boundary — the privilege suite creates and drops the
@@ -398,7 +398,7 @@ jobs:
 
       - name: Assert no integration test was skipped
         working-directory: AI
-        run: node ../.github/scripts/assert-tests-ran.mjs jest-integration-results.json 50 "ai integration"
+        run: node ../.github/scripts/assert-tests-ran.mjs jest-integration-results.json 95 "ai integration"
 
   # --------------------------------------------------------------- frontend --
   frontend:

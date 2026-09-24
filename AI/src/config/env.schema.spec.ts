@@ -1,4 +1,4 @@
-import { validateEnv } from './env.schema';
+import { MIN_SCAN_INTERVAL_MS, validateEnv } from './env.schema';
 
 /**
  * Configuration must fail LOUDLY. A service that boots pointing at the wrong
@@ -47,6 +47,76 @@ describe('validateEnv (AI)', () => {
       expect(() => validateEnv({ ...valid, SERVICE_TOKEN_BACKEND_TO_AI: leaked })).toThrow(
         expect.not.objectContaining({ message: expect.stringContaining(leaked) }),
       );
+    });
+  });
+
+  describe('SCAN_INTERVAL — a technical floor, and an empty value that means unset', () => {
+    it('is optional: absent leaves the scheduler unarmed', () => {
+      expect(validateEnv({ ...valid, SCAN_INTERVAL: undefined }).SCAN_INTERVAL).toBeUndefined();
+    });
+
+    it('★ an EMPTY value means unset, not malformed', () => {
+      // `SCAN_INTERVAL: ${SCAN_INTERVAL}` in a compose file renders exactly
+      // this when the host variable is not exported. Refusing to boot on it
+      // would take the Alert API down over a variable that only governs
+      // scanning.
+      expect(validateEnv({ ...valid, SCAN_INTERVAL: '' }).SCAN_INTERVAL).toBeUndefined();
+    });
+
+    it('★ a WHITESPACE-ONLY value means unset too', () => {
+      expect(validateEnv({ ...valid, SCAN_INTERVAL: '   ' }).SCAN_INTERVAL).toBeUndefined();
+    });
+
+    it.each(['0s', '1ms', '999ms'])('refuses %s — below the technical floor', (value) => {
+      expect(() => validateEnv({ ...valid, SCAN_INTERVAL: value })).toThrow(/SCAN_INTERVAL must be at least/);
+    });
+
+    it('says the floor is a guard rail, not the cadence', () => {
+      expect(() => validateEnv({ ...valid, SCAN_INTERVAL: '0s' })).toThrow(/NOT the operational scan cadence/);
+    });
+
+    it(`accepts EXACTLY the floor (${MIN_SCAN_INTERVAL_MS}ms)`, () => {
+      expect(validateEnv({ ...valid, SCAN_INTERVAL: '1000ms' }).SCAN_INTERVAL).toBe(MIN_SCAN_INTERVAL_MS);
+      expect(validateEnv({ ...valid, SCAN_INTERVAL: '1s' }).SCAN_INTERVAL).toBe(MIN_SCAN_INTERVAL_MS);
+    });
+
+    it('accepts an ordinary larger interval', () => {
+      expect(validateEnv({ ...valid, SCAN_INTERVAL: '5m' }).SCAN_INTERVAL).toBe(300_000);
+    });
+
+    it.each(['300', 'soon', '5 m', '-1s', '5x'])('refuses %j — present but not a duration', (value) => {
+      // Malformed is NOT normalised away: only an empty value means unset.
+      expect(() => validateEnv({ ...valid, SCAN_INTERVAL: value })).toThrow(/SCAN_INTERVAL/);
+    });
+
+    it('★ no production cadence is defaulted anywhere', () => {
+      // The floor exists so a misconfiguration cannot hot-loop. It is not a
+      // decision about how often to scan, and nothing supplies one.
+      expect(validateEnv(valid).SCAN_INTERVAL).toBeUndefined();
+    });
+  });
+
+  describe('the other optional durations treat empty the same way', () => {
+    it.each([
+      'DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD',
+      'DETECTOR_STALE_START_GRACE',
+      'DETECTOR_STALE_START_HIGH_AFTER',
+      'DETECTOR_COMPLETION_REVIEW_HIGH_AFTER',
+    ])('%s: empty means unset, so the threshold stays TBD', (name) => {
+      expect(validateEnv({ ...valid, [name]: '' })[name as 'DETECTOR_STALE_START_GRACE']).toBeUndefined();
+      expect(() => validateEnv({ ...valid, [name]: 'nonsense' })).toThrow(new RegExp(name));
+    });
+  });
+
+  describe('a defaulted duration falls back to its approved value when empty', () => {
+    it.each([
+      ['DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD', 2 * 3_600_000],
+      ['DETECTOR_COMPLETION_REVIEW_WARNING_AFTER', 12 * 3_600_000],
+      ['BACKEND_TIMEOUT', 10_000],
+      ['SCAN_INITIAL_DELAY', 0],
+    ])('%s falls back to %i ms', (name, expected) => {
+      const env = validateEnv({ ...valid, [name]: '' }) as unknown as Record<string, number>;
+      expect(env[name]).toBe(expected);
     });
   });
 
