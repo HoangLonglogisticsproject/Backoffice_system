@@ -53,20 +53,28 @@ const HIDDEN: Geometry = { left: 0, width: 0, scrollWidth: 0, visible: false };
 const same = (a: Geometry, b: Geometry): boolean =>
   a.left === b.left && a.width === b.width && a.scrollWidth === b.scrollWidth && a.visible === b.visible;
 
-export function SyncedHorizontalScrollbar({ targetRef, className }: SyncedHorizontalScrollbarProps) {
+export function SyncedHorizontalScrollbar({
+  targetRef,
+  className,
+}: Readonly<SyncedHorizontalScrollbarProps>) {
   const barRef = React.useRef<HTMLDivElement>(null);
   const [geometry, setGeometry] = React.useState<Geometry>(HIDDEN);
 
   /**
-   * Which side is currently driving the other.
+   * ★ THE LOOP IS BROKEN BY POSITION, NOT BY TIMING. Assigning `scrollLeft`
+   * makes the other box fire its own `scroll` event, so the two would hand
+   * the value back and forth for ever. The guard is simply that neither side
+   * writes when the two already agree: the echo arrives, finds them equal,
+   * and stops there.
    *
-   * Setting `scrollLeft` fires a `scroll` event, so without this the two
-   * boxes hand the value back and forth. The flag is cleared on the next
-   * frame rather than immediately because the event is dispatched
-   * asynchronously — clearing it on the same tick would be clearing it before
-   * the echo arrives.
+   * A "I am currently syncing" flag cleared on the next frame was the first
+   * version and is worse, because a scroll event can arrive after that frame.
+   * A stale echo would then be free to write the OLD position back over a
+   * newer one — interrupting a drag or momentum scroll mid-flight — and a
+   * flag still set when a real scroll arrived would drop it. Comparing
+   * positions has neither failure: by the time a late echo is handled, both
+   * boxes are already at the newer position, so it does nothing.
    */
-  const echo = React.useRef(false);
 
   const measure = React.useCallback(() => {
     const target = targetRef.current;
@@ -131,14 +139,12 @@ export function SyncedHorizontalScrollbar({ targetRef, className }: SyncedHorizo
     if (!target) return;
 
     const onTargetScroll = () => {
-      if (echo.current) return;
       const bar = barRef.current;
-      if (!bar || bar.scrollLeft === target.scrollLeft) return;
-      echo.current = true;
+      // The sub-pixel tolerance matters: browsers report fractional
+      // `scrollLeft` at some zoom levels but round on assignment, so exact
+      // equality would see a difference that is not one and write back.
+      if (!bar || Math.abs(bar.scrollLeft - target.scrollLeft) < 1) return;
       bar.scrollLeft = target.scrollLeft;
-      requestAnimationFrame(() => {
-        echo.current = false;
-      });
     };
 
     target.addEventListener('scroll', onTargetScroll, { passive: true });
@@ -147,15 +153,10 @@ export function SyncedHorizontalScrollbar({ targetRef, className }: SyncedHorizo
 
   // Bar → target.
   const onBarScroll = React.useCallback(() => {
-    if (echo.current) return;
     const target = targetRef.current;
     const bar = barRef.current;
-    if (!target || !bar || target.scrollLeft === bar.scrollLeft) return;
-    echo.current = true;
+    if (!target || !bar || Math.abs(target.scrollLeft - bar.scrollLeft) < 1) return;
     target.scrollLeft = bar.scrollLeft;
-    requestAnimationFrame(() => {
-      echo.current = false;
-    });
   }, [targetRef]);
 
   // Appearing mid-scroll must not jump the table back to column one.
@@ -178,7 +179,14 @@ export function SyncedHorizontalScrollbar({ targetRef, className }: SyncedHorizo
       // duplicate scroll region would add noise, not reach.
       aria-hidden="true"
       className={cn(
-        'fixed bottom-0 z-20 overflow-x-auto overflow-y-hidden',
+        // ★ AN EXPLICIT HEIGHT, BECAUSE THE SPACER CANNOT PROVIDE ONE. Where
+        // the platform draws OVERLAY scrollbars (macOS by default) the bar
+        // adds no layout height and stays hidden until something scrolls, so
+        // a box sized by its content would be about two pixels tall: invisible
+        // and impossible to grab. 17px is the tallest classic scrollbar
+        // (Windows) so neither platform is clipped, and on the overlay ones it
+        // is the strip that has to be hovered for the thumb to appear.
+        'fixed bottom-0 z-20 h-[17px] overflow-x-auto overflow-y-hidden',
         'border-t border-gray-200 bg-white/95 shadow-[0_-1px_3px_rgba(0,0,0,0.06)]',
         className,
       )}
@@ -187,6 +195,7 @@ export function SyncedHorizontalScrollbar({ targetRef, className }: SyncedHorizo
       onScroll={onBarScroll}
       tabIndex={-1}
     >
+      {/* Width is the whole point; the height only has to be non-zero. */}
       <div style={{ width: geometry.scrollWidth, height: 1 }} />
     </div>
   );

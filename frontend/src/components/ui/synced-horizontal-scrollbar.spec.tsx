@@ -162,6 +162,48 @@ describe('SyncedHorizontalScrollbar', () => {
       expect(floating.scrollLeft).toBe(500);
     });
 
+    it('★ a LATE echo cannot drag the table back to where it was', () => {
+      // The ordering a frame-timed guard gets wrong: the user keeps moving
+      // while the first echo is still in flight. When it finally arrives,
+      // both boxes are already further along, and it must do nothing.
+      const target = makeTarget();
+      mount(target);
+      const floating = bar() as HTMLElement;
+
+      floating.scrollLeft = 300;
+      act(() => {
+        floating.dispatchEvent(new Event('scroll'));
+      });
+      // The drag continues before the browser delivers the echo for 300.
+      floating.scrollLeft = 700;
+      act(() => {
+        floating.dispatchEvent(new Event('scroll'));
+        // ...and only now does the stale one land.
+        target.dispatchEvent(new Event('scroll'));
+      });
+
+      expect(target.scrollLeft).toBe(700);
+      expect(floating.scrollLeft).toBe(700);
+    });
+
+    it('ignores a sub-pixel difference, which zoom levels produce and assignment rounds away', () => {
+      const target = makeTarget();
+      mount(target);
+      const floating = bar() as HTMLElement;
+
+      floating.scrollLeft = 400;
+      act(() => {
+        floating.dispatchEvent(new Event('scroll'));
+      });
+      target.scrollLeft = 400.4;
+      act(() => {
+        target.dispatchEvent(new Event('scroll'));
+      });
+
+      // Left where the user put it, not nudged by a rounding artefact.
+      expect(floating.scrollLeft).toBe(400);
+    });
+
     it('adopts the table’s current position when it appears, instead of jumping to column one', () => {
       const target = makeTarget();
       target.scrollLeft = 900;

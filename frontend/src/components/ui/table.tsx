@@ -16,7 +16,7 @@ interface TableProps extends React.ComponentProps<"table"> {
   stickyScrollbar?: boolean
 }
 
-function Table({ className, stickyScrollbar = false, ...props }: TableProps) {
+function Table({ className, stickyScrollbar = false, ...props }: Readonly<TableProps>) {
   // The scroll container is this div, not the table: `overflow-x` lives here,
   // so this is the element whose `scrollLeft` the floating bar drives.
   const containerRef = React.useRef<HTMLDivElement>(null)
