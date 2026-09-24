@@ -1,7 +1,7 @@
 # Backend ↔ AI internal contracts
 
 **Loại:** REFERENCE · **Trạng thái:** đang áp dụng cho Phase 1a và 1b (read models, scan engine, 3 detector).
-**Nguồn quyết định:** [ADR-0007](../architecture/adr-0007-ai-platform-boundary.md).
+**Nguồn quyết định:** [ADR-0007](../architecture/adr-0007-ai-platform-boundary.md) (ranh giới) · [ADR-0008](../architecture/adr-0008-operational-alert-engine.md) (alert engine Phase 1b).
 
 Hợp đồng duy nhất giữa `/backend` và `/AI`. Hai bên không chia sẻ source; mọi kiểu dữ liệu được khai báo hai lần và mỗi bên có spec pin đúng hình dạng này.
 

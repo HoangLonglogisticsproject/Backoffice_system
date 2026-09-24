@@ -1,6 +1,6 @@
 # ADR-0007 — The AI Platform is a separate bounded application at `/AI`; the Backend remains the operational source of truth
 
-**Status:** **ACCEPTED** — Phase 1a implemented (foundation), Phase 1b implemented (read models, scan engine, three deterministic detectors). Phases 1c/2/3 build on it without reopening it.
+**Status:** **ACCEPTED** — Phase 1a implemented (foundation). Phases 1b/1c/2/3 build on it without reopening it.
 
 **Date:** 2026-09-19 · **Decided by:** CEO (business rules, decisions A–P of the Final Architecture v1), engineering (shape).
 
@@ -88,22 +88,6 @@ The partial unique index `uq_alert_live_dedupe ON alerts (dedupe_key) WHERE stat
 
 Discovery scans candidate windows, produces positive signals and upserts by dedupe key. Resolution enumerates live alerts, re-fetches the canonical subject state by id, evaluates the current condition and resolves **only when that state was successfully verified**. A failed, partial or malformed scan never means a condition disappeared. `ai.scan_runs` carries the outcome (`running | succeeded | partial | failed | abandoned`) that this rests on. Phase 1a ships the table; Phase 1b ships the engine.
 
-**Phase 1b implements both halves.** `ScanEngineService.discover` walks the candidate window and upserts positives; it never resolves. `ScanEngineService.resolve` enumerates the detector's live alerts (open, acknowledged AND dismissed), looks their subjects up **by id**, re-evaluates the same predicate, and closes only what the returned facts show to be clear. A timeout, a 5xx, a body that does not match the contract, a page it could not finish, or a subject the backend did not return all leave every alert exactly where it was — and the run is marked `partial` or `failed`, which `resolveBySystem` independently refuses to resolve against.
-
-**`scan_runs.outcome` is a verdict on VERIFICATION, not on mutation.** The run is
-closed as `succeeded` before any alert is resolved, because `resolveBySystem` refuses a
-run that is still `running`; and a resolution that fails afterwards does NOT downgrade
-it, because an alert that is already resolved would then appear to have been resolved by
-a partial scan. `alerts.resolved_scan_run_id` is the source of truth for what a run
-closed; `scan_runs.resolved` is an execution metric written after `finished_at` and may
-under-count if the process dies mid-pass. Three crash windows are pinned by test: crash
-before the first resolve (nothing corrupt, next scan converges), crash between two
-resolves (the first stays resolved and is not re-resolved, no duplicate history, no
-reopen), and a mutation whose history write fails (rolled back, alert stays live, run
-stays succeeded).
-
-**One predicate, not two.** A detector exposes a single `evaluate(facts, now)`; Discovery asks it about candidates and Resolution asks it about existing subjects. Two predicates would drift, and the day they disagreed an alert would either be raised forever or closed while its condition held.
-
 **The persistence layer holds the invariant, not the engine's discipline.** `AlertService.resolveBySystem` requires a non-null `scanRunId` and, inside the same transaction as the update, checks that the run exists, has `phase = 'resolution'`, `outcome = 'succeeded'`, and `detector_code` equal to the alert's — then that the alert admits a system resolution. Any failure leaves the alert and its history untouched. The system actor is refused at the user transition door, so this is the only path to `system_cleared`. There is no HTTP route for it.
 
 ### 2.11 Backend read models supply FACTS; the AI owns ALERT POLICY
@@ -112,57 +96,7 @@ The backend's internal read-model endpoints (Phase 1b) return **canonical operat
 
 ### 2.12 Configuration
 
-Thresholds and severity bands are configuration injected into detectors, never constants inside them. Approved values: Detector 1 lead time **2 h**; Detector 3 warning after **12 h** — these are the defaults, overridable per environment.
-
-Everything else is **not decided, and therefore has no default**. Phase 1b makes each absence explicit rather than guessing:
-
-| Absent | Behaviour |
-|---|---|
-| a detector's HIGH band | the detector emits `warning` and never `high` |
-| **Detector 2's grace** | **the detector is DISABLED**, and says so at boot — a zero grace would alert on every assignment the moment its pickup passed, which is a business decision nobody took |
-| `SCAN_INTERVAL` | the scheduler does not arm; the Alert API still serves |
-| the backend URL or the AI→backend token | the scheduler does not arm |
-
-Durations are written with a unit (`2h`, `30m`) and parsed at boot: a bare number is ambiguous by a factor of a thousand and is refused. An **empty** value is read as absent, not as malformed — a compose file written `SCAN_INTERVAL: ${SCAN_INTERVAL}` renders the empty string when the host variable is not exported, and refusing to boot on it would take the Alert API down over a variable that only governs scanning. A value that is present but is not a duration is still a boot error.
-
-`SCAN_INTERVAL` additionally has a floor of **1 s**. This is a guard rail, not a cadence: one tick is three detectors times two phases, each taking the advisory lock and making backend requests bounded by `BACKEND_TIMEOUT`, so an interval below a second issues ticks faster than a single round trip can finish and the scheduler degenerates into the hot loop the unit requirement exists to prevent. **The operational scan cadence remains undecided and has no default anywhere.**
-
-### 2.12a Scheduling and exclusion (Phase 1b)
-
-An in-process interval timer, not a job runner: there is one recurring task per detector and nothing to enqueue, retry or route, so a broker would add a service to operate in exchange for nothing. What a queue would have provided — exactly one worker — comes from `pg_try_advisory_lock(771053318, key(detectorCode, phase))` on a dedicated connection, held outside any transaction for the length of the scan and released in `finally`. `try`, not `wait`: a tick that cannot take the lock has nothing to do. A worker that dies releases the lock with its session, and a connection that dies mid-scan is detected (the client carries its own `error` listener) and destroyed rather than returned to the pool.
-
-This is deliberately NOT "we only run one container". Two replicas during a rolling deploy is the normal case; the guarantee is a property of the database, not of the topology.
-
-### 2.12b Candidate bands, and the discovery page cap
-
-Discovery stops after 100 pages and reports `partial` rather than claiming a complete
-scan. With a single ascending walk that cap was a **liveness bug**, not merely a slow
-path: overdue trips accumulate at the head of the order, so a large enough backlog would
-consume the whole budget on every run and a trip leaving in ninety minutes would never be
-evaluated — the alert that matters most would be the one that never fires.
-
-A detector therefore returns candidate **bands** in priority order, and Discovery walks
-them under one shared budget. D1 asks for `[now, now + lead]` first and `(-∞, now)`
-second. The cut at `now` is **closed on the approaching side**: a pickup due this very
-instant is the most urgent candidate the detector can see, and leaving it at the head of
-the overdue backlog would starve exactly the case the ordering exists to protect.
-
-The backend gained optional, purely technical range bounds to express this: `after`, and
-an inclusivity flag for each end. Which side of a boundary instant matters is a statement
-about urgency, so it belongs to the detector; the read model only needs to be able to say
-it. The alternative — nudging a bound by a millisecond — encodes the decision as an
-epsilon nobody can read and the database does not necessarily share. The backend still
-knows nothing about what two hours means, nor which side of the cut is the urgent one.
-
-This is scan ORDERING, not policy. The predicate is unchanged, overdue trips remain
-candidates for ever, and no retention window or cutoff is invented. A band left unwalked
-because the budget ran out is reported as `partial`, naming the band.
-
-### 2.12c The internal namespace is refused by the edge, in any case
-
-`/internal/v1/*` is what the backend and the AI Platform say to each other over the compose network. On every public host it must be unreachable *before* authentication is consulted — the service token is the second line, not the first.
-
-nginx prefix matching is case-SENSITIVE, so `location ^~ /api/internal/` alone let `/api/Internal/v1/...` fall through to the general `/api/` proxy, whose trailing `proxy_pass .../` strips `/api/` and hands `/Internal/v1/...` to Express, which matches routes case-INSENSITIVELY by default. Both public configs therefore also carry `location ~* ^/api/internal(/|$)`, which beats a plain prefix location in nginx's matching order. `.github/scripts/check-nginx-internal-block.sh` runs the real configs in a container and proves it with requests rather than with reasoning about that order.
+Thresholds and severity bands are configuration injected into detectors, never constants inside them. Approved values: Detector 1 lead time **2 h**; Detector 3 warning after **12 h**. Every other timing or band (scan interval, initial delay, Detector 2 grace and high thresholds, Detector 1 high band, Detector 3 high band) is **TBD — configurable before Phase 1b**, not a default.
 
 ### 2.13 What is deliberately absent
 
@@ -176,7 +110,6 @@ No queue or broker (Redis, BullMQ, Kafka, RabbitMQ). No cron package. No chatbot
 - The backend gains an `infrastructure/service-auth` module with no consumer until Phase 1b/1c — the boundary exists before the first route that crosses it.
 - `affected.sh` gains a third classification; a change under `/AI` runs the `ai` job and deploys nothing.
 - SonarCloud duplication (`.sonarcloud.properties`): the copied infrastructure files — migration runner, pool adapter, keyset cursor, env schema, health probe, integration-test harness — are excluded from copy-paste detection only, because they duplicate the backend's on purpose to keep the boundary. Nothing under `AI/src/core` is excluded and no rule is disabled. Repeated literals inside PostgreSQL `CHECK (… IN (…))` constraints are accepted as canonical values of a declarative constraint, not extracted.
-- Phase 1b adds **no** table and **no** migration. The alert tables, including `ai.alert_scan_observations`, all came with Phase 1a; the scan engine writes only through that existing aggregate.
 - Retention needs `DELETE`, so `ai.*` carries **no** deny-delete trigger (a deviation from the backend's history tables); the guarantee is GRANT plus the A7 boundary rule.
 
 ## 4. Alternatives rejected
