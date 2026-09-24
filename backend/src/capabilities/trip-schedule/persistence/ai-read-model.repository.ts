@@ -156,8 +156,21 @@ const toCompletion = (row: CompletionRow): CompletionRequestFacts => ({
 });
 
 export interface WindowQuery {
-  /** Upper bound of the anchor, inclusive. A technical window the AI computes. */
+  /**
+   * The anchor range, as the half-open interval `(after, before]`.
+   *
+   * ★ HALF-OPEN SO RANGES CHAIN WITHOUT A GAP OR AN OVERLAP. A caller that
+   * wants to walk one band before another asks for `(-inf, t]` and then
+   * `(t, t + something]`: a row whose anchor is exactly `t` belongs to the
+   * first and only the first. Two inclusive bounds would return it twice;
+   * two exclusive ones would lose it.
+   *
+   * Both are TECHNICAL bounds the caller computes. This side never knows what
+   * they mean — it does not know what "two hours before pickup" is, only how
+   * to return rows inside an interval.
+   */
   before: Date;
+  after?: Date;
   limit: number;
   cursor?: string;
 }
@@ -173,11 +186,12 @@ export class AiReadModelRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * Trips with no active assignment whose pickup instant is at or before the
-   * window. Archived and finished trips are out (they are not work); trips
-   * with no `pickup_at` are out because the detector this feeds keys on that
-   * instant alone (CEO: no `scheduled_on` fallback). Ordered by
-   * `(pickup_at, id)` ascending — the soonest first.
+   * Trips with no active assignment whose pickup instant lies in
+   * `(after, before]`. Archived and finished trips are out (they are not
+   * work); trips with no `pickup_at` are out because the detector this feeds
+   * keys on that instant alone (CEO: no `scheduled_on` fallback). Ordered by
+   * `(pickup_at, id)` ascending — the soonest first WITHIN the band the
+   * caller asked for.
    */
   async unassignedTrips(query: WindowQuery): Promise<Page<TripFacts>> {
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
@@ -188,12 +202,13 @@ export class AiReadModelRepository {
          AND t.status <> 'finished'
          AND t.pickup_at IS NOT NULL
          AND t.pickup_at <= $1::timestamptz
+         AND ($2::timestamptz IS NULL OR t.pickup_at > $2::timestamptz)
          AND NOT EXISTS (SELECT 1 FROM trip_driver_assignments da
                           WHERE da.trip_id = t.id AND da.state = 'active')
-         AND ($2::timestamptz IS NULL OR (t.pickup_at, t.id) > ($2::timestamptz, $3::uuid))
+         AND ($3::timestamptz IS NULL OR (t.pickup_at, t.id) > ($3::timestamptz, $4::uuid))
        ORDER BY t.pickup_at ASC, t.id ASC
-       LIMIT $4`,
-      [query.before, cursor?.t ?? null, cursor?.i ?? null, query.limit + 1],
+       LIMIT $5`,
+      [query.before, query.after ?? null, cursor?.t ?? null, cursor?.i ?? null, query.limit + 1],
     );
     return toPage(
       rows.map((row) => ({ ...toTrip(row), id: row.trip_id, cursorAt: row.cursor_at })),
@@ -217,12 +232,13 @@ export class AiReadModelRepository {
          AND t.status <> 'finished'
          AND t.pickup_at IS NOT NULL
          AND t.pickup_at <= $1::timestamptz
+         AND ($2::timestamptz IS NULL OR t.pickup_at > $2::timestamptz)
          AND NOT EXISTS (SELECT 1 FROM trip_execution_events e
                           WHERE e.driver_assignment_id = a.id AND e.voided_at IS NULL)
-         AND ($2::timestamptz IS NULL OR (t.pickup_at, a.id) > ($2::timestamptz, $3::uuid))
+         AND ($3::timestamptz IS NULL OR (t.pickup_at, a.id) > ($3::timestamptz, $4::uuid))
        ORDER BY t.pickup_at ASC, a.id ASC
-       LIMIT $4`,
-      [query.before, cursor?.t ?? null, cursor?.i ?? null, query.limit + 1],
+       LIMIT $5`,
+      [query.before, query.after ?? null, cursor?.t ?? null, cursor?.i ?? null, query.limit + 1],
     );
     return toPage(
       rows.map((row) => ({ ...toAssignment(row), id: row.assignment_id, cursorAt: row.cursor_at })),
@@ -238,10 +254,11 @@ export class AiReadModelRepository {
        ${COMPLETION_FROM}
        WHERE r.state = 'pending'
          AND r.submitted_at <= $1::timestamptz
-         AND ($2::timestamptz IS NULL OR (r.submitted_at, r.id) > ($2::timestamptz, $3::uuid))
+         AND ($2::timestamptz IS NULL OR r.submitted_at > $2::timestamptz)
+         AND ($3::timestamptz IS NULL OR (r.submitted_at, r.id) > ($3::timestamptz, $4::uuid))
        ORDER BY r.submitted_at ASC, r.id ASC
-       LIMIT $4`,
-      [query.before, cursor?.t ?? null, cursor?.i ?? null, query.limit + 1],
+       LIMIT $5`,
+      [query.before, query.after ?? null, cursor?.t ?? null, cursor?.i ?? null, query.limit + 1],
     );
     return toPage(
       rows.map((row) => ({ ...toCompletion(row), id: row.request_id, cursorAt: row.cursor_at })),

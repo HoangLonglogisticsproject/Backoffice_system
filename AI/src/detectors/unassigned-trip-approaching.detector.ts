@@ -46,12 +46,33 @@ export class UnassignedTripApproachingDetector implements Detector<TripFacts> {
   }
 
   /**
-   * Everything whose pickup is at or before `now + warningLead` — which
-   * includes every pickup already past, because a trip that went unassigned
-   * yesterday is still unassigned today.
+   * TWO BANDS, APPROACHING FIRST — and this is the fix for a liveness bug,
+   * not a change of rule.
+   *
+   * Every pickup already past stays a candidate: a trip that went unassigned
+   * yesterday is still unassigned today, and nobody has approved a cutoff.
+   * But those accumulate at the HEAD of an ascending walk, so a large enough
+   * overdue backlog would consume the whole page budget every single run and
+   * a trip leaving in ninety minutes would never be looked at. The alert that
+   * matters most would be the one that never fires.
+   *
+   * So the scan walks `(now, now + lead]` first — the trips somebody can
+   * still do something about — and only then `(-inf, now]`. The predicate is
+   * untouched; what changed is the order a bounded scan spends its budget in.
+   *
+   * The bands are half-open and adjacent, so a pickup at exactly `now` falls
+   * in the overdue band and in only one of them: at `now` the pickup is DUE,
+   * not approaching.
    */
-  candidateWindow(now: Date): CandidateWindow {
-    return { before: new Date(now.getTime() + this.settings.unassignedTripWarningLeadMs) };
+  candidateWindows(now: Date): CandidateWindow[] {
+    return [
+      {
+        label: 'approaching',
+        after: now,
+        before: new Date(now.getTime() + this.settings.unassignedTripWarningLeadMs),
+      },
+      { label: 'overdue', before: now },
+    ];
   }
 
   subjectIdOf(facts: TripFacts): string {

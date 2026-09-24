@@ -51,13 +51,16 @@ export class StaleAssignmentStartDetector implements Detector<AssignmentFacts> {
   }
 
   /**
-   * Everything whose pickup is at or before `now - grace`. A disabled
-   * detector is never asked for a window, but the shape is total anyway: a
-   * zero-length window is the honest answer to "no configuration".
+   * One band: everything whose pickup is at or before `now - grace`. There is
+   * nothing to prioritise — every candidate here is already past its grace,
+   * and ascending order means the longest-overdue is looked at first.
+   *
+   * A disabled detector is never asked for a window, but the shape is total
+   * anyway: a zero-length window is the honest answer to "no configuration".
    */
-  candidateWindow(now: Date): CandidateWindow {
+  candidateWindows(now: Date): CandidateWindow[] {
     const graceMs = this.settings.staleStartGraceMs ?? 0;
-    return { before: new Date(now.getTime() - graceMs) };
+    return [{ label: 'overdue', before: new Date(now.getTime() - graceMs) }];
   }
 
   subjectIdOf(facts: AssignmentFacts): string {

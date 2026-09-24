@@ -114,6 +114,30 @@ describe('AI read-model HTTP security', () => {
       await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&limit=0`)).expect(422);
     });
 
+    it('passes the optional `after` bound through, so a caller can walk one band at a time', async () => {
+      const after = '2026-09-24T06:00:00.000Z';
+      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${after}`)).expect(200);
+      expect(readModel.unassignedTrips).toHaveBeenCalledWith({
+        before: new Date(BEFORE),
+        after: new Date(after),
+        limit: 50,
+        cursor: undefined,
+      });
+    });
+
+    it('refuses a band that could never contain anything', async () => {
+      const notBefore = '2026-09-24T09:00:00.000Z';
+      const response = await authed(
+        request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=${notBefore}`),
+      ).expect(422);
+      expect(response.body.error.details).toHaveProperty('after');
+      expect(readModel.unassignedTrips).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unparsable `after`', async () => {
+      await authed(request(app.getHttpServer()).get(`${lists[0]}?before=${BEFORE}&after=whenever`)).expect(422);
+    });
+
     it('passes the window, the limit and the cursor through untouched', async () => {
       await authed(request(app.getHttpServer()).get(`${lists[1]}?before=${BEFORE}&limit=7&cursor=abc`)).expect(200);
       expect(readModel.unstartedAssignments).toHaveBeenCalledWith({

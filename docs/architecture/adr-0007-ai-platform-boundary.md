@@ -131,15 +131,23 @@ An in-process interval timer, not a job runner: there is one recurring task per 
 
 This is deliberately NOT "we only run one container". Two replicas during a rolling deploy is the normal case; the guarantee is a property of the database, not of the topology.
 
-### 2.12b Known limit: the discovery page cap
+### 2.12b Candidate bands, and the discovery page cap
 
 Discovery stops after 100 pages and reports `partial` rather than claiming a complete
-scan. Combined with ascending `(pickup_at, id)` ordering, a backlog larger than
-`READ_MODEL_PAGE_SIZE × 100` would be walked oldest-first, so the most imminent trips
-could go unseen in that pass. The cap is a guard, not a policy: no retention window or
-cutoff is invented here, and the condition is visible as a `partial` run carrying
-`Stopped after 100 pages`. Deciding what to do about a backlog that large is a business
-question, not one this ADR settles.
+scan. With a single ascending walk that cap was a **liveness bug**, not merely a slow
+path: overdue trips accumulate at the head of the order, so a large enough backlog would
+consume the whole budget on every run and a trip leaving in ninety minutes would never be
+evaluated — the alert that matters most would be the one that never fires.
+
+A detector therefore returns candidate **bands** in priority order, and Discovery walks
+them under one shared budget. D1 asks for `(now, now + lead]` first and `(-∞, now]`
+second. The bands are half-open and adjacent, so a pickup at exactly `now` falls in the
+overdue band and in exactly one of them. The backend gained an optional, purely technical
+`after` bound to express this; it still knows nothing about what two hours means.
+
+This is scan ORDERING, not policy. The predicate is unchanged, overdue trips remain
+candidates for ever, and no retention window or cutoff is invented. A band left unwalked
+because the budget ran out is reported as `partial`, naming the band.
 
 ### 2.13 What is deliberately absent
 

@@ -152,11 +152,38 @@ describe('UNASSIGNED_TRIP_APPROACHING_EXECUTION', () => {
     });
   });
 
-  describe('the candidate window', () => {
-    it('asks for everything up to the warning lead ahead of now', () => {
-      expect(detectorWith().candidateWindow(NOW).before.toISOString()).toBe(
-        new Date(NOW.getTime() + 2 * HOUR).toISOString(),
-      );
+  describe('★ the candidate bands — approaching first, so it cannot be starved', () => {
+    const windows = () => detectorWith().candidateWindows(NOW);
+
+    it('asks for two bands, the approaching one FIRST', () => {
+      expect(windows().map((w) => w.label)).toEqual(['approaching', 'overdue']);
+    });
+
+    it('the approaching band is (now, now + lead]', () => {
+      const [approaching] = windows();
+      expect(approaching!.after?.toISOString()).toBe(NOW.toISOString());
+      expect(approaching!.before.toISOString()).toBe(new Date(NOW.getTime() + 2 * HOUR).toISOString());
+    });
+
+    it('the overdue band is everything at or before now, unbounded below', () => {
+      const overdue = windows()[1];
+      expect(overdue!.before.toISOString()).toBe(NOW.toISOString());
+      expect(overdue!.after).toBeUndefined();
+    });
+
+    it('★ the bands are adjacent and half-open: `pickup_at = now` belongs to exactly one', () => {
+      const [approaching, overdue] = windows();
+      // (now, now+lead] and (-inf, now] meet at `now` and do not overlap:
+      // `now` is excluded from the first and included in the second.
+      expect(approaching!.after!.getTime()).toBe(overdue!.before.getTime());
+    });
+
+    it('together they still cover every candidate the predicate admits', () => {
+      const [approaching, overdue] = windows();
+      // Nothing between the two bands, and nothing above the lead that the
+      // rule would have alerted on anyway.
+      expect(overdue!.before.getTime()).toBe(approaching!.after!.getTime());
+      expect(approaching!.before.getTime()).toBe(NOW.getTime() + 2 * HOUR);
     });
   });
 

@@ -148,9 +148,10 @@ describe('COMPLETION_REVIEW_OVERDUE', () => {
 
   describe('the candidate window', () => {
     it('asks for submissions at or before now minus the warning window', () => {
-      expect(detectorWith().candidateWindow(NOW).before.toISOString()).toBe(
-        new Date(NOW.getTime() - 12 * HOUR).toISOString(),
-      );
+      const windows = detectorWith().candidateWindows(NOW);
+      expect(windows).toHaveLength(1);
+      expect(windows[0]!.before.toISOString()).toBe(new Date(NOW.getTime() - 12 * HOUR).toISOString());
+      expect(windows[0]!.after).toBeUndefined();
     });
   });
 

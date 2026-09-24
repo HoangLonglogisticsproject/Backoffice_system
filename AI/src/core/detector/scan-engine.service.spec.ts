@@ -3,7 +3,7 @@ import { DetectorSettings } from '../../config/detector-settings';
 import type { AppConfig } from '../../config/app.config';
 import { ReadModelError, type FactsPage } from '../../infrastructure/backend-client/backend-read-model.client';
 import type { AlertSignal } from '../alert/domain/alert';
-import type { Detector } from './detector.contract';
+import type { CandidateWindow, Detector } from './detector.contract';
 import { ScanEngineService } from './scan-engine.service';
 
 /**
@@ -29,7 +29,7 @@ describe('ScanEngineService', () => {
     subjectType: 'trip',
     enabled: true,
     disabledReason: null,
-    candidateWindow: () => ({ before: NOW }),
+    candidateWindows: () => [{ label: 'all', before: NOW }],
     subjectIdOf: (facts) => facts.id,
     evaluate: (facts) =>
       facts.problem
@@ -126,8 +126,8 @@ describe('ScanEngineService', () => {
 
       expect(report.candidates).toBe(2);
       expect(report.signals).toBe(2);
-      expect(fetch).toHaveBeenNthCalledWith(1, NOW, null, 'cid-3');
-      expect(fetch).toHaveBeenNthCalledWith(2, NOW, 'c1', 'cid-3');
+      expect(fetch).toHaveBeenNthCalledWith(1, { label: 'all', before: NOW }, null, 'cid-3');
+      expect(fetch).toHaveBeenNthCalledWith(2, { label: 'all', before: NOW }, 'c1', 'cid-3');
     });
 
     it('a read failure mid-walk is PARTIAL, and keeps what it already recorded', async () => {
@@ -177,6 +177,90 @@ describe('ScanEngineService', () => {
 
       expect(exactly100).toHaveBeenCalledTimes(100);
       expect(report.outcome).toBe('succeeded');
+    });
+
+    describe('★ several bands, walked in the detector\'s order under one budget', () => {
+      const twoBand = (): Detector<Facts> =>
+        detector({
+          candidateWindows: () => [
+            { label: 'approaching', after: NOW, before: new Date(NOW.getTime() + 7_200_000) },
+            { label: 'overdue', before: NOW },
+          ],
+        });
+
+      it('walks the first band to the end before it asks for the second', async () => {
+        const { engine } = build();
+        const seen: string[] = [];
+        const fetch = jest.fn(async (window: CandidateWindow) => {
+          seen.push(window.label);
+          return page([]);
+        });
+
+        await engine.discover(twoBand(), fetch, 'cid-bands');
+
+        expect(seen).toEqual(['approaching', 'overdue']);
+      });
+
+      it('passes each band\'s bounds through to the backend', async () => {
+        const { engine } = build();
+        const fetch = jest.fn(async () => page([]));
+
+        await engine.discover(twoBand(), fetch, 'cid-bounds');
+
+        expect(fetch).toHaveBeenNthCalledWith(
+          1,
+          { label: 'approaching', after: NOW, before: new Date(NOW.getTime() + 7_200_000) },
+          null,
+          'cid-bounds',
+        );
+        expect(fetch).toHaveBeenNthCalledWith(2, { label: 'overdue', before: NOW }, null, 'cid-bounds');
+      });
+
+      it('★ THE STARVATION CASE: an endless overdue band cannot hide the approaching one', async () => {
+        const { engine, alerts } = build();
+        // The approaching band holds the one trip that matters; the overdue
+        // band is an inexhaustible backlog. Before the fix the single
+        // ascending walk spent the whole budget on the backlog and never
+        // reached the urgent trip.
+        const fetch = jest.fn(async (window: CandidateWindow) =>
+          window.label === 'approaching'
+            ? page([{ id: 'urgent', problem: true }])
+            : page([{ id: 'ancient', problem: true }], 'more'),
+        );
+
+        const report = await engine.discover(twoBand(), fetch, 'cid-starve');
+
+        // The urgent trip WAS evaluated and alerted, in this very scan.
+        expect(alerts.recordSignal).toHaveBeenCalledWith(
+          expect.objectContaining({ subjectId: 'urgent' }),
+          expect.anything(),
+        );
+        // The backlog still costs the run its clean bill of health.
+        expect(report.outcome).toBe('partial');
+        expect(report.error).toContain('overdue');
+      });
+
+      it('★ an approaching band that exceeds the budget is PARTIAL, and the overdue band is reported unreached', async () => {
+        const { engine } = build();
+        const fetch = jest.fn(async (window: CandidateWindow) =>
+          window.label === 'approaching' ? page([{ id: 'a', problem: false }], 'more') : page([]),
+        );
+
+        const report = await engine.discover(twoBand(), fetch, 'cid-first-band-cap');
+
+        expect(report.outcome).toBe('partial');
+        expect(report.error).toContain('approaching');
+        // It never got to the second band, and says so rather than implying
+        // the whole window was seen.
+        expect(fetch).toHaveBeenCalledTimes(100);
+      });
+
+      it('reports `succeeded` when both bands finish inside the budget', async () => {
+        const { engine } = build();
+        const report = await engine.discover(twoBand(), jest.fn(async () => page([])), 'cid-both');
+        expect(report.outcome).toBe('succeeded');
+        expect(report.error).toBeNull();
+      });
     });
 
     it('records the run with its phase and closes it exactly once', async () => {

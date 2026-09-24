@@ -39,9 +39,12 @@ export class CompletionReviewOverdueDetector implements Detector<CompletionReque
     return null;
   }
 
-  /** Everything submitted at or before `now - warningAfter`. */
-  candidateWindow(now: Date): CandidateWindow {
-    return { before: new Date(now.getTime() - this.settings.completionReviewWarningAfterMs) };
+  /**
+   * One band: everything submitted at or before `now - warningAfter`. Oldest
+   * submission first, which is the order a review queue is worked in anyway.
+   */
+  candidateWindows(now: Date): CandidateWindow[] {
+    return [{ label: 'overdue', before: new Date(now.getTime() - this.settings.completionReviewWarningAfterMs) }];
   }
 
   subjectIdOf(facts: CompletionRequestFacts): string {

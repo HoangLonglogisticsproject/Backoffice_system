@@ -43,7 +43,10 @@ export class ReadModelError extends Error {
 }
 
 export interface PageRequest {
+  /** Upper bound of the anchor, inclusive. */
   before: Date;
+  /** Lower bound, exclusive. The backend reads the pair as `(after, before]`. */
+  after?: Date;
   limit: number;
   cursor?: string | null;
 }
@@ -113,6 +116,7 @@ export class BackendReadModelClient {
       before: request.before.toISOString(),
       limit: String(request.limit),
     });
+    if (request.after) query.set('after', request.after.toISOString());
     if (request.cursor) query.set('cursor', request.cursor);
 
     const payload = await this.send(`${BASE_PATH}/${path}?${query.toString()}`, correlationId, { method: 'GET' });

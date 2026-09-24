@@ -10,6 +10,7 @@ import { ScanRunRepository } from '@core/alert/persistence/scan-run.repository';
 import { ScanEngineService } from '@core/detector/scan-engine.service';
 import { UnassignedTripApproachingDetector } from '../../src/detectors/unassigned-trip-approaching.detector';
 import { ReadModelError, type FactsPage } from '@infrastructure/backend-client/backend-read-model.client';
+import type { CandidateWindow } from '@core/detector/detector.contract';
 import type { TripFacts } from '@infrastructure/backend-client/read-model.types';
 import {
   TEST_URL,
@@ -98,8 +99,21 @@ describeIntegration('Scan engine against real PostgreSQL', () => {
   /** The same trip, now with a lorry on it — the condition has cleared. */
   const cleared = (tripId: string): TripFacts => ({ ...problem(tripId), activeAssignmentCount: 1 });
 
+  /**
+   * A backend stub that HONOURS THE BAND. D1 asks for two bands now, so a
+   * stub that returned everything to both would double-count each trip —
+   * and would be lying about what the real read model does, which filters on
+   * `(after, before]` in SQL.
+   */
   const onePage = (items: TripFacts[]) =>
-    jest.fn(async (): Promise<FactsPage<TripFacts>> => ({ items, nextCursor: null, hasMore: false }));
+    jest.fn(async (window: CandidateWindow): Promise<FactsPage<TripFacts>> => ({
+      items: items.filter((trip) => {
+        const at = trip.pickupAt!.getTime();
+        return at <= window.before.getTime() && (window.after === undefined || at > window.after.getTime());
+      }),
+      nextCursor: null,
+      hasMore: false,
+    }));
 
   const lookupOf = (facts: TripFacts[]) =>
     jest.fn(async (ids: string[]) => facts.filter((item) => ids.includes(item.tripId)));

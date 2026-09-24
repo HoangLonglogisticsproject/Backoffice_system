@@ -280,6 +280,76 @@ describeIntegration('AI read models against real PostgreSQL', () => {
       expect([...seen].sort()).toEqual([...ids].sort());
     });
 
+    describe('★ the (after, before] band — half-open, so bands chain without a gap or a repeat', () => {
+      it('excludes the lower bound and includes the upper one', async () => {
+        const atLowerBound = await createTrip({ pickupAt: hours(1) });
+        const inside = await createTrip({ pickupAt: hours(2) });
+        const atUpperBound = await createTrip({ pickupAt: hours(3) });
+        await createTrip({ pickupAt: hours(4) });
+
+        const band = await service.unassignedTrips({ after: hours(1), before: hours(3), limit: 50 });
+
+        expect(band.items.map((t) => t.tripId)).toEqual([inside, atUpperBound]);
+        expect(band.items.map((t) => t.tripId)).not.toContain(atLowerBound);
+      });
+
+      it('★ two adjacent bands see every trip exactly once — none lost at the join, none repeated', async () => {
+        // `now` is hours(0). The detector asks for (now, now+2h] and then
+        // (-inf, now]; a trip at exactly `now` must appear in one of them.
+        const overdue = await createTrip({ pickupAt: hours(-5) });
+        const exactlyNow = await createTrip({ pickupAt: hours(0) });
+        const soon = await createTrip({ pickupAt: hours(1) });
+        const atLead = await createTrip({ pickupAt: hours(2) });
+        const beyondLead = await createTrip({ pickupAt: hours(3) });
+
+        const approaching = await service.unassignedTrips({ after: hours(0), before: hours(2), limit: 50 });
+        const overdueBand = await service.unassignedTrips({ before: hours(0), limit: 50 });
+
+        expect(approaching.items.map((t) => t.tripId)).toEqual([soon, atLead]);
+        expect(overdueBand.items.map((t) => t.tripId)).toEqual([overdue, exactlyNow]);
+
+        const seen = [...approaching.items, ...overdueBand.items].map((t) => t.tripId);
+        expect(new Set(seen).size).toBe(seen.length); // no repeat
+        expect(seen).toEqual(expect.arrayContaining([overdue, exactlyNow, soon, atLead]));
+        expect(seen).not.toContain(beyondLead); // the rule would not alert on it anyway
+      });
+
+      it('keeps the keyset walk correct inside a band with tied pickup instants', async () => {
+        const tied = hours(1);
+        const ids: string[] = [];
+        for (let i = 0; i < 5; i += 1) ids.push(await createTrip({ pickupAt: tied }));
+        await createTrip({ pickupAt: hours(-1) }); // outside the band
+
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        let guard = 0;
+        do {
+          const result = await service.unassignedTrips({ after: hours(0), before: hours(2), limit: 2, cursor });
+          seen.push(...result.items.map((t) => t.tripId));
+          cursor = result.nextCursor ?? undefined;
+          guard += 1;
+        } while (cursor && guard < 10);
+
+        expect(new Set(seen).size).toBe(5);
+        expect([...seen].sort()).toEqual([...ids].sort());
+      });
+
+      it('applies to the other two read models as well', async () => {
+        const tripId = await createTrip({ pickupAt: hours(-3) });
+        const assignmentId = await assign(tripId);
+        await submitCompletion(tripId, assignmentId, 'pending', hours(-3));
+
+        expect(
+          (await service.unstartedAssignments({ after: hours(-2), before: hours(24), limit: 50 })).items,
+        ).toHaveLength(0);
+        expect(
+          (await service.unstartedAssignments({ after: hours(-4), before: hours(24), limit: 50 })).items,
+        ).toHaveLength(1);
+        expect((await service.pendingCompletions({ after: hours(-2), before: hours(24), limit: 50 })).items).toHaveLength(0);
+        expect((await service.pendingCompletions({ after: hours(-4), before: hours(24), limit: 50 })).items).toHaveLength(1);
+      });
+    });
+
     it('★ refuses a malformed cursor rather than silently restarting at page one', async () => {
       await createTrip();
       // A client that quietly got page one again would loop forever and look

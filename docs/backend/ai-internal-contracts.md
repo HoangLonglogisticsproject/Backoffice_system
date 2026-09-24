@@ -149,11 +149,23 @@ Base: backend, `Authorization: Bearer SERVICE_TOKEN_AI_TO_BACKEND` trên **mọi
 *pages correctly when many trips share one pickup instant*). Cursor sai định dạng → `422`,
 không bao giờ âm thầm quay về trang đầu.
 
-⚠ **Rủi ro starvation, ghi để vận hành biết.** D1 sắp xếp `pickup_at` tăng dần — chuyến
-cũ nhất trước. Nếu tồn đọng hơn `READ_MODEL_PAGE_SIZE × 100` chuyến chưa có xe (mặc
-định 10.000), scan dừng ở cap, báo `partial`, và các chuyến **sắp tới giờ** có thể không
-được nhìn tới trong lần quét đó. Không tự đặt retention/window cutoff để tránh — đó là
-quyết định nghiệp vụ. Dấu hiệu nhận biết: run `partial` kèm `Stopped after 100 pages`.
+★ **D1 quét theo HAI BAND, band cấp bách trước.** Một lượt quét tăng dần duy nhất sẽ để
+tồn đọng quá hạn nằm ở đầu ăn hết page budget mỗi lần, và chuyến sắp tới giờ **không
+bao giờ** được đánh giá — lỗi liveness, không phải chậm. Vì vậy AI gọi hai lần:
+
+| Band | Range | Thứ tự |
+|---|---|---|
+| `approaching` | `(now, now + 2h]` | **trước** |
+| `overdue` | `(-∞, now]` | sau |
+
+Hai band nửa-mở và liền nhau: `pickup_at = now` thuộc đúng band `overdue` (đã đến giờ
+lấy hàng = quá hạn, không phải sắp tới), không trùng, không sót. Predicate của detector
+**không đổi**; chỉ thứ tự tiêu ngân sách đổi. Không có retention/window cutoff nào được
+tự đặt: chuyến quá hạn vẫn là candidate vĩnh viễn.
+
+Page budget **dùng chung** cho cả hai band: band đầu tiêu trước. Hết budget → run
+`partial` kèm tên band chưa đi hết (hoặc chưa tới). Không bao giờ báo `succeeded` khi
+còn band chưa quét.
 
 ## 11. Scan engine (Phase 1b — đã implement, phía AI)
 

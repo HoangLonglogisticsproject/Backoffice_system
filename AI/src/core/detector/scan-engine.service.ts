@@ -11,7 +11,7 @@ import { AlertService } from '../alert/application/alert.service';
 import { AlertRepository } from '../alert/persistence/alert.repository';
 import { ScanRunRepository } from '../alert/persistence/scan-run.repository';
 import type { ScanOutcome, ScanPhase } from '../alert/domain/scan-run';
-import type { Detector } from './detector.contract';
+import type { CandidateWindow, Detector } from './detector.contract';
 
 /**
  * Discovery and Resolution — the two halves of a scan, and the invariant
@@ -73,7 +73,7 @@ export class ScanEngineService {
    */
   async discover<Facts>(
     detector: Detector<Facts>,
-    fetchPage: (before: Date, cursor: string | null, correlationId: string) => Promise<FactsPage<Facts>>,
+    fetchPage: (window: CandidateWindow, cursor: string | null, correlationId: string) => Promise<FactsPage<Facts>>,
     correlationId: string = randomUUID(),
   ): Promise<ScanReport> {
     const startedAt = Date.now();
@@ -94,35 +94,50 @@ export class ScanEngineService {
     let error: string | null = null;
 
     try {
-      const { before } = detector.candidateWindow(now);
-      let cursor: string | null = null;
+      // ★ THE BANDS ARE WALKED IN THE ORDER THE DETECTOR GAVE THEM, AND THE
+      // PAGE BUDGET IS SHARED. The first band therefore spends the budget
+      // first — which is the whole point of there being more than one: a
+      // detector puts the band that must not be starved at the front. A band
+      // left unwalked because the budget ran out is a PARTIAL scan, never a
+      // successful one.
       let pages = 0;
 
-      do {
-        const page: FactsPage<Facts> = await fetchPage(before, cursor, correlationId);
-        candidates += page.items.length;
-
-        for (const facts of page.items) {
-          const signal = detector.evaluate(facts, now);
-          if (!signal) continue;
-
-          signals += 1;
-          const result = await this.alerts.recordSignal(signal, { scanRunId: run.id, correlationId });
-          if (result.created) created += 1;
-          else updated += 1;
-        }
-
-        cursor = page.hasMore ? page.nextCursor : null;
-        pages += 1;
-        if (pages >= MAX_PAGES && cursor) {
-          // Not a failure of the backend, but not a complete scan either: the
-          // rest of the window was never looked at, and saying `succeeded`
-          // would be a claim this run cannot support.
+      for (const window of detector.candidateWindows(now)) {
+        if (pages >= MAX_PAGES) {
           outcome = 'partial';
-          error = `Stopped after ${MAX_PAGES} pages with more to read.`;
+          error = `Stopped after ${MAX_PAGES} pages; the "${window.label}" band was not reached.`;
           break;
         }
-      } while (cursor);
+
+        let cursor: string | null = null;
+        do {
+          const page: FactsPage<Facts> = await fetchPage(window, cursor, correlationId);
+          candidates += page.items.length;
+
+          for (const facts of page.items) {
+            const signal = detector.evaluate(facts, now);
+            if (!signal) continue;
+
+            signals += 1;
+            const result = await this.alerts.recordSignal(signal, { scanRunId: run.id, correlationId });
+            if (result.created) created += 1;
+            else updated += 1;
+          }
+
+          cursor = page.hasMore ? page.nextCursor : null;
+          pages += 1;
+          if (pages >= MAX_PAGES && cursor) {
+            // Not a failure of the backend, but not a complete scan either:
+            // the rest of this band was never looked at, and saying
+            // `succeeded` would be a claim this run cannot support.
+            outcome = 'partial';
+            error = `Stopped after ${MAX_PAGES} pages with more to read in the "${window.label}" band.`;
+            break;
+          }
+        } while (cursor);
+
+        if (outcome === 'partial') break;
+      }
     } catch (caught) {
       outcome = caught instanceof ReadModelError ? 'partial' : 'failed';
       error = describe(caught);

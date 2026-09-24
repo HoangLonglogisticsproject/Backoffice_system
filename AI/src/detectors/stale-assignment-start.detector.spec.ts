@@ -185,13 +185,13 @@ describe('STALE_ASSIGNMENT_START', () => {
 
   describe('the candidate window', () => {
     it('asks for pickups at or before now minus the grace', () => {
-      expect(withGrace(30 * 60_000).candidateWindow(NOW).before.toISOString()).toBe(
-        new Date(NOW.getTime() - 30 * 60_000).toISOString(),
-      );
+      const windows = withGrace(30 * 60_000).candidateWindows(NOW);
+      expect(windows).toHaveLength(1);
+      expect(windows[0]!.before.toISOString()).toBe(new Date(NOW.getTime() - 30 * 60_000).toISOString());
     });
 
     it('is total even when disabled, so the shape never depends on configuration', () => {
-      expect(detectorWith().candidateWindow(NOW).before.toISOString()).toBe(NOW.toISOString());
+      expect(detectorWith().candidateWindows(NOW)[0]!.before.toISOString()).toBe(NOW.toISOString());
     });
   });
 

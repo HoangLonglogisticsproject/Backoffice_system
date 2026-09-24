@@ -111,8 +111,11 @@ export class ScanSchedulerService implements OnApplicationBootstrap, OnApplicati
     await this.underLock(detector.code, 'discovery', () =>
       this.engine.discover(
         detector,
-        (before, cursor, cid) =>
-          this.backend.unassignedTrips({ before, limit: this.settings.readModelPageSize, cursor }, cid),
+        (window, cursor, cid) =>
+          this.backend.unassignedTrips(
+            { before: window.before, after: window.after, limit: this.settings.readModelPageSize, cursor },
+            cid,
+          ),
         correlationId,
       ),
     );
@@ -133,8 +136,11 @@ export class ScanSchedulerService implements OnApplicationBootstrap, OnApplicati
     await this.underLock(detector.code, 'discovery', () =>
       this.engine.discover(
         detector,
-        (before, cursor, cid) =>
-          this.backend.unstartedAssignments({ before, limit: this.settings.readModelPageSize, cursor }, cid),
+        (window, cursor, cid) =>
+          this.backend.unstartedAssignments(
+            { before: window.before, after: window.after, limit: this.settings.readModelPageSize, cursor },
+            cid,
+          ),
         correlationId,
       ),
     );
@@ -155,8 +161,11 @@ export class ScanSchedulerService implements OnApplicationBootstrap, OnApplicati
     await this.underLock(detector.code, 'discovery', () =>
       this.engine.discover(
         detector,
-        (before, cursor, cid) =>
-          this.backend.pendingCompletions({ before, limit: this.settings.readModelPageSize, cursor }, cid),
+        (window, cursor, cid) =>
+          this.backend.pendingCompletions(
+            { before: window.before, after: window.after, limit: this.settings.readModelPageSize, cursor },
+            cid,
+          ),
         correlationId,
       ),
     );

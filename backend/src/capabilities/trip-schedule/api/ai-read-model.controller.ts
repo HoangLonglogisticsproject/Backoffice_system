@@ -24,10 +24,21 @@ import { LOOKUP_LIMIT } from '../persistence/ai-read-model.repository';
  * the alerts the AI may raise from them — there is no `/trips-that-should-alert`.
  */
 
-/** `?before=<ISO instant>&limit=&cursor=` — the instant is required and must parse. */
-const windowQuerySchema = pageQuerySchema.extend({
-  before: z.coerce.date({ invalid_type_error: 'before must be an ISO-8601 instant' }),
-});
+/**
+ * `?before=<ISO>&after=<ISO>&limit=&cursor=` — `before` is required, `after`
+ * optional. Together they are the half-open interval `(after, before]`, so a
+ * caller can walk one band and then the next without losing or repeating a
+ * row at the join.
+ */
+const windowQuerySchema = pageQuerySchema
+  .extend({
+    before: z.coerce.date({ invalid_type_error: 'before must be an ISO-8601 instant' }),
+    after: z.coerce.date({ invalid_type_error: 'after must be an ISO-8601 instant' }).optional(),
+  })
+  .refine((query) => query.after === undefined || query.after < query.before, {
+    message: 'after must be earlier than before — the range (after, before] would otherwise be empty',
+    path: ['after'],
+  });
 type WindowQueryInput = z.infer<typeof windowQuerySchema>;
 
 const uuidList = z.array(z.string().uuid()).max(LOOKUP_LIMIT).default([]);
@@ -45,21 +56,36 @@ export class AiReadModelController {
 
   @Get('unassigned-trips')
   unassignedTrips(@Query(new ZodValidationPipe(windowQuerySchema)) query: WindowQueryInput): Promise<Page<TripFacts>> {
-    return this.readModel.unassignedTrips({ before: query.before, limit: query.limit, cursor: query.cursor });
+    return this.readModel.unassignedTrips({
+      before: query.before,
+      after: query.after,
+      limit: query.limit,
+      cursor: query.cursor,
+    });
   }
 
   @Get('unstarted-assignments')
   unstartedAssignments(
     @Query(new ZodValidationPipe(windowQuerySchema)) query: WindowQueryInput,
   ): Promise<Page<AssignmentFacts>> {
-    return this.readModel.unstartedAssignments({ before: query.before, limit: query.limit, cursor: query.cursor });
+    return this.readModel.unstartedAssignments({
+      before: query.before,
+      after: query.after,
+      limit: query.limit,
+      cursor: query.cursor,
+    });
   }
 
   @Get('pending-completions')
   pendingCompletions(
     @Query(new ZodValidationPipe(windowQuerySchema)) query: WindowQueryInput,
   ): Promise<Page<CompletionRequestFacts>> {
-    return this.readModel.pendingCompletions({ before: query.before, limit: query.limit, cursor: query.cursor });
+    return this.readModel.pendingCompletions({
+      before: query.before,
+      after: query.after,
+      limit: query.limit,
+      cursor: query.cursor,
+    });
   }
 
   /** POST because a batch of ids does not fit a query string; 200 because nothing is created. */

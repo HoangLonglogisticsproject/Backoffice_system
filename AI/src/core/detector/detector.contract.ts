@@ -16,10 +16,23 @@ import type { AlertSignal } from '../alert/domain/alert';
  * second.
  */
 
-/** The window Discovery should ask the backend for, in the backend's terms. */
+/**
+ * A band of the read model's anchor for Discovery to walk, in the backend's
+ * terms: the half-open interval `(after, before]`.
+ *
+ * ★ A DETECTOR MAY ASK FOR SEVERAL, IN PRIORITY ORDER, AND THAT IS SCAN
+ * ORDERING RATHER THAN POLICY. The rule that decides whether a subject is a
+ * problem does not change; what changes is which candidates a bounded scan
+ * looks at FIRST. Without it, one band can consume the whole page budget
+ * every run and another is never reached — a liveness bug, not a slow one.
+ */
 export interface CandidateWindow {
-  /** Upper bound for the read model's anchor — `pickupBefore` or `submittedBefore`. */
+  /** A short name for the log line: `approaching`, `overdue`, `all`. */
+  label: string;
+  /** Upper bound of the anchor, INCLUSIVE. */
   before: Date;
+  /** Lower bound of the anchor, EXCLUSIVE. Absent means unbounded below. */
+  after?: Date;
 }
 
 export interface Detector<Facts> {
@@ -39,8 +52,11 @@ export interface Detector<Facts> {
   /** Why it is disabled, for the boot log. `null` when it is enabled. */
   readonly disabledReason: string | null;
 
-  /** The window Discovery asks for, computed from `now` and this detector's config. */
-  candidateWindow(now: Date): CandidateWindow;
+  /**
+   * The bands Discovery walks, MOST URGENT FIRST. One for most detectors;
+   * more when a detector has a band that must not be starved by another.
+   */
+  candidateWindows(now: Date): CandidateWindow[];
 
   /** The subject id these facts describe — what an alert's `subjectId` becomes. */
   subjectIdOf(facts: Facts): string;
