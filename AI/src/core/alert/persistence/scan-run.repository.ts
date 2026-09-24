@@ -112,6 +112,17 @@ export class ScanRunRepository {
     return rows[0] ? toScanRun(rows[0]) : null;
   }
 
+  /**
+   * Records how many alerts a finished resolution run closed.
+   *
+   * Separate from `finish` because the resolutions happen AFTER the run is
+   * marked `succeeded` — `resolveBySystem` will not accept a run that is
+   * still `running`, so the count cannot be known before the run closes.
+   */
+  async recordResolved(id: string, resolved: number, executor: DatabaseQuery = this.db): Promise<void> {
+    await executor.query('UPDATE scan_runs SET resolved = $2 WHERE id = $1', [id, resolved]);
+  }
+
   async findById(id: string, executor: DatabaseQuery = this.db): Promise<ScanRun | null> {
     const rows = await executor.query<ScanRunRow>(`SELECT ${COLUMNS} FROM scan_runs WHERE id = $1`, [id]);
     return rows[0] ? toScanRun(rows[0]) : null;
