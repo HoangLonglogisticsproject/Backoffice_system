@@ -152,6 +152,33 @@ describe('ScanEngineService', () => {
       expect(report.outcome).toBe('failed');
     });
 
+    it('★ stops at the page cap and reports PARTIAL, never `succeeded`', async () => {
+      const { engine, scanRuns } = build();
+      // A backend that always says there is more: the walk must stop itself.
+      const endless = jest.fn(async () => page([{ id: 't1', problem: false }], 'next'));
+
+      const report = await engine.discover(detector(), endless, 'cid-cap');
+
+      expect(report.outcome).toBe('partial');
+      expect(report.error).toMatch(/Stopped after 100 pages/);
+      expect(endless).toHaveBeenCalledTimes(100);
+      expect(scanRuns.finish).toHaveBeenCalledWith('run-discovery', expect.objectContaining({ outcome: 'partial' }));
+    });
+
+    it('does not report partial when the last page happens to be the hundredth', async () => {
+      const { engine } = build();
+      let call = 0;
+      const exactly100 = jest.fn(async () => {
+        call += 1;
+        return call < 100 ? page([], 'next') : page([]);
+      });
+
+      const report = await engine.discover(detector(), exactly100, 'cid-cap-exact');
+
+      expect(exactly100).toHaveBeenCalledTimes(100);
+      expect(report.outcome).toBe('succeeded');
+    });
+
     it('records the run with its phase and closes it exactly once', async () => {
       const { engine, scanRuns } = build();
       await engine.discover(detector(), jest.fn().mockResolvedValue(page([])), 'cid-6');

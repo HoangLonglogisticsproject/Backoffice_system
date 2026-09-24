@@ -90,6 +90,18 @@ Discovery scans candidate windows, produces positive signals and upserts by dedu
 
 **Phase 1b implements both halves.** `ScanEngineService.discover` walks the candidate window and upserts positives; it never resolves. `ScanEngineService.resolve` enumerates the detector's live alerts (open, acknowledged AND dismissed), looks their subjects up **by id**, re-evaluates the same predicate, and closes only what the returned facts show to be clear. A timeout, a 5xx, a body that does not match the contract, a page it could not finish, or a subject the backend did not return all leave every alert exactly where it was — and the run is marked `partial` or `failed`, which `resolveBySystem` independently refuses to resolve against.
 
+**`scan_runs.outcome` is a verdict on VERIFICATION, not on mutation.** The run is
+closed as `succeeded` before any alert is resolved, because `resolveBySystem` refuses a
+run that is still `running`; and a resolution that fails afterwards does NOT downgrade
+it, because an alert that is already resolved would then appear to have been resolved by
+a partial scan. `alerts.resolved_scan_run_id` is the source of truth for what a run
+closed; `scan_runs.resolved` is an execution metric written after `finished_at` and may
+under-count if the process dies mid-pass. Three crash windows are pinned by test: crash
+before the first resolve (nothing corrupt, next scan converges), crash between two
+resolves (the first stays resolved and is not re-resolved, no duplicate history, no
+reopen), and a mutation whose history write fails (rolled back, alert stays live, run
+stays succeeded).
+
 **One predicate, not two.** A detector exposes a single `evaluate(facts, now)`; Discovery asks it about candidates and Resolution asks it about existing subjects. Two predicates would drift, and the day they disagreed an alert would either be raised forever or closed while its condition held.
 
 **The persistence layer holds the invariant, not the engine's discipline.** `AlertService.resolveBySystem` requires a non-null `scanRunId` and, inside the same transaction as the update, checks that the run exists, has `phase = 'resolution'`, `outcome = 'succeeded'`, and `detector_code` equal to the alert's — then that the alert admits a system resolution. Any failure leaves the alert and its history untouched. The system actor is refused at the user transition door, so this is the only path to `system_cleared`. There is no HTTP route for it.
@@ -118,6 +130,16 @@ Durations are written with a unit (`2h`, `30m`) and parsed at boot: a bare numbe
 An in-process interval timer, not a job runner: there is one recurring task per detector and nothing to enqueue, retry or route, so a broker would add a service to operate in exchange for nothing. What a queue would have provided — exactly one worker — comes from `pg_try_advisory_lock(771053318, key(detectorCode, phase))` on a dedicated connection, held outside any transaction for the length of the scan and released in `finally`. `try`, not `wait`: a tick that cannot take the lock has nothing to do. A worker that dies releases the lock with its session, and a connection that dies mid-scan is detected (the client carries its own `error` listener) and destroyed rather than returned to the pool.
 
 This is deliberately NOT "we only run one container". Two replicas during a rolling deploy is the normal case; the guarantee is a property of the database, not of the topology.
+
+### 2.12b Known limit: the discovery page cap
+
+Discovery stops after 100 pages and reports `partial` rather than claiming a complete
+scan. Combined with ascending `(pickup_at, id)` ordering, a backlog larger than
+`READ_MODEL_PAGE_SIZE × 100` would be walked oldest-first, so the most imminent trips
+could go unseen in that pass. The cap is a guard, not a policy: no retention window or
+cutoff is invented here, and the condition is visible as a `partial` run carrying
+`Stopped after 100 pages`. Deciding what to do about a backlog that large is a business
+question, not one this ADR settles.
 
 ### 2.13 What is deliberately absent
 

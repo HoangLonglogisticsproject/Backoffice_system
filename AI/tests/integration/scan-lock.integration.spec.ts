@@ -159,11 +159,20 @@ describeIntegration('ScanLock against real PostgreSQL', () => {
     const lock = newLock();
     const handle = await lock.acquire('D1', 'discovery');
 
-    const { rows } = await pool.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM pg_stat_activity
-        WHERE state = 'idle in transaction' AND datname = current_database()`,
+    // ★ SCOPED TO THE LOCK'S OWN SESSION, not to the database. Asking
+    // `pg_stat_activity` for every backend would also see the other
+    // integration specs running beside this one, which legitimately do hold
+    // transactions open — a neighbour's correctness is not this test's
+    // subject.
+    const { rows } = await pool.query<{ state: string }>(
+      `SELECT a.state FROM pg_locks l
+         JOIN pg_stat_activity a USING (pid)
+        WHERE l.locktype = 'advisory' AND l.classid = $1
+          AND l.objid = $2::bigint & 4294967295 AND l.granted`,
+      [SCAN_LOCK_NAMESPACE, scanLockKey('D1', 'discovery')],
     );
-    expect(rows[0]!.n).toBe(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).not.toBe('idle in transaction');
 
     await handle!.release();
   });

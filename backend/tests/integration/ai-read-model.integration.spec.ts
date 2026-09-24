@@ -280,6 +280,21 @@ describeIntegration('AI read models against real PostgreSQL', () => {
       expect([...seen].sort()).toEqual([...ids].sort());
     });
 
+    it('★ refuses a malformed cursor rather than silently restarting at page one', async () => {
+      await createTrip();
+      // A client that quietly got page one again would loop forever and look
+      // healthy while doing it.
+      await expect(service.unassignedTrips({ before: hours(24), limit: 2, cursor: 'not-a-cursor' })).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+      await expect(
+        service.unstartedAssignments({ before: hours(24), limit: 2, cursor: 'not-a-cursor' }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        service.pendingCompletions({ before: hours(24), limit: 2, cursor: 'not-a-cursor' }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
     it('reports a trip with no customer as `customer: null` rather than dropping it', async () => {
       await createTrip({ withCustomer: false });
       const result = await service.unassignedTrips(page);

@@ -308,6 +308,142 @@ describeIntegration('Scan engine against real PostgreSQL', () => {
     });
   });
 
+  describe('★ crash and retry — the run proves VERIFICATION, not mutation', () => {
+    /**
+     * `scan_runs.outcome` answers exactly one question: did this run verify
+     * the canonical facts completely? It deliberately does NOT answer "did
+     * every resolution that followed land". That is why the run is closed
+     * BEFORE the resolutions — `resolveBySystem` refuses a run that is not
+     * already `succeeded` — and why a later mutation failure must never
+     * downgrade it: an alert that IS resolved would then look as though a
+     * PARTIAL scan had resolved it, which is the one thing Phase 1a forbids.
+     *
+     * The cases below are the crash windows that choice leaves open. None of
+     * them uses a mock: each simply builds the state a crash would leave.
+     */
+
+    /** The state a crash leaves: a verified run that resolved nothing yet. */
+    const verifiedRunThatResolvedNothing = async (): Promise<string> => {
+      const run = await scanRuns.start({
+        detectorCode: detector.code,
+        detectorVersion: detector.version,
+        phase: 'resolution',
+        configSnapshot: settings.snapshot(),
+        correlationId: 'crashed',
+      });
+      await scanRuns.finish(run.id, { outcome: 'succeeded', candidates: 2 });
+      return run.id;
+    };
+
+    it('A — crash after verification, before the first resolve: nothing is corrupt, the next scan converges', async () => {
+      await engine.discover(detector, onePage([problem(TRIP_A), problem(TRIP_B)]), 'crash-a');
+      const crashedRun = await verifiedRunThatResolvedNothing();
+
+      // Both alerts are untouched, and the run stands as succeeded: it DID
+      // verify — the process died on the way to acting on that.
+      expect((await alertRow(TRIP_A))?.status).toBe('open');
+      expect((await alertRow(TRIP_B))?.status).toBe('open');
+      expect(await scanRuns.findById(crashedRun)).toMatchObject({ outcome: 'succeeded', resolved: 0 });
+
+      // The next scan is an ordinary one and closes both.
+      const retry = await engine.resolve(detector, lookupOf([cleared(TRIP_A), cleared(TRIP_B)]), 'crash-a');
+
+      expect(retry.resolved).toBe(2);
+      expect((await alertRow(TRIP_A))?.status).toBe('resolved');
+      expect((await alertRow(TRIP_B))?.status).toBe('resolved');
+      // Each names the run that actually verified it, not the crashed one.
+      expect((await alertRow(TRIP_A))?.resolved_scan_run_id).toBe(retry.scanRunId);
+    });
+
+    it('B — crash after resolving A, before B: A stays resolved, B closes next time, A never reopens', async () => {
+      await engine.discover(detector, onePage([problem(TRIP_A), problem(TRIP_B)]), 'crash-b');
+      const crashedRun = await verifiedRunThatResolvedNothing();
+      const alertA = (await alertRow(TRIP_A))!;
+
+      // A was resolved by that run; then the process died.
+      await service.resolveBySystem({ alertId: alertA.id, scanRunId: crashedRun, correlationId: 'crash-b' });
+      expect((await alertRow(TRIP_A))?.status).toBe('resolved');
+      expect((await alertRow(TRIP_B))?.status).toBe('open');
+      const historyAfterCrash = await history.listByAlert(alertA.id);
+      // The metric was never written back — but the alert names the run.
+      expect((await scanRuns.findById(crashedRun))?.resolved).toBe(0);
+      expect((await alertRow(TRIP_A))?.resolved_scan_run_id).toBe(crashedRun);
+
+      const retry = await engine.resolve(detector, lookupOf([cleared(TRIP_A), cleared(TRIP_B)]), 'crash-b');
+
+      // ★ Only B was still a candidate: a resolved alert is not live, so it
+      // cannot be resolved a second time.
+      expect(retry.candidates).toBe(1);
+      expect(retry.resolved).toBe(1);
+      expect((await alertRow(TRIP_B))?.status).toBe('resolved');
+      expect((await alertRow(TRIP_A))?.status).toBe('resolved');
+      expect(await history.listByAlert(alertA.id)).toHaveLength(historyAfterCrash.length);
+      expect((await history.listByAlert(alertA.id)).filter((h) => h.toStatus === 'resolved')).toHaveLength(1);
+    });
+
+    it('C — a resolution whose history write fails leaves that alert live, and the run stays succeeded', async () => {
+      await engine.discover(detector, onePage([problem(TRIP_A)]), 'crash-c');
+      const alert = (await alertRow(TRIP_A))!;
+      const run = await verifiedRunThatResolvedNothing();
+
+      // The same failure the Phase 1a suite proves rolls a transition back.
+      const brokenHistory = {
+        record: async () => {
+          throw new Error('history unavailable');
+        },
+      } as unknown as AlertHistoryRepository;
+      const fragile = new AlertService(db, alerts, brokenHistory, scanRuns);
+
+      await expect(
+        fragile.resolveBySystem({ alertId: alert.id, scanRunId: run, correlationId: 'crash-c' }),
+      ).rejects.toThrow('history unavailable');
+
+      // ★ The alert is untouched and the run is STILL succeeded: verification
+      // was complete; only the mutation failed.
+      expect((await alertRow(TRIP_A))?.status).toBe('open');
+      expect((await alertRow(TRIP_A))?.resolved_scan_run_id).toBeNull();
+      expect((await scanRuns.findById(run))?.outcome).toBe('succeeded');
+      expect(await history.listByAlert(alert.id)).toHaveLength(1);
+
+      // And the next scan converges.
+      const retry = await engine.resolve(detector, lookupOf([cleared(TRIP_A)]), 'crash-c');
+      expect(retry.resolved).toBe(1);
+      expect((await alertRow(TRIP_A))?.status).toBe('resolved');
+    });
+
+    it('★ replaying the SAME succeeded run against an already-resolved alert is refused', async () => {
+      await engine.discover(detector, onePage([problem(TRIP_A)]), 'idem');
+      const report = await engine.resolve(detector, lookupOf([cleared(TRIP_A)]), 'idem');
+      const alert = (await alertRow(TRIP_A))!;
+      const storyAfterFirst = await history.listByAlert(alert.id);
+
+      await expect(
+        service.resolveBySystem({ alertId: alert.id, scanRunId: report.scanRunId, correlationId: 'idem' }),
+      ).rejects.toThrow();
+
+      expect((await alertRow(TRIP_A))?.status).toBe('resolved');
+      expect(await history.listByAlert(alert.id)).toHaveLength(storyAfterFirst.length);
+    });
+
+    it('a PARTIAL run can never be used to resolve, even by a direct call', async () => {
+      await engine.discover(detector, onePage([problem(TRIP_A)]), 'partial-run');
+      const alert = (await alertRow(TRIP_A))!;
+      const run = await scanRuns.start({
+        detectorCode: detector.code,
+        detectorVersion: detector.version,
+        phase: 'resolution',
+        correlationId: 'partial-run',
+      });
+      await scanRuns.finish(run.id, { outcome: 'partial', error: 'the backend went away' });
+
+      await expect(
+        service.resolveBySystem({ alertId: alert.id, scanRunId: run.id, correlationId: 'partial-run' }),
+      ).rejects.toThrow();
+
+      expect((await alertRow(TRIP_A))?.status).toBe('open');
+    });
+  });
+
   describe('★ the full cycle: raise, clear, recur', () => {
     it('a condition that comes back after resolution opens a NEW incident', async () => {
       // 1. It happens.

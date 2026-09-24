@@ -142,7 +142,18 @@ Base: backend, `Authorization: Bearer SERVICE_TOKEN_AI_TO_BACKEND` trên **mọi
 
 ★ **`lookup` KHÔNG lọc gì cả** — archived, finished, ended, approved đều trả về kèm trạng thái. Đây là điều kiện để Resolution kết luận "điều kiện đã hết" từ **facts nhận được**, không bao giờ từ việc một id vắng mặt khỏi danh sách đã lọc. Id không tồn tại thì vắng mặt; AI coi đó là **không xác minh được** và **giữ alert**.
 
-★ **Refused, not truncated:** lookup quá 200 id → `422`, không cắt bớt. Một lookup bị cắt sẽ khiến AI nhầm "không trả về" thành "không tồn tại".
+★ **Refused, not truncated:** lookup quá 200 id → `422`, không cắt bớt. Một lookup bị cắt sẽ khiến AI nhầm "không trả về" thành "không tồn tại". Id trùng được dedupe trước khi đếm và trước khi truy vấn.
+
+**Ordering & pagination.** Keyset trên `(anchor, id)` tăng dần, không OFFSET ở bất kỳ đâu;
+`id` là tie-breaker nên nhiều row cùng timestamp vẫn được duyệt đúng một lần (pin:
+*pages correctly when many trips share one pickup instant*). Cursor sai định dạng → `422`,
+không bao giờ âm thầm quay về trang đầu.
+
+⚠ **Rủi ro starvation, ghi để vận hành biết.** D1 sắp xếp `pickup_at` tăng dần — chuyến
+cũ nhất trước. Nếu tồn đọng hơn `READ_MODEL_PAGE_SIZE × 100` chuyến chưa có xe (mặc
+định 10.000), scan dừng ở cap, báo `partial`, và các chuyến **sắp tới giờ** có thể không
+được nhìn tới trong lần quét đó. Không tự đặt retention/window cutoff để tránh — đó là
+quyết định nghiệp vụ. Dấu hiệu nhận biết: run `partial` kèm `Stopped after 100 pages`.
 
 ## 11. Scan engine (Phase 1b — đã implement, phía AI)
 
@@ -152,12 +163,33 @@ Base: backend, `Authorization: Bearer SERVICE_TOKEN_AI_TO_BACKEND` trên **mọi
 |---|---|
 | timeout / 5xx / 401 / body sai contract | `ReadModelError` → run `partial` → **không resolve gì** |
 | lỗi lập trình | run `failed` → không resolve |
-| dừng sau 100 trang mà còn dữ liệu | run `partial` |
+| dừng sau 100 trang mà còn dữ liệu | run `partial` (pin: *stops at the page cap*) |
 | id không có trong kết quả lookup | giữ alert, ghi log `warn` |
 | batch đầu clear, batch sau lỗi | **không resolve batch nào** |
 | người dùng vừa chuyển trạng thái alert | resolve bị từ chối, log `warn`, không phải lỗi scan |
 
-Resolution ghi `scan_runs` là `succeeded` **trước** khi resolve, vì `resolveBySystem` từ chối run còn `running`; số lượng resolved ghi lại sau bằng `recordResolved`.
+### 11.1 `scan_runs.outcome` nghĩa là gì (quan trọng)
+
+`outcome` trả lời **đúng một câu hỏi**: run này có verify đầy đủ canonical facts không?
+Nó **không** trả lời "mọi mutation sau đó có thành công không".
+
+Thứ tự bắt buộc: verify → `finish(succeeded)` → resolve từng alert → `recordResolved`.
+Lý do: `resolveBySystem` từ chối run còn `running`, nên run phải đóng trước. Và một
+mutation lỗi sau đó **không được** hạ run xuống `partial`: alert đã resolved sẽ thành
+"resolved bởi một partial scan", đúng điều Phase 1a cấm.
+
+Hệ quả, đã pin bằng test (`scan-engine.integration.spec.ts`, nhóm *crash and retry*):
+
+| Cửa sổ crash | Trạng thái để lại | Scan kế tiếp |
+|---|---|---|
+| A. sau verify, trước resolve đầu tiên | run `succeeded`, `resolved = 0`, mọi alert còn live | verify lại và resolve bình thường |
+| B. sau khi resolve A, trước B | A `resolved` (trỏ đúng run đó), B còn live, metric `resolved` = 0 | chỉ B là candidate; A không resolve lần hai, không reopen, không history trùng |
+| C. mutation/history write lỗi sau khi run succeeded | transaction rollback → alert đó còn live; run **vẫn** `succeeded` | resolve alert đó ở lần sau |
+
+★ **`alerts.resolved_scan_run_id` là source of truth**, `scan_runs.resolved` chỉ là
+**execution metric** có thể đếm thiếu nếu process chết giữa chừng (ghi sau
+`finished_at` — có chủ đích, không phải design smell). Đếm chính xác bằng
+`SELECT count(*) FROM ai.alerts WHERE resolved_scan_run_id = $1`.
 
 **Lock:** `pg_try_advisory_lock(771053318, key(detectorCode, phase))` trên connection riêng, ngoài transaction, release trong `finally`; connection chết → session chết → lock tự nhả. Try chứ không wait: tick không lấy được lock thì bỏ qua.
 
