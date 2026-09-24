@@ -218,7 +218,9 @@ export default function TripSchedulePage() {
             trips.showingPreviousPage && 'opacity-60',
           )}
         >
-          <Table>
+          {/* The widest table in the Backoffice: the floating bar keeps the
+              columns on the right reachable from the middle of the rows. */}
+          <Table stickyScrollbar>
             <TableHeader className="bg-gray-50/50">
               <TableRow>
                 <TableHead className="w-[50px] text-center font-semibold text-gray-600">
