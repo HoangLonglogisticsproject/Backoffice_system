@@ -1,19 +1,41 @@
 import * as React from "react"
 
+import { SyncedHorizontalScrollbar } from "@/components/ui/synced-horizontal-scrollbar"
 import { cn } from "@/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+interface TableProps extends React.ComponentProps<"table"> {
+  /**
+   * Put a second horizontal scrollbar at the bottom of the viewport while
+   * this table is in view.
+   *
+   * For tables wide enough that the native bar at the table's own bottom edge
+   * is out of reach from the middle of the rows. Off by default: a table that
+   * fits needs no second bar, and the component hides itself anyway when
+   * there is nothing to scroll.
+   */
+  stickyScrollbar?: boolean
+}
+
+function Table({ className, stickyScrollbar = false, ...props }: TableProps) {
+  // The scroll container is this div, not the table: `overflow-x` lives here,
+  // so this is the element whose `scrollLeft` the floating bar drives.
+  const containerRef = React.useRef<HTMLDivElement>(null)
+
   return (
-    <div
-      data-slot="table-container"
-      className="relative w-full overflow-x-auto"
-    >
-      <table
-        data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
-        {...props}
-      />
-    </div>
+    <>
+      <div
+        ref={containerRef}
+        data-slot="table-container"
+        className="relative w-full overflow-x-auto"
+      >
+        <table
+          data-slot="table"
+          className={cn("w-full caption-bottom text-sm", className)}
+          {...props}
+        />
+      </div>
+      {stickyScrollbar ? <SyncedHorizontalScrollbar targetRef={containerRef} /> : null}
+    </>
   )
 }
 
