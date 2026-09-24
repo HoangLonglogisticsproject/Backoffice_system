@@ -41,6 +41,64 @@ export class AppConfig {
     return this.config.get('TRUSTED_CONTEXT_SECRET', { infer: true });
   }
 
+  // ------------------------------------------------------------ Phase 1b --
+
+  /** Empty when no backend is configured — the engine then does not run. */
+  get backendInternalUrl(): string {
+    return this.config.get('BACKEND_INTERNAL_URL', { infer: true });
+  }
+
+  /** The bearer secret this service presents to the backend. Never log it. */
+  get serviceTokenAiToBackend(): string {
+    return this.config.get('SERVICE_TOKEN_AI_TO_BACKEND', { infer: true });
+  }
+
+  get backendTimeoutMs(): number {
+    return this.config.get('BACKEND_TIMEOUT', { infer: true });
+  }
+
+  /** `undefined` when nobody has chosen an interval — the scheduler stays disarmed. */
+  get scanIntervalMs(): number | undefined {
+    return this.config.get('SCAN_INTERVAL', { infer: true });
+  }
+
+  get scanInitialDelayMs(): number {
+    return this.config.get('SCAN_INITIAL_DELAY', { infer: true });
+  }
+
+  get unassignedTripWarningLeadMs(): number {
+    return this.config.get('DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD', { infer: true });
+  }
+
+  get unassignedTripHighLeadMs(): number | null {
+    return this.config.get('DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD', { infer: true }) ?? null;
+  }
+
+  /** `null` disables D2. It does NOT mean a zero grace. */
+  get staleStartGraceMs(): number | null {
+    return this.config.get('DETECTOR_STALE_START_GRACE', { infer: true }) ?? null;
+  }
+
+  get staleStartHighMs(): number | null {
+    return this.config.get('DETECTOR_STALE_START_HIGH_AFTER', { infer: true }) ?? null;
+  }
+
+  get completionReviewWarningAfterMs(): number {
+    return this.config.get('DETECTOR_COMPLETION_REVIEW_WARNING_AFTER', { infer: true });
+  }
+
+  get completionReviewHighAfterMs(): number | null {
+    return this.config.get('DETECTOR_COMPLETION_REVIEW_HIGH_AFTER', { infer: true }) ?? null;
+  }
+
+  get readModelPageSize(): number {
+    return this.config.get('READ_MODEL_PAGE_SIZE', { infer: true });
+  }
+
+  get resolutionBatchSize(): number {
+    return this.config.get('RESOLUTION_BATCH_SIZE', { infer: true });
+  }
+
   get isProduction(): boolean {
     return this.nodeEnv === 'production';
   }

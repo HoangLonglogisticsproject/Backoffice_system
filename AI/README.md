@@ -1,9 +1,15 @@
 # AI Platform — `/AI`
 
-Ứng dụng riêng bên cạnh `/backend` và `/frontend` (ADR-0007). Phase 1a: nền tảng
-Alert — schema `ai`, migration runner riêng, Alert aggregate + lifecycle + history,
-service-to-service auth, internal Alert API, `/health`. **Chưa có detector, scheduler,
-RAG.**
+Ứng dụng riêng bên cạnh `/backend` và `/frontend` (ADR-0007).
+
+**Phase 1a** — nền tảng Alert: schema `ai`, migration runner riêng, Alert aggregate +
+lifecycle + history + dedupe, service-to-service auth, internal Alert API, `/health`.
+
+**Phase 1b** — scan engine: 3 deterministic detector (D1 chuyến chưa có xe, D2 xe đã
+điều chưa khởi hành, D3 yêu cầu hoàn tất chờ duyệt quá lâu), discovery/resolution tách
+đôi, advisory lock theo (detector, phase), scan_runs lifecycle, backend read-model client.
+
+**Chưa có:** frontend Alert UI, alert PermissionKey, RAG, pgvector, LLM.
 
 NestJS 11 · PostgreSQL 17 · `pg` (không ORM) · zod · jest — cùng phiên bản với backend.
 
@@ -39,6 +45,22 @@ minh boundary bằng chính hai script này.
 | `ai_migrator` | `npm run migrate` | owner schema `ai` | runtime, cleanup |
 | `ai_app` | runtime | SELECT/INSERT/UPDATE `ai.*` | DELETE, DDL, ledger, `public.*` |
 | `ai_maintenance` | retention (Phase 1b) | SELECT/DELETE trên 3 bảng được duyệt | INSERT, DDL, ledger, `public.*` |
+
+## Detector & cấu hình
+
+| Detector | Anchor | Đã duyệt | CHƯA duyệt |
+|---|---|---|---|
+| `UNASSIGNED_TRIP_APPROACHING_EXECUTION` | `pickup_at` | warning 2h trước pickup | ngưỡng HIGH |
+| `STALE_ASSIGNMENT_START` | `pickup_at` | — | **grace** → **detector TẮT** cho tới khi được chốt |
+| `COMPLETION_REVIEW_OVERDUE` | `submitted_at` | warning sau 12h | ngưỡng HIGH |
+
+★ Giá trị chưa duyệt **không có mặc định**. Thiếu ngưỡng HIGH → chỉ phát `warning`;
+thiếu grace của D2 → D2 tắt (zero không phải mặc định); thiếu `SCAN_INTERVAL` →
+scheduler không arm, Alert API vẫn phục vụ. Xem `.env.example`.
+
+**Discovery ≠ Resolution:** discovery quét window và chỉ nâng alert; resolution liệt kê
+alert đang sống, lookup theo id, và chỉ đóng khi facts nhận được nói điều kiện đã hết.
+Scan lỗi/partial/timeout/id vắng mặt → **không đóng gì**.
 
 ## API nội bộ
 

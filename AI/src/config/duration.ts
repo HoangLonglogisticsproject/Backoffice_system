@@ -1,0 +1,71 @@
+import { z } from 'zod';
+
+/**
+ * A duration, written the way an operator writes one: `2h`, `30m`, `45s`,
+ * `90ms`. Parsed once at boot into milliseconds, so nothing downstream ever
+ * multiplies by 3600 again.
+ *
+ * ★ NO BARE NUMBERS. `SCAN_INTERVAL=300` is ambiguous in a way that has
+ * shipped outages: seconds or milliseconds is a factor of a thousand, and the
+ * wrong guess is either a hot loop or a scan every five days. A unit is
+ * required, always.
+ */
+const PATTERN = /^(\d+)(ms|s|m|h)$/;
+
+const MULTIPLIER: Readonly<Record<string, number>> = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+};
+
+/** Milliseconds, or `null` when the text is not a duration. */
+export function parseDuration(text: string): number | null {
+  const match = PATTERN.exec(text.trim());
+  if (!match) return null;
+
+  const [, amount, unit] = match as unknown as [string, string, keyof typeof MULTIPLIER];
+  const multiplier = MULTIPLIER[unit];
+  if (multiplier === undefined) return null;
+
+  const value = Number(amount) * multiplier;
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+/** A zod schema for a duration variable, yielding milliseconds. */
+export const duration = (name: string) =>
+  z.string().transform((text, ctx) => {
+    const milliseconds = parseDuration(text);
+    if (milliseconds === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${name} must be a duration with a unit, such as 2h, 30m, 45s or 500ms — got "${text}"`,
+      });
+      return z.NEVER;
+    }
+    return milliseconds;
+  });
+
+/**
+ * An environment variable that arrived empty is UNSET, not malformed.
+ *
+ * ★ THIS IS A REAL DEPLOYMENT SHAPE, NOT A CONVENIENCE. A compose file
+ * written `SCAN_INTERVAL: ${SCAN_INTERVAL}` renders the empty string when the
+ * host variable is not exported, and `docker compose` does not distinguish
+ * that from a deliberate empty value. Without this the service refuses to
+ * boot on a variable whose documented meaning when absent is "not armed" —
+ * and the Alert API, which has nothing to do with scanning, goes down with
+ * it. A value that is present but not a duration is still an error.
+ */
+const blankIsUnset = (value: unknown): unknown =>
+  typeof value === 'string' && value.trim().length === 0 ? undefined : value;
+
+/** `duration()`, where empty means the variable was never set. */
+export const optionalDuration = (name: string) => z.preprocess(blankIsUnset, duration(name).optional());
+
+/** `duration()`, where empty means "use the approved default". */
+export const durationOr = (name: string, fallback: string) =>
+  z.preprocess(blankIsUnset, duration(name).default(fallback));
+
+/** For log lines and evidence, where seconds read better than milliseconds. */
+export const toSeconds = (milliseconds: number): number => Math.round(milliseconds / 1_000);

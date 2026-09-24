@@ -336,6 +336,29 @@ export class AlertRepository {
     );
   }
 
+  /**
+   * Every LIVE incident of one detector, as `(alertId, subjectId)`.
+   *
+   * ★ WHAT THE RESOLUTION PHASE STARTS FROM. Not a window, not a list the
+   * backend chose — the alerts this service is currently asserting. Dismissed
+   * ones are included: a dismissed incident is suppressed, not closed, and the
+   * system still has to notice when its condition finally clears.
+   */
+  async liveSubjects(
+    detectorCode: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<{ alertId: string; subjectId: string }[]> {
+    const rows = await executor.query<{ alert_id: string; subject_id: string }>(
+      `SELECT id AS alert_id, subject_id
+         FROM alerts
+        WHERE detector_code = $1
+          AND ${LIVE_PREDICATE}
+        ORDER BY first_seen_at ASC, id ASC`,
+      [detectorCode],
+    );
+    return rows.map((row) => ({ alertId: row.alert_id, subjectId: row.subject_id }));
+  }
+
   /** Counts over LIVE incidents only — resolved ones are history, not a queue. */
   async summary(): Promise<AlertSummary> {
     const rows = await this.db.query<{ status: AlertStatus; severity: AlertSeverity; count: number }>(

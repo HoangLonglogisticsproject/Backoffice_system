@@ -1,7 +1,7 @@
 # Backend ↔ AI internal contracts
 
-**Loại:** REFERENCE · **Trạng thái:** đang áp dụng cho Phase 1a; §10 là ranh giới cho Phase 1b, chưa implement.
-**Nguồn quyết định:** [ADR-0007](../architecture/adr-0007-ai-platform-boundary.md).
+**Loại:** REFERENCE · **Trạng thái:** đang áp dụng cho Phase 1a và 1b (read models, scan engine, 3 detector).
+**Nguồn quyết định:** [ADR-0007](../architecture/adr-0007-ai-platform-boundary.md) (ranh giới) · [ADR-0008](../architecture/adr-0008-operational-alert-engine.md) (alert engine Phase 1b).
 
 Hợp đồng duy nhất giữa `/backend` và `/AI`. Hai bên không chia sẻ source; mọi kiểu dữ liệu được khai báo hai lần và mỗi bên có spec pin đúng hình dạng này.
 
@@ -11,7 +11,7 @@ Hợp đồng duy nhất giữa `/backend` và `/AI`. Hai bên không chia sẻ 
 
 ```
 Frontend ──cookie──▶ Backend ──Bearer(SERVICE_TOKEN_BACKEND_TO_AI) + signed context──▶ AI  /internal/v1/alerts*
-AI (Phase 1b) ──Bearer(SERVICE_TOKEN_AI_TO_BACKEND)──▶ Backend /internal/v1/read-models/*   (chưa có)
+AI ──Bearer(SERVICE_TOKEN_AI_TO_BACKEND)──▶ Backend /internal/v1/read-models/dispatch/*
 ```
 Frontend không bao giờ gọi AI. AI không bao giờ gọi endpoint mutation nào của backend.
 
@@ -27,7 +27,7 @@ Không dùng header `X-User-Role` / `X-User-Scope` không chữ ký làm boundar
 
 ## 3. Internal namespace
 
-Mọi route service-to-service nằm dưới `/internal/v1/…` ở cả hai bên. `v1` là bắt buộc; thay đổi phá vỡ contract = `v2` mới, không sửa `v1`. Reverse proxy trả **404** cho `/api/internal/` trên mọi host public (Phase 1b, khi backend có route internal đầu tiên). AI không publish port ra host.
+Mọi route service-to-service nằm dưới `/internal/v1/…` ở cả hai bên. `v1` là bắt buộc; thay đổi phá vỡ contract = `v2` mới, không sửa `v1`. Reverse proxy trả **404** cho `/api/internal/` trên mọi host public — đã cấu hình ở cả `deploy/nginx.conf` và `deploy/nginx-bo-api.conf` (`location ^~ /api/internal/ { return 404; }`). AI không publish port ra host.
 
 ## 4. Service authentication
 
@@ -115,18 +115,123 @@ Không có route tạo alert. Không có route system-resolve — đường syst
 
 **System resolution** (`AlertService.resolveBySystem`, application-internal, không có HTTP route): bắt buộc `scanRunId`; trong cùng transaction phải có run tồn tại, `phase='resolution'`, `outcome='succeeded'`, `detector_code` trùng alert, và alert đang ở trạng thái cho phép system resolve. Sai bất kỳ điều nào → không đổi alert, không ghi history (`409 CONFLICT` / `INVALID_ALERT_TRANSITION` / `422`). Actor `system` bị từ chối ở cửa `transition()` của người dùng.
 
-## 10. Backend read-model boundary (Phase 1b — CHƯA implement, chỉ nguyên tắc)
+## 10. Backend read-model API (Phase 1b — đã implement)
 
-**Backend read models sở hữu CANONICAL FACTS. AI sở hữu ALERT POLICY.**
+**Nguyên tắc:** Backend read models sở hữu **CANONICAL FACTS**. AI sở hữu **ALERT POLICY**.
 
 | Backend trả (facts) | AI quyết (policy) |
 |---|---|
 | trip `status`, `archived`, `pickupAt`, `deliveryAt`, `scheduledOn`, `activeAssignmentCount` | ngưỡng warning/high |
-| assignment `state`, `assignedAt`, `endedAt`, `hasLiveEvents` (tính bằng đúng predicate `hasLiveEvents()` của backend), `latestCompletionState` | "fact này có phải alert không" |
-| completion `state`, `attemptNo`, `submittedAt`, `decidedAt` | severity mapping |
-| | exclusion riêng của detector |
-| | quyết định active / clear cuối cùng |
+| assignment `state`, `assignedAt`, `endedAt`, `hasLiveEvents`, `latestCompletionState` | "fact này có phải alert không" |
+| completion `state`, `attemptNo`, `submittedAt`, `decidedAt` | severity mapping, exclusion riêng của detector, quyết định active/clear |
 
-Backend **được** lọc thô vì hiệu năng: cửa sổ thời gian kỹ thuật (`pickupBefore`, `submittedBefore`), thu hẹp trạng thái canonical (`state=active`), pagination, predicate factual ổn định. Backend **không được** chứa predicate alert hoàn chỉnh, threshold hay severity.
+Backend **được** lọc thô vì hiệu năng: cửa sổ thời gian kỹ thuật (`before`), thu hẹp trạng thái canonical (`archived IS NULL`, `status <> 'finished'`, `state = 'active'`, `voided_at IS NULL`, `state = 'pending'`), pagination. Backend **không** chứa threshold, severity hay predicate alert hoàn chỉnh — integration spec khẳng định điều này bằng các case "REPORTS … — the exclusion is the AI's rule".
 
-Hình dạng dự kiến (sẽ chốt ở Phase 1b, không phải hợp đồng hôm nay): `GET /internal/v1/read-models/dispatch/{unassigned-trips | unstarted-assignments | pending-completions}` (keyset, ≤ 200) và `POST /internal/v1/read-models/dispatch/subjects:lookup` (≤ 200 id, trả cả archived/finished) cho Resolution theo id. Guard: `ServiceAuthGuard` phía backend (`backend/src/infrastructure/service-auth/service-auth.guard.ts`, đã có, chưa gắn route).
+Base: backend, `Authorization: Bearer SERVICE_TOKEN_AI_TO_BACKEND` trên **mọi** route. Không session, không CSRF, không `PermissionGuard`.
+
+| Method & path | Query / body | Trả về |
+|---|---|---|
+| `GET /internal/v1/read-models/dispatch/unassigned-trips` | `before` (ISO instant, bắt buộc), `limit` (≤200, mặc định 50), `cursor` | `Page<TripFacts>` — trip live, `pickup_at IS NOT NULL`, `pickup_at <= before`, không có active assignment; sắp `(pickup_at, id)` tăng dần |
+| `GET …/unstarted-assignments` | như trên | `Page<AssignmentFacts>` — assignment `active`, trip live, `pickup_at <= before`, không có execution event non-void |
+| `GET …/pending-completions` | như trên | `Page<CompletionRequestFacts>` — request `pending`, `submitted_at <= before` |
+| `POST …/subjects/lookup` | `{ tripIds?, assignmentIds?, completionRequestIds? }` (uuid[], tổng ≤ 200 sau khi dedupe) | `{ trips, assignments, completionRequests }` |
+
+`TripFacts` = `{ tripId, scheduledOn, pickupAt, deliveryAt, status, archived, activeAssignmentCount, customer }`.
+`AssignmentFacts` = `{ assignmentId, tripId, driverUserId, vehicleId, vehiclePlate, state, assignedAt, endedAt, hasLiveEvents, latestCompletionState, trip }`.
+`CompletionRequestFacts` = `{ requestId, assignmentId, tripId, attemptNo, state, submittedAt, decidedAt, trip }`.
+
+★ **`lookup` KHÔNG lọc gì cả** — archived, finished, ended, approved đều trả về kèm trạng thái. Đây là điều kiện để Resolution kết luận "điều kiện đã hết" từ **facts nhận được**, không bao giờ từ việc một id vắng mặt khỏi danh sách đã lọc. Id không tồn tại thì vắng mặt; AI coi đó là **không xác minh được** và **giữ alert**.
+
+★ **Refused, not truncated:** lookup quá 200 id → `422`, không cắt bớt. Một lookup bị cắt sẽ khiến AI nhầm "không trả về" thành "không tồn tại". Id trùng được dedupe trước khi đếm và trước khi truy vấn.
+
+**Ordering & pagination.** Keyset trên `(anchor, id)` tăng dần, không OFFSET ở bất kỳ đâu;
+`id` là tie-breaker nên nhiều row cùng timestamp vẫn được duyệt đúng một lần (pin:
+*pages correctly when many trips share one pickup instant*). Cursor sai định dạng → `422`,
+không bao giờ âm thầm quay về trang đầu.
+
+★ **D1 quét theo HAI BAND, band cấp bách trước.** Một lượt quét tăng dần duy nhất sẽ để
+tồn đọng quá hạn nằm ở đầu ăn hết page budget mỗi lần, và chuyến sắp tới giờ **không
+bao giờ** được đánh giá — lỗi liveness, không phải chậm. Vì vậy AI gọi hai lần:
+
+| Band | Range | Thứ tự |
+|---|---|---|
+| `approaching` | `[now, now + 2h]` | **trước** |
+| `overdue` | `(-∞, now)` | sau |
+
+★ **`pickup_at = now` thuộc band `approaching`.** Chuyến đến giờ lấy hàng **ngay lúc
+này** là candidate cấp bách nhất; để nó ở đầu band tồn đọng là bỏ đói đúng trường hợp mà
+thứ tự quét sinh ra để bảo vệ. Vết cắt tại `now` vì vậy **đóng ở phía approaching, mở ở
+phía overdue**: hai band phân hoạch chính xác — mọi `pickup_at` thuộc đúng một band,
+không trùng, không sót — và không phải dịch mốc thời gian đi 1ms để nói điều đó.
+
+Predicate của detector **không đổi**; chỉ thứ tự tiêu ngân sách đổi. Không có
+retention/window cutoff nào được tự đặt: chuyến quá hạn vẫn là candidate vĩnh viễn.
+
+**Range bounds là kỹ thuật thuần tuý.** Backend nhận `before`, `after` và hai cờ
+`beforeInclusive` / `afterInclusive` (mặc định: `before` đóng, `after` mở → `(after,
+before]`). Cờ chỉ nhận đúng `true` hoặc `false`; giá trị khác → `422`. Range rỗng →
+`422`, không trả về trang rỗng. Backend **không biết** 2h, không biết severity, không
+biết bên nào của vết cắt là cấp bách.
+
+Page budget **dùng chung** cho cả hai band: band đầu tiêu trước. Hết budget → run
+`partial` kèm tên band chưa đi hết (hoặc chưa tới). Không bao giờ báo `succeeded` khi
+còn band chưa quét.
+
+## 11. Scan engine (Phase 1b — đã implement, phía AI)
+
+**Discovery ≠ Resolution.** Discovery quét candidate window, đánh giá rule, upsert positives; **không bao giờ** resolve. Vắng mặt khỏi window không chứng minh điều gì. Resolution liệt kê alert đang `open|acknowledged|dismissed` của detector, lookup **theo id**, đánh giá lại, và chỉ resolve khi facts nhận được nói điều kiện đã hết.
+
+| Tình huống | Kết quả |
+|---|---|
+| timeout / 5xx / 401 / body sai contract | `ReadModelError` → run `partial` → **không resolve gì** |
+| lỗi lập trình | run `failed` → không resolve |
+| dừng sau 100 trang mà còn dữ liệu | run `partial` (pin: *stops at the page cap*) |
+| id không có trong kết quả lookup | giữ alert, ghi log `warn` |
+| batch đầu clear, batch sau lỗi | **không resolve batch nào** |
+| người dùng vừa chuyển trạng thái alert | resolve bị từ chối, log `warn`, không phải lỗi scan |
+
+### 11.1 `scan_runs.outcome` nghĩa là gì (quan trọng)
+
+`outcome` trả lời **đúng một câu hỏi**: run này có verify đầy đủ canonical facts không?
+Nó **không** trả lời "mọi mutation sau đó có thành công không".
+
+Thứ tự bắt buộc: verify → `finish(succeeded)` → resolve từng alert → `recordResolved`.
+Lý do: `resolveBySystem` từ chối run còn `running`, nên run phải đóng trước. Và một
+mutation lỗi sau đó **không được** hạ run xuống `partial`: alert đã resolved sẽ thành
+"resolved bởi một partial scan", đúng điều Phase 1a cấm.
+
+Hệ quả, đã pin bằng test (`scan-engine.integration.spec.ts`, nhóm *crash and retry*):
+
+| Cửa sổ crash | Trạng thái để lại | Scan kế tiếp |
+|---|---|---|
+| A. sau verify, trước resolve đầu tiên | run `succeeded`, `resolved = 0`, mọi alert còn live | verify lại và resolve bình thường |
+| B. sau khi resolve A, trước B | A `resolved` (trỏ đúng run đó), B còn live, metric `resolved` = 0 | chỉ B là candidate; A không resolve lần hai, không reopen, không history trùng |
+| C. mutation/history write lỗi sau khi run succeeded | transaction rollback → alert đó còn live; run **vẫn** `succeeded` | resolve alert đó ở lần sau |
+
+★ **`alerts.resolved_scan_run_id` là source of truth**, `scan_runs.resolved` chỉ là
+**execution metric** có thể đếm thiếu nếu process chết giữa chừng (ghi sau
+`finished_at` — có chủ đích, không phải design smell). Đếm chính xác bằng
+`SELECT count(*) FROM ai.alerts WHERE resolved_scan_run_id = $1`.
+
+**Lock:** `pg_try_advisory_lock(771053318, key(detectorCode, phase))` trên connection riêng, ngoài transaction, release trong `finally`; connection chết → session chết → lock tự nhả. Try chứ không wait: tick không lấy được lock thì bỏ qua.
+
+**Correlation id:** một id cho cả tick, đi vào read-model request (`X-Correlation-Id`), `scan_runs.correlation_id`, `alert_transition_history.correlation_id` và mọi dòng log.
+
+**Log:** một dòng JSON mỗi run — `event, detector, phase, runId, outcome, durationMs, candidates, signals, created, updated, resolved, correlationId, error?`. Không log token, trusted context, secret hay payload nghiệp vụ.
+
+## 12. Detector & cấu hình (Phase 1b)
+
+| Detector | Subject | Anchor | Đã duyệt | CHƯA duyệt |
+|---|---|---|---|---|
+| `UNASSIGNED_TRIP_APPROACHING_EXECUTION` v1 | trip | `pickup_at` | warning lead **2h** | ngưỡng HIGH |
+| `STALE_ASSIGNMENT_START` v1 | assignment | `pickup_at` | — | **grace (bắt buộc để chạy)**, ngưỡng HIGH |
+| `COMPLETION_REVIEW_OVERDUE` v1 | completion request | `submitted_at` | warning sau **12h** | ngưỡng HIGH |
+
+★ **Giá trị chưa duyệt thì KHÔNG có mặc định.** Thiếu ngưỡng HIGH → detector chỉ phát `warning`. Thiếu grace của D2 → **D2 bị tắt** và ghi rõ lý do lúc boot (zero không phải mặc định). Thiếu `SCAN_INTERVAL` → scheduler không arm.
+
+v1 chỉ dùng `warning` và `high`; `info`/`critical` không được phát. `confidence` luôn `null` với rule detector.
+
+**Evidence** (deterministic, `evidenceVersion = 1`, chỉ facts giải thích alert — không dump read model, không secret):
+- D1: `tripId, scheduledOn, pickupAt, tripStatus, activeAssignmentCount, remainingSeconds, warningLeadSeconds, highLeadSeconds, observedAt`
+- D2: `assignmentId, tripId, driverUserId, vehicleId, pickupAt, assignedAt, hasLiveExecutionEvent, latestCompletionState, elapsedSincePickupSeconds, configuredGraceSeconds, highAfterSeconds, observedAt`
+- D3: `completionRequestId, assignmentId, tripId, attemptNo, submittedAt, elapsedSeconds, warningThresholdSeconds, highThresholdSeconds, observedAt`

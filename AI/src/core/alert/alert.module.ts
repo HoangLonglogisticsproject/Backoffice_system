@@ -16,6 +16,6 @@ import { ScanRunRepository } from './persistence/scan-run.repository';
   imports: [ServiceAuthModule],
   controllers: [InternalAlertController],
   providers: [AlertService, AlertRepository, AlertHistoryRepository, ScanRunRepository],
-  exports: [AlertService, ScanRunRepository],
+  exports: [AlertService, AlertRepository, ScanRunRepository],
 })
 export class AlertModule {}

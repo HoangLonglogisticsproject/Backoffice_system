@@ -1,5 +1,24 @@
 import { z } from 'zod';
 import { SCHEMA_NAME_PATTERN } from '../common/database/schema-name';
+import { durationOr, optionalDuration } from './duration';
+
+/**
+ * The floor under `SCAN_INTERVAL`, in milliseconds.
+ *
+ * ★ THIS IS NOT THE SCAN CADENCE, AND IT IS NOT A POLICY VALUE. How often the
+ * engine should scan in production is still TBD and deliberately has no
+ * default anywhere in this codebase. This is the point below which a
+ * configuration is not a cadence at all but a hot loop: one tick is three
+ * detectors times two phases, each taking an advisory lock and making
+ * backend requests bounded by `BACKEND_TIMEOUT` (10s by default), so an
+ * interval under a second issues ticks faster than a single network round
+ * trip can finish. `inFlight` would skip most of them and the rest would run
+ * back to back — which is exactly the failure `duration.ts` refuses bare
+ * numbers to avoid, arriving instead through `SCAN_INTERVAL=0s`.
+ *
+ * One second, therefore: the smallest interval that is still an interval.
+ */
+export const MIN_SCAN_INTERVAL_MS = 1_000;
 
 /**
  * The deployment's environment, validated once at boot.
@@ -96,6 +115,99 @@ export const envSchema = z.object({
    * this person, with these permissions, for the next minute".
    */
   TRUSTED_CONTEXT_SECRET: secret('TRUSTED_CONTEXT_SECRET'),
+
+  // ------------------------------------------------------------ Phase 1b --
+  //
+  // The scan engine. Everything below is OPTIONAL and closed when absent:
+  // this service must still boot to serve the Alert API when no scanning is
+  // configured, and a half-configured engine must not run rather than run on
+  // invented values.
+
+  /**
+   * Where the backend's internal read models live, reached over the compose
+   * network (`http://backend:3000`). Empty = the engine has nowhere to read
+   * from, so the scheduler does not arm.
+   */
+  BACKEND_INTERNAL_URL: z
+    .string()
+    .default('')
+    .superRefine((value, ctx) => {
+      if (value.length === 0) return;
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'BACKEND_INTERNAL_URL must be a valid URL' });
+        return;
+      }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'BACKEND_INTERNAL_URL must be http or https' });
+      }
+    }),
+
+  /**
+   * The bearer secret THIS service presents to the backend. The other
+   * direction's secret is `SERVICE_TOKEN_BACKEND_TO_AI` above; they are never
+   * the same value. Empty = the engine cannot authenticate, so it does not run.
+   */
+  SERVICE_TOKEN_AI_TO_BACKEND: z
+    .string()
+    .default('')
+    .refine((value) => value.length === 0 || value.length >= 32, {
+      message: 'SERVICE_TOKEN_AI_TO_BACKEND must be at least 32 characters when set — generate it, never type it',
+    }),
+
+  /** How long one read-model request may take before it is a failed scan. */
+  BACKEND_TIMEOUT: durationOr('BACKEND_TIMEOUT', '10s'),
+
+  /**
+   * ★ NOT APPROVED, SO NOT DEFAULTED. How often the engine scans is a
+   * business decision nobody has taken. Unset = the scheduler does not arm
+   * and says so at boot; the Alert API still serves.
+   *
+   * The floor below is a GUARD RAIL, NOT A CADENCE — see `MIN_SCAN_INTERVAL_MS`.
+   */
+  SCAN_INTERVAL: optionalDuration('SCAN_INTERVAL').refine(
+    (milliseconds) => milliseconds === undefined || (milliseconds as number) >= MIN_SCAN_INTERVAL_MS,
+    {
+      message:
+        `SCAN_INTERVAL must be at least ${MIN_SCAN_INTERVAL_MS}ms — this is a technical floor that ` +
+        'prevents a scheduler hot loop, NOT the operational scan cadence, which is still unapproved',
+    },
+  ),
+
+  /**
+   * How long after boot the first tick fires. Defaulted to `0s` because that
+   * is the ABSENCE of a delay rather than a chosen one — the lock makes an
+   * immediate tick safe even while another replica is mid-deploy.
+   */
+  SCAN_INITIAL_DELAY: durationOr('SCAN_INITIAL_DELAY', '0s'),
+
+  /** D1 — CEO-approved (2026-09-19): two hours before pickup. */
+  DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD: durationOr('DETECTOR_UNASSIGNED_TRIP_WARNING_LEAD', '2h'),
+  /** D1 HIGH band — TBD. Unset = this detector never raises `high`. */
+  DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD: optionalDuration('DETECTOR_UNASSIGNED_TRIP_HIGH_LEAD'),
+
+  /**
+   * D2 — NOT APPROVED. How long after pickup an unstarted assignment is a
+   * problem. Unset = D2 is DISABLED, which is not the same as a zero grace.
+   */
+  DETECTOR_STALE_START_GRACE: optionalDuration('DETECTOR_STALE_START_GRACE'),
+  /** D2 HIGH band — TBD. */
+  DETECTOR_STALE_START_HIGH_AFTER: optionalDuration('DETECTOR_STALE_START_HIGH_AFTER'),
+
+  /** D3 — CEO-approved (2026-09-19): twelve hours pending. */
+  DETECTOR_COMPLETION_REVIEW_WARNING_AFTER: durationOr('DETECTOR_COMPLETION_REVIEW_WARNING_AFTER', '12h'),
+  /** D3 HIGH band — TBD. */
+  DETECTOR_COMPLETION_REVIEW_HIGH_AFTER: optionalDuration('DETECTOR_COMPLETION_REVIEW_HIGH_AFTER'),
+
+  /**
+   * Technical sizes, not policy: how big a read-model page is and how many
+   * ids one resolution lookup carries. The backend refuses a lookup above
+   * 200, so this stays at or under that.
+   */
+  READ_MODEL_PAGE_SIZE: z.coerce.number().int().min(1).max(200).default(100),
+  RESOLUTION_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(100),
 });
 
 export type Env = z.infer<typeof envSchema>;
