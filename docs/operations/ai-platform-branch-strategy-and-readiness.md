@@ -67,10 +67,18 @@ ai/integration
 
    ```sh
    git fetch origin
-   git switch ai/integration
+   git switch -c sync/main-into-ai-integration origin/ai/integration
    git merge origin/main          # merge, không rebase
-   git push origin ai/integration
+   git push origin sync/main-into-ai-integration
+   # rồi mở PR: sync/main-into-ai-integration → ai/integration
    ```
+
+   ★ **Qua PR, không push thẳng.** `ai-integration-protection` bắt buộc pull
+   request cho mọi thay đổi trên `ai/integration`, kể cả của admin (ruleset
+   không có bypass actor). `git push origin ai/integration` bị từ chối với
+   `GH013: Changes must be made through a pull request`. Đây là chủ ý: một
+   nhánh dài hạn mà nhiều PR bám vào không nên đổi dưới chân người khác mà
+   không ai nhìn thấy.
 
    Merge chứ không rebase: **không rewrite lịch sử `ai/integration`**. Nhánh này có nhiều người và nhiều PR bám vào, force push sẽ phá hết — và ruleset chặn force push.
 
