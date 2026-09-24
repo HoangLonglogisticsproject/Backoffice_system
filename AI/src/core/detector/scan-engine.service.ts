@@ -53,6 +53,21 @@ export interface ScanReport {
 /** How many pages one discovery may walk before it stops asking. */
 const MAX_PAGES = 100;
 
+/** What one discovery has seen so far, across every band it has walked. */
+interface DiscoveryTally {
+  candidates: number;
+  signals: number;
+  created: number;
+  updated: number;
+}
+
+/** The run a helper is working for, and the instant it is evaluating against. */
+interface ScanContext {
+  runId: string;
+  correlationId: string;
+  now: Date;
+}
+
 @Injectable()
 export class ScanEngineService {
   private readonly logger = new Logger(ScanEngineService.name);
@@ -86,12 +101,9 @@ export class ScanEngineService {
       correlationId,
     });
 
-    let candidates = 0;
-    let signals = 0;
-    let created = 0;
-    let updated = 0;
     let outcome: ScanOutcome = 'succeeded';
     let error: string | null = null;
+    const tally: DiscoveryTally = { candidates: 0, signals: 0, created: 0, updated: 0 };
 
     try {
       // ★ THE BANDS ARE WALKED IN THE ORDER THE DETECTOR GAVE THEM, AND THE
@@ -100,52 +112,41 @@ export class ScanEngineService {
       // detector puts the band that must not be starved at the front. A band
       // left unwalked because the budget ran out is a PARTIAL scan, never a
       // successful one.
-      let pages = 0;
+      let spent = 0;
 
       for (const window of detector.candidateWindows(now)) {
-        if (pages >= MAX_PAGES) {
+        if (spent >= MAX_PAGES) {
           outcome = 'partial';
           error = `Stopped after ${MAX_PAGES} pages; the "${window.label}" band was not reached.`;
           break;
         }
 
-        let cursor: string | null = null;
-        do {
-          const page: FactsPage<Facts> = await fetchPage(window, cursor, correlationId);
-          candidates += page.items.length;
+        const walk = await this.walkBand(detector, window, fetchPage, tally, {
+          runId: run.id,
+          correlationId,
+          now,
+          budget: MAX_PAGES - spent,
+        });
+        spent += walk.pagesRead;
 
-          for (const facts of page.items) {
-            const signal = detector.evaluate(facts, now);
-            if (!signal) continue;
-
-            signals += 1;
-            const result = await this.alerts.recordSignal(signal, { scanRunId: run.id, correlationId });
-            if (result.created) created += 1;
-            else updated += 1;
-          }
-
-          cursor = page.hasMore ? page.nextCursor : null;
-          pages += 1;
-          if (pages >= MAX_PAGES && cursor) {
-            // Not a failure of the backend, but not a complete scan either:
-            // the rest of this band was never looked at, and saying
-            // `succeeded` would be a claim this run cannot support.
-            outcome = 'partial';
-            error = `Stopped after ${MAX_PAGES} pages with more to read in the "${window.label}" band.`;
-            break;
-          }
-        } while (cursor);
-
-        if (outcome === 'partial') break;
+        if (walk.unfinished) {
+          // Not a failure of the backend, but not a complete scan either:
+          // the rest of this band was never looked at, and saying
+          // `succeeded` would be a claim this run cannot support.
+          outcome = 'partial';
+          error = `Stopped after ${MAX_PAGES} pages with more to read in the "${window.label}" band.`;
+          break;
+        }
       }
-    } catch (caught) {
-      outcome = caught instanceof ReadModelError ? 'partial' : 'failed';
-      error = describe(caught);
+    } catch (error_) {
+      outcome = error_ instanceof ReadModelError ? 'partial' : 'failed';
+      error = describe(error_);
       this.logger.error(
         `discovery ${detector.code} run=${run.id} cid=${correlationId} outcome=${outcome} — ${error}`,
       );
     }
 
+    const { candidates, signals, created, updated } = tally;
     await this.scanRuns.finish(run.id, { outcome, candidates, signals, created, updated, error });
 
     const report: ScanReport = {
@@ -193,39 +194,33 @@ export class ScanEngineService {
     let resolved = 0;
     let outcome: ScanOutcome = 'succeeded';
     let error: string | null = null;
-    /** Alert ids whose subjects were fetched AND evaluated as clear. */
-    const clear: string[] = [];
+    let clear: string[] = [];
 
     try {
-      const live = await this.alertRows.liveSubjects(detector.code);
-      candidates = live.length;
+      const verification = await this.verifySubjects(detector, lookup, { runId: run.id, correlationId, now });
+      candidates = verification.candidates;
+      clear = verification.clear;
 
-      for (const batch of chunk(live, this.settings.resolutionBatchSize)) {
-        const facts = await lookup(
-          batch.map((row) => row.subjectId),
-          correlationId,
-        );
-        const bySubject = new Map(facts.map((item) => [detector.subjectIdOf(item), item]));
-
-        for (const row of batch) {
-          const current = bySubject.get(row.subjectId);
-          if (current === undefined) {
-            // ★ NOT "RESOLVED". The backend answered, and this id was not in
-            // the answer: the row is gone from a table nothing deletes from,
-            // or the contract changed. Either way nobody has shown the
-            // condition cleared, so the alert stays and says so.
-            this.logger.warn(
-              `resolution ${detector.code} run=${run.id} cid=${correlationId} ` +
-                `alert=${row.alertId} subject=${row.subjectId} was not returned by the backend — keeping the alert`,
-            );
-            continue;
-          }
-          if (detector.evaluate(current, now) === null) clear.push(row.alertId);
-        }
+      if (verification.missing > 0) {
+        // ★ AN INCOMPLETE VERIFICATION RESOLVES NOTHING — NOT EVEN THE PART
+        // IT DID VERIFY. The backend answered, and some requested id was not
+        // in the answer: the row is gone from a table nothing deletes from,
+        // or the contract changed, or the lookup was silently truncated. The
+        // last of those is the dangerous one, because it makes a subject that
+        // EXISTS look absent — and if this run were allowed to close the
+        // alerts it happened to verify, a truncated answer would resolve real
+        // alerts one batch at a time. So the whole run is partial and the
+        // second pass below does not run at all. Every alert stays live,
+        // including the ones whose condition really had cleared; the next
+        // complete run closes them.
+        outcome = 'partial';
+        error =
+          `${verification.missing} of ${verification.candidates} subject(s) were not returned by the backend; ` +
+          'nothing was resolved.';
       }
-    } catch (caught) {
-      outcome = caught instanceof ReadModelError ? 'partial' : 'failed';
-      error = describe(caught);
+    } catch (error_) {
+      outcome = error_ instanceof ReadModelError ? 'partial' : 'failed';
+      error = describe(error_);
       this.logger.error(
         `resolution ${detector.code} run=${run.id} cid=${correlationId} outcome=${outcome} — ${error}`,
       );
@@ -237,18 +232,7 @@ export class ScanEngineService {
     // this run inside its own transaction and refuses anything that is not a
     // succeeded resolution run of this detector.
     if (outcome === 'succeeded') {
-      for (const alertId of clear) {
-        try {
-          await this.alerts.resolveBySystem({ alertId, scanRunId: run.id, correlationId });
-          resolved += 1;
-        } catch (caught) {
-          // A person acknowledged, dismissed or resolved it while the scan
-          // ran: their move wins, and this is not a scan failure.
-          this.logger.warn(
-            `resolution ${detector.code} run=${run.id} alert=${alertId} was not resolved: ${describe(caught)}`,
-          );
-        }
-      }
+      resolved = await this.closeCleared(detector, clear, { runId: run.id, correlationId });
       await this.scanRuns.recordResolved(run.id, resolved);
     }
 
@@ -267,6 +251,129 @@ export class ScanEngineService {
     };
     this.log(report, correlationId);
     return report;
+  }
+
+  /**
+   * Walk ONE band to its end, or until the shared page budget runs out.
+   *
+   * Everything a page produces — candidates counted, signals evaluated,
+   * alerts upserted — happens here, because "read a band" and "spend the
+   * budget across bands" are two different jobs and only the second one has
+   * to know there is more than one band.
+   */
+  private async walkBand<Facts>(
+    detector: Detector<Facts>,
+    window: CandidateWindow,
+    fetchPage: (window: CandidateWindow, cursor: string | null, correlationId: string) => Promise<FactsPage<Facts>>,
+    tally: DiscoveryTally,
+    context: ScanContext & { budget: number },
+  ): Promise<{ pagesRead: number; unfinished: boolean }> {
+    let cursor: string | null = null;
+    let pagesRead = 0;
+
+    do {
+      const page: FactsPage<Facts> = await fetchPage(window, cursor, context.correlationId);
+      tally.candidates += page.items.length;
+      await this.recordPositives(detector, page.items, tally, context);
+
+      cursor = page.hasMore ? page.nextCursor : null;
+      pagesRead += 1;
+
+      if (pagesRead >= context.budget && cursor) return { pagesRead, unfinished: true };
+    } while (cursor);
+
+    return { pagesRead, unfinished: false };
+  }
+
+  /** Evaluate one page of facts and upsert whatever the rule calls a problem. */
+  private async recordPositives<Facts>(
+    detector: Detector<Facts>,
+    items: readonly Facts[],
+    tally: DiscoveryTally,
+    context: ScanContext,
+  ): Promise<void> {
+    for (const facts of items) {
+      const signal = detector.evaluate(facts, context.now);
+      if (!signal) continue;
+
+      tally.signals += 1;
+      const result = await this.alerts.recordSignal(signal, {
+        scanRunId: context.runId,
+        correlationId: context.correlationId,
+      });
+      if (result.created) tally.created += 1;
+      else tally.updated += 1;
+    }
+  }
+
+  /**
+   * Ask the backend for every live subject BY ID and re-run the predicate on
+   * what came back.
+   *
+   * Reports what it verified and what it could not: an id that was requested
+   * and not returned is `missing`, never "clear". Deciding what a missing
+   * subject means to the run is the caller's job, and the answer is that it
+   * poisons the whole run.
+   */
+  private async verifySubjects<Facts>(
+    detector: Detector<Facts>,
+    lookup: (subjectIds: string[], correlationId: string) => Promise<Facts[]>,
+    context: ScanContext,
+  ): Promise<{ candidates: number; clear: string[]; missing: number }> {
+    const live = await this.alertRows.liveSubjects(detector.code);
+    const clear: string[] = [];
+    let missing = 0;
+
+    for (const batch of chunk(live, this.settings.resolutionBatchSize)) {
+      const facts = await lookup(
+        batch.map((row) => row.subjectId),
+        context.correlationId,
+      );
+      const bySubject = new Map(facts.map((item) => [detector.subjectIdOf(item), item]));
+
+      for (const row of batch) {
+        const current = bySubject.get(row.subjectId);
+        if (current === undefined) {
+          missing += 1;
+          this.logger.warn(
+            `resolution ${detector.code} run=${context.runId} cid=${context.correlationId} ` +
+              `alert=${row.alertId} subject=${row.subjectId} was not returned by the backend — keeping the alert`,
+          );
+          continue;
+        }
+        if (detector.evaluate(current, context.now) === null) clear.push(row.alertId);
+      }
+    }
+
+    return { candidates: live.length, clear, missing };
+  }
+
+  /** Close the verified-clear alerts, and count only the ones that moved. */
+  private async closeCleared<Facts>(
+    detector: Detector<Facts>,
+    clear: readonly string[],
+    context: Omit<ScanContext, 'now'>,
+  ): Promise<number> {
+    let resolved = 0;
+
+    for (const alertId of clear) {
+      try {
+        await this.alerts.resolveBySystem({
+          alertId,
+          scanRunId: context.runId,
+          correlationId: context.correlationId,
+        });
+        resolved += 1;
+      } catch (error_) {
+        // A person acknowledged, dismissed or resolved it while the scan
+        // ran: their move wins, and this is not a scan failure.
+        this.logger.warn(
+          `resolution ${detector.code} run=${context.runId} alert=${alertId} was not resolved: ${describe(error_)}`,
+        );
+      }
+    }
+
+    return resolved;
   }
 
   /** One structured line per run. No token, no context, no operational payload. */
@@ -294,7 +401,8 @@ export class ScanEngineService {
 /** The message, and for a read failure its classification — never a payload. */
 function describe(caught: unknown): string {
   if (caught instanceof ReadModelError) {
-    return `${caught.kind}${caught.status ? ` (${caught.status})` : ''}: ${caught.message}`;
+    const status = caught.status === undefined ? '' : ` (${caught.status})`;
+    return `${caught.kind}${status}: ${caught.message}`;
   }
   return (caught as Error)?.message ?? String(caught);
 }

@@ -282,6 +282,77 @@ describeIntegration('Scan engine against real PostgreSQL', () => {
       expect((await alertRow(TRIP_A))?.status).toBe('open');
     });
 
+    describe('★ an INCOMPLETE lookup resolves nothing — not even the part it verified', () => {
+      /** Every transition this alert has ever had, newest last. */
+      const transitionsOf = async (tripId: string): Promise<string[]> => {
+        const { rows } = await pool.query<{ to_status: string }>(
+          `SELECT h.to_status FROM alert_transition_history h
+             JOIN alerts a ON a.id = h.alert_id
+            WHERE a.subject_id = $1 ORDER BY h.created_at, h.id`,
+          [tripId],
+        );
+        return rows.map((row) => row.to_status);
+      };
+
+      const twoLiveAlerts = async (cid: string): Promise<void> => {
+        await engine.discover(detector, onePage([problem(TRIP_A), problem(TRIP_B)]), cid);
+      };
+
+      it('A. clear first, missing second: neither alert moves', async () => {
+        await twoLiveAlerts('cid-miss-a');
+        // TRIP_A has genuinely cleared; TRIP_B is simply not in the answer.
+        const report = await engine.resolve(detector, lookupOf([cleared(TRIP_A)]), 'cid-miss-a');
+
+        expect(report.outcome).toBe('partial');
+        expect(report.resolved).toBe(0);
+        expect(report.error).toContain('not returned by the backend');
+        expect((await alertRow(TRIP_A))?.status).toBe('open');
+        expect((await alertRow(TRIP_B))?.status).toBe('open');
+        expect(await transitionsOf(TRIP_A)).toEqual(['open']);
+        expect(await transitionsOf(TRIP_B)).toEqual(['open']);
+        expect((await scanRuns.findById(report.scanRunId))?.resolved).toBe(0);
+      });
+
+      it('B. missing first, clear second: same result, order changes nothing', async () => {
+        await twoLiveAlerts('cid-miss-b');
+        const report = await engine.resolve(detector, lookupOf([cleared(TRIP_B)]), 'cid-miss-b');
+
+        expect(report.outcome).toBe('partial');
+        expect(report.resolved).toBe(0);
+        expect((await alertRow(TRIP_A))?.status).toBe('open');
+        expect((await alertRow(TRIP_B))?.status).toBe('open');
+        expect(await transitionsOf(TRIP_A)).toEqual(['open']);
+        expect(await transitionsOf(TRIP_B)).toEqual(['open']);
+      });
+
+      it('C. a COMPLETE lookup still resolves what cleared — the guard costs the normal case nothing', async () => {
+        await twoLiveAlerts('cid-miss-c');
+        const report = await engine.resolve(detector, lookupOf([cleared(TRIP_A), problem(TRIP_B)]), 'cid-miss-c');
+
+        expect(report.outcome).toBe('succeeded');
+        expect(report.resolved).toBe(1);
+        expect((await alertRow(TRIP_A))?.status).toBe('resolved');
+        expect((await alertRow(TRIP_B))?.status).toBe('open');
+        expect(await transitionsOf(TRIP_A)).toEqual(['open', 'resolved']);
+        expect((await scanRuns.findById(report.scanRunId))?.resolved).toBe(1);
+      });
+
+      it('★ and a subsequent COMPLETE run converges: what really cleared is then closed', async () => {
+        await twoLiveAlerts('cid-miss-e');
+        await engine.resolve(detector, lookupOf([cleared(TRIP_A)]), 'cid-miss-e');
+        expect((await alertRow(TRIP_A))?.status).toBe('open');
+
+        // Nothing is lost by refusing to act on a partial answer — the very
+        // next run that CAN account for every subject does the work.
+        const second = await engine.resolve(detector, lookupOf([cleared(TRIP_A), problem(TRIP_B)]), 'cid-miss-e');
+
+        expect(second.outcome).toBe('succeeded');
+        expect(second.resolved).toBe(1);
+        expect((await alertRow(TRIP_A))?.status).toBe('resolved');
+        expect((await alertRow(TRIP_B))?.status).toBe('open');
+      });
+    });
+
     it('★ a FAILED lookup resolves nothing, and the run says `partial`', async () => {
       await engine.discover(detector, onePage([problem(TRIP_A)]), 'cid-9');
 
@@ -313,15 +384,20 @@ describeIntegration('Scan engine against real PostgreSQL', () => {
       expect((await alertRow(TRIP_B))?.status).toBe('open');
     });
 
-    it('★ a subject the backend did not return is NOT resolved', async () => {
+    it('★ D. a subject the backend did not return is NOT resolved, and the run is PARTIAL', async () => {
       await engine.discover(detector, onePage([problem(TRIP_A)]), 'cid-11');
 
-      // The backend answered, and this id simply was not in the answer.
+      // The backend answered, and this id simply was not in the answer. That
+      // is an INCOMPLETE verification, and an incomplete verification is not
+      // a successful one — `resolveBySystem` independently refuses a run in
+      // any other state, so this is also what makes the guard unbypassable.
       const report = await engine.resolve(detector, lookupOf([]), 'cid-11');
 
-      expect(report.outcome).toBe('succeeded');
+      expect(report.outcome).toBe('partial');
+      expect(report.error).toContain('not returned by the backend');
       expect(report.resolved).toBe(0);
       expect((await alertRow(TRIP_A))?.status).toBe('open');
+      expect((await scanRuns.findById(report.scanRunId))?.resolved).toBe(0);
     });
 
     it('resolves a DISMISSED alert once the condition clears — suppression ends by clearing', async () => {

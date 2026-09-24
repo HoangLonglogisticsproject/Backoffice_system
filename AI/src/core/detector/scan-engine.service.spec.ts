@@ -334,16 +334,61 @@ describe('ScanEngineService', () => {
       expect(scanRuns.recordResolved).not.toHaveBeenCalled();
     });
 
-    it('★ a subject the backend did not return is NOT treated as cleared', async () => {
+    it('★ a subject the backend did not return is NOT treated as cleared, and makes the run PARTIAL', async () => {
       const { engine, alerts, alertRows } = build();
       alertRows.liveSubjects.mockResolvedValue([{ alertId: 'a1', subjectId: 't1' }]);
       const lookup = jest.fn().mockResolvedValue([]);
 
       const report = await engine.resolve(detector(), lookup, 'cid-10');
 
-      expect(report.outcome).toBe('succeeded');
+      // Incomplete verification is not successful verification. `partial` is
+      // also what stops `resolveBySystem` accepting this run at all.
+      expect(report.outcome).toBe('partial');
+      expect(report.error).toContain('not returned by the backend');
       expect(report.resolved).toBe(0);
       expect(alerts.resolveBySystem).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['clear first, missing second', ['t1', 't2'], ['t1']],
+      ['missing first, clear second', ['t1', 't2'], ['t2']],
+    ])(
+      '★ ONE missing subject stops the WHOLE run resolving — %s',
+      async (_name, subjectIds, returnedIds) => {
+        const { engine, alerts, alertRows } = build();
+        alertRows.liveSubjects.mockResolvedValue(
+          subjectIds.map((subjectId, index) => ({ alertId: `a${index + 1}`, subjectId })),
+        );
+        // Everything the backend DOES return has cleared, so under the old
+        // behaviour those alerts would have been closed on a run that could
+        // not account for the rest.
+        const lookup = jest.fn().mockResolvedValue(returnedIds.map((id) => ({ id, problem: false })));
+
+        const report = await engine.resolve(detector(), lookup, 'cid-missing');
+
+        expect(report.outcome).toBe('partial');
+        expect(report.resolved).toBe(0);
+        expect(alerts.resolveBySystem).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a complete lookup still resolves normally — the guard costs the ordinary case nothing', async () => {
+      const { engine, alerts, alertRows } = build();
+      alertRows.liveSubjects.mockResolvedValue([
+        { alertId: 'a1', subjectId: 't1' },
+        { alertId: 'a2', subjectId: 't2' },
+      ]);
+      const lookup = jest.fn().mockResolvedValue([
+        { id: 't1', problem: false },
+        { id: 't2', problem: true },
+      ]);
+
+      const report = await engine.resolve(detector(), lookup, 'cid-complete');
+
+      expect(report.outcome).toBe('succeeded');
+      expect(report.resolved).toBe(1);
+      expect(alerts.resolveBySystem).toHaveBeenCalledTimes(1);
+      expect(alerts.resolveBySystem).toHaveBeenCalledWith(expect.objectContaining({ alertId: 'a1' }));
     });
 
     it('a refused resolution (somebody moved the alert) is not a scan failure', async () => {
