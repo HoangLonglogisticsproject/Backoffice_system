@@ -1,12 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { ApiError } from '@/utils/errors';
 import DriverNotificationsPage from './DriverNotificationsPage';
 import { destinationOf } from '@/utils/driverNotifications';
-import type { Notification } from '@/types/notification';
+import type { Notification, NotificationType } from '@/types/notification';
 
 const fetchNotifications = vi.fn();
 const markNotificationRead = vi.fn();
@@ -29,6 +29,12 @@ const note = (over: Partial<Notification> = {}): Notification => ({
   ...over,
 });
 
+/** Where a tap landed — the schedule's tab lives in the search. */
+const Landed = () => {
+  const { pathname, search } = useLocation();
+  return <p>{`AT ${pathname}${search}`}</p>;
+};
+
 const renderPage = () => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -38,7 +44,7 @@ const renderPage = () => {
       <LanguageProvider>
         <MemoryRouter initialEntries={['/driver/notifications']}>
           <Routes>
-            <Route path="/driver" element={<p>TRIP LIST</p>} />
+            <Route path="/driver" element={<Landed />} />
             <Route path="/driver/notifications" element={<DriverNotificationsPage />} />
           </Routes>
         </MemoryRouter>
@@ -48,8 +54,14 @@ const renderPage = () => {
 };
 
 beforeEach(() => {
+  // 10:00 in Ho Chi Minh: business day 2026-08-30, the fixture's trip day.
+  vi.setSystemTime(new Date('2026-08-30T03:00:00.000Z'));
   fetchNotifications.mockReset().mockResolvedValue({ items: [], unreadCount: 0 });
   markNotificationRead.mockReset().mockResolvedValue(note({ readAt: '2026-08-29T10:01:00.000Z' }));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 /**
@@ -62,6 +74,15 @@ describe('DriverNotificationsPage', () => {
   it('says so when there is nothing', async () => {
     renderPage();
     expect(await screen.findByText(/chưa có thông báo nào/i)).toBeInTheDocument();
+  });
+
+  it('offers a named way back to the schedule', async () => {
+    renderPage();
+
+    const back = await screen.findByRole('link', { name: 'Về lịch làm việc' });
+    expect(back).toHaveAttribute('href', '/driver');
+    fireEvent.click(back);
+    expect(await screen.findByText('AT /driver')).toBeInTheDocument();
   });
 
   it('★ renders the sentence from the TYPE, the day from the snapshot, and the reason', async () => {
@@ -89,7 +110,7 @@ describe('DriverNotificationsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /bạn được phân công chuyến/i }));
 
     await waitFor(() => expect(markNotificationRead).toHaveBeenCalledWith('n1'));
-    expect(await screen.findByText('TRIP LIST')).toBeInTheDocument();
+    expect(await screen.findByText('AT /driver')).toBeInTheDocument();
   });
 
   it('does not stamp one that is already read', async () => {
@@ -98,7 +119,7 @@ describe('DriverNotificationsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /bạn được phân công chuyến/i }));
 
-    expect(await screen.findByText('TRIP LIST')).toBeInTheDocument();
+    expect(await screen.findByText('AT /driver')).toBeInTheDocument();
     expect(markNotificationRead).not.toHaveBeenCalled();
   });
 
@@ -108,7 +129,7 @@ describe('DriverNotificationsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /không còn lái/i }));
 
-    expect(await screen.findByText('TRIP LIST')).toBeInTheDocument();
+    expect(await screen.findByText('AT /driver')).toBeInTheDocument();
   });
 
   it('still navigates when the read stamp fails — the stamp is a courtesy', async () => {
@@ -118,7 +139,7 @@ describe('DriverNotificationsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /bạn được phân công chuyến/i }));
 
-    expect(await screen.findByText('TRIP LIST')).toBeInTheDocument();
+    expect(await screen.findByText('AT /driver')).toBeInTheDocument();
   });
 
   it('shows a driver-worded failure when the list cannot be read', async () => {
@@ -128,10 +149,26 @@ describe('DriverNotificationsPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/không có kết nối/i);
   });
 
-  it('maps every type to a destination', () => {
-    expect(destinationOf(note())).toBe('/driver');
-    expect(destinationOf(note({ type: 'COMPLETION_REJECTED' }))).toBe('/driver');
-    expect(destinationOf(note({ type: 'COMPLETION_APPROVED' }))).toBe('/driver');
-    expect(destinationOf(note({ type: 'TRIP_UNASSIGNED' }))).toBe('/driver');
+  it('★ sends a trip on a later day to the schedule on the upcoming tab', async () => {
+    fetchNotifications.mockResolvedValue({ items: [note({ tripScheduledOn: '2026-09-01' })], unreadCount: 1 });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /bạn được phân công chuyến/i }));
+
+    expect(await screen.findByText('AT /driver?view=upcoming')).toBeInTheDocument();
+  });
+});
+
+const TYPES: NotificationType[] = ['TRIP_ASSIGNED', 'TRIP_UNASSIGNED', 'COMPLETION_REJECTED', 'COMPLETION_APPROVED'];
+
+describe('destinationOf', () => {
+  it.each([
+    ['2026-08-30', '/driver'],
+    ['2026-08-31', '/driver?view=upcoming'],
+    ['2026-08-29', '/driver?view=past'],
+  ])('a trip on %s, seen on 2026-08-30, leads to %s whatever the type', (tripScheduledOn, destination) => {
+    for (const type of TYPES) {
+      expect(destinationOf(note({ type, tripScheduledOn }), '2026-08-30'), type).toBe(destination);
+    }
   });
 });

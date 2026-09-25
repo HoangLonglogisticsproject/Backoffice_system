@@ -128,3 +128,18 @@ export function reviewErrorKey(error: unknown): TranslationKey {
  */
 export const shouldReloadAfter = (error: unknown): boolean =>
   isApiError(error) && (error.status === 409 || error.status === 404);
+
+/**
+ * A read whose answer will not change by asking again — the server has
+ * refused THIS session, not lost a packet.
+ *
+ * ★ A 401 SAYS "no longer signed in" (expired, revoked, or the account was
+ * disabled since), A 403 SAYS "not yours" (or no longer yours) AND A 404 SAYS
+ * "not there". Asking twice more changes none of them and fills the server's
+ * log with what looks like probing — so the query does not retry them, the
+ * screen offers no retry button that cannot succeed, and ★ NOTHING READ
+ * EARLIER STAYS ON SCREEN after one: a refusal is where access ends, and data
+ * kept from before it would outlive the access that fetched it.
+ */
+export const isFinalRefusal = (error: unknown): boolean =>
+  isApiError(error) && (error.status === 401 || error.status === 403 || error.status === 404);

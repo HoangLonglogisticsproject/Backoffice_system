@@ -5,7 +5,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/componen
 import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
 import { completionStage, executionSteps, liveExpenses, suggestedDeclaration } from '@/utils/driverExecution';
-import { formatDateTime } from '@/utils/format/datetime';
+import { formatTimeOnDay } from '@/utils/format/datetime';
 import { formatMoney, sumMoney } from '@/utils/format/money';
 import type { DriverTripDetail, ExpenseDeclaration } from '@/types/driver';
 import { FactRow } from './FactRow';
@@ -196,12 +196,12 @@ function TripSummary({ trip }: Readonly<{ trip: DriverTripDetail }>) {
       <FactRow
         icon={<MapPin />}
         label={t('driverActualPickup')}
-        value={pickupAt ? formatDateTime(pickupAt, language) : null}
+        value={pickupAt ? formatTimeOnDay(pickupAt, language) : null}
       />
       <FactRow
         icon={<Flag />}
         label={t('driverActualDelivery')}
-        value={deliveryAt ? formatDateTime(deliveryAt, language) : null}
+        value={deliveryAt ? formatTimeOnDay(deliveryAt, language) : null}
       />
       <FactRow icon={<Receipt />} label={t('driverStageExpense')} value={expenses} />
     </div>
@@ -223,7 +223,10 @@ function AttemptLine({
 
   return (
     <p className="mt-2 text-xs text-muted-foreground">
-      {t('driverAttempt')} {request.attemptNo} · {formatDateTime(request.submittedAt, language)} ·{' '}
+      {/* Two lines: the time already carries a "·", and a third one would blur
+          which part is the attempt and which the declaration. */}
+      {t('driverAttempt')} {request.attemptNo}: {formatTimeOnDay(request.submittedAt, language)}
+      <br />
       {request.expenseDeclaration === 'expenses'
         ? t('driverDeclaredExpenses')
         : t('driverDeclaredNone')}

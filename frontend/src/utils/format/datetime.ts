@@ -29,7 +29,7 @@ const LOCALES: Record<Language, string> = {
  * text is unchanged. Verify that before touching them: a difference here is a
  * silent change to every date in the app.
  */
-type FormatterKind = 'date' | 'dateTime' | 'time' | 'utcDay';
+type FormatterKind = 'date' | 'dateTime' | 'time' | 'utcDay' | 'utcWeekday';
 
 const OPTIONS: Record<FormatterKind, Intl.DateTimeFormatOptions> = {
   // `toLocaleDateString()` with no options.
@@ -50,9 +50,12 @@ const OPTIONS: Record<FormatterKind, Intl.DateTimeFormatOptions> = {
   time: { hour: '2-digit', minute: '2-digit' },
 
   utcDay: { year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'UTC' },
+
+  // The same day, named: "Thứ Năm, 24/09/2026" — a heading over a day's work.
+  utcWeekday: { weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'UTC' },
 };
 
-// Two languages times three kinds: six entries at most, so this never grows
+// Two languages times five kinds: ten entries at most, so this never grows
 // into a leak worth bounding.
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -80,6 +83,17 @@ export function formatDateTime(iso: string, language: Language): string {
   return Number.isNaN(date.getTime()) ? iso : formatter('dateTime', language).format(date);
 }
 
+/**
+ * An instant as "08:30 · 30/8/2026" — the clock first, because on a driver's
+ * screen the time is the fact and the day is context. No seconds: nobody is
+ * late by seconds, and they are the digits that make a phone line wrap.
+ */
+export function formatTimeOnDay(iso: string, language: Language): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return `${formatter('time', language).format(date)} · ${formatter('date', language).format(date)}`;
+}
+
 /** The time of day only. Same malformed-input rule as `formatDate`. */
 export function formatTime(iso: string, language: Language): string {
   const date = new Date(iso);
@@ -100,16 +114,28 @@ export function formatTime(iso: string, language: Language): string {
  * `formatDate` does, so a server-side mistake is visible rather than disguised.
  */
 export function formatCalendarDay(day: string, language: Language): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  const asUtc = calendarDayAsUtc(day);
+  return asUtc ? formatter('utcDay', language).format(asUtc) : day;
+}
+
+/** The same calendar day with its weekday — same input rules as `formatCalendarDay`. */
+export function formatCalendarWeekday(day: string, language: Language): string {
+  const asUtc = calendarDayAsUtc(day);
+  return asUtc ? formatter('utcWeekday', language).format(asUtc) : day;
+}
+
+/** `YYYY-MM-DD` as UTC midnight, or `null` when it is not exactly a real day. */
+function calendarDayAsUtc(day: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
 
   const [year, month, date] = day.split('-').map(Number) as [number, number, number];
   const asUtc = new Date(Date.UTC(year, month - 1, date));
 
   // A day that does not exist — `2026-02-31` — rolls over into the next month
   // rather than throwing, so it is caught here and shown as it arrived.
-  if (asUtc.getUTCMonth() !== month - 1 || asUtc.getUTCDate() !== date) return day;
+  if (asUtc.getUTCMonth() !== month - 1 || asUtc.getUTCDate() !== date) return null;
 
-  return formatter('utcDay', language).format(asUtc);
+  return asUtc;
 }
 
 /**

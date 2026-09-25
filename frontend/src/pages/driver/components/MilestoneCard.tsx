@@ -5,7 +5,7 @@ import { StatusPill } from '@/components/common/StatusPill';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
 import { executionSteps, isOverdue, lateByMinutes, nextEvent, type ExecutionStep } from '@/utils/driverExecution';
-import { formatDateTime } from '@/utils/format/datetime';
+import { formatTimeOnDay } from '@/utils/format/datetime';
 import type { TranslationKey } from '@/types/translate';
 import type { DriverTripDetail, ExecutionEventType } from '@/types/driver';
 import { FactRow } from './FactRow';
@@ -90,7 +90,7 @@ export function MilestoneCard({ end, trip, now, onReport, reporting, locating = 
         <FactRow
           icon={<Clock />}
           label={t('driverScheduled')}
-          value={scheduledAt ? formatDateTime(scheduledAt, language) : null}
+          value={scheduledAt ? formatTimeOnDay(scheduledAt, language) : null}
         />
 
         <ol className="space-y-2.5 border-t border-border pt-3">
@@ -156,13 +156,13 @@ function StepRow({ step, now }: Readonly<{ step: ExecutionStep; now: Date }>) {
         {/* The plan and the fact, on separate lines and labelled. */}
         {step.scheduledAt ? (
           <p className="text-xs text-muted-foreground">
-            {t('driverScheduled')}: {formatDateTime(step.scheduledAt, language)}
+            {t('driverScheduled')}: {formatTimeOnDay(step.scheduledAt, language)}
           </p>
         ) : null}
 
         {step.actualAt ? (
           <p className="text-xs text-foreground">
-            {t('driverActual')}: {formatDateTime(step.actualAt, language)}
+            {t('driverActual')}: {formatTimeOnDay(step.actualAt, language)}
             {late !== null && late > 0 ? (
               <span className="ml-1 text-muted-foreground">
                 ({t('driverLateBy')} {late} {t('driverMinutes')})

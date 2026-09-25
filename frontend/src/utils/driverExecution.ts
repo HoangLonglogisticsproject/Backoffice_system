@@ -301,10 +301,16 @@ export const completionStage = (trip: DriverTripDetail): CompletionStage => {
  *
  * ★ DERIVED, NEVER STORED. The server keeps execution EVENTS, expense lines
  * and completion requests; "which stage am I on" is a reading of those, made
- * here so the header pill, the stepper and the section highlights cannot
- * disagree. Pickup and delivery each cover two events (arrive, confirm);
- * expense is the checkpoint the driver answers after the journey; completion
- * is the review the office decides.
+ * here so the stepper and the section highlights cannot disagree. Pickup and
+ * delivery each cover two events (arrive, confirm); expense is the checkpoint
+ * the driver answers after the journey; completion is the review the office
+ * decides.
+ *
+ * ⚠ THE HEADER PILL IS NOT THIS. It is `assignmentStatusOf`, where a sent
+ * completion outranks the journey (DL-116). A completion may be sent before
+ * the four steps are reported (DL-108), and then the pill says "waiting for
+ * review" while delivery and completion are BOTH current here: the driver can
+ * still report the missing step, and the office is reviewing.
  */
 export type WorkflowStage = 'pickup' | 'delivery' | 'expense' | 'completion';
 
@@ -340,6 +346,55 @@ export const workflowStages = (trip: DriverTripDetail): WorkflowStep[] => {
 /** The stage the driver is on, or `null` once the trip is closed. */
 export const currentStage = (trip: DriverTripDetail): WorkflowStage | null =>
   workflowStages(trip).find((step) => step.state === 'current')?.stage ?? null;
+
+// ------------------------------------------------------------------- status --
+
+/**
+ * Where ONE assignment stands, in a word — what the detail screen leads with.
+ *
+ * ★ READ FROM THIS TURN'S EVENTS AND COMPLETION, NEVER FROM THE TRIP. The
+ * dispatch status is the office's word and is not sent to a driver (DL-69);
+ * and on a trip with two lorries one turn can be approved while the other is
+ * still on the road, so a trip-level word would be wrong for one of them.
+ *
+ * ★ THE COMPLETION REQUEST OUTRANKS THE JOURNEY. A request can be sent before
+ * all four steps are reported (a driver who lost signal at the gate), and once
+ * it is, the review is what the driver is waiting on.
+ *
+ * ⚠ NO "LATE". How late is too late has never been decided (design O-4); the
+ * milestone cards show the minutes and leave the judgement to a person.
+ */
+export type AssignmentStatus =
+  | 'assigned'
+  | 'at-pickup'
+  | 'in-transit'
+  | 'at-delivery'
+  | 'awaiting-completion'
+  | 'completion-pending'
+  | 'completion-rejected'
+  | 'approved';
+
+/** What the journey says, named by the step still owed. */
+const OWING: Record<ExecutionEventType, AssignmentStatus> = {
+  ARRIVED_PICKUP: 'assigned',
+  PICKUP_CONFIRMED: 'at-pickup',
+  ARRIVED_DELIVERY: 'in-transit',
+  DELIVERY_CONFIRMED: 'at-delivery',
+};
+
+const REVIEW: Partial<Record<CompletionStage, AssignmentStatus>> = {
+  approved: 'approved',
+  pending: 'completion-pending',
+  rejected: 'completion-rejected',
+};
+
+export const assignmentStatusOf = (trip: DriverTripDetail): AssignmentStatus => {
+  const reviewed = REVIEW[completionStage(trip)];
+  if (reviewed) return reviewed;
+
+  const owed = nextEvent(trip.events);
+  return owed === null ? 'awaiting-completion' : OWING[owed];
+};
 
 /** May the driver send, or send again, right now? */
 export const canSubmitCompletion = (trip: DriverTripDetail): boolean => {

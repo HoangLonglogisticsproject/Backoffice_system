@@ -219,3 +219,16 @@
     @apply font-sans;
     }
 }
+
+/* ★ THE DRIVER SHELL'S FIXED BARS NEVER HIDE A FOCUSED CONTROL. Scrolling a
+   focused element into view respects scroll-padding, so the sticky top bar
+   and — below `md` — the fixed bottom navigation stay clear of it. Scoped to
+   the driver shell; the Backoffice scrolls inside its own <main>. */
+html:has([data-shell='driver']) {
+  scroll-padding-top: 4rem;
+}
+@media (width < 48rem) {
+  html:has([data-shell='driver']) {
+    scroll-padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+}

@@ -154,13 +154,37 @@ const PHRASES = {
   // ★ WRITTEN FOR SOMEBODY STANDING BESIDE A LORRY. Short, concrete, and about
   // what to do next rather than about what the system is. Nothing here names a
   // status code, a table or a state machine.
+  // A proper name: the same in every language.
+  companyName: { vi: 'Hoàng Long', en: 'Hoàng Long' },
   driverPortal: { vi: 'Cổng tài xế', en: 'Driver Portal' },
-  driverMyTrips: { vi: 'Chuyến của tôi', en: 'My trips' },
-  driverMyAssignments: { vi: 'Xe của tôi trên chuyến này', en: 'My vehicles on this trip' },
-  driverNoTrips: { vi: 'Bạn chưa được phân công chuyến nào', en: 'You have no assigned trips' },
-  driverBackToTrips: { vi: 'Về danh sách chuyến', en: 'Back to trips' },
+  driverSchedule: { vi: 'Lịch làm việc', en: 'Work schedule' },
+  // ★ THE SCHEDULE IS SPLIT BY THE TRIP'S DAY, NOT BY A STATUS: the list the
+  // server sends carries no execution state, so "done" is not something it can
+  // say. "Earlier" is a date, and says nothing about whether the work is closed.
+  driverViewToday: { vi: 'Hôm nay', en: 'Today' },
+  driverViewUpcoming: { vi: 'Sắp tới', en: 'Upcoming' },
+  driverViewPast: { vi: 'Đã qua', en: 'Earlier' },
+  driverEmptyToday: { vi: 'Bạn chưa có chuyến nào hôm nay.', en: 'You have no trips today.' },
+  driverEmptyUpcoming: { vi: 'Chưa có lịch sắp tới.', en: 'Nothing is scheduled yet.' },
+  driverEmptyPast: { vi: 'Chưa có chuyến nào đã qua.', en: 'No earlier trips.' },
+  driverViewTrip: { vi: 'Xem chuyến', en: 'View trip' },
+  driverNoPickupTime: { vi: 'Chưa có giờ lấy hàng', en: 'No pickup time yet' },
+  driverTripDetail: { vi: 'Chi tiết chuyến', en: 'Trip details' },
+  driverPlannedPickup: { vi: 'Dự kiến lấy hàng', en: 'Planned pickup' },
+  driverBack: { vi: 'Quay lại', en: 'Back' },
+  driverBackToTrips: { vi: 'Về lịch làm việc', en: 'Back to schedule' },
   driverRetry: { vi: 'Thử lại', en: 'Try again' },
   driverLoading: { vi: 'Đang tải…', en: 'Loading…' },
+  // Where ONE assignment stands, read from its own events and completion —
+  // never the dispatch board's status, which is the office's word (DL-69).
+  driverStatusAssigned: { vi: 'Đã phân công', en: 'Assigned' },
+  driverStatusAtPickup: { vi: 'Đang ở điểm lấy hàng', en: 'At pickup' },
+  driverStatusInTransit: { vi: 'Đang vận chuyển', en: 'In transit' },
+  driverStatusAtDelivery: { vi: 'Đang ở điểm giao hàng', en: 'At delivery' },
+  driverStatusAwaitingCompletion: { vi: 'Chờ gửi hoàn tất', en: 'Ready to submit' },
+  driverStatusCompletionPending: { vi: 'Chờ duyệt', en: 'Waiting for review' },
+  driverStatusCompletionRejected: { vi: 'Bị trả lại', en: 'Sent back' },
+  driverStatusApproved: { vi: 'Đã duyệt', en: 'Approved' },
 
   driverVehicle: { vi: 'Xe', en: 'Vehicle' },
   driverCustomer: { vi: 'Khách hàng', en: 'Customer' },
@@ -179,9 +203,10 @@ const PHRASES = {
   driverStageDelivery: { vi: 'Giao hàng', en: 'Delivery' },
   driverStageExpense: { vi: 'Chi phí', en: 'Expenses' },
   driverStageCompletion: { vi: 'Hoàn thành', en: 'Completion' },
-  driverStageCurrent: { vi: 'Đang thực hiện', en: 'In progress' },
-  driverTripSummary: { vi: 'Thông tin chuyến', en: 'Trip details' },
-  driverTripUnit: { vi: 'chuyến', en: 'trips' },
+  // The end of the trip where the next tap is — not a status, which the
+  // summary above already states.
+  driverStageCurrent: { vi: 'Việc tiếp theo', en: 'Next up' },
+  driverTripSummary: { vi: 'Thông tin chuyến', en: 'Trip information' },
   driverAddress: { vi: 'Địa chỉ', en: 'Address' },
   driverActualPickup: { vi: 'Lấy hàng lúc', en: 'Picked up at' },
   driverActualDelivery: { vi: 'Giao hàng lúc', en: 'Delivered at' },
@@ -261,7 +286,6 @@ const PHRASES = {
   // ------------------------------------------------------- notifications --
   driverNotifications: { vi: 'Thông báo', en: 'Notifications' },
   driverProfile: { vi: 'Hồ sơ', en: 'Profile' },
-  driverNavSection: { vi: 'TÀI XẾ', en: 'DRIVER' },
   driverUnread: { vi: 'chưa đọc', en: 'unread' },
   driverNoNotifications: { vi: 'Chưa có thông báo nào.', en: 'No notifications yet.' },
   driverTripOn: { vi: 'Chuyến ngày', en: 'Trip on' },
