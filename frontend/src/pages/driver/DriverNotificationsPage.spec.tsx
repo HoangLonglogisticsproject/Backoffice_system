@@ -76,6 +76,15 @@ describe('DriverNotificationsPage', () => {
     expect(await screen.findByText(/chưa có thông báo nào/i)).toBeInTheDocument();
   });
 
+  it('offers a named way back to the schedule', async () => {
+    renderPage();
+
+    const back = await screen.findByRole('link', { name: 'Về lịch làm việc' });
+    expect(back).toHaveAttribute('href', '/driver');
+    fireEvent.click(back);
+    expect(await screen.findByText('AT /driver')).toBeInTheDocument();
+  });
+
   it('★ renders the sentence from the TYPE, the day from the snapshot, and the reason', async () => {
     fetchNotifications.mockResolvedValue({
       items: [

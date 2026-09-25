@@ -36,6 +36,14 @@ vi.mock('@/api/driverPortal', () => ({
   submitCompletion: (...a: unknown[]) => submitCompletion(...a),
 }));
 
+// Only the receipt is observed; `setToastLanguage` and the rest stay real.
+const notifySuccess = vi.fn();
+
+vi.mock('@/utils/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/toast')>()),
+  notifySuccess: (...a: unknown[]) => notifySuccess(...a),
+}));
+
 const EARLIER = '2026-08-30T02:00:00.000Z';
 
 const event = (type: string, over: Record<string, unknown> = {}) => ({
@@ -458,6 +466,20 @@ describe('★ the detail when a read fails', () => {
     expect(fetchMyAssignment).toHaveBeenCalledTimes(2);
   });
 
+  it('★ a server fault on the read — what a malformed id can draw — is worded plainly, with a retry and a way out', async () => {
+    // The portal never builds an id itself: it only follows links the list
+    // gave it. A hand-typed or truncated URL can still reach the server, which
+    // may answer 5xx; the screen must not crash or show the server's words.
+    fetchMyAssignment.mockRejectedValue(new ApiError(500, 'INTERNAL', 'invalid input syntax for type uuid'));
+    renderDetail('/driver/assignments/not-a-uuid');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Có lỗi xảy ra. Thử lại, nếu vẫn lỗi hãy báo văn phòng.');
+    expect(fetchMyAssignment).toHaveBeenCalledWith('not-a-uuid');
+    expect(document.body).not.toHaveTextContent(/invalid input|uuid|500|INTERNAL/i);
+    expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Về lịch làm việc' })).toHaveAttribute('href', '/driver');
+  });
+
   it('★ offline on first open says "no connection" and offers a retry', async () => {
     // TanStack would otherwise PARK the read while the browser says offline —
     // no data, no error, not loading — which this page words as "something
@@ -469,8 +491,10 @@ describe('★ the detail when a read fails', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
     expect(screen.queryByText(/có lỗi xảy ra/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument();
-    // Asked, not parked.
-    expect(fetchMyAssignment).toHaveBeenCalled();
+    // Asked, not parked — the first ask and its two retries, then it stops.
+    expect(fetchMyAssignment).toHaveBeenCalledTimes(3);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(fetchMyAssignment).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -517,6 +541,25 @@ describe('★ execution progresses one step at a time', () => {
     // a handset whose clock is an hour out would write an hour of lateness
     // nobody caused. The server stamps it when the tap arrives.
     expect(body).not.toHaveProperty('actualAt');
+  });
+
+  it('★ a retried arrival carries the same clientEventId as the attempt that failed', async () => {
+    // One id per INTENT: the retry must collide with its own first attempt on
+    // the server, so one bar of signal never records the arrival twice.
+    recordExecutionEvent.mockRejectedValueOnce(new ApiError(0, undefined, 'Network error'));
+    renderDetail();
+    const arrival = await screen.findByRole('button', { name: 'Tôi đã đến điểm lấy hàng' });
+
+    fireEvent.click(arrival);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/không có kết nối/i);
+    await waitFor(() => expect(arrival).toBeEnabled());
+    fireEvent.click(arrival);
+
+    await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalledTimes(2));
+    const [[firstId, first], [secondId, second]] = recordExecutionEvent.mock.calls as [string, { clientEventId: string }][];
+    expect([firstId, secondId]).toEqual(['a1', 'a1']);
+    expect(first.clientEventId).toBe('a1:ARRIVED_PICKUP');
+    expect(second.clientEventId).toBe(first.clientEventId);
   });
 
   it('★ a wrong device clock changes nothing the business reads', async () => {
@@ -885,6 +928,33 @@ describe('★ failures a driver can act on', () => {
     await waitFor(() => expect(fetchMyAssignment.mock.calls.length).toBeGreaterThan(1));
   });
 
+  it('★ a write answered 404 re-reads, and the final 404 takes the page away', async () => {
+    const gone = new ApiError(404, 'NOT_FOUND', 'x');
+    fetchMyAssignment.mockResolvedValueOnce(trip()).mockRejectedValue(gone);
+    recordExecutionEvent.mockRejectedValue(gone);
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Tôi đã đến điểm lấy hàng' }));
+
+    expect(await screen.findByRole('link', { name: 'Về lịch làm việc' })).toHaveAttribute('href', '/driver');
+    expect(screen.getByRole('alert')).toHaveTextContent('Không tìm thấy chuyến này.');
+    expect(screen.queryByText('Đã phân công')).not.toBeInTheDocument();
+    expect(screen.queryByText('BÃI XE MIỀN NAM')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Tôi đã đến điểm lấy hàng' })).not.toBeInTheDocument();
+  });
+
+  it('re-reads the trip when a declared expense is refused with a 409', async () => {
+    declareExpense.mockRejectedValue(new ApiError(409, 'CONFLICT', 'Cost is locked.'));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /thêm khoản chi/i }));
+    fireEvent.change(screen.getByLabelText(/số tiền/i), { target: { value: '1500000' } });
+    fireEvent.click(screen.getByRole('button', { name: /^lưu$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/chuyến vừa thay đổi/i);
+    await waitFor(() => expect(fetchMyAssignment.mock.calls.length).toBeGreaterThan(1));
+  });
+
   it('explains a lost connection without a status code', async () => {
     recordExecutionEvent.mockRejectedValue(new ApiError(0, undefined, 'Network error'));
     renderDetail();
@@ -938,6 +1008,22 @@ describe('★ the completion checkpoint cannot be walked past', () => {
 
     expect(screen.getByLabelText(/số tiền/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^dầu$/i })).toBeInTheDocument();
+  });
+
+  it('★ opens the form again when chosen again after the driver cancelled it', async () => {
+    // The checkpoint's "open" is a one-shot signal the form hands back on
+    // closing; a second choice must be able to send it again.
+    fetchMyAssignment.mockResolvedValue(trip({ events: ALL_REPORTED }));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Có phát sinh chi phí' }));
+    expect(screen.getByLabelText('Số tiền')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Huỷ' }));
+    expect(screen.queryByLabelText('Số tiền')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Có phát sinh chi phí' }));
+    expect(screen.getByLabelText('Số tiền')).toBeInTheDocument();
   });
 
   it('does not reopen the form when figures already stand', async () => {
@@ -1088,13 +1174,159 @@ describe('★ the draft survives, and the request is idempotent', () => {
     expect(screen.getByLabelText(/số tiền/i)).toHaveValue('');
   });
 
+  it('★ keys the draft by the assignment — a draft under the TRIP’s id is not picked up', async () => {
+    // Two lorries of one trip share `t1`; a trip-keyed draft would put one
+    // lorry's half-typed fuel on the other's form (ADR-0004).
+    sessionStorage.setItem(
+      'driver-expense-draft:t1',
+      JSON.stringify({ category: 'fuel', amount: '4242000', note: 'lorry B', clientRequestId: 'r-t1' }),
+    );
+    renderDetail('/driver/assignments/a1');
+
+    fireEvent.click(await screen.findByRole('button', { name: /thêm khoản chi/i }));
+
+    expect(screen.getByLabelText(/số tiền/i)).toHaveValue('');
+    expect(screen.getByLabelText(/ghi chú/i)).toHaveValue('');
+  });
+
   it('survives malformed storage without breaking the screen', async () => {
-    sessionStorage.setItem('driver-expense-draft:t1', '{not json');
+    // Under the key the page actually reads (the assignment's), or the parse
+    // this case is about never runs.
+    sessionStorage.setItem('driver-expense-draft:a1', '{not json');
     renderDetail();
 
     fireEvent.click(await screen.findByRole('button', { name: /thêm khoản chi/i }));
 
     expect(screen.getByLabelText(/số tiền/i)).toHaveValue('');
+  });
+});
+
+describe('★ a rejection leads the driver to the figures', () => {
+  const scrollIntoView = vi.fn();
+  // jsdom has none of its own — see `goToExpenses` — so this puts back "none".
+  const original = Element.prototype.scrollIntoView;
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = scrollIntoView;
+  });
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = original;
+  });
+
+  it('★ "Chỉnh sửa và gửi lại" scrolls the expense panel into view — and sends nothing', async () => {
+    fetchMyAssignment.mockResolvedValue(
+      trip({
+        events: ALL_REPORTED,
+        expenses: [cost()],
+        accountability: 'REJECTED_NEEDS_CORRECTION',
+        completion: {
+          id: 'r1',
+          attemptNo: 1,
+          state: 'rejected',
+          expenseDeclaration: 'expenses',
+          submittedAt: EARLIER,
+          decisionReason: 'Số tiền dầu sai.',
+        },
+      }),
+    );
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Chỉnh sửa và gửi lại' }));
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    const scrolled = scrollIntoView.mock.contexts[0] as HTMLElement;
+    expect(scrolled).toHaveAttribute('id', 'driver-expenses');
+    expect(scrolled).toHaveTextContent('Chi phí tôi đã khai');
+    expect(submitCompletion).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ★ THE FOUR WRITES, each made the way a driver makes it. One table because
+ * they share one shape in `useDriverActions`: the button that sent it is busy
+ * while it travels, and a yes raises a receipt and re-reads the whole turn.
+ */
+const WRITES = [
+  {
+    write: 'an arrival',
+    api: recordExecutionEvent,
+    fixture: {},
+    button: 'Tôi đã đến điểm lấy hàng',
+    toast: 'toastEventReported',
+  },
+  {
+    write: 'a declared expense',
+    api: declareExpense,
+    fixture: {},
+    prepare: async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /thêm khoản chi/i }));
+      fireEvent.change(screen.getByLabelText(/số tiền/i), { target: { value: '1500000' } });
+    },
+    button: 'Lưu',
+    toast: 'toastExpenseDeclared',
+  },
+  {
+    write: 'a corrected expense',
+    api: editExpense,
+    fixture: { expenses: [cost()] },
+    prepare: async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+      fireEvent.change(screen.getByLabelText(/số tiền/i), { target: { value: '1550000' } });
+    },
+    button: 'Lưu',
+    toast: 'toastExpenseCorrected',
+  },
+  {
+    write: 'a submitted completion',
+    api: submitCompletion,
+    fixture: { events: ALL_REPORTED },
+    button: 'Gửi hoàn tất chuyến',
+    toast: 'toastCompletionSubmitted',
+  },
+];
+
+/** Makes the write and hands back the button that sent it. */
+const send = async ({ prepare, button }: (typeof WRITES)[number]) => {
+  await prepare?.();
+  const sender = await screen.findByRole('button', { name: button });
+  fireEvent.click(sender);
+  return sender;
+};
+
+describe('★ every write: busy while it travels, then a receipt and a re-read of the whole turn', () => {
+  it.each(WRITES)('$write: the button it was sent from is disabled until the server answers', async (write) => {
+    write.api.mockReturnValue(new Promise(() => undefined));
+    fetchMyAssignment.mockResolvedValue(trip(write.fixture));
+    renderDetail();
+
+    const sender = await send(write);
+
+    await waitFor(() => expect(sender).toBeDisabled());
+    // A second tap on a slow connection sends nothing.
+    fireEvent.click(sender);
+    expect(write.api).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(WRITES)('$write: once accepted, invalidates this assignment and the schedule', async (write) => {
+    fetchMyAssignment.mockResolvedValue(trip(write.fixture));
+    const { client } = renderDetail();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+
+    await send(write);
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: driverKeys.assignment('a1') }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: driverKeys.assignments() });
+  });
+
+  it.each(WRITES)('$write: once accepted, says so with $toast', async (write) => {
+    fetchMyAssignment.mockResolvedValue(trip(write.fixture));
+    renderDetail();
+
+    await send(write);
+
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith(write.toast));
+    expect(notifySuccess).toHaveBeenCalledTimes(1);
   });
 });
 

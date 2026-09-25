@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { queryClient as productionClient } from '@/config/query-client';
 import { ApiError } from '@/utils/errors';
 import DriverTripPage from './DriverTripPage';
 import DriverTripsPage from './DriverTripsPage';
@@ -137,8 +138,10 @@ function LocationProbe() {
   );
 }
 
-const renderAt = (path: string) => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+const renderAt = (
+  path: string,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
+) => {
   const view = render(
     <QueryClientProvider client={client}>
       <LanguageProvider>
@@ -190,6 +193,12 @@ const stepper = () => {
     .getAllByRole('listitem')
     .map((item) => ({ label: item.textContent ?? '', current: item.getAttribute('aria-current') === 'step' }));
 };
+
+/**
+ * A milestone card's header — its title and the pill beside it. The header, not
+ * the card: the card's own step rows say "Chưa đến" too.
+ */
+const cardHeader = (title: string) => screen.getByText(title).parentElement as HTMLElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -413,6 +422,26 @@ describe('★ the work schedule', () => {
     expect(screen.queryByText('Bạn chưa có chuyến nào hôm nay.')).toBeNull();
   });
 
+  it('★ offline, the production retry rules give up after three asks — no loop, no endless skeleton', async () => {
+    // The app's own query defaults (retry twice on a network failure), with
+    // the back-off shortened so the case runs fast. `networkMode: 'always'`
+    // means the retries RUN while offline instead of waiting for the network,
+    // so the error screen arrives after a bounded number of attempts.
+    onlineManager.setOnline(false);
+    fetchMyAssignments.mockRejectedValue(new ApiError(0, undefined, 'down'));
+    const production = new QueryClient({
+      defaultOptions: { queries: { ...productionClient.getDefaultOptions().queries, retryDelay: 0 } },
+    });
+    renderAt('/driver', production);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
+    expect(fetchMyAssignments).toHaveBeenCalledTimes(3);
+    // And it stays at three: nothing keeps asking behind the error.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(fetchMyAssignments).toHaveBeenCalledTimes(3);
+    expect(production.getQueryState(['driver', 'assignments'])?.fetchStatus).toBe('idle');
+  });
+
   it('★ a failed refresh keeps the schedule on screen, and says so above it with a retry', async () => {
     fetchMyAssignments.mockResolvedValueOnce([trip()]).mockRejectedValue(new ApiError(0, undefined, 'down'));
     const { client } = renderAt('/driver');
@@ -506,6 +535,19 @@ describe('★ the trip detail reads the workflow', () => {
     expect(screen.getByText('Hoàn tất các bước vận chuyển ở trên trước')).toBeInTheDocument();
   });
 
+  it.each([
+    { at: 'before pickup', events: [], pickup: 'Việc tiếp theo', delivery: 'Chưa đến' },
+    { at: 'pickup confirmed', events: JOURNEY.slice(0, 2), pickup: 'Đã xong', delivery: 'Việc tiếp theo' },
+    { at: 'delivery confirmed', events: JOURNEY, pickup: 'Đã xong', delivery: 'Đã xong' },
+  ])('$at: the pickup card’s pill reads “$pickup”, the delivery card’s “$delivery”', async ({ events, pickup, delivery }) => {
+    fetchMyAssignment.mockResolvedValue(trip({ events }));
+    renderAt('/driver/assignments/a1');
+    await screen.findByText('Kho HCM');
+
+    expect(within(cardHeader('Điểm lấy hàng')).getByText(pickup)).toBeInTheDocument();
+    expect(within(cardHeader('Điểm giao hàng')).getByText(delivery)).toBeInTheDocument();
+  });
+
   it('pickup confirmed: delivery becomes the stage and the pickup card reads done', async () => {
     fetchMyAssignment.mockResolvedValue(trip({ events: [event('ARRIVED_PICKUP'), event('PICKUP_CONFIRMED')] }));
     renderAt('/driver/assignments/a1');
@@ -552,6 +594,19 @@ describe('★ the trip detail reads the workflow', () => {
     expect(screen.getByText('Đang chờ duyệt — chưa sửa được')).toBeInTheDocument();
     expect(screen.getByText('2 khoản · 330,000')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
+  });
+
+  it.each([
+    ['expenses', 'Đã khai: có phát sinh'],
+    ['none', 'Đã khai: không phát sinh'],
+  ])('completion pending (%s): the caption names the attempt, when it was sent, then what it declared', async (expenseDeclaration, declared) => {
+    fetchMyAssignment.mockResolvedValue(trip({ events: JOURNEY, completion: completion('pending', { expenseDeclaration }) }));
+    renderAt('/driver/assignments/a1');
+
+    // `submittedAt` on the viewer's clock (TZ=UTC under test), then its date.
+    const caption = await screen.findByText(/^Lần gửi 1: /);
+    expect(caption).toHaveTextContent('Lần gửi 1: 02:00 · 30/8/2026');
+    expect(caption).toHaveTextContent(declared);
   });
 
   it('★ rejected: the expense card says so with the reason, lines are editable, and resending is a separate tap', async () => {

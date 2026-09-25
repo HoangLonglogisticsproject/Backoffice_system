@@ -103,6 +103,37 @@ describe('scheduleOf', () => {
     expect(ids(schedule.today)).toEqual([[TODAY, ['early', 'late', 'none-1', 'none-2']]]);
   });
 
+  it('★ files by the trip’s business day, never by the calendar day of its pickup instant', () => {
+    // 17:30Z on the 30th is 00:30 on the 31st in Hồ Chí Minh: a night pickup
+    // for the 30th's trip stays on the 30th, and the 31st's trip with an early
+    // pickup stays on the 31st. `scheduledOn` is a NOT NULL date; the pickup
+    // instant may be missing, so it cannot be what decides the tab.
+    const schedule = scheduleOf(
+      [
+        assignment('night-pickup', TODAY, '2026-08-30T17:30:00.000Z'),
+        assignment('tomorrow-early', '2026-08-31', '2026-08-30T16:00:00.000Z'),
+        assignment('no-pickup-yet', '2026-08-29', null),
+      ],
+      TODAY,
+    );
+
+    expect(ids(schedule.today)).toEqual([[TODAY, ['night-pickup']]]);
+    expect(ids(schedule.upcoming)).toEqual([['2026-08-31', ['tomorrow-early']]]);
+    expect(ids(schedule.past)).toEqual([['2026-08-29', ['no-pickup-yet']]]);
+  });
+
+  it('★ keeps two assignments of ONE trip as two entries — nothing merges by trip', () => {
+    const lorryA = { ...assignment('a1', TODAY, '2026-08-30T01:00:00.000Z'), tripId: 't-shared' };
+    const lorryB = { ...assignment('a2', TODAY, '2026-08-30T01:00:00.000Z'), tripId: 't-shared' };
+
+    const [day] = scheduleOf([lorryA, lorryB], TODAY).today;
+
+    expect(day?.assignments.map((a) => [a.tripId, a.assignment.id])).toEqual([
+      ['t-shared', 'a1'],
+      ['t-shared', 'a2'],
+    ]);
+  });
+
   it('★ keeps the server order on equal pickup times — two lorries of one trip stay as assigned', () => {
     // Deliberately NOT id order: the server's order is the assignment order,
     // and a re-sort by anything else would swap the lorries on the driver.

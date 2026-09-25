@@ -301,10 +301,16 @@ export const completionStage = (trip: DriverTripDetail): CompletionStage => {
  *
  * ★ DERIVED, NEVER STORED. The server keeps execution EVENTS, expense lines
  * and completion requests; "which stage am I on" is a reading of those, made
- * here so the header pill, the stepper and the section highlights cannot
- * disagree. Pickup and delivery each cover two events (arrive, confirm);
- * expense is the checkpoint the driver answers after the journey; completion
- * is the review the office decides.
+ * here so the stepper and the section highlights cannot disagree. Pickup and
+ * delivery each cover two events (arrive, confirm); expense is the checkpoint
+ * the driver answers after the journey; completion is the review the office
+ * decides.
+ *
+ * ⚠ THE HEADER PILL IS NOT THIS. It is `assignmentStatusOf`, where a sent
+ * completion outranks the journey (DL-116). A completion may be sent before
+ * the four steps are reported (DL-108), and then the pill says "waiting for
+ * review" while delivery and completion are BOTH current here: the driver can
+ * still report the missing step, and the office is reviewing.
  */
 export type WorkflowStage = 'pickup' | 'delivery' | 'expense' | 'completion';
 
