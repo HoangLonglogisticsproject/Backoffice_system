@@ -71,7 +71,10 @@ export const scheduleOf = (
 
   const schedule: Record<ScheduleView, ScheduleDay[]> = { today: [], upcoming: [], past: [] };
   for (const [day, onDay] of byDay) {
-    schedule[scheduleViewOf(day, today)].push({ day, assignments: onDay.sort(byPlannedPickup) });
+    // In place, and safe: `onDay` is this function's own array, built above —
+    // the caller's list (the query cache) is never reordered.
+    onDay.sort(byPlannedPickup);
+    schedule[scheduleViewOf(day, today)].push({ day, assignments: onDay });
   }
 
   schedule.upcoming.sort((a, b) => a.day.localeCompare(b.day));

@@ -267,7 +267,9 @@ describe('★ the assignment detail, read first', () => {
     fetchMyAssignment.mockReturnValue(new Promise(() => undefined));
     renderDetail();
 
-    expect(screen.getByRole('status')).toHaveTextContent('Đang tải…');
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(/^Đang tải…$/);
+    expect(status.tagName).toBe('OUTPUT');
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 
@@ -450,6 +452,7 @@ describe('★ the detail when a read fails', () => {
   });
 
   it.each([
+    { status: 401, code: 'UNAUTHORIZED', message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' },
     { status: 403, code: 'FORBIDDEN', message: 'Chuyến này không thuộc về bạn.' },
     { status: 404, code: 'NOT_FOUND', message: 'Không tìm thấy chuyến này.' },
   ])('★ a $status on refresh takes the trip away: the answer is final', async ({ status, code, message }) => {

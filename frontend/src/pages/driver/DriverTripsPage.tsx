@@ -5,6 +5,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useMyAssignments } from '@/hooks/driver';
 import { useBusinessToday } from '@/hooks/useBusinessToday';
 import { isScheduleView, scheduleOf, SCHEDULE_VIEWS, type ScheduleDay, type ScheduleView } from '@/utils/driverSchedule';
+import { isFinalRefusal } from '@/utils/driverErrors';
 import { formatCalendarWeekday } from '@/utils/format/datetime';
 import type { TranslationKey } from '@/types/translate';
 import { AssignmentCard, AssignmentCardSkeleton } from './components/AssignmentCard';
@@ -47,10 +48,11 @@ export default function DriverTripsPage() {
   // — and it turns over at midnight while the page stays open.
   const today = useBusinessToday();
   const schedule = useMemo(() => scheduleOf(assignments, today), [assignments, today]);
-  // ★ A FAILED REFRESH DOES NOT TAKE AWAY A SCHEDULE ALREADY ON SCREEN. The
-  // error blocks only when there is nothing to show; otherwise it is said
-  // above the cards, which stay.
-  const blocking = Boolean(error) && assignments.length === 0;
+  // ★ A FAILED REFRESH DOES NOT TAKE AWAY A SCHEDULE ALREADY ON SCREEN — a
+  // lost signal is said above the cards, which stay. A REFUSAL DOES: after a
+  // 401/403 the addresses already loaded must not outlive the access that
+  // fetched them. The same rule as the assignment detail.
+  const blocking = Boolean(error) && (assignments.length === 0 || isFinalRefusal(error));
   const settled = !loading && !blocking;
 
   const show = (next: unknown) => {
@@ -136,12 +138,18 @@ function ScheduleDays({ view, days }: Readonly<{ view: ScheduleView; days: reado
   );
 }
 
-/** Cards in the shape of the real ones, and one sentence for a screen reader. */
+/**
+ * Cards in the shape of the real ones, and one sentence for a screen reader.
+ *
+ * ★ THE SENTENCE IS THE `<output>`, THE CARDS ARE NOT. `<output>` is a status
+ * live region by itself (polite, like `role="status"`) and takes phrasing
+ * content only; the skeleton blocks are decoration (`aria-hidden`) beside it.
+ */
 function ScheduleSkeleton() {
   const { t } = useLanguage();
   return (
-    <div role="status" className="space-y-3">
-      <span className="sr-only">{t('driverLoading')}</span>
+    <div className="space-y-3">
+      <output className="sr-only">{t('driverLoading')}</output>
       <AssignmentCardSkeleton />
       <AssignmentCardSkeleton />
     </div>

@@ -219,7 +219,12 @@ describe('★ the work schedule', () => {
     fetchMyAssignments.mockReturnValue(new Promise((resolve) => (release = resolve)));
     renderAt('/driver');
 
-    expect(screen.getByRole('status')).toHaveTextContent('Đang tải…');
+    // A status region by the element's own semantics — an `<output>`, not a
+    // div wearing `role="status"` — holding only the sentence.
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(/^Đang tải…$/);
+    expect(status.tagName).toBe('OUTPUT');
+    expect(status).not.toHaveAttribute('role');
     expect(screen.queryByRole('link')).toBeNull();
     release([trip()]);
 
@@ -458,6 +463,25 @@ describe('★ the work schedule', () => {
     expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 1');
     // Read first: the warning comes before the cards it qualifies.
     expect(alert.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    { status: 401, code: 'UNAUTHORIZED', message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' },
+    { status: 403, code: 'FORBIDDEN', message: 'Chuyến này không thuộc về bạn.' },
+  ])('★ a $status on refresh takes the loaded schedule away — nothing outlives the access', async ({ status, code, message }) => {
+    // A lost signal keeps the cards (above); a refusal must not. After a
+    // revoked session or a changed account, addresses fetched earlier would
+    // otherwise stay on an open phone next to the refusal.
+    fetchMyAssignments.mockResolvedValueOnce([trip()]).mockRejectedValue(new ApiError(status, code, 'x'));
+    const { client } = renderAt('/driver');
+    await todayCards();
+
+    await act(() => client.refetchQueries({ queryKey: ['driver', 'assignments'] }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(screen.queryByText('Kho HCM')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /xem chuyến/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Thử lại' })).not.toBeInTheDocument();
   });
 
   it('★ a refusal offers no retry — asking again cannot change it', async () => {

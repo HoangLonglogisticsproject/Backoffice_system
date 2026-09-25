@@ -110,7 +110,8 @@ export default function DriverTripPage() {
 
   // ★ ONLY A FINAL ANSWER, OR NOTHING TO SHOW, TAKES THE PAGE AWAY. A refresh
   // that failed on a weak signal must not unmount a form the driver is typing
-  // into; it is said above the page instead (see below).
+  // into; it is said above the page instead (see below). A refusal (401/403/
+  // 404) does take it: nothing read before it may outlive the access.
   if (!trip || isFinalRefusal(loadError)) {
     return (
       <div className="space-y-4">
@@ -367,8 +368,10 @@ function TripFacts({ trip }: Readonly<{ trip: DriverTripDetail }>) {
 function DetailSkeleton() {
   const { t } = useLanguage();
   return (
-    <div role="status" className="space-y-4">
-      <span className="sr-only">{t('driverLoading')}</span>
+    <div className="space-y-4">
+      {/* The announcement is the `<output>` (a polite status region); the
+          blocks below are decoration. As on the schedule. */}
+      <output className="sr-only">{t('driverLoading')}</output>
       <div className="flex items-center gap-3 py-1">
         <Skeleton className="size-9 rounded-lg" />
         <div className="flex-1 space-y-1.5">
