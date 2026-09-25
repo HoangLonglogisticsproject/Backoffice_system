@@ -3,15 +3,19 @@ import type { ReactNode } from 'react';
 /**
  * The Backoffice status pill — the ring-bordered capsule every list uses to
  * say what state a row is in (a membership, a decision, a catalogue entry).
- * One place for the three tones, so a new list gets the same pill rather
- * than a near copy.
+ * One place for the tones, so a new list gets the same pill rather than a
+ * near copy.
  */
-export type StatusTone = 'green' | 'amber' | 'gray';
+export type StatusTone = 'green' | 'amber' | 'gray' | 'blue' | 'red';
 
 const TONES: Record<StatusTone, string> = {
   green: 'bg-green-50 text-green-700 ring-green-600/20',
   amber: 'bg-amber-50 text-amber-700 ring-amber-600/20',
   gray: 'bg-gray-50 text-gray-600 ring-gray-500/10',
+  // Under way. The Backoffice's own accent blue, not a new one.
+  blue: 'bg-blue-50 text-blue-700 ring-blue-700/10',
+  // Sent back: the reader has something to fix.
+  red: 'bg-red-50 text-red-700 ring-red-600/10',
 };
 
 export function StatusPill({ tone, children }: Readonly<{ tone: StatusTone; children: ReactNode }>) {

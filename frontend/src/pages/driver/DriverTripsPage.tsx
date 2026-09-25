@@ -1,156 +1,149 @@
-import { Link } from 'react-router-dom';
-import { ChevronRight, Clock, Flag, MapPin, Truck } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { PageHeader } from '@/components/common/PageHeader';
-import { QueueStates } from '@/components/common/DecisionQueue';
-import { StatusPill } from '@/components/common/StatusPill';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useMyAssignments } from '@/hooks/driver';
-import { driverErrorKey } from '@/utils/driverErrors';
-import { formatCalendarDay, formatTime } from '@/utils/format/datetime';
-import { formatPlate } from '@/utils/format';
-import type { DriverTrip } from '@/types/driver';
+import { useBusinessToday } from '@/hooks/useBusinessToday';
+import { isScheduleView, scheduleOf, SCHEDULE_VIEWS, type ScheduleDay, type ScheduleView } from '@/utils/driverSchedule';
+import { formatCalendarWeekday } from '@/utils/format/datetime';
+import type { TranslationKey } from '@/types/translate';
+import { AssignmentCard, AssignmentCardSkeleton } from './components/AssignmentCard';
+import { DriverLoadError } from './components/DriverLoadError';
 
 /**
- * What am I driving.
+ * The driver's work schedule — "which trips do I drive today?"
  *
- * ★ THE LIST TAKES NO PARAMETER, AND THAT IS THE SECURITY MODEL VISIBLE IN THE
- * URL. The server reads the caller's own assignments, so there is no id a
- * client could supply to widen it and nothing to filter here.
+ * ★ THE LIST TAKES NO PARAMETER, AND THAT IS THE SECURITY MODEL. The server
+ * reads the caller's own assignments; the view is split here, on the client,
+ * from what came back — there is no id or date a client could send to widen it.
  *
- * ★ GROUPED BY TRIP, OPENED BY ASSIGNMENT (ADR-0004). A driver may hold two
- * lorries on one trip. The trip — customer, pickup, delivery, day — is one
- * card; each lorry under it is its own turn with its own timeline, and tapping
- * the lorry opens that turn. Rendering two identical trip cards would make the
- * driver guess which was which.
+ * ★ ONE CARD PER ASSIGNMENT, OPENED BY `assignmentId` (ADR-0004, DL-115).
  *
- * ★ NO EXECUTION STATE ON THIS SCREEN, because the list endpoint carries none:
- * events live on the detail. Nothing here guesses a stage from the plan.
+ * ★ THE VIEW IS IN THE URL (`?view=upcoming`), so going back from a trip lands
+ * on the tab the driver left, and today — the common case — is the bare
+ * `/driver`.
  */
+
+const VIEW_LABEL: Record<ScheduleView, TranslationKey> = {
+  today: 'driverViewToday',
+  upcoming: 'driverViewUpcoming',
+  past: 'driverViewPast',
+};
+
+const EMPTY: Record<ScheduleView, TranslationKey> = {
+  today: 'driverEmptyToday',
+  upcoming: 'driverEmptyUpcoming',
+  past: 'driverEmptyPast',
+};
+
 export default function DriverTripsPage() {
   const { t, language } = useLanguage();
+  const [params, setParams] = useSearchParams();
   const { assignments, loading, error, reload } = useMyAssignments();
 
-  const idle = !loading && !error;
-  const trips = groupByTrip(assignments);
+  const requested = params.get('view');
+  const view: ScheduleView = isScheduleView(requested) ? requested : 'today';
+  // The business calendar's today — never the handset's (see `driverSchedule`)
+  // — and it turns over at midnight while the page stays open.
+  const today = useBusinessToday();
+  const schedule = useMemo(() => scheduleOf(assignments, today), [assignments, today]);
+  // ★ A FAILED REFRESH DOES NOT TAKE AWAY A SCHEDULE ALREADY ON SCREEN. The
+  // error blocks only when there is nothing to show; otherwise it is said
+  // above the cards, which stay.
+  const blocking = Boolean(error) && assignments.length === 0;
+  const settled = !loading && !blocking;
+
+  const show = (next: unknown) => {
+    if (!isScheduleView(next)) return;
+    // `replace`: switching tabs is not a place to go back to.
+    setParams(next === 'today' ? {} : { view: next }, { replace: true });
+  };
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={t('driverMyTrips')}
-        subtitle={idle && trips.length > 0 ? `${trips.length} ${t('driverTripUnit')}` : undefined}
-      />
+      <header>
+        <h1 className="text-xl font-semibold">{t('driverSchedule')}</h1>
+        <p className="text-sm text-muted-foreground">{formatCalendarWeekday(today, language)}</p>
+      </header>
 
-      {!idle || trips.length === 0 ? (
-        <Card size="sm">
-          <QueueStates
-            loading={loading}
-            showLoading
-            forbidden={false}
-            error={Boolean(error)}
-            errorMessage={error ? t(driverErrorKey(error)) : undefined}
-            onRetry={reload}
-            empty={idle && trips.length === 0}
-            emptyKey="driverNoTrips"
-          />
-        </Card>
-      ) : null}
-
-      {idle && trips.length > 0 ? (
-        <ul aria-label={t('driverMyTrips')} className="space-y-3">
-          {trips.map((group) => (
-            <li key={group.tripId}>
-              <TripCard group={group} language={language} />
-            </li>
+      <Tabs value={view} onValueChange={show}>
+        {/* 48px with a 2px inset: each tab is a full 44px thumb target. */}
+        <TabsList className="h-12 w-full p-0.5">
+          {SCHEDULE_VIEWS.map((option) => (
+            <TabsTrigger key={option} value={option}>
+              {t(VIEW_LABEL[option])}
+              {/* The space is its own text node: a name is built from each
+                  element's TRIMMED text, so one inside the span would be lost
+                  and a screen reader would hear "Hôm nay2". */}
+              {settled ? (
+                <>
+                  {' '}
+                  <span className="text-xs tabular-nums">{countOf(schedule[option])}</span>
+                </>
+              ) : null}
+            </TabsTrigger>
           ))}
-        </ul>
-      ) : null}
+        </TabsList>
+
+        {SCHEDULE_VIEWS.map((option) => (
+          <TabsContent key={option} value={option}>
+            {loading ? <ScheduleSkeleton /> : null}
+            {error ? <DriverLoadError error={error} onRetry={reload} /> : null}
+            {settled ? <ScheduleDays view={option} days={schedule[option]} /> : null}
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 }
 
-/** One trip and every turn the driver holds on it, in the order the server gave them. */
-interface TripGroup {
-  tripId: string;
-  trip: DriverTrip;
-  turns: DriverTrip[];
-}
+const countOf = (days: readonly ScheduleDay[]): number =>
+  days.reduce((total, day) => total + day.assignments.length, 0);
 
-const groupByTrip = (assignments: readonly DriverTrip[]): TripGroup[] => {
-  const groups = new Map<string, TripGroup>();
-  for (const turn of assignments) {
-    const group = groups.get(turn.tripId);
-    if (group) group.turns.push(turn);
-    else groups.set(turn.tripId, { tripId: turn.tripId, trip: turn, turns: [turn] });
+/**
+ * One view's days. Today is one day and the header already names it; upcoming
+ * and earlier can span many, so each day gets its own heading.
+ */
+function ScheduleDays({ view, days }: Readonly<{ view: ScheduleView; days: readonly ScheduleDay[] }>) {
+  const { t, language } = useLanguage();
+
+  if (days.length === 0) {
+    return <p className="py-10 text-center text-sm text-muted-foreground">{t(EMPTY[view])}</p>;
   }
-  return [...groups.values()];
-};
-
-function TripCard({ group, language }: Readonly<{ group: TripGroup; language: 'vi' | 'en' }>) {
-  const { t } = useLanguage();
-  const { trip, turns } = group;
-
-  const window =
-    trip.scheduledPickupAt || trip.scheduledDeliveryAt
-      ? [trip.scheduledPickupAt, trip.scheduledDeliveryAt]
-          .map((at) => (at ? formatTime(at, language) : '…'))
-          .join(' – ')
-      : null;
 
   return (
-    <Card size="sm">
-      <CardContent className="space-y-3">
-        <div className="space-y-2">
-          <div className="flex items-start justify-between gap-2">
-            <p className="truncate text-base font-semibold">{trip.customer?.name ?? t('driverNotSet')}</p>
-            <StatusPill tone="gray">{formatCalendarDay(trip.scheduledOn, language)}</StatusPill>
-          </div>
+    <div className="space-y-5">
+      {days.map(({ day, assignments }) => {
+        const headingId = `schedule-day-${day}`;
+        return (
+          <section key={day} aria-labelledby={view === 'today' ? undefined : headingId} className="space-y-2">
+            {view === 'today' ? null : (
+              <h2 id={headingId} className="text-sm font-semibold text-muted-foreground">
+                {formatCalendarWeekday(day, language)}
+              </h2>
+            )}
+            <ul aria-label={view === 'today' ? t('driverViewToday') : undefined} className="space-y-3">
+              {assignments.map((assignment) => (
+                <li key={assignment.assignment.id}>
+                  <AssignmentCard assignment={assignment} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
 
-          <div className="space-y-1 text-sm">
-            <p className="flex items-start gap-1.5">
-              <MapPin className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden />
-              <span className="line-clamp-1">
-                <span className="text-muted-foreground">{t('driverPickup')}: </span>
-                {trip.pickupAddress ?? t('driverNotSet')}
-              </span>
-            </p>
-            <p className="flex items-start gap-1.5">
-              <Flag className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden />
-              <span className="line-clamp-1">
-                <span className="text-muted-foreground">{t('driverDelivery')}: </span>
-                {trip.deliveryAddress ?? t('driverNotSet')}
-              </span>
-            </p>
-          </div>
-
-          {window ? (
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Clock className="size-3.5 shrink-0" aria-hidden />
-              <span className="tabular-nums">{window}</span>
-            </p>
-          ) : null}
-        </div>
-
-        {/* ★ ONE ROW PER LORRY, AND THE ROW IS THE TARGET. A thumb on a moving
-            lorry does not reliably hit a 14px caption, so the whole row opens
-            the turn. */}
-        <ul aria-label={t('driverMyAssignments')} className="divide-y divide-border rounded-lg border border-border">
-          {turns.map((turn) => (
-            <li key={turn.assignment.id}>
-              <Link
-                to={`/driver/assignments/${turn.assignment.id}`}
-                className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-              >
-                <Truck className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                <span className="flex-1 truncate text-sm font-medium">
-                  {formatPlate(turn.vehicle?.plate) || t('driverNotSet')}
-                </span>
-                <ChevronRight className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
+/** Cards in the shape of the real ones, and one sentence for a screen reader. */
+function ScheduleSkeleton() {
+  const { t } = useLanguage();
+  return (
+    <div role="status" className="space-y-3">
+      <span className="sr-only">{t('driverLoading')}</span>
+      <AssignmentCardSkeleton />
+      <AssignmentCardSkeleton />
+    </div>
   );
 }

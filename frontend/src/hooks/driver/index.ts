@@ -11,6 +11,7 @@ import {
 } from '@/api/driverPortal';
 import type { DriverTrip, DriverTripDetail, ExpenseDeclaration } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
+import { isFinalRefusal } from '@/utils/driverErrors';
 import { ApiError, isApiError } from '@/utils/errors';
 import { notifySuccess } from '@/utils/toast';
 
@@ -66,6 +67,11 @@ export function useMyAssignments(): {
     // A driver on the road opens this repeatedly; a short window keeps a
     // back-navigation instant without showing yesterday's work.
     staleTime: 30_000,
+    // ★ OFFLINE IS AN ERROR HERE, NOT A PAUSE. TanStack's default parks a
+    // query while the browser says it is offline — no data, no error, not
+    // loading — and the schedule would read that as "no trips today". Asking
+    // anyway fails fast as "no connection", with a retry button.
+    networkMode: 'always',
   });
 
   return {
@@ -87,14 +93,11 @@ export function useMyAssignment(assignmentId: string | undefined): {
     queryKey: driverKeys.assignment(assignmentId ?? ''),
     queryFn: () => fetchMyAssignment(assignmentId as string),
     enabled: Boolean(assignmentId),
-    // ★ NEVER RETRIED ON A REFUSAL. A 403 means this turn is not theirs (or has
-    // ended) and a 404 means it is not there; asking twice more changes neither
-    // answer and fills the server's log with what looks like probing.
-    retry: (failureCount, error) => {
-      const status = isApiError(error) ? error.status : 0;
-      if (status === 403 || status === 404) return false;
-      return failureCount < 2;
-    },
+    // Offline fails as "no connection" rather than parking — see the list.
+    networkMode: 'always',
+    // ★ NEVER RETRIED ON A REFUSAL — see `isFinalRefusal`. Anything else is
+    // tried twice more, so a dropped packet on the road is not an error screen.
+    retry: (failureCount, error) => !isFinalRefusal(error) && failureCount < 2,
   });
 
   return {

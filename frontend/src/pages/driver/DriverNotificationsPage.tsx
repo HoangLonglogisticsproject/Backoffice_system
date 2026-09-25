@@ -1,12 +1,12 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Bell, CheckCircle2, Truck, UserMinus, XCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { buttonVariants } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useMarkNotificationRead, useNotifications } from '@/hooks/notifications';
 import { driverErrorKey } from '@/utils/driverErrors';
 import { destinationOf } from '@/utils/driverNotifications';
 import { cn } from '@/utils/cn';
-import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
+import { formatCalendarDay, formatTimeOnDay, todayAsCalendarDay } from '@/utils/format/datetime';
 import type { TranslationKey } from '@/types/translate';
 import type { Notification, NotificationType } from '@/types/notification';
 
@@ -47,15 +47,19 @@ export default function DriverNotificationsPage() {
     // Read is a courtesy stamp, not a gate: the navigation does not wait for
     // it and a failure to stamp must not keep the driver off their trip.
     if (notification.readAt === null) markRead.mutate(notification.id);
-    navigate(destinationOf(notification));
+    navigate(destinationOf(notification, todayAsCalendarDay()));
   };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon-lg" aria-label={t('driverBackToTrips')} render={<Link to="/driver" />}>
+        <Link
+          to="/driver"
+          aria-label={t('driverBackToTrips')}
+          className={cn(buttonVariants({ variant: 'ghost', size: 'icon-lg' }), '-ml-2 size-11')}
+        >
           <ArrowLeft />
-        </Button>
+        </Link>
         <h1 className="flex items-center gap-2 font-semibold">
           <Bell className="size-4" aria-hidden />
           {t('driverNotifications')}
@@ -115,7 +119,7 @@ export default function DriverNotificationsPage() {
                       </span>
                     ) : null}
                     <span className="mt-1 block text-xs text-muted-foreground">
-                      {formatDateTime(notification.createdAt, language)}
+                      {formatTimeOnDay(notification.createdAt, language)}
                     </span>
                   </span>
                   {unread ? (

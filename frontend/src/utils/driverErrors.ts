@@ -128,3 +128,14 @@ export function reviewErrorKey(error: unknown): TranslationKey {
  */
 export const shouldReloadAfter = (error: unknown): boolean =>
   isApiError(error) && (error.status === 409 || error.status === 404);
+
+/**
+ * A read whose answer will not change by asking again.
+ *
+ * ★ A 403 SAYS "not yours" (or no longer yours) AND A 404 SAYS "not there".
+ * Asking twice more changes neither answer and fills the server's log with
+ * what looks like probing — so the query does not retry them, and the screen
+ * does not offer a retry button that cannot succeed.
+ */
+export const isFinalRefusal = (error: unknown): boolean =>
+  isApiError(error) && (error.status === 403 || error.status === 404);
