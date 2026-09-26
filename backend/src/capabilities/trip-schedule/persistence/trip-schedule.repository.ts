@@ -7,6 +7,8 @@ import {
   TripScheduleWithRefs,
   TripStatus,
 } from '../domain/trip-schedule';
+import type { TripBoardOrder } from '../domain/trip-board';
+import { orderBySql } from './trip-board-order';
 
 /**
  * SQL for the dispatch board. Opens no transaction; decides nothing.
@@ -336,7 +338,7 @@ export class TripScheduleRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * One page of the board, newest day first, plus how many rows the range holds.
+   * One page of the board, in the caller's order, plus how many rows the range holds.
    *
    * ★ ONE STATEMENT FOR BOTH, via `COUNT(*) OVER()`. Counting in a second query
    * would count a different instant: a row inserted between the two would
@@ -347,12 +349,14 @@ export class TripScheduleRepository {
    * Offset rather than keyset, which is the exception in this codebase — see
    * `common/pagination/offset-page` and ADR-0003. It is defensible ONLY because
    * the range is mandatory and capped, so the offset is never deep and the
-   * count never scans the table. `idx_trip_schedule_page` supplies the ordering
-   * in the direction written here, tiebreaker included.
+   * count never scans the table. `idx_trip_schedule_page` supplies the default
+   * order (`executionDate desc`), tiebreaker included; the other orders sort the
+   * bounded range the window function has to read in full anyway.
    */
   async listPage(
     range: DateRange,
     assignment: TripAssignmentFilter,
+    order: TripBoardOrder,
     limit: number,
     offset: number,
     executor: DatabaseQuery = this.db,
@@ -363,7 +367,7 @@ export class TripScheduleRepository {
            AND t.scheduled_on >= $1::date
            AND t.scheduled_on <= $2::date
            ${ASSIGNMENT_PREDICATE[assignment]}
-         ORDER BY t.scheduled_on DESC, t.id DESC
+         ${orderBySql(order)}
          LIMIT $3 OFFSET $4`,
       [range.from, range.to, limit, offset],
     );
