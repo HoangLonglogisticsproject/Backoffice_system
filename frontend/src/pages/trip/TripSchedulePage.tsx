@@ -175,41 +175,48 @@ export default function TripSchedulePage() {
           {trips.assignment === 'all' && <TripScheduleExportButton range={trips.range} />}
         </div>
 
-        <div className="flex flex-wrap items-end gap-3 border-b border-gray-100 bg-gray-50/50 p-4">
-          <div className="space-y-1">
-            <label htmlFor="trip-from" className="text-xs font-medium text-gray-600">
-              {t('dateFrom')}
-            </label>
-            <Input
-              id="trip-from"
-              type="date"
-              value={trips.range.from}
-              onChange={(event) => trips.setFrom(event.target.value)}
-              className="h-9 w-[170px] bg-white"
-            />
-          </div>
+        {/*
+          Two groups on one row: the date range, and the order. The wider gap
+          between them is what says which controls belong together; when the
+          row runs out, the order wraps below as a whole.
+        */}
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3 border-b border-gray-100 bg-gray-50/50 p-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <label htmlFor="trip-from" className="text-xs font-medium text-gray-600">
+                {t('dateFrom')}
+              </label>
+              <Input
+                id="trip-from"
+                type="date"
+                value={trips.range.from}
+                onChange={(event) => trips.setFrom(event.target.value)}
+                className="h-9 w-[170px] bg-white"
+              />
+            </div>
 
-          <div className="space-y-1">
-            <label htmlFor="trip-to" className="text-xs font-medium text-gray-600">
-              {t('dateTo')}
-            </label>
-            <Input
-              id="trip-to"
-              type="date"
-              value={trips.range.to}
-              onChange={(event) => trips.setTo(event.target.value)}
-              className="h-9 w-[170px] bg-white"
-            />
-          </div>
+            <div className="space-y-1">
+              <label htmlFor="trip-to" className="text-xs font-medium text-gray-600">
+                {t('dateTo')}
+              </label>
+              <Input
+                id="trip-to"
+                type="date"
+                value={trips.range.to}
+                onChange={(event) => trips.setTo(event.target.value)}
+                className="h-9 w-[170px] bg-white"
+              />
+            </div>
 
-          <Button
-            type="button"
-            variant="outline"
-            className="h-9 bg-white"
-            onClick={trips.resetRange}
-          >
-            {t('thisMonth')}
-          </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 bg-white"
+              onClick={trips.resetRange}
+            >
+              {t('thisMonth')}
+            </Button>
+          </div>
 
           <TripSortControl value={trips.order} onChange={trips.setOrder} />
         </div>

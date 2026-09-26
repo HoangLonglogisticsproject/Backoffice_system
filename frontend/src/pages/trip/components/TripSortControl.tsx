@@ -46,11 +46,13 @@ export function TripSortControl({
 }: Readonly<{ value: TripBoardOrder; onChange: (order: TripBoardOrder) => void }>) {
   const { t } = useLanguage();
 
-  // The same wrapper as the two date fields beside it, so label and control
-  // sit exactly as theirs do.
+  // ONE GROUP: the label and both selects on a single gap, so they read as one
+  // control. Minimum widths rather than fixed ones, so a longer translation
+  // grows the select instead of clipping it; on a narrow screen the pieces
+  // wrap in place instead of overflowing.
   return (
-    <div className="space-y-1">
-      <label htmlFor="trip-sort" className="text-xs font-medium text-gray-600">
+    <div className="flex flex-wrap items-center gap-3">
+      <label htmlFor="trip-sort" className="text-xs font-medium whitespace-nowrap text-gray-600">
         {t('tripSortBy')}
       </label>
       <select
@@ -60,7 +62,7 @@ export function TripSortControl({
           const sort = event.target.value;
           if (isSort(sort)) onChange({ ...value, sort });
         }}
-        className={SELECT_CLASS}
+        className={cn(SELECT_CLASS, 'min-w-52')}
       >
         {TRIP_BOARD_SORTS.map((sort) => (
           <option key={sort} value={sort}>
@@ -75,14 +77,14 @@ export function TripSortControl({
           const direction = event.target.value;
           if (isDirection(direction)) onChange({ ...value, direction });
         }}
-        className={cn(SELECT_CLASS, 'ml-2')}
+        className={cn(SELECT_CLASS, 'min-w-48')}
       >
         {DIRECTIONS.map((direction) => (
           <option key={direction.value} value={direction.value}>
             {t(direction.label)}
           </option>
-          ))}
-        </select>
+        ))}
+      </select>
     </div>
   );
 }
