@@ -70,6 +70,16 @@ vi.mock('@/api/tripCatalogue', () => ({
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
 }));
+const fetchTripCosts = vi.fn();
+vi.mock('@/api/tripCost', () => ({
+  fetchTripCosts: (...a: unknown[]) => fetchTripCosts(...a),
+  fetchOutsourceHires: async () => ({ items: [], total: '0.00' }),
+  fetchTripCostSummary: async () => ({ costs: '0.00', hires: '0.00', combined: '0.00' }),
+  createTripCost: vi.fn(),
+  createOutsourceHire: vi.fn(),
+  voidTripCost: vi.fn(),
+  voidOutsourceHire: vi.fn(),
+}));
 
 const session = (permissions: string[]) => ({
   state: {
@@ -187,6 +197,7 @@ describe('TripSchedulePage', () => {
     replaceDriver.mockReset().mockResolvedValue({ id: 'a2', driverUserId: 'd2' });
     endDriverAssignment.mockReset().mockResolvedValue({ id: 'a1', state: 'ended' });
     fetchDriverAssignments.mockReset().mockResolvedValue([]);
+    fetchTripCosts.mockReset().mockResolvedValue({ items: [], total: '0.00' });
     useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create']));
   });
 
@@ -1681,11 +1692,12 @@ describe('TripSchedulePage', () => {
   });
 
   /**
-   * ★ THE MONEY IS NOT ON THE BOARD, AND ITS CONTROL HAS ITS OWN PERMISSION.
+   * ★ COST HAS ITS OWN PERMISSION, AND THE BOARD SHOWS ONLY WHAT THE SERVER SENT.
    *
-   * `trip.read` is unrestricted — every signed-in account reads this list. So
-   * no amount may appear in it, and the way in is a dialog gated on `cost.read`
-   * rather than a column. These cases pin both halves.
+   * Every booking function reads this list, so no cost figure may appear for a
+   * caller without `cost.read` — the server sends them `costSummary: null`, and
+   * the column is not drawn. A `cost.read` holder sees each trip's total in its
+   * own column and the lines in the dialog. These cases pin both halves.
    */
   describe('★ cost is a separate permission and a separate fetch', () => {
     it('offers the cost control to a caller holding cost.read', async () => {
@@ -1730,15 +1742,102 @@ describe('TripSchedulePage', () => {
       expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
     });
 
-    it('★ renders no amount anywhere on the board', async () => {
-      // The list endpoint returns no money at all. This asserts the page never
-      // starts showing one, which is what a "just add a total column" change
-      // would break.
-      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+    it('★ renders no cost figure without cost.read — not even one the payload carried', async () => {
+      // The server withholds it; this pins the page never drawing one either,
+      // should a figure ever reach a caller it was not meant for.
+      useSession.mockReturnValue(session(['trip.read', 'trip.write', 'trip.price.read']));
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ costSummary: { total: '6250000.50', itemCount: 3 } })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
       renderPage();
       await screen.findByText('50H-49266');
 
-      expect(document.body.textContent).not.toMatch(/1\.500\.000|4\.500\.000/);
+      expect(screen.queryByRole('columnheader', { name: 'Chi phí chuyến' })).toBeNull();
+      expect(document.body.textContent).not.toMatch(/6,250,000/);
+    });
+
+    it("★ shows each trip's server total in its own column, and opens the dialog from it", async () => {
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ costSummary: { total: '6250000.50', itemCount: 3 } })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      renderPage();
+
+      const cell = await screen.findByRole('button', { name: 'Chi phí chuyến: 6,250,000.50' });
+      expect(cell).toHaveTextContent('3 khoản');
+      // Said once, on the header — that the total may include unapproved lines.
+      // The header's own name stays the plain label.
+      const header = screen.getByRole('columnheader', { name: 'Chi phí chuyến' });
+      expect(within(header).getByTitle(
+        'Tổng các khoản chi phí đã ghi nhận cho chuyến; có thể bao gồm khoản chưa duyệt.',
+      )).toBeTruthy();
+
+      fireEvent.click(cell);
+
+      await waitFor(() => expect(fetchTripCosts).toHaveBeenCalledWith('t1', false));
+    });
+  });
+
+  describe("★ the board order is the server's", () => {
+    const pages = () =>
+      fetchTripSchedules.mockImplementation(async (request: { page?: number }) => ({
+        items: [trip()],
+        page: request.page ?? 1,
+        limit: 20,
+        total: 45,
+        totalPages: 3,
+      }));
+    const orderOf = (request: unknown) => {
+      const { sort, direction } = request as { sort?: string; direction?: string };
+      return { sort, direction };
+    };
+
+    it('asks for the order the board always had, by default', async () => {
+      renderPage();
+      await waitFor(() => expect(listCalls()).toHaveLength(1));
+
+      expect(orderOf(listCalls()[0]![0])).toEqual({ sort: 'executionDate', direction: 'desc' });
+    });
+
+    it('★ asks the server for the chosen order, and goes back to page one', async () => {
+      pages();
+      renderPage();
+      await screen.findByText('50H-49266');
+
+      fireEvent.click(screen.getByRole('button', { name: /sau/i }));
+      await waitFor(() =>
+        expect(listCalls().some(([r]) => (r as { page?: number }).page === 2)).toBe(true),
+      );
+
+      fireEvent.change(screen.getByLabelText('Sắp xếp theo'), { target: { value: 'lastUpdated' } });
+      fireEvent.change(screen.getByLabelText('Thứ tự'), { target: { value: 'asc' } });
+      // The label says what the server sorts by: the row's last edit.
+      expect(screen.getByRole('option', { name: 'Chỉnh sửa gần nhất' })).toHaveProperty('selected', true);
+
+      await waitFor(() => {
+        const reordered = listCalls().filter(([r]) => orderOf(r).sort === 'lastUpdated');
+        expect(reordered.some(([r]) => orderOf(r).direction === 'asc')).toBe(true);
+        // Page 2 of one order is not page 2 of another.
+        expect(reordered.every(([r]) => (r as { page?: number }).page === 1)).toBe(true);
+      });
+    });
+
+    it('keeps the tab badge out of the order — a count has none', async () => {
+      renderPage();
+      fireEvent.change(await screen.findByLabelText('Sắp xếp theo'), {
+        target: { value: 'bookingCreated' },
+      });
+      await waitFor(() =>
+        expect(listCalls().some(([r]) => orderOf(r).sort === 'bookingCreated')).toBe(true),
+      );
+
+      const badgeCalls = fetchTripSchedules.mock.calls.filter(
+        ([request]) => (request as { limit?: number }).limit === 1,
+      );
+      expect(badgeCalls.length).toBeGreaterThan(0);
+      expect(badgeCalls.every(([request]) => orderOf(request).sort === undefined)).toBe(true);
     });
   });
 

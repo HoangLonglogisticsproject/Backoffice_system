@@ -4,7 +4,7 @@ import { fetchOutsourceHires, fetchTripCostSummary, fetchTripCosts } from '@/api
 import { useSession } from '@/contexts/SessionProvider';
 import { ApiError, isApiError } from '@/utils/errors';
 import type { OutsourceHire, TripCost, TripCostList, TripCostTotals } from '@/types/tripCost';
-import { tripKeys } from './keys';
+import { holdsTripCosts, tripKeys } from './keys';
 
 export interface TripCostView {
   costs: TripCostList<TripCost> | null;
@@ -96,11 +96,18 @@ export function useTripCost(tripId: string | null, includeVoided = false): TripC
    * or a React Query devtools panel — to show.
    *
    * Keyed on the whole money prefix, so both lists, both `includeVoided`
-   * variants and the summary go together.
+   * variants and the summary go together — and on the board pages fetched
+   * with `cost.read`, whose rows carry each trip's cost total. The board has
+   * already moved to a `costs: false` key by then, so what is removed here is
+   * never the page on screen.
    */
   useEffect(() => {
     if (authorized) return;
     queryClient.removeQueries({ queryKey: [...tripKeys.all, 'money'] });
+    queryClient.removeQueries({
+      queryKey: tripKeys.schedules(),
+      predicate: (query) => holdsTripCosts(query.queryKey),
+    });
   }, [authorized, queryClient]);
 
   const reload = useCallback(() => {
@@ -109,6 +116,12 @@ export function useTripCost(tripId: string | null, includeVoided = false): TripC
     // summary: a record that was just voided changes all of them at once, and
     // refreshing only what is on screen would leave the others contradicting it.
     void queryClient.invalidateQueries({ queryKey: tripKeys.money(tripId) });
+    // ★ AND THE BOARD'S COST COLUMN, which shows the same total. Only the pages
+    // that carry costs — the unassigned badge and a cost-less board are untouched.
+    void queryClient.invalidateQueries({
+      queryKey: tripKeys.schedules(),
+      predicate: (query) => holdsTripCosts(query.queryKey),
+    });
   }, [queryClient, tripId]);
 
   // Read from the cache only while the caller may see it. A disabled query

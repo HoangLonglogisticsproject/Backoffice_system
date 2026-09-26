@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   allowedCategories,
+  assignmentStatusOf,
   canDeclareExpense,
   canSubmitCompletion,
   completionStage,
@@ -16,6 +17,7 @@ import {
   workflowStages,
   currentStage,
 } from './driverExecution';
+import type { AssignmentStatus } from './driverExecution';
 import { TRIP_COST_CATEGORIES } from '@/types/tripCost';
 import type { TripCost } from '@/types/tripCost';
 import type {
@@ -498,5 +500,30 @@ describe('★ the four workflow stages', () => {
     const approved = trip({ events: JOURNEY, accountability: 'APPROVED_IMMUTABLE', completion: request({ state: 'approved' }) });
     expect(states(approved)).toEqual(['done', 'done', 'done', 'done']);
     expect(currentStage(approved)).toBeNull();
+  });
+});
+
+describe('★ where one assignment stands — assignmentStatusOf', () => {
+  const AP = event('ARRIVED_PICKUP');
+  const PC = event('PICKUP_CONFIRMED');
+  const AD = event('ARRIVED_DELIVERY');
+  const DC = event('DELIVERY_CONFIRMED');
+
+  it.each<{ name: string; over: Partial<DriverTripDetail>; status: AssignmentStatus }>([
+    { name: 'nothing reported', over: {}, status: 'assigned' },
+    { name: 'arrived at pickup', over: { events: [AP] }, status: 'at-pickup' },
+    { name: 'pickup confirmed', over: { events: [AP, PC] }, status: 'in-transit' },
+    { name: 'arrived at delivery', over: { events: [AP, PC, AD] }, status: 'at-delivery' },
+    { name: 'all four, nothing sent', over: { events: [AP, PC, AD, DC] }, status: 'awaiting-completion' },
+    // ★ The review outranks the journey: a request can be sent before all four
+    // steps are in (lost signal at the gate), and then it is what the driver waits on.
+    { name: 'pending with only the arrival', over: { events: [AP], completion: request({ state: 'pending' }) }, status: 'completion-pending' },
+    { name: 'rejected', over: { events: [AP, PC, AD, DC], completion: request({ state: 'rejected' }) }, status: 'completion-rejected' },
+    { name: 'approved', over: { events: [AP, PC, AD, DC], completion: request({ state: 'approved' }) }, status: 'approved' },
+    { name: 'immutable with no request', over: { accountability: 'APPROVED_IMMUTABLE', completion: null }, status: 'approved' },
+    // ★ A withdrawn confirmation no longer counts, so the lorry is back at the pickup.
+    { name: 'pickup confirmation voided', over: { events: [AP, event('PICKUP_CONFIRMED', { voidedAt: EARLIER })] }, status: 'at-pickup' },
+  ])('$name → $status', ({ over, status }) => {
+    expect(assignmentStatusOf(trip(over))).toBe(status);
   });
 });

@@ -3,6 +3,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../../../common/e
 import { toOffsetPage, type OffsetPage } from '../../../common/pagination/offset-page';
 import type { DateRangePageQuery } from '../../../common/pagination/date-range-page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
+import type { TripBoardOrder } from '../domain/trip-board';
 import { optionalPoint } from '../domain/trip-location';
 import type {
   TripAssignmentFilter,
@@ -108,16 +109,16 @@ export type UpdateTripInput = Partial<CreateTripInput> & {
 };
 
 /**
- * Reading the board: the range, the page, and who is driving.
+ * Reading the board: the range, the page, who is driving, and in what order.
  *
- * ★ ONE MORE FIELD THAN `DateRangePageQuery`, AND IT IS NOT PAGINATION. The
- * range is what makes the offset envelope defensible (ADR-0003); `assignment`
- * is an ordinary filter on top of it, and it is spelled out here rather than
- * added to the shared DTO because the other list that DTO serves — the
- * operational board — has no business gaining a driver filter it never asked
- * for.
+ * ★ MORE THAN `DateRangePageQuery`, AND NONE OF IT IS PAGINATION. The range is
+ * what makes the offset envelope defensible (ADR-0003); `assignment` is an
+ * ordinary filter on top of it and `sort`/`direction` only reorder the same
+ * set. They are spelled out here rather than added to the shared DTO because
+ * the other list that DTO serves — the operational board — has no business
+ * gaining a driver filter or a sort it never asked for.
  */
-export interface TripBoardQuery extends DateRangePageQuery {
+export interface TripBoardQuery extends DateRangePageQuery, TripBoardOrder {
   assignment: TripAssignmentFilter;
 }
 
@@ -178,6 +179,7 @@ export class TripScheduleService {
     const { items, total } = await this.trips.listPage(
       range,
       query.assignment,
+      { sort: query.sort, direction: query.direction },
       query.limit,
       offset,
     );

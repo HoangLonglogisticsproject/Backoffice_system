@@ -6,6 +6,7 @@ import type {
   TripStatus,
 } from '@/types/trip';
 import type { OffsetPage, OffsetPageRequest } from '@/types/pagination';
+import type { SortDirection, TripBoardRow, TripBoardSort } from '@/types/tripBoard';
 
 /**
  * The dispatch board (contract §21).
@@ -90,6 +91,13 @@ export type UpdateTripInput = Partial<CreateTripInput>;
  */
 export interface TripScheduleQuery extends OffsetPageRequest {
   assignment?: TripAssignmentFilter;
+  /**
+   * The server's order, never a sort applied here: a page is not the result
+   * set, so sorting it in the browser would reorder twenty rows of a list of
+   * hundreds. Omitted, the server orders by run day, newest first.
+   */
+  sort?: TripBoardSort;
+  direction?: SortDirection;
 }
 
 /**
@@ -118,8 +126,8 @@ const fromWire = <T extends { legacyVehicleId: string | null }>(row: Wire<T>): T
 
 export async function fetchTripSchedules(
   request: TripScheduleQuery = {},
-): Promise<OffsetPage<TripScheduleWithRefs>> {
-  const { data } = await httpClient.get<OffsetPage<Wire<TripScheduleWithRefs>>>('/trip-schedules', {
+): Promise<OffsetPage<TripBoardRow>> {
+  const { data } = await httpClient.get<OffsetPage<Wire<TripBoardRow>>>('/trip-schedules', {
     // axios drops `undefined` params, so an unset filter simply is not sent and
     // the server applies its own default — the current month, and the whole
     // board rather than one of its halves.
@@ -129,6 +137,8 @@ export async function fetchTripSchedules(
       page: request.page,
       limit: request.limit,
       assignment: request.assignment,
+      sort: request.sort,
+      direction: request.direction,
     },
   });
   return { ...data, items: data.items.map(fromWire) };

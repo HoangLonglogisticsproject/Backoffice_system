@@ -154,13 +154,37 @@ const PHRASES = {
   // ★ WRITTEN FOR SOMEBODY STANDING BESIDE A LORRY. Short, concrete, and about
   // what to do next rather than about what the system is. Nothing here names a
   // status code, a table or a state machine.
+  // A proper name: the same in every language.
+  companyName: { vi: 'Hoàng Long', en: 'Hoàng Long' },
   driverPortal: { vi: 'Cổng tài xế', en: 'Driver Portal' },
-  driverMyTrips: { vi: 'Chuyến của tôi', en: 'My trips' },
-  driverMyAssignments: { vi: 'Xe của tôi trên chuyến này', en: 'My vehicles on this trip' },
-  driverNoTrips: { vi: 'Bạn chưa được phân công chuyến nào', en: 'You have no assigned trips' },
-  driverBackToTrips: { vi: 'Về danh sách chuyến', en: 'Back to trips' },
+  driverSchedule: { vi: 'Lịch làm việc', en: 'Work schedule' },
+  // ★ THE SCHEDULE IS SPLIT BY THE TRIP'S DAY, NOT BY A STATUS: the list the
+  // server sends carries no execution state, so "done" is not something it can
+  // say. "Earlier" is a date, and says nothing about whether the work is closed.
+  driverViewToday: { vi: 'Hôm nay', en: 'Today' },
+  driverViewUpcoming: { vi: 'Sắp tới', en: 'Upcoming' },
+  driverViewPast: { vi: 'Đã qua', en: 'Earlier' },
+  driverEmptyToday: { vi: 'Bạn chưa có chuyến nào hôm nay.', en: 'You have no trips today.' },
+  driverEmptyUpcoming: { vi: 'Chưa có lịch sắp tới.', en: 'Nothing is scheduled yet.' },
+  driverEmptyPast: { vi: 'Chưa có chuyến nào đã qua.', en: 'No earlier trips.' },
+  driverViewTrip: { vi: 'Xem chuyến', en: 'View trip' },
+  driverNoPickupTime: { vi: 'Chưa có giờ lấy hàng', en: 'No pickup time yet' },
+  driverTripDetail: { vi: 'Chi tiết chuyến', en: 'Trip details' },
+  driverPlannedPickup: { vi: 'Dự kiến lấy hàng', en: 'Planned pickup' },
+  driverBack: { vi: 'Quay lại', en: 'Back' },
+  driverBackToTrips: { vi: 'Về lịch làm việc', en: 'Back to schedule' },
   driverRetry: { vi: 'Thử lại', en: 'Try again' },
   driverLoading: { vi: 'Đang tải…', en: 'Loading…' },
+  // Where ONE assignment stands, read from its own events and completion —
+  // never the dispatch board's status, which is the office's word (DL-69).
+  driverStatusAssigned: { vi: 'Đã phân công', en: 'Assigned' },
+  driverStatusAtPickup: { vi: 'Đang ở điểm lấy hàng', en: 'At pickup' },
+  driverStatusInTransit: { vi: 'Đang vận chuyển', en: 'In transit' },
+  driverStatusAtDelivery: { vi: 'Đang ở điểm giao hàng', en: 'At delivery' },
+  driverStatusAwaitingCompletion: { vi: 'Chờ gửi hoàn tất', en: 'Ready to submit' },
+  driverStatusCompletionPending: { vi: 'Chờ duyệt', en: 'Waiting for review' },
+  driverStatusCompletionRejected: { vi: 'Bị trả lại', en: 'Sent back' },
+  driverStatusApproved: { vi: 'Đã duyệt', en: 'Approved' },
 
   driverVehicle: { vi: 'Xe', en: 'Vehicle' },
   driverCustomer: { vi: 'Khách hàng', en: 'Customer' },
@@ -179,9 +203,10 @@ const PHRASES = {
   driverStageDelivery: { vi: 'Giao hàng', en: 'Delivery' },
   driverStageExpense: { vi: 'Chi phí', en: 'Expenses' },
   driverStageCompletion: { vi: 'Hoàn thành', en: 'Completion' },
-  driverStageCurrent: { vi: 'Đang thực hiện', en: 'In progress' },
-  driverTripSummary: { vi: 'Thông tin chuyến', en: 'Trip details' },
-  driverTripUnit: { vi: 'chuyến', en: 'trips' },
+  // The end of the trip where the next tap is — not a status, which the
+  // summary above already states.
+  driverStageCurrent: { vi: 'Việc tiếp theo', en: 'Next up' },
+  driverTripSummary: { vi: 'Thông tin chuyến', en: 'Trip information' },
   driverAddress: { vi: 'Địa chỉ', en: 'Address' },
   driverActualPickup: { vi: 'Lấy hàng lúc', en: 'Picked up at' },
   driverActualDelivery: { vi: 'Giao hàng lúc', en: 'Delivered at' },
@@ -261,7 +286,6 @@ const PHRASES = {
   // ------------------------------------------------------- notifications --
   driverNotifications: { vi: 'Thông báo', en: 'Notifications' },
   driverProfile: { vi: 'Hồ sơ', en: 'Profile' },
-  driverNavSection: { vi: 'TÀI XẾ', en: 'DRIVER' },
   driverUnread: { vi: 'chưa đọc', en: 'unread' },
   driverNoNotifications: { vi: 'Chưa có thông báo nào.', en: 'No notifications yet.' },
   driverTripOn: { vi: 'Chuyến ngày', en: 'Trip on' },
@@ -991,6 +1015,20 @@ const PHRASES = {
   tripTabUnassigned: { vi: 'Chờ phân công', en: 'Awaiting a driver' },
   tripTabAssigned: { vi: 'Đã phân công', en: 'Has a driver' },
   tripTabsLabel: { vi: 'Lọc theo tài xế', en: 'Filter by driver' },
+  // The board's order. Every one is a date, so the direction reads as time.
+  // Keys follow the server's sort names; only the words are presentation.
+  tripSortBy: { vi: 'Sắp xếp theo', en: 'Sort by' },
+  // ★ "Ngày chạy" BECAUSE THE TRIP FORM ALREADY CALLS THIS FIELD THAT
+  // (`fieldDate`). One field, one name on every screen that shows it.
+  tripSortExecutionDate: { vi: 'Ngày chạy', en: 'Trip date' },
+  tripSortBookingCreated: { vi: 'Booking mới nhất', en: 'Latest booking' },
+  // ★ "CHỈNH SỬA", NOT "CẬP NHẬT". The key is the trip ROW's `updated_at`: an
+  // edit or a status move changes it; a new crew, a cost line or a driver's
+  // milestone does not. "Cập nhật" would promise all of those.
+  tripSortLastUpdated: { vi: 'Chỉnh sửa gần nhất', en: 'Last edited' },
+  tripSortDirection: { vi: 'Thứ tự', en: 'Order' },
+  sortNewestFirst: { vi: 'Mới nhất trước', en: 'Newest first' },
+  sortOldestFirst: { vi: 'Cũ nhất trước', en: 'Oldest first' },
   // ★ A DIFFERENT SENTENCE PER TAB. "Không có chuyến nào" under a filter reads
   // as "the month is empty" when what it means is "every trip here already has
   // somebody on it" — and a dispatcher who believes the first one goes looking
@@ -1289,6 +1327,17 @@ const PHRASES = {
   },
   // Trip cost — the CHI PHÍ block of the workbook, behind `cost.read`
   tripCost: { vi: 'Chi phí chuyến', en: 'Trip cost' },
+  // The board's cost cell. "Chưa có" is a zero the server counted; the unknown
+  // state is a dash, because it is not a zero and must not read as one.
+  tripCostNone: { vi: 'Chưa có', en: 'None yet' },
+  tripCostItems: { vi: 'khoản', en: 'item(s)' },
+  tripCostUnknown: { vi: 'Không rõ chi phí', en: 'Cost unknown' },
+  // Hover help on the column header — once, not on every row. The total is the
+  // cost dialog's, which counts a driver's lines before they are approved.
+  tripCostHelp: {
+    vi: 'Tổng các khoản chi phí đã ghi nhận cho chuyến; có thể bao gồm khoản chưa duyệt.',
+    en: 'Total of the cost items recorded for this trip; may include items not yet approved.',
+  },
   costOwnVehicle: { vi: 'Chi phí xe nhà', en: 'Own-vehicle cost' },
   costOutsource: { vi: 'Xe thuê ngoài', en: 'Outsourced hire' },
   // The five headings, exactly as the sheet writes them.

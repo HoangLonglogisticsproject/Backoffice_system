@@ -43,14 +43,28 @@ import type { TripCost, TripCostCategory } from '@/types/tripCost';
 const assignmentPath = (assignmentId: string) =>
   `/driver/assignments/${encodeURIComponent(assignmentId)}`;
 
-/** Every turn this driver holds right now — one per lorry, grouped by trip on screen. */
+/**
+ * ★ A READ ON THE ROAD GIVES UP, SO THE SCREEN CAN SAY SO. The shared client
+ * sets no timeout, and a phone that loses its signal mid-request would keep a
+ * skeleton on screen until the browser's own limit — minutes. Each attempt
+ * stops after this long and fails as "no connection"; with the query's two
+ * retries (1 s and 2 s apart) a dead connection reaches the retry button in
+ * about half a minute.
+ * Reads only: a write that timed out may still have landed, and its answer is
+ * the idempotency key, not a guess.
+ */
+const READ_TIMEOUT_MS = 10_000;
+
+/** Every turn this driver holds — one per lorry, one card each on the schedule. */
 export async function fetchMyAssignments(): Promise<DriverTrip[]> {
-  const { data } = await httpClient.get<DriverTrip[]>('/driver/assignments');
+  const { data } = await httpClient.get<DriverTrip[]>('/driver/assignments', { timeout: READ_TIMEOUT_MS });
   return data;
 }
 
 export async function fetchMyAssignment(assignmentId: string): Promise<DriverTripDetail> {
-  const { data } = await httpClient.get<DriverTripDetail>(assignmentPath(assignmentId));
+  const { data } = await httpClient.get<DriverTripDetail>(assignmentPath(assignmentId), {
+    timeout: READ_TIMEOUT_MS,
+  });
   return data;
 }
 
