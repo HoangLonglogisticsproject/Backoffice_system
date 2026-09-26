@@ -19,8 +19,11 @@ const DIRECTIONS: readonly { value: SortDirection; label: TranslationKey }[] = [
   { value: 'asc', label: 'sortOldestFirst' },
 ];
 
-const isSort = (value: string): value is TripBoardSort =>
-  TRIP_BOARD_SORTS.some((sort) => sort === value);
+// Widened once, by assignment rather than a cast: a readonly `TripBoardSort[]`
+// is a readonly `string[]`, which is what `includes` needs to take a raw value.
+const SORT_VALUES: readonly string[] = TRIP_BOARD_SORTS;
+
+const isSort = (value: string): value is TripBoardSort => SORT_VALUES.includes(value);
 
 const isDirection = (value: string): value is SortDirection =>
   DIRECTIONS.some((direction) => direction.value === value);

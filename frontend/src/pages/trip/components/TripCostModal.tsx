@@ -419,11 +419,14 @@ function AddRecordForm({
           <label htmlFor="cost-category" className="text-sm font-medium text-gray-700">
             {t('fieldCategory')}
           </label>
+          {/*
+            No `autoFocus`, here or on the carrier field: the dialog owns focus
+            (`Modal` traps it, and restores it on close). Opening the form
+            leaves the keyboard on the button that opened it, and Tab reaches
+            the fields from there — no jump the user did not ask for.
+          */}
           <select
             id="cost-category"
-            // The first field of a form that just appeared: without this the
-            // keyboard is still wherever the button left it.
-            autoFocus
             value={category}
             onChange={(event) => setCategory(event.target.value as TripCostCategory)}
             className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
@@ -442,7 +445,6 @@ function AddRecordForm({
           </label>
           <Input
             id="hire-carrier"
-            autoFocus
             value={carrierName}
             onChange={(event) => setCarrierName(event.target.value)}
             required
