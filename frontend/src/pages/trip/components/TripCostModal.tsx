@@ -36,12 +36,12 @@ import type { TranslationKey } from '@/types/translate';
 /**
  * The CHI PHÍ block of the workbook, for one trip.
  *
- * ★ A DIALOG OFF THE BOARD ROW, NOT A COLUMN ON THE BOARD. Two reasons, and
- * neither is layout. The board is already twelve columns read at a glance, and
- * — far more importantly — it is read by EVERYBODY. Money is not: putting an
- * amount in the list would hand the company's cost base to every signed-in
- * account, which is the one thing the separate `cost.*` permissions exist to
- * prevent.
+ * ★ THE LINES LIVE HERE; THE BOARD CARRIES ONLY EACH TRIP'S TOTAL. The board
+ * is read by every booking function and money is not, so the list's
+ * `costSummary` is computed by the server for `cost.read` holders alone —
+ * `null` for everybody else — and the lines themselves (who entered what,
+ * withdrawn or not) are fetched here, when this opens, behind the same key.
+ * Opened from the wallet button or from the total in the board's cost column.
  *
  * ★ RECORDING SOMETHING HAPPENS IN PLACE, BENEATH THE LIST IT JOINS. The form
  * used to be a second dialog stacked on this one — two focus traps fighting for

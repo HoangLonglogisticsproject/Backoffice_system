@@ -34,6 +34,8 @@ import { TripFormModal } from './components/TripFormModal';
 import { TripStatusBadge } from './components/TripStatusBadge';
 import { TripStatusSelect } from './components/TripStatusSelect';
 import { TripCostModal } from './components/TripCostModal';
+import { TripCostCell } from './components/TripCostCell';
+import { TripSortControl } from './components/TripSortControl';
 import { DispatchPanel } from './components/DispatchPanel';
 
 /**
@@ -66,9 +68,10 @@ export default function TripSchedulePage() {
   // the crew button and the edit button read different hints.
   const canDispatch = can('dispatch.write');
   // ★ A SEPARATE PERMISSION, AND A SEPARATE COLUMN CONDITION. Money is not
-  // `trip.write`: an accountant may hold `cost.read` and no right to correct
-  // the board at all, so gating the actions column on `canManage` alone would
-  // hide the only control they need.
+  // `trip.write`: a caller may hold `cost.read` and no right to correct the
+  // board at all, so gating the actions column on `canManage` alone would hide
+  // the only control they need. It also draws the cost column — whose figures
+  // the server sends to `cost.read` holders only.
   const canViewCost = can('cost.read');
   // ★ A THIRD, NARROWER KEY, AND NOT EITHER OF THE TWO ABOVE. `cost.read` is
   // the ledger of what runs COST US and is 'global'; this is what each trip is
@@ -207,6 +210,8 @@ export default function TripSchedulePage() {
           >
             {t('thisMonth')}
           </Button>
+
+          <TripSortControl value={trips.order} onChange={trips.setOrder} />
         </div>
 
         <div
@@ -252,6 +257,23 @@ export default function TripSchedulePage() {
                       {t('colPurchasePrice')}
                     </TableHead>
                   </>
+                )}
+                {canViewCost && (
+                  <TableHead className="text-right font-semibold text-gray-600">
+                    {/*
+                      ★ WHAT THE TOTAL COUNTS, SAID ONCE ON THE HEADER. It is the
+                      cost dialog's figure, so it includes a driver's lines still
+                      awaiting review. A native `title`, the hover-help this app
+                      already uses (see `EmployeeManagementPage`), rather than a
+                      new tooltip primitive or a sentence on every row.
+                    */}
+                    <span
+                      title={t('tripCostHelp')}
+                      className="cursor-help underline decoration-dotted underline-offset-4"
+                    >
+                      {t('tripCost')}
+                    </span>
+                  </TableHead>
                 )}
                 <TableHead className="font-semibold text-gray-600">{t('colNote')}</TableHead>
                 <TableHead className="font-semibold text-gray-600">{t('colCreatedBy')}</TableHead>
@@ -358,11 +380,10 @@ export default function TripSchedulePage() {
                   </TableCell>
                   {/*
                     ★ THE TWO AGREED CHARGES — what this run is sold for and what
-                    it is bought for. They are the only amounts on the board, and
-                    only for a head or the superadmin. The wallet button beside
-                    them opens what the run COST us: a different ledger behind
-                    `cost.read`, fetched when that dialog opens and never in this
-                    list's data.
+                    it is bought for, behind `trip.price.read`. What the run COST
+                    us is a different ledger behind `cost.read`: its total rides
+                    in the next column, sent by the server to `cost.read` holders
+                    only, and its lines open in the dialog.
 
                     ★ FORMATTED, NEVER PARSED. `formatMoney` does string work —
                     the values are `NUMERIC(14,2)` carried as text precisely so
@@ -390,6 +411,11 @@ export default function TripSchedulePage() {
                         {trip.purchasePrice ? formatMoney(trip.purchasePrice) : <Unset />}
                       </TableCell>
                     </>
+                  )}
+                  {canViewCost && (
+                    <TableCell rowSpan={span} className="text-right">
+                      <TripCostCell summary={trip.costSummary} onOpen={() => setCostFor(trip.id)} />
+                    </TableCell>
                   )}
                   <TableCell rowSpan={span}>
                     <Prose value={trip.note} />
@@ -446,11 +472,10 @@ export default function TripSchedulePage() {
                         </Button>
                         )}
                         {/*
-                          ★ ITS OWN PERMISSION, AND ITS OWN DIALOG. The amounts
-                          are never in the board's data — they are fetched only
-                          when this opens, and only for a caller holding
-                          `cost.read`. A column here would put the company's
-                          cost base in front of every signed-in account.
+                          ★ ITS OWN PERMISSION, AND ITS OWN DIALOG. The lines
+                          are fetched only when this opens, and only for a
+                          caller holding `cost.read`; the board carries each
+                          trip's total alone, and only to that same caller.
                         */}
                         {canViewCost && (
                           <Button
