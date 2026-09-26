@@ -5,8 +5,10 @@ import { useSession } from '@/contexts/SessionProvider';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useOffsetPages, type OffsetPages } from '@/hooks/useOffsetPages';
 import { currentMonthRange } from '@/utils/format/datetime';
-import type { TripAssignmentFilter, TripScheduleWithRefs } from '@/types/trip';
-import { tripKeys } from './keys';
+import type { TripAssignmentFilter } from '@/types/trip';
+import { DEFAULT_TRIP_BOARD_ORDER, type TripBoardOrder, type TripBoardRow } from '@/types/tripBoard';
+import { tripKeys, type TripBoardListFilter } from './keys';
+import { boardListRequest, unassignedCountRequest, withoutRows } from './tripBoardQuery';
 
 /** The two `YYYY-MM-DD` strings the endpoint filters on. Never `Date`s — see `types/pagination.ts`. */
 export interface DateRange {
@@ -14,7 +16,7 @@ export interface DateRange {
   to: string;
 }
 
-export interface TripSchedules extends OffsetPages<TripScheduleWithRefs> {
+export interface TripSchedules extends OffsetPages<TripBoardRow> {
   /** What the filter bar shows — updated on every keystroke. */
   range: DateRange;
   setFrom: (day: string) => void;
@@ -24,6 +26,9 @@ export interface TripSchedules extends OffsetPages<TripScheduleWithRefs> {
   /** Which half of the board is on screen: all of it, or one side of the crew line. */
   assignment: TripAssignmentFilter;
   setAssignment: (filter: TripAssignmentFilter) => void;
+  /** The server's order for the list. Changing it goes back to page one. */
+  order: TripBoardOrder;
+  setOrder: (order: TripBoardOrder) => void;
   /**
    * How many trips in the range still have nobody on them — the number on the
    * tab, whichever tab is open. `null` until it has been read once.
@@ -74,7 +79,7 @@ const FILTER_DEBOUNCE_MS = 300;
  * the three tabs are three cached lists rather than one list being re-sorted,
  * and the server answers each with its own `total`.
  *
- * Changing either date — or the tab — resets to page one; `useOffsetPages` does
+ * Changing either date — or the tab, or the order — resets to page one; `useOffsetPages` does
  * that during render, so narrowing the range never flashes an empty page 5
  * first, and switching to a tab with fewer pages cannot land past the end.
  *
@@ -85,38 +90,41 @@ const FILTER_DEBOUNCE_MS = 300;
  */
 export function useTripSchedules(): TripSchedules {
   const queryClient = useQueryClient();
-  const { state } = useSession();
+  const { state, can } = useSession();
 
   const [range, setRange] = useState<DateRange>(() => currentMonthRange());
   const [assignment, setAssignment] = useState<TripAssignmentFilter>('all');
+  const [order, setOrder] = useState<TripBoardOrder>(DEFAULT_TRIP_BOARD_ORDER);
   const queried = useDebouncedValue(range, FILTER_DEBOUNCE_MS);
 
-  const pages = useOffsetPages<TripScheduleWithRefs>(
-    tripKeys.scheduleList({ ...queried, assignment }),
+  // The list's identity: its cache key, and — through `boardListRequest` — its
+  // request. `costs` keeps a page fetched with money apart from one fetched
+  // without; see `tripKeys.scheduleList`.
+  const filter: TripBoardListFilter = { ...queried, assignment, ...order, costs: can('cost.read') };
+
+  const pages = useOffsetPages<TripBoardRow>(
+    tripKeys.scheduleList(filter),
     // Rebuilt every render, and that is fine: `useOffsetPages` keys the cache on
     // the key it was given, not on this closure's identity.
-    (request) =>
-      fetchTripSchedules({ ...request, from: queried.from, to: queried.to, assignment }),
+    (request) => fetchTripSchedules(boardListRequest(filter, request)),
     { staleTime: SCHEDULE_STALE_MS },
   );
 
   /**
    * The number on the "chờ phân công" tab.
    *
-   * ★ ITS OWN READ, AND `limit: 1` IS WHY IT IS AFFORDABLE. The count has to be
-   * visible from EVERY tab — that is the entire point of a queue badge, to say
-   * there is work waiting without being asked — so it cannot come from the list
-   * on screen, which is a different filter two thirds of the time. It asks for
-   * one row and reads `total`, which the server computes with `COUNT(*) OVER()`
-   * on the same statement either way.
+   * ★ ITS OWN READ. The count has to be visible from EVERY tab — that is the
+   * entire point of a queue badge, to say there is work waiting without being
+   * asked — so it cannot come from the list on screen, which is a different
+   * filter two thirds of the time. What it asks for, and what it keeps:
+   * `unassignedCountRequest`, `withoutRows`.
    *
    * Keyed on the DEBOUNCED range, like the list, so typing a year in the date
    * box does not fire four counts.
    */
   const count = useQuery({
     queryKey: tripKeys.unassignedCount(queried),
-    queryFn: () =>
-      fetchTripSchedules({ ...queried, page: 1, limit: 1, assignment: 'unassigned' }),
+    queryFn: async () => withoutRows(await fetchTripSchedules(unassignedCountRequest(queried))),
     enabled: state?.status === 'ready',
     staleTime: SCHEDULE_STALE_MS,
     select: (page) => page.total,
@@ -145,6 +153,8 @@ export function useTripSchedules(): TripSchedules {
     resetRange,
     assignment,
     setAssignment,
+    order,
+    setOrder,
     unassignedCount: count.data ?? null,
     reload,
   };

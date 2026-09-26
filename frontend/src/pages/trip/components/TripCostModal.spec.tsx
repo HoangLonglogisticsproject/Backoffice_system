@@ -306,6 +306,47 @@ describe('TripCostModal', () => {
         expect(screen.queryByLabelText('Số tiền (VND) *')).toBeNull();
       });
 
+      /**
+       * ★ NO FOCUS JUMP. The dialog owns focus; opening a form leaves the
+       * keyboard on the button that opened it (no `autoFocus`), and every
+       * control of the form is still there to Tab to, inside the dialog.
+       */
+      it('★ leaves focus on the button that opened the form, with every control reachable', async () => {
+        renderPanel();
+        await settled();
+        const opener = screen.getByRole('button', { name: 'Thêm chi phí' });
+
+        opener.focus();
+        fireEvent.click(opener);
+        await screen.findByLabelText('Khoản mục *');
+
+        expect(document.activeElement).toBe(opener);
+        const dialog = screen.getByRole('dialog');
+        for (const control of [
+          screen.getByLabelText('Khoản mục *'),
+          screen.getByLabelText('Số tiền (VND) *'),
+          screen.getByRole('button', { name: 'Hủy bỏ' }),
+          screen.getByRole('button', { name: 'Lưu' }),
+        ]) {
+          expect(dialog.contains(control)).toBe(true);
+          expect(control).not.toBeDisabled();
+          control.focus();
+          expect(document.activeElement).toBe(control);
+        }
+      });
+
+      it('★ does not jump into the hire form either', async () => {
+        renderPanel();
+        await settled();
+        const opener = screen.getByRole('button', { name: 'Thêm xe ngoài' });
+
+        opener.focus();
+        fireEvent.click(opener);
+        await screen.findByLabelText('Nhà xe *');
+
+        expect(document.activeElement).toBe(opener);
+      });
+
       it('swaps to the hire form rather than showing both at once', async () => {
         renderPanel();
         await settled();

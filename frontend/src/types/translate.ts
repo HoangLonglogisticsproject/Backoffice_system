@@ -1015,6 +1015,20 @@ const PHRASES = {
   tripTabUnassigned: { vi: 'Chờ phân công', en: 'Awaiting a driver' },
   tripTabAssigned: { vi: 'Đã phân công', en: 'Has a driver' },
   tripTabsLabel: { vi: 'Lọc theo tài xế', en: 'Filter by driver' },
+  // The board's order. Every one is a date, so the direction reads as time.
+  // Keys follow the server's sort names; only the words are presentation.
+  tripSortBy: { vi: 'Sắp xếp theo', en: 'Sort by' },
+  // ★ "Ngày chạy" BECAUSE THE TRIP FORM ALREADY CALLS THIS FIELD THAT
+  // (`fieldDate`). One field, one name on every screen that shows it.
+  tripSortExecutionDate: { vi: 'Ngày chạy', en: 'Trip date' },
+  tripSortBookingCreated: { vi: 'Booking mới nhất', en: 'Latest booking' },
+  // ★ "CHỈNH SỬA", NOT "CẬP NHẬT". The key is the trip ROW's `updated_at`: an
+  // edit or a status move changes it; a new crew, a cost line or a driver's
+  // milestone does not. "Cập nhật" would promise all of those.
+  tripSortLastUpdated: { vi: 'Chỉnh sửa gần nhất', en: 'Last edited' },
+  tripSortDirection: { vi: 'Thứ tự', en: 'Order' },
+  sortNewestFirst: { vi: 'Mới nhất trước', en: 'Newest first' },
+  sortOldestFirst: { vi: 'Cũ nhất trước', en: 'Oldest first' },
   // ★ A DIFFERENT SENTENCE PER TAB. "Không có chuyến nào" under a filter reads
   // as "the month is empty" when what it means is "every trip here already has
   // somebody on it" — and a dispatcher who believes the first one goes looking
@@ -1313,6 +1327,17 @@ const PHRASES = {
   },
   // Trip cost — the CHI PHÍ block of the workbook, behind `cost.read`
   tripCost: { vi: 'Chi phí chuyến', en: 'Trip cost' },
+  // The board's cost cell. "Chưa có" is a zero the server counted; the unknown
+  // state is a dash, because it is not a zero and must not read as one.
+  tripCostNone: { vi: 'Chưa có', en: 'None yet' },
+  tripCostItems: { vi: 'khoản', en: 'item(s)' },
+  tripCostUnknown: { vi: 'Không rõ chi phí', en: 'Cost unknown' },
+  // Hover help on the column header — once, not on every row. The total is the
+  // cost dialog's, which counts a driver's lines before they are approved.
+  tripCostHelp: {
+    vi: 'Tổng các khoản chi phí đã ghi nhận cho chuyến; có thể bao gồm khoản chưa duyệt.',
+    en: 'Total of the cost items recorded for this trip; may include items not yet approved.',
+  },
   costOwnVehicle: { vi: 'Chi phí xe nhà', en: 'Own-vehicle cost' },
   costOutsource: { vi: 'Xe thuê ngoài', en: 'Outsourced hire' },
   // The five headings, exactly as the sheet writes them.
