@@ -37,8 +37,7 @@ export type EmptyStateKey =
   | 'emptyRoster'
   | 'driverRequestQueueEmpty'
   | 'driverRequestMineEmpty'
-  | 'driverListEmpty'
-  | 'driverNoTrips';
+  | 'driverListEmpty';
 
 /**
  * An endpoint that returns the whole list at once, as ONE page. For queues

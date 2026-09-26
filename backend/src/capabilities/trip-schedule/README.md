@@ -122,6 +122,23 @@ không bao giờ quét bảng. Đổi lại có được hai thứ keyset cố �
 **★ Điều kiện kèm theo:** nếu khoảng ngày thôi bắt buộc, hoặc trần 366 ngày bị
 nới, lập luận trên hết hiệu lực và list phải quay về keyset.
 
+## Sắp xếp và tổng chi phí trên board
+
+`?sort=executionDate|bookingCreated|lastUpdated&direction=asc|desc`, mặc định
+`executionDate desc` — đúng thứ tự trước đây. ⚠ `lastUpdated` là `updated_at` của
+**dòng chuyến** (UI: "Chỉnh sửa gần nhất"), không phải hoạt động gộp: phân công, chi
+phí và mốc tài xế ghi bảng khác và không làm nó đổi. Enum → SQL ở **một** chỗ,
+`persistence/trip-board-order.ts`; mọi thứ tự kết thúc bằng `t.id` cùng chiều để
+trang offset không lặp/mất dòng khi trùng giá trị. Không cần index mới:
+`COUNT(*) OVER()` vốn đã đọc trọn khoảng ngày (qua `idx_trip_schedule_page`), nên
+thứ tự nào cũng chỉ là top-N sort trên tập đã bị chặn 366 ngày.
+
+Mỗi dòng có `costSummary` — cùng con số với `cost-summary.combined`, **một** câu
+aggregate cho cả trang (`persistence/trip-board-cost.repository.ts`, `UNION ALL` hai
+sổ rồi mới `GROUP BY`, nên không nhân dòng). Không có `cost.read` → `null` và câu đó
+**không chạy**. `application/trip-board.service.ts` ghép hai thứ; controller chỉ
+quyết ai được thấy.
+
 ## Hai cái bẫy về ngày, cả hai đều lệch một ngày
 
 **Đọc ra.** `scheduled_on` là `DATE`. `pg` parse kiểu đó thành `Date` của
@@ -239,4 +256,8 @@ application/trip-execution.service.ts   assign / replace / end theo assignment; 
 application/trip-completion.service.ts  approve / reject theo request; finishTrip khi assignment ACTIVE cuối cùng
 api/active-assignment.guard.ts          tài xế chỉ vào assignment của mình, theo :assignmentId
 api/trip-schedule.security.spec.ts   61 case: ai được gì, trên từng route
+domain/trip-board.ts                 thứ tự board, TripCostSummary, canSeeTripCosts
+application/trip-board.service.ts    trang board + tổng chi phí cho người có cost.read
+persistence/trip-board-order.ts      enum → ORDER BY cố định, luôn có tiebreaker id
+persistence/trip-board-cost.repository.ts  tổng chi phí cả trang trong một câu
 ```

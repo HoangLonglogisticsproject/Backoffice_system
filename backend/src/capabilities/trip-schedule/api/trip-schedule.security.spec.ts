@@ -22,6 +22,8 @@ import { TripCatalogueService } from '../application/trip-catalogue.service';
 import { OperationalBoardService } from '../application/operational-board.service';
 import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService } from '../application/trip-schedule.service';
+import { TripBoardService } from '../application/trip-board.service';
+import { TripBoardCostRepository } from '../persistence/trip-board-cost.repository';
 import { TripCatalogueController } from './trip-catalogue.controller';
 import { TripScheduleController } from './trip-schedule.controller';
 
@@ -93,6 +95,8 @@ describe('trip-schedule HTTP security', () => {
     replaceDriver: jest.Mock;
     endAssignment: jest.Mock;
   };
+  /** The page's one batched cost read. The service in front of it is the real one. */
+  let boardCosts: { forTrips: jest.Mock };
   /** Somebody with a driver account, to be assigned. */
   const DRIVER_USER = '99999999-9999-4999-8999-999999999999';
   let context: AuthorizationContext;
@@ -164,6 +168,10 @@ describe('trip-schedule HTTP security', () => {
       endAssignment: jest.fn().mockResolvedValue({ id: 'assignment-1', state: 'ended' }),
     };
 
+    boardCosts = {
+      forTrips: jest.fn().mockResolvedValue(new Map([[TRIP, { total: '6000000.00', itemCount: 2 }]])),
+    };
+
     catalogue = {
       listVehicles: jest.fn().mockResolvedValue([]),
       createVehicle: jest.fn().mockResolvedValue({ id: VEHICLE, plate: '50H-49266' }),
@@ -189,6 +197,8 @@ describe('trip-schedule HTTP security', () => {
         BackofficeOnlyGuard,
         CsrfGuard,
         { provide: TripScheduleService, useValue: trips },
+        TripBoardService,
+        { provide: TripBoardCostRepository, useValue: boardCosts },
         { provide: OperationalBoardService, useValue: operations },
         { provide: TripExecutionService, useValue: execution },
         { provide: TripCatalogueService, useValue: catalogue },
@@ -627,6 +637,65 @@ describe('trip-schedule HTTP security', () => {
       // `z.coerce.boolean()` would make this pass archived rows through.
       await authed('get', '/trip-vehicles?includeArchived=false').expect(200);
       expect(catalogue.listVehicles).toHaveBeenCalledWith(false);
+    });
+  });
+
+  // ============================================ ★ THE BOARD'S ORDER AND COST ==
+
+  /**
+   * ★ `sort`/`direction` ARE A WHITELIST, AND THE COST FIGURE IS NEVER READ FOR
+   * A CALLER WHO MAY NOT SEE IT. `cost.read` is global-only: accounting reads
+   * the prices and still gets `costSummary: null`, with no aggregate run.
+   */
+  describe('★ the board list — its order and its one cost figure', () => {
+    const sales = () => asContext({ memberOf: [DEPT], functions: ['sales'] });
+
+    it('forwards the order the board always had when none is named', async () => {
+      context = sales();
+      await authed('get', '/trip-schedules').expect(200);
+
+      expect(trips.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'executionDate', direction: 'desc' }),
+      );
+    });
+
+    it('forwards a named order', async () => {
+      context = sales();
+      await authed('get', '/trip-schedules?sort=lastUpdated&direction=asc').expect(200);
+
+      expect(trips.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'lastUpdated', direction: 'asc' }),
+      );
+    });
+
+    it('★ refuses an order it does not have — a raw column included — before any read', async () => {
+      context = asContext({ global: true });
+      const column = await authed('get', '/trip-schedules?sort=created_at');
+      const direction = await authed('get', '/trip-schedules?direction=sideways');
+
+      expect(column.status).toBe(422);
+      expect(column.body.error.details).toHaveProperty('sort');
+      expect(direction.status).toBe(422);
+      expect(direction.body.error.details).toHaveProperty('direction');
+      expect(trips.list).not.toHaveBeenCalled();
+    });
+
+    it('★ never computes the cost summary without cost.read — not even for accounting', async () => {
+      context = asContext({ memberOf: [DEPT], functions: ['accounting'] });
+      const response = await authed('get', '/trip-schedules').expect(200);
+
+      expect(response.body.items[0].costSummary).toBeNull();
+      expect(boardCosts.forTrips).not.toHaveBeenCalled();
+      expect(JSON.stringify(response.body)).not.toContain('6000000');
+    });
+
+    it('carries it for a caller holding cost.read, from one batched read for the page', async () => {
+      context = asContext({ global: true });
+      const response = await authed('get', '/trip-schedules').expect(200);
+
+      expect(response.body.items[0].costSummary).toEqual({ total: '6000000.00', itemCount: 2 });
+      expect(boardCosts.forTrips).toHaveBeenCalledTimes(1);
+      expect(boardCosts.forTrips).toHaveBeenCalledWith([TRIP]);
     });
   });
 

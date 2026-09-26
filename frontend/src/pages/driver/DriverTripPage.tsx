@@ -1,32 +1,36 @@
-import { useCallback, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, MessageSquare, Package, Truck, User } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useCallback, useState, type MouseEvent } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Clock, MessageSquare, Package, Truck, User } from 'lucide-react';
+import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { StatusPill } from '@/components/common/StatusPill';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Stepper } from '@/components/common/Stepper';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useDriverActions, useMyAssignment } from '@/hooks/driver';
-import { driverErrorKey, shouldReloadAfter } from '@/utils/driverErrors';
-import { currentStage, workflowStages, type WorkflowStage } from '@/utils/driverExecution';
+import { driverErrorKey, isFinalRefusal, shouldReloadAfter } from '@/utils/driverErrors';
+import { assignmentStatusOf, currentStage, workflowStages, type WorkflowStage } from '@/utils/driverExecution';
 import { captureLocation } from '@/utils/driverLocation';
-import { formatCalendarDay } from '@/utils/format/datetime';
+import { wasOpenedFromSchedule } from '@/utils/driverSchedule';
+import { formatCalendarWeekday, formatTimeOnDay } from '@/utils/format/datetime';
+import { cn } from '@/utils/cn';
 import { formatPlate } from '@/utils/format';
 import type { TranslationKey } from '@/types/translate';
 import type { DriverTripDetail, ExecutionEventType, ExpenseDeclaration, LocationEvidence } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
+import { AssignmentStatusPill } from './components/AssignmentStatusPill';
 import { CompletionPanel } from './components/CompletionPanel';
+import { DriverLoadError } from './components/DriverLoadError';
 import { ExpensePanel } from './components/ExpensePanel';
 import { FactRow } from './components/FactRow';
 import { MilestoneCard } from './components/MilestoneCard';
 
 /**
- * One trip, everything the driver needs, in the order they need it.
+ * One assignment, everything the driver needs, in the order they need it.
  *
  * ★ THE ORDER OF THE SECTIONS IS THE JOB, not a layout preference: where do I
- * stand, what is this trip, the pickup, the delivery, what did I spend, am I
- * finished. A driver scrolls top to bottom once per trip, and the section
- * that is live is the one lit up.
+ * stand and when do I load, in which lorry, the pickup, the delivery, what
+ * else to know, what did I spend, am I finished. A driver scrolls top to
+ * bottom once per trip, and the section that is live is the one lit up.
  *
  * ★ EVERY BUSINESS RULE ON THIS PAGE COMES FROM `utils/driverExecution`. This
  * file wires data to components and turns failures into sentences; it decides
@@ -102,19 +106,24 @@ export default function DriverTripPage() {
     }
   };
 
-  if (loading) {
-    return <p className="py-12 text-center text-sm text-muted-foreground">{t('driverLoading')}</p>;
-  }
+  if (loading) return <DetailSkeleton />;
 
-  if (loadError || !trip) {
+  // ★ ONLY A FINAL ANSWER, OR NOTHING TO SHOW, TAKES THE PAGE AWAY. A refresh
+  // that failed on a weak signal must not unmount a form the driver is typing
+  // into; it is said above the page instead (see below). A refusal (401/403/
+  // 404) does take it: nothing read before it may outlive the access.
+  if (!trip || isFinalRefusal(loadError)) {
     return (
-      <div className="space-y-4 py-12 text-center">
+      <div className="space-y-4">
+        <DetailHeader subtitle={null} />
         {/* ★ A 403 SAYS "not yours" AND NOTHING ELSE. Never whether the trip
-            exists, never whose it is. */}
-        <p className="text-sm text-muted-foreground">{t(driverErrorKey(loadError))}</p>
-        <Button variant="outline" size="lg" render={<Link to="/driver" />}>
-          {t('driverBackToTrips')}
-        </Button>
+            exists, never whose it is — and no retry, because asking again
+            cannot change it. */}
+        <DriverLoadError error={loadError} onRetry={reload}>
+          <Link to="/driver" className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'h-11 w-full')}>
+            {t('driverBackToTrips')}
+          </Link>
+        </DriverLoadError>
       </div>
     );
   }
@@ -190,27 +199,17 @@ export default function DriverTripPage() {
   const submitCompletion = (declaration: ExpenseDeclaration) =>
     void run(() => complete.mutateAsync(declaration));
 
-  const stages = workflowStages(trip);
   const stage = currentStage(trip);
   const now = new Date();
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon-lg" aria-label={t('driverBackToTrips')} render={<Link to="/driver" />}>
-          <ArrowLeft />
-        </Button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-base font-semibold">{trip.customer?.name ?? t('driverNotSet')}</h1>
-          <p className="text-xs text-muted-foreground">{formatCalendarDay(trip.scheduledOn, language)}</p>
-        </div>
-        {/* Where the trip stands, in one word — the same reading the stepper draws. */}
-        {stage ? (
-          <StatusPill tone="amber">{t(STAGE_LABEL[stage])}</StatusPill>
-        ) : (
-          <StatusPill tone="green">{t('driverStageCompletion')}</StatusPill>
-        )}
-      </div>
+      <DetailHeader subtitle={formatCalendarWeekday(trip.scheduledOn, language)} />
+
+      {/* The last good read stays on screen; this says it could not be refreshed. */}
+      {loadError ? <DriverLoadError error={loadError} onRetry={reload} /> : null}
+
+      <TripSummary trip={trip} />
 
       {actionError ? (
         <p
@@ -221,19 +220,10 @@ export default function DriverTripPage() {
         </p>
       ) : null}
 
-      <Card size="sm">
-        <CardContent>
-          <Stepper
-            label={t('driverProgress')}
-            steps={stages.map((step) => ({ key: step.stage, label: t(STAGE_LABEL[step.stage]), state: step.state }))}
-          />
-        </CardContent>
-      </Card>
-
-      <TripFacts trip={trip} />
-
       <MilestoneCard end="pickup" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} locating={locating} />
       <MilestoneCard end="delivery" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} locating={locating} />
+
+      <TripFacts trip={trip} />
 
       <ExpensePanel
         trip={trip}
@@ -261,8 +251,87 @@ export default function DriverTripPage() {
 }
 
 /**
- * The whitelisted facts about the trip itself. The two ends have their own
- * cards; this is what is true of the whole trip.
+ * The screen's title and the way back.
+ *
+ * ★ BACK MEANS BACK. Opened from a schedule card, the arrow returns through
+ * history, so the tab the driver was on (`?view=upcoming`) survives. Opened any
+ * other way there is no schedule behind this entry, and the link's own target
+ * — the schedule — is where it goes. A link either way, because it navigates.
+ */
+function DetailHeader({ subtitle }: Readonly<{ subtitle: string | null }>) {
+  const { t } = useLanguage();
+  const navigate = useNavigate();
+  const { state } = useLocation();
+
+  const back = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!wasOpenedFromSchedule(state)) return;
+    event.preventDefault();
+    navigate(-1);
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <Link
+        to="/driver"
+        onClick={back}
+        aria-label={t('driverBack')}
+        className={cn(buttonVariants({ variant: 'ghost', size: 'icon-lg' }), '-ml-2 size-11')}
+      >
+        <ArrowLeft />
+      </Link>
+      <div className="min-w-0 flex-1">
+        <h1 className="text-lg font-semibold">{t('driverTripDetail')}</h1>
+        {subtitle ? <p className="text-sm text-muted-foreground">{subtitle}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The first thing on the screen: where this assignment stands, when to load,
+ * in which lorry — and the progress under it.
+ *
+ * ★ THE PLANNED PICKUP IS AN INSTANT, SHOWN ON THE VIEWER'S CLOCK. The DAY in
+ * the header is the business day (`scheduledOn`); the time here is the moment
+ * the office planned, rendered where the driver is standing.
+ */
+function TripSummary({ trip }: Readonly<{ trip: DriverTripDetail }>) {
+  const { t, language } = useLanguage();
+  const pickupAt = trip.scheduledPickupAt;
+
+  return (
+    <Card>
+      <CardContent className="space-y-4">
+        <AssignmentStatusPill status={assignmentStatusOf(trip)} />
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FactRow
+            icon={<Clock />}
+            label={t('driverPlannedPickup')}
+            value={pickupAt ? formatTimeOnDay(pickupAt, language) : null}
+            emphasis
+          />
+          <FactRow icon={<Truck />} label={t('driverVehicle')} value={formatPlate(trip.vehicle?.plate) || null} emphasis />
+        </div>
+
+        <div className="border-t border-border pt-4">
+          <Stepper
+            label={t('driverProgress')}
+            steps={workflowStages(trip).map((step) => ({
+              key: step.stage,
+              label: t(STAGE_LABEL[step.stage]),
+              state: step.state,
+            }))}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * What else is true of the trip: whose goods, what goods, and what the office
+ * wrote for the driver. The lorry and the two ends have their own sections.
  *
  * ★ THERE IS NO PRICE, NO COST, NO HIRE AMOUNT AND NO `note` HERE — not because
  * they are filtered, but because the server never sends them. A field can only
@@ -278,7 +347,6 @@ function TripFacts({ trip }: Readonly<{ trip: DriverTripDetail }>) {
       </CardHeader>
       <CardContent className="space-y-3">
         <FactRow icon={<User />} label={t('driverCustomer')} value={trip.customer?.name ?? null} />
-        <FactRow icon={<Truck />} label={t('driverVehicle')} value={formatPlate(trip.vehicle?.plate) || null} />
         <FactRow icon={<Package />} label={t('driverCargo')} value={trip.cargoInfo} />
 
         {/* ★ THE ONE FIELD WRITTEN FOR THE DRIVER, so it is the one given room. */}
@@ -293,5 +361,41 @@ function TripFacts({ trip }: Readonly<{ trip: DriverTripDetail }>) {
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/** The sections' shapes while the assignment loads, and one sentence for a screen reader. */
+function DetailSkeleton() {
+  const { t } = useLanguage();
+  return (
+    <div className="space-y-4">
+      {/* The announcement is the `<output>` (a polite status region); the
+          blocks below are decoration. As on the schedule. */}
+      <output className="sr-only">{t('driverLoading')}</output>
+      <div className="flex items-center gap-3 py-1">
+        <Skeleton className="size-9 rounded-lg" />
+        <div className="flex-1 space-y-1.5">
+          <Skeleton className="h-5 w-36" />
+          <Skeleton className="h-4 w-28" />
+        </div>
+      </div>
+      <Card>
+        <CardContent className="space-y-4">
+          <Skeleton className="h-6 w-28 rounded-full" />
+          <Skeleton className="h-10 w-3/5" />
+          <Skeleton className="h-10 w-2/5" />
+          <Skeleton className="h-12 w-full" />
+        </CardContent>
+      </Card>
+      {[0, 1].map((end) => (
+        <Card key={end}>
+          <CardContent className="space-y-3">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-4 w-1/2" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
   );
 }

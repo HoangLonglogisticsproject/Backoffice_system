@@ -1,4 +1,16 @@
 import type { TripAssignmentFilter } from '@/types/trip';
+import type { TripBoardOrder } from '@/types/tripBoard';
+
+/**
+ * What identifies one board list. `costs` is whether it was fetched by a caller
+ * who may see money — see `scheduleList`.
+ */
+export interface TripBoardListFilter extends TripBoardOrder {
+  from: string;
+  to: string;
+  assignment: TripAssignmentFilter;
+  costs: boolean;
+}
 
 /**
  * Every cache key the trip screens use, in one place.
@@ -27,9 +39,16 @@ export const tripKeys = {
    * one key would serve the crewed page's rows to the uncrewed tab, and
    * `useOffsetPages` would keep the page number across a switch that changes how
    * many pages there are.
+   *
+   * ★ SO ARE `sort` AND `direction` — page 2 of one order is not page 2 of
+   * another, and a new key is what sends the walk back to page 1.
+   *
+   * ★ AND SO IS `costs`. A page fetched with `cost.read` carries money; one
+   * fetched without carries `null`. Sharing a key would show a stale zero-less
+   * board to somebody just granted the permission, and — worse — keep figures
+   * cached for somebody who just lost it (`holdsTripCosts` finds those).
    */
-  scheduleList: (filter: { from: string; to: string; assignment: TripAssignmentFilter }) =>
-    [...tripKeys.schedules(), filter] as const,
+  scheduleList: (filter: TripBoardListFilter) => [...tripKeys.schedules(), filter] as const,
 
   /**
    * How many trips in a range still have nobody on them — the number on the tab.
@@ -83,4 +102,17 @@ export const tripKeys = {
     [...tripKeys.catalogues(), 'vehicles', { includeArchived }] as const,
   customers: (includeArchived: boolean) =>
     [...tripKeys.catalogues(), 'customers', { includeArchived }] as const,
+};
+
+/**
+ * Is this cached query a board list holding cost figures?
+ *
+ * For `queryClient.removeQueries` / `invalidateQueries` predicates: the board
+ * lists fetched with `cost.read` are exactly the `scheduleList` keys whose
+ * filter says `costs: true`.
+ */
+export const holdsTripCosts = (queryKey: readonly unknown[]): boolean => {
+  const [root, list, filter] = queryKey;
+  if (root !== tripKeys.all[0] || list !== 'schedules') return false;
+  return typeof filter === 'object' && filter !== null && 'costs' in filter && filter.costs === true;
 };

@@ -1208,3 +1208,35 @@ Ba điều frontend **không được** giả định:
 * `clientEventId` vẫn là `${assignmentId}:${type}` — idempotency **không đổi**.
 * Notification signal vẫn mang `tripId`; deep link về danh sách `/driver`, vì một Trip
   có thể chứa hai lượt của cùng một tài xế.
+
+## 22. Board — sắp xếp và tổng chi phí từng chuyến (2026-09-26)
+
+Chỉ `GET /trip-schedules`. **Additive**: client cũ không gửi gì mới vẫn nhận đúng
+thứ tự và đúng các field như trước, cộng thêm một field nó có thể bỏ qua.
+
+| Query | Giá trị | Mặc định | Sai → |
+|---|---|---|---|
+| `sort` | `executionDate` → `scheduled_on`, UI **"Ngày chạy"** (cùng nhãn form chuyến) · `bookingCreated` → `created_at`, UI **"Booking mới nhất"** · `lastUpdated` → `updated_at` của dòng chuyến, UI **"Chỉnh sửa gần nhất"** | `executionDate` | **422** `details.sort` — không lặng lẽ về mặc định |
+| `direction` | `asc` · `desc` | `desc` | **422** `details.direction` |
+
+* Mọi thứ tự kết thúc bằng `id` cùng chiều → ổn định giữa các trang; đổi thứ tự thì
+  client quay về trang 1 (khoá cache chứa `sort`/`direction`).
+* ⚠ `lastUpdated` / **"Chỉnh sửa gần nhất"** = `updated_at` của **dòng chuyến**: sửa
+  field, đổi trạng thái, lưu trữ. **Không** phải hoạt động gộp — phân công xe/tài xế,
+  ghi chi phí, mốc của tài xế **không** làm nó đổi. Vì vậy UI nói "chỉnh sửa", không
+  nói "cập nhật".
+* Không có tên cột nào đi qua API; server map từ enum sang SQL cố định.
+
+Mỗi item thêm **`costSummary: { total: string, itemCount: number } | null`**:
+
+* `total` = đúng `combined` của `GET /trip-schedules/:id/cost-summary` (chi phí xe nhà +
+  xe thuê ngoài còn hiệu lực, bỏ bản ghi đã huỷ), chuỗi thập phân, `"0.00"` khi chưa có.
+* **`null` với người không có `cost.read`** — server không tính, không phải tính rồi
+  che. `null` ≠ `"0.00"`: frontend vẽ `—` cho `null`, "Chưa có" cho `itemCount: 0`.
+* ⚠ Giống `cost-summary`, tổng này **gồm cả dòng tài xế khai còn chờ duyệt**
+  (`editable` / `locked`). Có nên tính dòng chưa duyệt vào chi phí chuyến hay không là
+  câu hỏi P&L, chưa quyết. Board nói điều đó một lần, bằng hover-help (`title`) trên
+  tiêu đề cột: *"Tổng các khoản chi phí đã ghi nhận cho chuyến; có thể bao gồm khoản
+  chưa duyệt."*
+* Chi phí lấy bằng **một** câu aggregate cho cả trang (không N+1). Export Excel không
+  gửi `sort` nên thứ tự file không đổi.

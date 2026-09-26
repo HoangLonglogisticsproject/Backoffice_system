@@ -6,15 +6,16 @@ import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { isNavActive } from './navActive';
 
 /**
- * The application shell: a top bar, a sidebar of navigation, and the page.
+ * The Backoffice's shell: a top bar, a sidebar of navigation, and the page.
  *
- * ★ ONE SHELL FOR EVERY APPLICATION IN THE PLATFORM. The Backoffice and the
- * Driver Portal are different products for different people, but they are the
- * same company's software, and the frame around a screen is where that shows.
- * The chrome lives here once; what goes in the sidebar — the navigation MODEL
- * — is each layout's own.
+ * ★ A DESK APPLICATION'S FRAME. The Driver Portal is a phone in one hand and
+ * has its own shell (`DriverLayout`, DL-114); what the two share is the design
+ * tokens and the rule that lights a destination (`isNavActive`). The chrome
+ * lives here once; what goes in the sidebar — the navigation MODEL — is the
+ * layout's own.
  *
  * ★ DESKTOP AND PHONE ARE THE SAME SIDEBAR IN TWO STATES. From `md` up it is a
  * column beside the page that the menu button collapses to icons. Below `md`
@@ -63,15 +64,6 @@ interface NavItemProps {
   label: string;
   /** Renders the row as present but unavailable — see `PlaceholderPage`. */
   unavailable?: boolean;
-  /**
-   * Active only on `to` itself, not on every path beneath it. A home route
-   * like `/driver` would otherwise light up under `/driver/notifications`.
-   */
-  exact?: boolean;
-  /** Further prefixes that count as this destination — a detail page under a list. */
-  activePaths?: readonly string[];
-  /** A count or marker drawn at the row's end — unread notifications. */
-  badge?: ReactNode;
 }
 
 export function NavItem({
@@ -79,16 +71,12 @@ export function NavItem({
   icon: Icon,
   label,
   unavailable,
-  exact = false,
-  activePaths = [],
-  badge,
 }: Readonly<NavItemProps>) {
   const { pathname } = useLocation();
   const { expanded, closeDrawer } = useSidebar();
   const { t } = useLanguage();
 
-  const under = (prefix: string) => pathname === prefix || pathname.startsWith(`${prefix}/`);
-  const isActive = (exact ? pathname === to : under(to)) || activePaths.some(under);
+  const isActive = isNavActive(pathname, { to });
 
   return (
     <Link
@@ -115,7 +103,6 @@ export function NavItem({
             {unavailable && (
               <span className="text-[10px] font-normal text-gray-400 shrink-0">{t('comingSoon')}</span>
             )}
-            {badge}
           </div>
         )}
       </Button>
@@ -142,28 +129,16 @@ export function SidebarSection({ title, children }: Readonly<{ title: string; ch
 interface AppShellProps {
   /** The product's name, in the top bar. */
   brand: string;
-  /** Show the name on a phone too. The Backoffice keeps it for `sm` and up. */
-  brandOnMobile?: boolean;
-  /** The top bar's right side: language, account, sign-out, a bell. */
+  /** The top bar's right side: language, account, sign-out. */
   headerActions?: ReactNode;
-  /** Above the navigation — who is signed in, for a product that says so there. */
-  sidebarHeader?: ReactNode;
   /** The navigation itself: `SidebarSection`s of `NavItem`s. */
   navigation: ReactNode;
-  /** Pinned to the bottom of the sidebar — a sign-out, for a product that puts it there. */
-  sidebarFooter?: ReactNode;
-  /** Bounds the page: a readable column on a wide screen, the full width on a phone. */
-  contentClassName?: string;
 }
 
 export function AppShell({
   brand,
-  brandOnMobile = false,
   headerActions,
-  sidebarHeader,
   navigation,
-  sidebarFooter,
-  contentClassName,
 }: Readonly<AppShellProps>) {
   const { t } = useLanguage();
   // The desktop column: wide or icons. The phone drawer: out or away.
@@ -201,9 +176,7 @@ export function AppShell({
             >
               <Menu className="h-5 w-5" />
             </Button>
-            <h1 className={clsx('text-xl font-extrabold text-blue-600', !brandOnMobile && 'hidden sm:block')}>
-              {brand}
-            </h1>
+            <h1 className="hidden text-xl font-extrabold text-blue-600 sm:block">{brand}</h1>
           </div>
 
           <div className="flex items-center gap-4">{headerActions}</div>
@@ -231,15 +204,11 @@ export function AppShell({
               isSidebarOpen ? 'md:w-64' : 'md:w-16',
             )}
           >
-            {sidebarHeader}
             <nav className="flex-1 overflow-y-auto py-4 custom-scrollbar">{navigation}</nav>
-            {sidebarFooter}
           </aside>
 
           <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-gray-50">
-            <div className={contentClassName}>
-              <Outlet />
-            </div>
+            <Outlet />
           </main>
         </div>
       </div>

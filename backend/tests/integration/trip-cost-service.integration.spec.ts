@@ -29,6 +29,7 @@ import {
   TripVehicleRepository,
 } from '../../src/capabilities/trip-schedule/persistence/trip-catalogue.repository';
 import { buildDateRangePageQuerySchema } from '@common/pagination/date-range-page-query.dto';
+import { DEFAULT_TRIP_BOARD_ORDER } from '../../src/capabilities/trip-schedule/domain/trip-board';
 
 /**
  * The cost application layer against a REAL PostgreSQL.
@@ -569,6 +570,11 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
    * `trip_outsource_hires` row — never reaches a trip payload at all. Naming
    * the two known columns rather than loosening the pattern keeps the next
    * money-shaped field that appears here loud.
+   *
+   * ★ THE LIST ROUTE NOW ADDS ONE FIGURE ON TOP — `costSummary` — AND NOT HERE.
+   * `TripBoardService` attaches it, one layer above this service, only for a
+   * caller holding `cost.read`; `trip-board.integration.spec.ts` pins that it
+   * is `null`, and never computed, for everybody else.
    */
   describe('★ the general trip API exposes no cost money', () => {
     const MONEY_WORDS = /amount|cost|price|total|hire|carrier|vat/i;
@@ -581,9 +587,10 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
 
     const asQuery = (raw: Record<string, unknown>) => ({
       ...buildDateRangePageQuerySchema(() => new Date('2026-08-15T03:00:00Z')).parse(raw),
-      // The crew filter the controller's pipe defaults in. Irrelevant to money,
-      // but the board's query carries it now.
+      // The crew filter and the order the controller's pipe defaults in.
+      // Irrelevant to money, but the board's query carries them now.
       assignment: 'all' as const,
+      ...DEFAULT_TRIP_BOARD_ORDER,
     });
 
     it('returns no money-shaped field from the list, on a trip that HAS money', async () => {

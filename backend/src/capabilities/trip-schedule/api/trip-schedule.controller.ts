@@ -24,8 +24,16 @@ import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { OperationalBoardService } from '../application/operational-board.service';
+import { TripBoardService } from '../application/trip-board.service';
 import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService, type TripBoardQuery } from '../application/trip-schedule.service';
+import {
+  canSeeTripCosts,
+  DEFAULT_TRIP_BOARD_ORDER,
+  SORT_DIRECTIONS,
+  TRIP_BOARD_SORTS,
+  type TripBoardRow,
+} from '../domain/trip-board';
 import { isRecordableAmount } from '../domain/trip-cost';
 import {
   canSeeTripPrices,
@@ -318,6 +326,17 @@ const includeVoidedSchema = z.object({ includeVoided: z.enum(['true', 'false']).
  */
 const boardFilterSchema = z.object({
   assignment: z.enum(TRIP_ASSIGNMENT_FILTERS).default('all'),
+  /**
+   * `?sort=bookingCreated&direction=asc`. Both default to the order the board
+   * always had, so a caller that sends neither reads the same rows in the same
+   * order as before.
+   *
+   * ★ AN UNKNOWN VALUE IS A 422, NOT A QUIET FALLBACK. A client asking for an
+   * order this server does not have should hear so, rather than be handed the
+   * default and render it under a label that says otherwise.
+   */
+  sort: z.enum(TRIP_BOARD_SORTS).default(DEFAULT_TRIP_BOARD_ORDER.sort),
+  direction: z.enum(SORT_DIRECTIONS).default(DEFAULT_TRIP_BOARD_ORDER.direction),
 });
 
 /**
@@ -373,6 +392,7 @@ export class TripScheduleController {
     private readonly trips: TripScheduleService,
     private readonly operations: OperationalBoardService,
     private readonly execution: TripExecutionService,
+    private readonly board: TripBoardService,
   ) {}
 
   /**
@@ -461,8 +481,11 @@ export class TripScheduleController {
   async list(
     @Query(new ZodValidationPipe(boardQuerySchema)) query: TripBoardQuery,
     @Req() request: Request,
-  ): Promise<OffsetPage<TripScheduleWithRefs>> {
-    const page = await this.trips.list(query);
+  ): Promise<OffsetPage<TripBoardRow>> {
+    // ★ COST IS WITHHELD UPSTREAM, PRICES ON THE WAY OUT. Without `cost.read`
+    // the cost summary is never computed (`costSummary: null`); the two prices
+    // are read with the row and blanked here, as on every other trip route.
+    const page = await this.board.page(query, canSeeTripCosts(authorizationOf(request)));
     // ★ THE PAGE IS REBUILT, NOT PATCHED IN PLACE. `redactPricesIn` returns new
     // rows; the envelope around them — total, page, size — is untouched, because
     // withholding a figure must not change how many trips there are.

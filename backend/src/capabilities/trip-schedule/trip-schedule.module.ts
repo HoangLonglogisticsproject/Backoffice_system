@@ -13,6 +13,7 @@ import { TripCatalogueController } from './api/trip-catalogue.controller';
 import { TripCompletionController } from './api/trip-completion.controller';
 import { TripCostController } from './api/trip-cost.controller';
 import { TripScheduleController } from './api/trip-schedule.controller';
+import { TripBoardService } from './application/trip-board.service';
 import { TripCatalogueService } from './application/trip-catalogue.service';
 import { DriverPortalService } from './application/driver-portal.service';
 import { OperationalBoardService } from './application/operational-board.service';
@@ -37,6 +38,7 @@ import {
 } from './persistence/trip-execution.repository';
 import { DriverTripReadModelRepository } from './persistence/driver-read-model.repository';
 import { OperationalBoardRepository } from './persistence/operational-board.repository';
+import { TripBoardCostRepository } from './persistence/trip-board-cost.repository';
 import { TripScheduleRepository } from './persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from './persistence/trip-status-history.repository';
 
@@ -68,6 +70,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
   ],
   providers: [
     TripScheduleService,
+    TripBoardService,
     TripCatalogueService,
     TripCostService,
     TripExecutionService,
@@ -83,6 +86,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     TripCostRepository,
     OutsourceHireRepository,
     TripCostTotalsRepository,
+    TripBoardCostRepository,
     TripStatusHistoryRepository,
     DriverAssignmentRepository,
     ExecutionEventRepository,
