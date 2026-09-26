@@ -182,8 +182,8 @@ export default function TripSchedulePage() {
         */}
         <div className="flex flex-wrap items-end gap-x-6 gap-y-3 border-b border-gray-100 bg-gray-50/50 p-4">
           <div className="flex flex-wrap items-end gap-3">
-            <div className="space-y-1">
-              <label htmlFor="trip-from" className="text-xs font-medium text-gray-600">
+            <div className="flex items-center gap-2">
+              <label htmlFor="trip-from" className="text-xs font-medium whitespace-nowrap text-gray-600">
                 {t('dateFrom')}
               </label>
               <Input
@@ -195,8 +195,8 @@ export default function TripSchedulePage() {
               />
             </div>
 
-            <div className="space-y-1">
-              <label htmlFor="trip-to" className="text-xs font-medium text-gray-600">
+            <div className="flex items-center gap-2">
+              <label htmlFor="trip-to" className="text-xs font-medium whitespace-nowrap text-gray-600">
                 {t('dateTo')}
               </label>
               <Input
