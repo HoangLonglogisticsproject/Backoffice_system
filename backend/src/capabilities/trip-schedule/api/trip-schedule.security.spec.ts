@@ -762,7 +762,13 @@ describe('trip-schedule HTTP security', () => {
 
     it('is refused to a caller who may not read the board at all', async () => {
       context = asContext({ memberOf: [DEPT] });
-      await authed('get', '/trip-schedules/export').expect(403);
+      const response = await authed('get', '/trip-schedules/export');
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      // Refused before anything is read: no page, and so no cost aggregate.
+      expect(trips.list).not.toHaveBeenCalled();
+      expect(boardCosts.forTrips).not.toHaveBeenCalled();
     });
 
     it('validates the same query as the board — a bad order is a 422, before any read', async () => {
