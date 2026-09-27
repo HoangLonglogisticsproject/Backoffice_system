@@ -27,11 +27,11 @@ import { formatDateTime } from '@/utils/format/datetime';
 import { cn } from '@/utils/cn';
 import {
   TRIP_COST_CATEGORIES,
+  TRIP_COST_CATEGORY_LABELS,
   type OutsourceHire,
   type TripCost,
   type TripCostCategory,
 } from '@/types/tripCost';
-import type { TranslationKey } from '@/types/translate';
 
 /**
  * The CHI PHÍ block of the workbook, for one trip.
@@ -60,14 +60,6 @@ import type { TranslationKey } from '@/types/translate';
  * each request; hiding a button only avoids offering something that would be
  * refused.
  */
-
-const CATEGORY_LABEL: Record<TripCostCategory, TranslationKey> = {
-  fuel: 'costFuel',
-  toll: 'costToll',
-  warehouse: 'costWarehouse',
-  loading: 'costLoading',
-  overtime: 'costOvertime',
-};
 
 export function TripCostModal({
   tripId,
@@ -155,7 +147,7 @@ export function TripCostModal({
                       {(money.costs?.items ?? []).map((line) => (
                         <RecordRow
                           key={line.id}
-                          label={t(CATEGORY_LABEL[line.category])}
+                          label={t(TRIP_COST_CATEGORY_LABELS[line.category])}
                           amount={line.amount}
                           record={line}
                           canDelete={canDelete}
@@ -433,7 +425,7 @@ function AddRecordForm({
           >
             {TRIP_COST_CATEGORIES.map((value) => (
               <option key={value} value={value}>
-                {t(CATEGORY_LABEL[value])}
+                {t(TRIP_COST_CATEGORY_LABELS[value])}
               </option>
             ))}
           </select>

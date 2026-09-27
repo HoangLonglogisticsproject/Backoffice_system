@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { translate, type TranslationKey } from '@/types/translate';
-import type { TripAssignmentRef, TripScheduleWithRefs } from '@/types/trip';
+import type { TripAssignmentRef } from '@/types/trip';
+import type { TripBoardRow } from '@/types/tripBoard';
 import { toTripSheetRows } from './tripScheduleSheet';
 
 /**
@@ -24,7 +25,7 @@ const turn = (over: Partial<TripAssignmentRef> = {}): TripAssignmentRef => ({
   ...over,
 });
 
-const trip = (over: Partial<TripScheduleWithRefs> = {}): TripScheduleWithRefs =>
+const trip = (over: Partial<TripBoardRow> = {}): TripBoardRow =>
   ({
     id: 't1',
     scheduledOn: '2026-08-04',
@@ -50,8 +51,9 @@ const trip = (over: Partial<TripScheduleWithRefs> = {}): TripScheduleWithRefs =>
     deliveryLocation: null,
     createdAt: '2026-08-01T00:00:00.000Z',
     updatedAt: '2026-08-01T00:00:00.000Z',
+    costSummary: null,
     ...over,
-  }) as TripScheduleWithRefs;
+  }) as TripBoardRow;
 
 describe('toTripSheetRows', () => {
   /**
@@ -68,7 +70,7 @@ describe('toTripSheetRows', () => {
       [trip({ sellPrice: '4500000', purchasePrice: '3000000' })],
       t,
       'vi',
-      true,
+      { prices: true },
     );
 
     expect(row[t('colSellPrice')]).toBe(4_500_000);
@@ -89,7 +91,7 @@ describe('toTripSheetRows', () => {
       [trip({ sellPrice: '4500000', purchasePrice: '3000000' })],
       t,
       'vi',
-      false,
+      { prices: false },
     );
 
     expect(Object.keys(row)).not.toContain(t('colSellPrice'));
@@ -117,7 +119,7 @@ describe('toTripSheetRows', () => {
    * any average taken over the column without anybody noticing.
    */
   it('★ leaves an unpriced trip blank rather than writing 0', () => {
-    const [row] = toTripSheetRows([trip({ sellPrice: null, purchasePrice: null })], t, 'vi', true);
+    const [row] = toTripSheetRows([trip({ sellPrice: null, purchasePrice: null })], t, 'vi', { prices: true });
 
     expect(row[t('colSellPrice')]).toBeNull();
     expect(row[t('colPurchasePrice')]).toBeNull();
@@ -128,14 +130,14 @@ describe('toTripSheetRows', () => {
    * Most runs go on our own lorries and are bought from nobody.
    */
   it('writes a selling price with no buying price, and leaves the other blank', () => {
-    const [row] = toTripSheetRows([trip({ sellPrice: '4500000', purchasePrice: null })], t, 'vi', true);
+    const [row] = toTripSheetRows([trip({ sellPrice: '4500000', purchasePrice: null })], t, 'vi', { prices: true });
 
     expect(row[t('colSellPrice')]).toBe(4_500_000);
     expect(row[t('colPurchasePrice')]).toBeNull();
   });
 
   it('writes the status label a dispatcher reads, never the enum', () => {
-    const [row] = toTripSheetRows([trip({ status: 'executing' })], t, 'vi', true);
+    const [row] = toTripSheetRows([trip({ status: 'executing' })], t, 'vi', { prices: true });
 
     expect(row[t('colStatus')]).toBe(t('tripExecuting'));
     expect(row[t('colStatus')]).not.toBe('executing');

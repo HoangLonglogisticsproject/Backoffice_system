@@ -4,7 +4,7 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 import type { TripCostSummary } from '@/types/tripBoard';
 import { TripCostCell } from './TripCostCell';
 
-const renderCell = (summary: TripCostSummary | null | undefined, onOpen = vi.fn()) => {
+const renderCell = (summary: Pick<TripCostSummary, 'total' | 'itemCount'> | null | undefined, onOpen = vi.fn()) => {
   render(
     <LanguageProvider>
       <TripCostCell summary={summary} onOpen={onOpen} />

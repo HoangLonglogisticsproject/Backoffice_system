@@ -1,4 +1,5 @@
 import type { TripScheduleWithRefs } from './trip';
+import type { TripCostCategory } from './tripCost';
 
 /**
  * The dispatch board's read model: its orders, and the one cost figure a row
@@ -35,12 +36,23 @@ export const DEFAULT_TRIP_BOARD_ORDER: TripBoardOrder = { sort: 'executionDate',
 
 /**
  * What one trip has cost — the same figure as the cost dialog's "Tổng chi phí
- * chuyến". `total` is a decimal STRING; format it, never parse it.
+ * chuyến". Every amount is a decimal STRING; format it, never parse it (the
+ * Excel export is the one deliberate exception, see `utils/export/sheetMoney`).
+ *
+ * ★ THE BREAKDOWN IS THE SAME LINES, SPLIT: the five categories plus `hires`
+ * make `total`, summed by the server. Nothing here adds them up again.
+ *
+ * ⚠ `hires` IS NOT THE TRIP'S `purchasePrice` ("Giá cước mua"). Both may
+ * describe one carrier payment and nothing reconciles them — never add the two.
  */
 export interface TripCostSummary {
   total: string;
   /** Live cost lines plus live hires. `0` exactly when nothing is recorded. */
   itemCount: number;
+  /** Live own-vehicle lines per category; `"0.00"` where none. */
+  byCategory: Record<TripCostCategory, string>;
+  /** Live outsourced hires. */
+  hires: string;
 }
 
 /**

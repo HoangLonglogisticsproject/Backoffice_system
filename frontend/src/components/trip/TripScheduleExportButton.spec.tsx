@@ -123,7 +123,21 @@ describe('TripScheduleExportButton', () => {
 
     await waitFor(() =>
       expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(
-        expect.objectContaining({ includePrices: true }),
+        // Prices do not bring costs with them: `cost.read` is its own key.
+        expect.objectContaining({ includePrices: true, includeCosts: false }),
+      ),
+    );
+  });
+
+  it('★ asks for the cost block only for a viewer holding cost.read', async () => {
+    useSession.mockReturnValue(session([...HEAD, 'cost.read']));
+
+    renderButton();
+    fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
+
+    await waitFor(() =>
+      expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(
+        expect.objectContaining({ includePrices: true, includeCosts: true }),
       ),
     );
   });
@@ -136,7 +150,7 @@ describe('TripScheduleExportButton', () => {
 
     await waitFor(() =>
       expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(
-        expect.objectContaining({ includePrices: false }),
+        expect.objectContaining({ includePrices: false, includeCosts: false }),
       ),
     );
   });

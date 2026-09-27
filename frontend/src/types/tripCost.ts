@@ -1,4 +1,5 @@
 import type { UserSummary } from './organization';
+import type { TranslationKey } from './translate';
 
 /**
  * The money on a trip.
@@ -39,6 +40,18 @@ export const TRIP_COST_CATEGORIES: readonly TripCostCategory[] = [
   'loading',
   'overtime',
 ];
+
+/**
+ * Each heading as the workbook writes it — for the cost dialog and for the
+ * Excel export alike. One map, so the two can never name a category apart.
+ */
+export const TRIP_COST_CATEGORY_LABELS: Record<TripCostCategory, TranslationKey> = {
+  fuel: 'costFuel',
+  toll: 'costToll',
+  warehouse: 'costWarehouse',
+  loading: 'costLoading',
+  overtime: 'costOvertime',
+};
 
 /**
  * What every financial record carries.

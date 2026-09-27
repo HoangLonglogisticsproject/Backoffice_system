@@ -23,8 +23,11 @@ export function TripCostCell({
   summary,
   onOpen,
 }: Readonly<{
-  /** `undefined` for a server that predates the field — the same "not known". */
-  summary: TripCostSummary | null | undefined;
+  /**
+   * Only the two figures a cell shows. `undefined` for a server that predates
+   * the field — the same "not known".
+   */
+  summary: Pick<TripCostSummary, 'total' | 'itemCount'> | null | undefined;
   onOpen: () => void;
 }>) {
   const { t } = useLanguage();

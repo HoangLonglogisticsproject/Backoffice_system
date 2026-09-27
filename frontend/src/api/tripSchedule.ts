@@ -180,7 +180,7 @@ const MAX_PAGE_SIZE = 200;
 export async function fetchAllTripSchedules(
   request: Omit<TripScheduleQuery, 'page' | 'limit'> = {},
   onProgress?: (loaded: number, total: number) => void,
-): Promise<TripScheduleWithRefs[]> {
+): Promise<TripBoardRow[]> {
   const first = await fetchTripSchedules({ ...request, page: 1, limit: MAX_PAGE_SIZE });
 
   const rows = [...first.items];

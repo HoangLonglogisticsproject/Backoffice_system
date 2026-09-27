@@ -48,16 +48,17 @@ export function TripScheduleExportButton({
         return;
       }
 
-      // ★ THE SAME PERMISSION THE BOARD'S COLUMNS ARE GATED ON. Without it the
-      // server has already blanked both figures, so the sheet would carry two
-      // columns of empty cells reading as "nothing is priced"; the builder
-      // drops the columns instead.
+      // ★ THE SAME PERMISSIONS THE BOARD'S COLUMNS ARE GATED ON. Without one,
+      // the server has already blanked those figures (prices) or never computed
+      // them (costs), so the sheet would carry columns of empty cells reading as
+      // "nothing is priced" or "nothing was spent"; the builder drops them.
       const written = await downloadTripScheduleWorkbook({
         trips,
         t,
         language,
         range,
         includePrices: can('trip.price.read'),
+        includeCosts: can('cost.read'),
       });
       notifySuccess('exportDone', {
         description: `${written} ${t('exportRowsUnit')}`,
