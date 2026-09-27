@@ -1227,7 +1227,8 @@ thứ tự và đúng các field như trước, cộng thêm một field nó có
   nói "cập nhật".
 * Không có tên cột nào đi qua API; server map từ enum sang SQL cố định.
 
-Mỗi item thêm **`costSummary: { total: string, itemCount: number } | null`**:
+Mỗi item thêm **`costSummary: { total, itemCount, byCategory, hires } | null`**
+(`byCategory`, `hires` thêm 2026-09-27 cho export Excel — additive):
 
 * `total` = đúng `combined` của `GET /trip-schedules/:id/cost-summary` (chi phí xe nhà +
   xe thuê ngoài còn hiệu lực, bỏ bản ghi đã huỷ), chuỗi thập phân, `"0.00"` khi chưa có.
@@ -1238,5 +1239,40 @@ Mỗi item thêm **`costSummary: { total: string, itemCount: number } | null`**:
   câu hỏi P&L, chưa quyết. Board nói điều đó một lần, bằng hover-help (`title`) trên
   tiêu đề cột: *"Tổng các khoản chi phí đã ghi nhận cho chuyến; có thể bao gồm khoản
   chưa duyệt."*
+* `byCategory: { fuel, toll, warehouse, loading, overtime }` — chi phí xe nhà còn hiệu
+  lực theo từng khoản mục cố định (enum + CHECK), `"0.00"` khi không có dòng nào;
+  `hires` — tổng xe thuê ngoài. **Năm khoản + `hires` = `total`**, cộng bằng PostgreSQL
+  trong cùng câu — không phải công thức thứ hai.
+* ⚠ **"Giá cước mua" và "Xe thuê ngoài" là hai dữ kiện độc lập:**
+  * `purchase_price` ("Giá cước mua") **KHÔNG** nằm trong `total` / "Tổng chi phí chuyến";
+  * xe thuê ngoài (`hires`, `trip_outsource_hires`) **CÓ** nằm trong `total`;
+  * hai trường có thể mô tả **cùng một nghĩa vụ trả nhà xe**, và không có gì đối soát
+    chúng;
+  * vì vậy **không công thức margin / P&L nào được trừ cả hai** cho tới khi quan hệ
+    domain giữa chúng được định nghĩa rõ. Ví dụ đã pin bằng test: mua 4.500.000 · thuê
+    ngoài 4.500.000 · bốc xếp 200.000 → tổng chi phí **4.700.000**, không phải 9.200.000.
 * Chi phí lấy bằng **một** câu aggregate cho cả trang (không N+1). Export Excel không
   gửi `sort` nên thứ tự file không đổi.
+
+**Export Excel — khối chi phí (2026-09-27).** Cột, sau "Giá cước mua", trước "Ghi chú":
+`Dầu · Cầu trạm · Phí kho · Bốc xếp · Tăng ca · Xe thuê ngoài · Tổng chi phí chuyến`.
+Một chuyến vẫn là **một dòng**. Ô tiền là **số thật** (định dạng hiển thị `#,##0`; giá
+trị lưu giữ nguyên phần lẻ, vd. `600000.5`).
+
+| Trạng thái | Cột chi phí | Giá trị |
+|---|---|---|
+| **A.** Có `cost.read`, chuyến có chi phí đã ghi nhận | có | số theo từng khoản, tổng |
+| **B.** Có `cost.read`, chuyến **không** có chi phí nào | có | **`0`** ở mọi ô, kể cả Tổng — không bao giờ để trống |
+| **C.** Không có `cost.read` | **bỏ hẳn** (như cột giá khi thiếu `trip.price.read`) | không có giá trị chi phí nào trong dữ liệu export |
+
+Quyền và "không có chi phí" **tách bạch**: khối cột bật theo quyền của người xuất
+(`can('cost.read')` từ session, ở nút export), **không bao giờ** suy ra từ dữ liệu — dòng
+đầu, tổng bằng 0, hay thiếu `costSummary` đều không làm đổi cột. Server tính theo
+`canSeeTripCosts(context)` của request và trả một summary cho **mọi** chuyến trong trang
+(chuyến không có dòng nào → toàn `"0.00"`), nên B không bao giờ thành `null`. Ô trống chỉ
+xảy ra khi session nói có `cost.read` mà server không trả con số cho dòng đó (session cũ
+hoặc lỗi) — nghĩa là "không biết", **không** phải "không có chi phí".
+
+Chi phí xuất Excel là **chi phí đã ghi nhận vận hành, không đồng nghĩa chi phí kế toán
+đã duyệt**: gồm mọi dòng còn hiệu lực (không bị huỷ), **kể cả dòng tài xế khai còn chờ
+duyệt** — khớp board và hộp thoại chi phí chuyến.
