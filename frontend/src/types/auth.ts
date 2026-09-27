@@ -75,6 +75,10 @@ export type PermissionKey =
   | 'cost.read'
   | 'cost.create'
   | 'cost.void'
+  // ★ THE EXCEL EXPORT'S COST BREAKDOWN — the SuperAdmin's and ACCOUNTING's
+  // (DL-117). Not `cost.read`: it opens neither the board's cost column nor the
+  // cost dialog. The server enforces it on `GET /trip-schedules/export`.
+  | 'cost.export'
   // ★ CLOSING A TRIP, AND DELIBERATELY NOT `trip.write`. A dispatcher
   // correcting a delivery address and a reviewer closing a trip's books are
   // different acts with different consequences — approval is irreversible —

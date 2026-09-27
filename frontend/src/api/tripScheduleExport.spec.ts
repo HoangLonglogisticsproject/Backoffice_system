@@ -51,8 +51,10 @@ describe('fetchAllTripSchedules', () => {
 
     await fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' });
 
+    // ★ THE EXPORT'S OWN ROUTE — its costs follow `cost.export`, not the
+    // board's `cost.read` (DL-117).
     expect(get).toHaveBeenCalledWith(
-      '/trip-schedules',
+      '/trip-schedules/export',
       expect.objectContaining({
         params: expect.objectContaining({ page: 1, limit: 200 }),
       }),

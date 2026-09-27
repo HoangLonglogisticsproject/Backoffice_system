@@ -1,6 +1,8 @@
-import { UserRepository } from '@core/users/persistence/user.repository';
-import { describeIntegration, poolAsDatabase } from '../helpers/integration-database';
+import { describeIntegration } from '../helpers/integration-database';
 import {
+  addCost,
+  addCrew,
+  addHire,
   addTrip,
   boardQuery,
   clearTrips,
@@ -21,12 +23,9 @@ describeIntegration('Trip board cost summary against real PostgreSQL', () => {
   jest.setTimeout(30_000);
 
   let fx: TripBoardFixture;
-  let driver: string;
 
   beforeAll(async () => {
     fx = await openTripBoard('trip_board_cost_itest');
-    const users = new UserRepository(poolAsDatabase(fx.pool));
-    driver = (await users.insertUser({ displayName: 'Tài Xế A', accountType: 'driver' })).id;
   });
 
   afterAll(async () => {
@@ -38,31 +37,9 @@ describeIntegration('Trip board cost summary against real PostgreSQL', () => {
     fx.statements.length = 0;
   });
 
-  const cost = (trip: string, amount: string, voided = false) =>
-    fx.pool.query(
-      `INSERT INTO trip_costs (trip_id, category, amount, created_by, voided_at, voided_by)
-       VALUES ($1, 'fuel', $2, $3, CASE WHEN $4 THEN now() END, CASE WHEN $4 THEN $3::uuid END)`,
-      [trip, amount, fx.author, voided],
-    );
-
-  const hire = (trip: string, amount: string, voided = false) =>
-    fx.pool.query(
-      `INSERT INTO trip_outsource_hires (trip_id, carrier_name, agreed_amount, created_by, voided_at, voided_by)
-       VALUES ($1, 'Hai Thành', $2, $3, CASE WHEN $4 THEN now() END, CASE WHEN $4 THEN $3::uuid END)`,
-      [trip, amount, fx.author, voided],
-    );
-
-  const crew = async (trip: string, plate: string) => {
-    const { rows } = await fx.pool.query<{ id: string }>(
-      `INSERT INTO trip_vehicles (plate, created_by) VALUES ($1, $2) RETURNING id`,
-      [plate, fx.author],
-    );
-    await fx.pool.query(
-      `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
-       VALUES ($1, $2, $3, $4)`,
-      [trip, rows[0]!.id, driver, fx.author],
-    );
-  };
+  const cost = (trip: string, amount: string, voided = false) => addCost(fx, trip, amount, { voided });
+  const hire = (trip: string, amount: string, voided = false) => addHire(fx, trip, amount, voided);
+  const crew = (trip: string, plate: string) => addCrew(fx, trip, plate);
 
   const summaryOf = async (trip: string) =>
     (await fx.board.page(boardQuery(), true)).items.find((row) => row.id === trip)!.costSummary;
@@ -77,7 +54,7 @@ describeIntegration('Trip board cost summary against real PostgreSQL', () => {
 
     const canonical = await fx.totals.forTrip(trip);
 
-    expect(await summaryOf(trip)).toEqual({ total: canonical.combined, itemCount: 3 });
+    expect(await summaryOf(trip)).toMatchObject({ total: canonical.combined, itemCount: 3 });
     expect(canonical.combined).toBe('6250000.50');
   });
 
@@ -91,13 +68,13 @@ describeIntegration('Trip board cost summary against real PostgreSQL', () => {
     await hire(trip, '1000');
     await hire(trip, '2000');
 
-    expect(await summaryOf(trip)).toEqual({ total: '3300.00', itemCount: 4 });
+    expect(await summaryOf(trip)).toMatchObject({ total: '3300.00', itemCount: 4 });
   });
 
   it('answers "0.00" and 0 for a trip with nothing recorded — a zero, not a gap', async () => {
     const trip = await addTrip(fx, '2026-08-04');
 
-    expect(await summaryOf(trip)).toEqual({ total: '0.00', itemCount: 0 });
+    expect(await summaryOf(trip)).toMatchObject({ total: '0.00', itemCount: 0 });
   });
 
   it('★ reads a page in two statements with cost and one without, whatever its size', async () => {

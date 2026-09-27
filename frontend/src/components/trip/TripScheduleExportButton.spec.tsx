@@ -123,8 +123,30 @@ describe('TripScheduleExportButton', () => {
 
     await waitFor(() =>
       expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(
-        expect.objectContaining({ includePrices: true }),
+        // Prices do not bring costs with them: `cost.read` is its own key.
+        expect.objectContaining({ includePrices: true, includeCosts: false }),
       ),
+    );
+  });
+
+  /**
+   * ★ THE COST BLOCK FOLLOWS `cost.export` — THE EXPORT'S OWN KEY (DL-117).
+   * Accounting holds it and not `cost.read`; the board's key alone must not
+   * open the export's block. The server enforces the same key on the data.
+   */
+  it.each([
+    ['the SuperAdmin (both keys)', [...HEAD, 'cost.read', 'cost.export'], true],
+    ['accounting (cost.export, no cost.read)', [...HEAD, 'cost.export'], true],
+    ['the board’s key alone (cost.read)', [...HEAD, 'cost.read'], false],
+    ['sales / dispatch / customer service', ['trip.read'], false],
+  ] as const)('★ asks for the cost block per cost.export — %s', async (_who, permissions, includeCosts) => {
+    useSession.mockReturnValue(session([...permissions]));
+
+    renderButton();
+    fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
+
+    await waitFor(() =>
+      expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(expect.objectContaining({ includeCosts })),
     );
   });
 
@@ -136,7 +158,7 @@ describe('TripScheduleExportButton', () => {
 
     await waitFor(() =>
       expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(
-        expect.objectContaining({ includePrices: false }),
+        expect.objectContaining({ includePrices: false, includeCosts: false }),
       ),
     );
   });

@@ -1,7 +1,14 @@
-import { TRIP_STATUS_LABELS, type TripScheduleWithRefs } from '@/types/trip';
+import { TRIP_STATUS_LABELS } from '@/types/trip';
 import type { Language, TranslationKey } from '@/types/translate';
 import { formatPlate } from '@/utils/format';
 import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
+import type { TripBoardRow } from '@/types/tripBoard';
+import { sheetMoney } from './sheetMoney';
+import {
+  TRIP_SHEET_COST_WIDTHS,
+  tripSheetCostCells,
+  tripSheetCostHeadings,
+} from './tripScheduleCostCells';
 
 /**
  * The dispatch board as rows a spreadsheet can hold.
@@ -55,24 +62,16 @@ const leg = (
 ];
 
 /**
- * The price, as a NUMBER — the one place this app parses it, and deliberately.
- *
- * Everywhere else the agreed charge stays a string end to end, because
- * `NUMERIC(14,2)` through float64 is how a figure changes without anything on
- * the wire showing it did. A spreadsheet is the exception that earns it: a
- * column of text is a column nobody can sum, and summing this column is most of
- * why anybody exports the board at all.
- *
- * Safe for what this business actually charges — VND amounts are whole numbers,
- * and every integer below 2^53 survives the round trip exactly. An unpriced
- * trip is `null`, never `0`: an empty cell and a zero are different claims, and
- * `0` would drag any average taken over the column.
+ * Which money this viewer may see — the two keys the board's own columns are
+ * gated on. ★ EVERY FLAG DEFAULTS TO FALSE, the fail-closed direction: a caller
+ * that forgets one exports a sheet without that money, never with it.
  */
-const price = (value: string | null): number | null => {
-  if (!value) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
+export interface SheetVisibility {
+  /** `trip.price.read` — "Giá cước bán" and "Giá cước mua". */
+  prices?: boolean;
+  /** `cost.read` — the cost block. */
+  costs?: boolean;
+}
 
 /**
  * Turns the trips into sheet rows.
@@ -82,17 +81,10 @@ const price = (value: string | null): number | null => {
  * run 1..n whatever the page size was.
  */
 export function toTripSheetRows(
-  trips: readonly TripScheduleWithRefs[],
+  trips: readonly TripBoardRow[],
   t: Translate,
   language: Language,
-  /**
-   * Does this viewer hold `trip.price.read`?
-   *
-   * ★ DEFAULTS TO FALSE, WHICH IS THE FAIL-CLOSED DIRECTION. A caller that
-   * forgets the argument exports a sheet with no money in it; the opposite
-   * default would put both figures in a file somebody then emails on.
-   */
-  includePrices = false,
+  { prices = false, costs = false }: SheetVisibility = {},
 ): TripSheetRow[] {
   const heading = {
     index: t('colIndex'),
@@ -111,6 +103,8 @@ export function toTripSheetRows(
     contact: t('exportColContact'),
     at: t('exportColTime'),
   };
+  // Built once for the export, not once per row.
+  const costHeadings = costs ? tripSheetCostHeadings(t) : [];
 
   return trips.map((trip, position) => {
     const [pickupAddress, pickupContact, pickupAt] = leg(
@@ -158,12 +152,17 @@ export function toTripSheetRows(
       // the values, so keeping the headings would export two columns of empty
       // cells that read as "nothing is priced" — a claim about the data rather
       // than about the reader.
-      ...(includePrices
+      ...(prices
         ? {
-            [heading.sellPrice]: price(trip.sellPrice),
-            [heading.purchasePrice]: price(trip.purchasePrice),
+            [heading.sellPrice]: sheetMoney(trip.sellPrice),
+            [heading.purchasePrice]: sheetMoney(trip.purchasePrice),
           }
         : {}),
+      // ★ THE COST BLOCK: omitted, like the prices, for a viewer without
+      // `cost.read` — the server sent them no figure. Beside the prices because
+      // that is where money is read; after "Giá cước mua" and never summed with
+      // it, since an outsourced hire may be the very same carrier payment.
+      ...(costs ? tripSheetCostCells(trip.costSummary, costHeadings) : {}),
       [heading.note]: trip.note ?? '',
       [heading.createdBy]: trip.createdByUser.displayName,
     };
@@ -176,21 +175,20 @@ export function toTripSheetRows(
  * Guessed once here rather than measured from the data: auto-fitting to the
  * longest cell makes the address columns swallow the screen, and the point of
  * the widths is that the sheet is readable the moment it opens.
- */
-export const TRIP_SHEET_COLUMN_WIDTHS = [
-  6, 12, 14, 20, 24, 30, 32, 20, 18, 32, 20, 18, 16, 14, 14, 40, 20,
-];
-
-/**
- * The same widths with the two price columns taken out.
  *
- * ★ DERIVED BY POSITION, WHICH IS FRAGILE AND SAYS SO. The widths are a
- * positional list against the key order in `toTripSheetRows`, so a column added
- * before the prices moves this slice. Deriving it beats keeping a second
- * hand-written array that goes stale silently — but if this list grows a third
- * variant, the widths should become a map keyed by heading instead.
+ * ★ COMPOSED FROM THE SAME SEGMENTS, IN THE SAME ORDER, AS A ROW — the columns
+ * everybody gets, the two prices, the cost block, then the note and the author.
+ * This replaces a list cut by position to drop the prices, which a second
+ * optional block would have turned into four hand-kept variants.
+ * `tripScheduleSheet.costs.spec` pins that the widths always match the columns.
  */
-export const TRIP_SHEET_COLUMN_WIDTHS_WITHOUT_PRICES = [
-  ...TRIP_SHEET_COLUMN_WIDTHS.slice(0, 13),
-  ...TRIP_SHEET_COLUMN_WIDTHS.slice(15),
+const LEADING_WIDTHS = [6, 12, 14, 20, 24, 30, 32, 20, 18, 32, 20, 18, 16];
+const PRICE_WIDTHS = [14, 14];
+const TRAILING_WIDTHS = [40, 20];
+
+export const tripSheetColumnWidths = ({ prices = false, costs = false }: SheetVisibility = {}): number[] => [
+  ...LEADING_WIDTHS,
+  ...(prices ? PRICE_WIDTHS : []),
+  ...(costs ? TRIP_SHEET_COST_WIDTHS : []),
+  ...TRAILING_WIDTHS,
 ];

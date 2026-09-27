@@ -44,6 +44,8 @@ trip.write        'head-anywhere' & function sales·accounting·dispatch — SUP
 dispatch.write    global | function dispatch     (0032) — assign / replace / end / danh sách tài xế
 trip.price.read   global | function accounting   (DL-111) — Sales / CS / Điều phối không thấy giá
 trip.price.write  global | function accounting   — key giá trong body POST / PATCH
+cost.read         global                        — hộp thoại Chi phí chuyến + cột chi phí board (cost.create / cost.void cũng global)
+cost.export       global | function accounting   (DL-117) — CHỈ khối chi phí trong Excel, GET /trip-schedules/export
 ```
 
 Dữ liệu chuyến thuộc **bốn phòng nghiệp vụ** (Sales, Kế toán, Điều phối, Customer
@@ -137,7 +139,9 @@ Mỗi dòng có `costSummary` — cùng con số với `cost-summary.combined`, 
 aggregate cho cả trang (`persistence/trip-board-cost.repository.ts`, `UNION ALL` hai
 sổ rồi mới `GROUP BY`, nên không nhân dòng). Không có `cost.read` → `null` và câu đó
 **không chạy**. `application/trip-board.service.ts` ghép hai thứ; controller chỉ
-quyết ai được thấy.
+quyết ai được thấy. Cùng câu đó tách `byCategory` (năm khoản mục) và `hires` — phần
+chi tiết cho export Excel, cộng lại đúng bằng `total`. ⚠ `hires` và "Giá cước mua"
+(`purchase_price`) có thể là cùng một khoản trả nhà xe, không có đối soát; đừng cộng.
 
 ## Hai cái bẫy về ngày, cả hai đều lệch một ngày
 

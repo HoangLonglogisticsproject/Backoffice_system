@@ -48,16 +48,20 @@ export function TripScheduleExportButton({
         return;
       }
 
-      // ★ THE SAME PERMISSION THE BOARD'S COLUMNS ARE GATED ON. Without it the
-      // server has already blanked both figures, so the sheet would carry two
-      // columns of empty cells reading as "nothing is priced"; the builder
-      // drops the columns instead.
+      // ★ THE KEYS THE SERVER ENFORCES FOR THIS FILE: `trip.price.read` for the
+      // prices, as on the board, and `cost.export` for the cost block — the
+      // EXPORT'S own key (DL-117), which accounting holds and `cost.read` does
+      // not replace. Without one, the server has already blanked those figures
+      // (prices) or never computed them (costs), so the sheet would carry
+      // columns of empty cells; the builder drops them instead. The layout
+      // follows the session's capability — the data follows the server.
       const written = await downloadTripScheduleWorkbook({
         trips,
         t,
         language,
         range,
         includePrices: can('trip.price.read'),
+        includeCosts: can('cost.export'),
       });
       notifySuccess('exportDone', {
         description: `${written} ${t('exportRowsUnit')}`,

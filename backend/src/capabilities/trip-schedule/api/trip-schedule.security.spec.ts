@@ -699,6 +699,85 @@ describe('trip-schedule HTTP security', () => {
     });
   });
 
+  // ============================================ ★ THE EXCEL EXPORT'S COST ==
+
+  /**
+   * ★ THE EXPORT HAS ITS OWN COST RULE (DL-117): `cost.export` — the SuperAdmin
+   * and ACCOUNTING — while the board keeps `cost.read`, the SuperAdmin's alone.
+   * Everything below is judged by the server: what a caller sends decides
+   * nothing about whether the aggregate runs.
+   */
+  describe('★ the export route — cost.export, not cost.read', () => {
+    const as = (functions: DepartmentFunction[]) => asContext({ memberOf: [DEPT], functions });
+    const COSTS = { total: '6000000.00', itemCount: 2 };
+
+    it('A. gives the SuperAdmin the breakdown', async () => {
+      context = asContext({ global: true });
+      const response = await authed('get', '/trip-schedules/export').expect(200);
+
+      expect(response.body.items[0].costSummary).toEqual(COSTS);
+      expect(boardCosts.forTrips).toHaveBeenCalledTimes(1);
+    });
+
+    it('★ B. gives ACCOUNTING the breakdown, from the same one batched read', async () => {
+      context = as(['accounting']);
+      const response = await authed('get', '/trip-schedules/export').expect(200);
+
+      expect(response.body.items[0].costSummary).toEqual(COSTS);
+      expect(boardCosts.forTrips).toHaveBeenCalledWith([TRIP]);
+    });
+
+    it('★ C. still gives ACCOUNTING no cost on the normal board request', async () => {
+      context = as(['accounting']);
+      const response = await authed('get', '/trip-schedules').expect(200);
+
+      expect(response.body.items[0].costSummary).toBeNull();
+      expect(boardCosts.forTrips).not.toHaveBeenCalled();
+    });
+
+    it.each(['sales', 'dispatch', 'customer_service'] as const)(
+      '★ E/F/G. gives %s no breakdown from the export — and runs no aggregate',
+      async (fn) => {
+        context = as([fn]);
+        const response = await authed('get', '/trip-schedules/export').expect(200);
+
+        expect(response.body.items[0].costSummary).toBeNull();
+        expect(boardCosts.forTrips).not.toHaveBeenCalled();
+        expect(JSON.stringify(response.body)).not.toContain('6000000');
+      },
+    );
+
+    it('★ H. lets no crafted request turn the costs on — on either route', async () => {
+      context = as(['sales']);
+      for (const path of [
+        '/trip-schedules?includeCosts=true',
+        '/trip-schedules?purpose=export&costs=true',
+        '/trip-schedules/export?includeCosts=true',
+      ]) {
+        const response = await authed('get', path).expect(200);
+        expect(response.body.items[0].costSummary).toBeNull();
+      }
+      expect(boardCosts.forTrips).not.toHaveBeenCalled();
+    });
+
+    it('is refused to a caller who may not read the board at all', async () => {
+      context = asContext({ memberOf: [DEPT] });
+      const response = await authed('get', '/trip-schedules/export');
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      // Refused before anything is read: no page, and so no cost aggregate.
+      expect(trips.list).not.toHaveBeenCalled();
+      expect(boardCosts.forTrips).not.toHaveBeenCalled();
+    });
+
+    it('validates the same query as the board — a bad order is a 422, before any read', async () => {
+      context = as(['accounting']);
+      await authed('get', '/trip-schedules/export?sort=created_at').expect(422);
+      expect(trips.list).not.toHaveBeenCalled();
+    });
+  });
+
   // ==================================================== ★ THE TWO PRICES ==
 
   /**
