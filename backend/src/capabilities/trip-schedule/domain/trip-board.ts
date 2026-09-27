@@ -1,4 +1,5 @@
 import { can, type AuthorizationContext } from '../../../core/authorization/domain/authorization.context';
+import type { TripCostCategory } from './trip-cost';
 import type { TripScheduleWithRefs } from './trip-schedule';
 
 /**
@@ -47,13 +48,25 @@ export const DEFAULT_TRIP_BOARD_ORDER: TripBoardOrder = { sort: 'executionDate',
  * or `locked`), because the canonical total does. Whether an unapproved figure
  * belongs in a trip's cost is a P&L question this read model does not decide.
  *
- * `total` is a decimal STRING, `"0.00"` when nothing is recorded — see
+ * Every amount is a decimal STRING, `"0.00"` when nothing is recorded — see
  * `trip-cost.ts` for why an amount never becomes a `number`.
+ *
+ * ★ THE BREAKDOWN IS THE SAME LINES, SPLIT — NOT A SECOND FORMULA. The five
+ * categories and `hires` add up to `total`, all summed by PostgreSQL in one
+ * statement, so a sheet that shows both can never show two different sums.
+ *
+ * ⚠ `hires` IS NOT "GIÁ CƯỚC MUA". The trip's `purchasePrice` is a separate
+ * field that may describe the same carrier payment; nothing reconciles the
+ * two, so nothing here adds one to the other.
  */
 export interface TripCostSummary {
   total: string;
   /** Live cost lines plus live hires. `0` exactly when `total` is `"0.00"`. */
   itemCount: number;
+  /** Live own-vehicle lines, per canonical category; `"0.00"` where none. */
+  byCategory: Record<TripCostCategory, string>;
+  /** Live outsourced hires (`trip_outsource_hires`). */
+  hires: string;
 }
 
 /**

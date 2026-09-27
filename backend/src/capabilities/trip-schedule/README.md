@@ -137,7 +137,9 @@ Mỗi dòng có `costSummary` — cùng con số với `cost-summary.combined`, 
 aggregate cho cả trang (`persistence/trip-board-cost.repository.ts`, `UNION ALL` hai
 sổ rồi mới `GROUP BY`, nên không nhân dòng). Không có `cost.read` → `null` và câu đó
 **không chạy**. `application/trip-board.service.ts` ghép hai thứ; controller chỉ
-quyết ai được thấy.
+quyết ai được thấy. Cùng câu đó tách `byCategory` (năm khoản mục) và `hires` — phần
+chi tiết cho export Excel, cộng lại đúng bằng `total`. ⚠ `hires` và "Giá cước mua"
+(`purchase_price`) có thể là cùng một khoản trả nhà xe, không có đối soát; đừng cộng.
 
 ## Hai cái bẫy về ngày, cả hai đều lệch một ngày
 
