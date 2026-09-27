@@ -47,6 +47,32 @@ describe('the money and the org chart stay global', () => {
   );
 });
 
+/**
+ * ★ THE EXPORT'S COST KEY IS ACCOUNTING'S AS WELL — AND ONLY THE EXPORT'S (DL-117).
+ *
+ * The CEO decision lets accounting take the cost breakdown out in Excel while
+ * the board's cost column and the cost dialog stay the SuperAdmin's. Both
+ * halves are one word in a table apart: `orFunction` on `cost.read` would open
+ * all three surfaces, and `cost.export` read by a second route would open the
+ * board. This block is what objects to either.
+ */
+describe('★ cost.export is the SuperAdmin’s and accounting’s — for the export alone', () => {
+  it('is global or the accounting function, and nobody else', () => {
+    expect(PERMISSION_REQUIREMENT['cost.export']).toEqual({ tier: 'global', orFunction: ['accounting'] });
+  });
+
+  it('is read by the export route alone — the board route still asks cost.read', async () => {
+    const api = join(__dirname, '..', '..', 'src', 'capabilities', 'trip-schedule', 'api');
+    const schedule = await readFile(join(api, 'trip-schedule.controller.ts'), 'utf8');
+    const exportRoute = schedule.slice(schedule.indexOf("@Get('trip-schedules/export')"));
+    const exportHandler = exportRoute.slice(0, exportRoute.indexOf('@Get(', 1));
+
+    expect(exportHandler).toContain('canExportTripCosts(');
+    expect(schedule.split('canExportTripCosts(').length - 1).toBe(1);
+    expect(schedule).toContain('canSeeTripCosts(authorizationOf(request))');
+  });
+});
+
 describe('★ the two price keys agree with each other', () => {
   it('everybody who may WRITE a price may READ it back', () => {
     // A holder who could type a figure and not see it saved would have a form

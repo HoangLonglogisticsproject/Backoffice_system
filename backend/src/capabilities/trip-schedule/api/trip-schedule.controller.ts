@@ -28,6 +28,7 @@ import { TripBoardService } from '../application/trip-board.service';
 import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService, type TripBoardQuery } from '../application/trip-schedule.service';
 import {
+  canExportTripCosts,
   canSeeTripCosts,
   DEFAULT_TRIP_BOARD_ORDER,
   SORT_DIRECTIONS,
@@ -489,6 +490,29 @@ export class TripScheduleController {
     // ★ THE PAGE IS REBUILT, NOT PATCHED IN PLACE. `redactPricesIn` returns new
     // rows; the envelope around them — total, page, size — is untouched, because
     // withholding a figure must not change how many trips there are.
+    return { ...page, items: redactPricesIn(page.items, this.mayPrice(request)) };
+  }
+
+  /**
+   * The same page, for the Excel export — with the export's own cost rule.
+   *
+   * ★ `cost.export`, NOT `cost.read` (DL-117). Accounting may take the cost
+   * breakdown out in Excel but not read it on the board, so the two routes ask
+   * two keys; the board route above is unchanged. Same query, same envelope,
+   * same one batched aggregate per page. A caller without the key gets
+   * `costSummary: null` here exactly as on the board — the aggregate never
+   * runs for them, whatever they send.
+   *
+   * Declared before `:tripId`: Nest matches in declaration order.
+   */
+  @Get('trip-schedules/export')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async exportPage(
+    @Query(new ZodValidationPipe(boardQuerySchema)) query: TripBoardQuery,
+    @Req() request: Request,
+  ): Promise<OffsetPage<TripBoardRow>> {
+    const page = await this.board.page(query, canExportTripCosts(authorizationOf(request)));
     return { ...page, items: redactPricesIn(page.items, this.mayPrice(request)) };
   }
 

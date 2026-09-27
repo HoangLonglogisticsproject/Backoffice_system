@@ -229,6 +229,26 @@ describe('trip-cost HTTP security', () => {
     });
   });
 
+  /**
+   * ★ THE BOOKING FUNCTIONS SEE NO MONEY HERE — ACCOUNTING INCLUDED. Accounting
+   * holds `cost.export` (DL-117) and may take costs out in the Excel export;
+   * that key opens nothing on these routes, which stay `cost.read` /
+   * `cost.create` / `cost.void`, the SuperAdmin's alone.
+   */
+  describe.each(['accounting', 'sales', 'dispatch', 'customer_service'] as const)(
+    '★ a %s member — the cost dialog stays closed',
+    (fn) => {
+      beforeEach(() => {
+        context = asContext({ memberOf: [DEPT], functions: [fn] });
+      });
+
+      it.each(ALL_ROUTES)('refuses %s %s', async (method, path) => {
+        const response = await authed(method, path).send(anyBody);
+        expect(response.status).toBe(403);
+      });
+    },
+  );
+
   describe('★ a caller with no relations at all sees no money', () => {
     beforeEach(() => {
       // Authenticated, provisioning finished, and holding nothing: no

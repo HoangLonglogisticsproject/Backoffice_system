@@ -124,10 +124,16 @@ const fromWire = <T extends { legacyVehicleId: string | null }>(row: Wire<T>): T
   return { ...rest, legacyVehicleId: vehicleId } as unknown as T;
 };
 
-export async function fetchTripSchedules(
-  request: TripScheduleQuery = {},
+/**
+ * One page of trips from either list route — the board's, or the export's.
+ * The two take the same query and return the same envelope; they differ only
+ * in the server's cost rule (`cost.read` vs `cost.export`, DL-117).
+ */
+async function readTripPage(
+  path: '/trip-schedules' | '/trip-schedules/export',
+  request: TripScheduleQuery,
 ): Promise<OffsetPage<TripBoardRow>> {
-  const { data } = await httpClient.get<OffsetPage<Wire<TripBoardRow>>>('/trip-schedules', {
+  const { data } = await httpClient.get<OffsetPage<Wire<TripBoardRow>>>(path, {
     // axios drops `undefined` params, so an unset filter simply is not sent and
     // the server applies its own default — the current month, and the whole
     // board rather than one of its halves.
@@ -143,6 +149,10 @@ export async function fetchTripSchedules(
   });
   return { ...data, items: data.items.map(fromWire) };
 }
+
+/** One page of the board. Its cost figures follow `cost.read`. */
+export const fetchTripSchedules = (request: TripScheduleQuery = {}): Promise<OffsetPage<TripBoardRow>> =>
+  readTripPage('/trip-schedules', request);
 
 /**
  * The API's ceiling on one page — `MAX_LIMIT` in the backend's `cursor.ts`.
@@ -181,13 +191,15 @@ export async function fetchAllTripSchedules(
   request: Omit<TripScheduleQuery, 'page' | 'limit'> = {},
   onProgress?: (loaded: number, total: number) => void,
 ): Promise<TripBoardRow[]> {
-  const first = await fetchTripSchedules({ ...request, page: 1, limit: MAX_PAGE_SIZE });
+  // ★ THE EXPORT ROUTE, NOT THE BOARD'S: its costs follow `cost.export`, which
+  // accounting holds and `cost.read` does not grant (DL-117).
+  const first = await readTripPage('/trip-schedules/export', { ...request, page: 1, limit: MAX_PAGE_SIZE });
 
   const rows = [...first.items];
   onProgress?.(rows.length, first.total);
 
   for (let page = 2; page <= first.totalPages; page += 1) {
-    const next = await fetchTripSchedules({ ...request, page, limit: MAX_PAGE_SIZE });
+    const next = await readTripPage('/trip-schedules/export', { ...request, page, limit: MAX_PAGE_SIZE });
     rows.push(...next.items);
     onProgress?.(rows.length, first.total);
   }

@@ -877,6 +877,8 @@ phòng, `vehicle.create` chỉ Điều phối. `driver.account.request` chỉ Đ
 | `trip.price.read` | ✓ | **✗** | ✓ | **✗** | ✗ | ✗ | ✗ |
 | `trip.price.write` (`sellPrice`/`purchasePrice` trong body) | ✓ | **✗** | ✓ | ✗ | ✗ | ✗ | ✗ |
 | `trip.complete.review` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `cost.read` · `cost.create` · `cost.void` (hộp thoại Chi phí chuyến, cột chi phí trên board) | ✓ | ✗ | **✗** | ✗ | ✗ | ✗ | ✗ |
+| `cost.export` (khối chi phí trong Excel, `GET /trip-schedules/export`) — DL-117 | ✓ | ✗ | **✓** | ✗ | ✗ | ✗ | ✗ |
 
 **`PATCH /trip-schedules/:id` được phân quyền theo field**, không theo route:
 key thường (địa chỉ, ghi chú, status…) cần `trip.write`; `sellPrice`/`purchasePrice`
@@ -1259,19 +1261,27 @@ Mỗi item thêm **`costSummary: { total, itemCount, byCategory, hires } | null`
 Một chuyến vẫn là **một dòng**. Ô tiền là **số thật** (định dạng hiển thị `#,##0`; giá
 trị lưu giữ nguyên phần lẻ, vd. `600000.5`).
 
+**Quyền của khối chi phí trong Excel là `cost.export`** (SuperAdmin ∨ phòng
+`accounting`, DL-117) — **không phải** `cost.read`. Export đọc route riêng
+**`GET /trip-schedules/export`** (cùng query, cùng envelope, cùng một câu aggregate mỗi
+trang); server tính chi phí ở đó theo `canExportTripCosts(context)`. Board
+(`GET /trip-schedules`) và hộp thoại Chi phí chuyến **giữ nguyên** `cost.read`: Kế toán
+xuất được chi phí trong Excel nhưng **vẫn không** thấy cột chi phí trên board, không mở
+được hộp thoại, không ghi/huỷ chi phí.
+
 | Trạng thái | Cột chi phí | Giá trị |
 |---|---|---|
-| **A.** Có `cost.read`, chuyến có chi phí đã ghi nhận | có | số theo từng khoản, tổng |
-| **B.** Có `cost.read`, chuyến **không** có chi phí nào | có | **`0`** ở mọi ô, kể cả Tổng — không bao giờ để trống |
-| **C.** Không có `cost.read` | **bỏ hẳn** (như cột giá khi thiếu `trip.price.read`) | không có giá trị chi phí nào trong dữ liệu export |
+| **A.** Có `cost.export`, chuyến có chi phí đã ghi nhận | có | số theo từng khoản, tổng |
+| **B.** Có `cost.export`, chuyến **không** có chi phí nào | có | **`0`** ở mọi ô, kể cả Tổng — không bao giờ để trống |
+| **C.** Không có `cost.export` (Sales · Điều phối · CS) | **bỏ hẳn** (như cột giá khi thiếu `trip.price.read`) | không có giá trị chi phí nào trong dữ liệu export |
 
 Quyền và "không có chi phí" **tách bạch**: khối cột bật theo quyền của người xuất
-(`can('cost.read')` từ session, ở nút export), **không bao giờ** suy ra từ dữ liệu — dòng
-đầu, tổng bằng 0, hay thiếu `costSummary` đều không làm đổi cột. Server tính theo
-`canSeeTripCosts(context)` của request và trả một summary cho **mọi** chuyến trong trang
-(chuyến không có dòng nào → toàn `"0.00"`), nên B không bao giờ thành `null`. Ô trống chỉ
-xảy ra khi session nói có `cost.read` mà server không trả con số cho dòng đó (session cũ
-hoặc lỗi) — nghĩa là "không biết", **không** phải "không có chi phí".
+(`can('cost.export')` từ session, ở nút export — chỉ là bố cục), **không bao giờ** suy ra
+từ dữ liệu. Dữ liệu do server quyết: `canExportTripCosts(context)` của request — tham số
+gì client gửi cũng không bật được aggregate. Server trả một summary cho **mọi** chuyến
+trong trang (chuyến không có dòng nào → toàn `"0.00"`), nên B không bao giờ thành `null`.
+Ô trống chỉ xảy ra khi session nói có `cost.export` mà server không trả con số cho dòng
+đó (session cũ hoặc lỗi) — nghĩa là "không biết", **không** phải "không có chi phí".
 
 Chi phí xuất Excel là **chi phí đã ghi nhận vận hành, không đồng nghĩa chi phí kế toán
 đã duyệt**: gồm mọi dòng còn hiệu lực (không bị huỷ), **kể cả dòng tài xế khai còn chờ

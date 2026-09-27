@@ -102,6 +102,12 @@ export const PERMISSIONS = [
   'cost.create',
   /** Withdraw one, with a reason. There is no edit — a correction is a void. */
   'cost.void',
+  /**
+   * ★ TAKE THE COST BREAKDOWN OUT IN THE EXCEL EXPORT — and nothing else.
+   * Not `cost.read`: holding this opens neither the cost dialog nor the
+   * board's cost column. Read by `GET /trip-schedules/export` alone (DL-117).
+   */
+  'cost.export',
 
   /**
    * ★ ONE KEY FOR BOTH DECISIONS, NOT TWO.
@@ -361,6 +367,17 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
   'cost.read': { tier: 'global' },
   'cost.create': { tier: 'global' },
   'cost.void': { tier: 'global' },
+  /**
+   * ★ THE SUPERADMIN AND ACCOUNTING — FOR THE EXPORT ONLY (CEO 2026-09-27, DL-117).
+   *
+   * Accounting takes a month's costs away in Excel; it still does not read them
+   * on the board or in the cost dialog, and records nothing. That is why this
+   * is a key of its own rather than `orFunction` on `cost.read`: widening
+   * `cost.read` would open all three surfaces at once, and the decision was
+   * taken for one. `cost.read` / `cost.create` / `cost.void` stay global-only —
+   * `authorization-policy.spec` holds both halves.
+   */
+  'cost.export': { tier: 'global', orFunction: ['accounting'] },
 
   /**
    * ★ 'global' BECAUSE THE CONTRACT NAMES ONE ACTOR, NOT BECAUSE IT IS SAFEST.

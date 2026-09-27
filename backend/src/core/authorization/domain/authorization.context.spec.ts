@@ -335,6 +335,21 @@ describe('grantedPermissions()', () => {
     ]);
   });
 
+  it('★ gives accounting the export’s cost key and none of the cost dialog’s (DL-117)', () => {
+    const granted = grantedPermissions(context({ memberOf: [A], functions: ['accounting'] }));
+
+    expect(granted).toContain('cost.export');
+    expect(granted).not.toContain('cost.read');
+    expect(granted).not.toContain('cost.create');
+    expect(granted).not.toContain('cost.void');
+  });
+
+  it.each(['sales', 'dispatch', 'customer_service'] as const)('gives %s no cost key at all', (fn) => {
+    const granted = grantedPermissions(context({ headOf: [A], memberOf: [A], functions: [fn] }));
+
+    expect(granted.filter((permission) => permission.startsWith('cost.'))).toEqual([]);
+  });
+
   it('lists nothing while a temporary credential is unchanged', () => {
     expect(grantedPermissions(context({ global: true, mustChangeSecret: true }))).toEqual([]);
   });
@@ -526,6 +541,9 @@ describe('★ orFunction — permissions a department FUNCTION grants', () => {
       'vehicle.create',
     ]);
     expect(grantedPermissions(accountant()).sort()).toEqual([
+      // The Excel export's cost breakdown (DL-117) — not `cost.read`: the
+      // board's cost column and the cost dialog stay the SuperAdmin's.
+      'cost.export',
       'customer.create',
       'location.create',
       'trip.create',

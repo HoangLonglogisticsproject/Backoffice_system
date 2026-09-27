@@ -141,6 +141,19 @@ describe('toTripSheetRows — the cost block', () => {
     COST_BLOCK.forEach((heading) => expect(row![heading]).toBeNull());
   });
 
+  /**
+   * ★ THE LAYOUT EACH ROLE GETS (DL-117). The button hands over `prices` from
+   * `trip.price.read` and `costs` from `cost.export`: the SuperAdmin and
+   * accounting hold both; sales, dispatch and customer service hold neither
+   * and keep the sheet they had before costs existed.
+   */
+  it('★ gives the SuperAdmin and accounting 24 columns, and everyone else the 15 they had', () => {
+    expect(headingsOf({ prices: true, costs: true })).toHaveLength(24);
+    expect(headingsOf({ prices: false, costs: false })).toEqual(
+      BEFORE.filter((heading) => heading !== 'Giá cước bán' && heading !== 'Giá cước mua'),
+    );
+  });
+
   it.each([
     { prices: false, costs: false },
     { prices: true, costs: false },

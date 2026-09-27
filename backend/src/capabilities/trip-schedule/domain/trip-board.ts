@@ -87,3 +87,14 @@ export type TripBoardRow = TripScheduleWithRefs & { costSummary: TripCostSummary
  */
 export const canSeeTripCosts = (authorization: AuthorizationContext | undefined): boolean =>
   authorization !== undefined && can(authorization, 'cost.read');
+
+/**
+ * May this caller take the cost breakdown out in the EXCEL EXPORT?
+ *
+ * ★ A DIFFERENT QUESTION FROM `canSeeTripCosts`, ON PURPOSE (DL-117).
+ * Accounting may export a month's costs but still not read them on the board
+ * or in the cost dialog, so the export route asks `cost.export` and the board
+ * route keeps asking `cost.read`. Same fail-closed shape: no context, no costs.
+ */
+export const canExportTripCosts = (authorization: AuthorizationContext | undefined): boolean =>
+  authorization !== undefined && can(authorization, 'cost.export');
