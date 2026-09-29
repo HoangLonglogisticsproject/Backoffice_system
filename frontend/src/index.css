@@ -117,6 +117,35 @@
 }
 
 /*
+ * ★ THE DRIVER PORTAL'S SIDEBAR IS DARK, AND ONLY THE DRIVER PORTAL'S.
+ *
+ * `DriverLayout` already marks its own shell `data-shell="driver"` (it was
+ * there to tell the two shells apart), so the navy lives as an override of the
+ * `--sidebar-*` tokens inside that subtree — no hex codes in the markup, and
+ * the Backoffice's white sidebar is untouched because nothing outside this
+ * selector is redefined.
+ *
+ * ★ THESE ARE THE FIRST USE OF `--sidebar-*` IN THE APPLICATION. The block
+ * above ships with shadcn and no file read it; `AppShell` paints itself
+ * `bg-white` directly. Taking the names now is what keeps the next sidebar
+ * from inventing a third vocabulary for the same idea.
+ *
+ * ⚠ Unaffected by `.dark`: the portal is one palette on a lorry windscreen in
+ * daylight, and a driver toggling the system theme must not be handed a second
+ * set of colours to learn.
+ */
+[data-shell='driver'] {
+    --sidebar: oklch(0.3 0.055 258);
+    --sidebar-foreground: oklch(0.93 0.015 258);
+    --sidebar-primary: oklch(0.52 0.15 255);
+    --sidebar-primary-foreground: oklch(0.99 0 0);
+    --sidebar-accent: oklch(0.52 0.15 255);
+    --sidebar-accent-foreground: oklch(0.99 0 0);
+    --sidebar-border: oklch(1 0 0 / 12%);
+    --sidebar-ring: oklch(0.75 0.09 255);
+}
+
+/*
  * ★ THE STATUS DROPDOWN ON THE TRIP BOARD — the one part of a native <select>
  * that CSS normally cannot reach.
  *

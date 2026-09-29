@@ -180,7 +180,7 @@ const PHRASES = {
   // say. "Earlier" is a date, and says nothing about whether the work is closed.
   driverViewToday: { vi: 'Hôm nay', en: 'Today' },
   driverViewUpcoming: { vi: 'Sắp tới', en: 'Upcoming' },
-  driverViewPast: { vi: 'Đã qua', en: 'Earlier' },
+  driverViewPast: { vi: 'Chuyến đã chạy', en: 'Finised trip' },
   driverEmptyToday: { vi: 'Bạn chưa có chuyến nào hôm nay.', en: 'You have no trips today.' },
   driverEmptyUpcoming: { vi: 'Chưa có lịch sắp tới.', en: 'Nothing is scheduled yet.' },
   driverEmptyPast: { vi: 'Chưa có chuyến nào đã qua.', en: 'No earlier trips.' },

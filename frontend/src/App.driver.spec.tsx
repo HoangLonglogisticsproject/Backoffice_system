@@ -187,9 +187,15 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
 });
 
 /**
- * ★ ITS OWN PHONE-FIRST SHELL, NOT `AppShell` (DL-114). A top bar that says
+ * ★ ITS OWN PHONE-FIRST SHELL, NOT `AppShell` (DL-114). A top strip that says
  * whose portal it is, the driver's four destinations where a thumb reaches
- * them, and nothing the Backoffice offers — no sidebar, no drawer.
+ * them, and nothing the Backoffice offers — no collapse toggle, no drawer.
+ *
+ * ⚠ JSDOM HAS NO BREAKPOINT. The shell draws the identity strip and the
+ * sign-out control twice — once for the phone, once for the desk column — each
+ * hidden by CSS at the width it does not belong to. A browser shows one;
+ * `screen` here sees both, which is why the queries below are `getAllBy*`. The
+ * MENU is not duplicated, and the test after them is what holds that.
  */
 describe('★ the driver’s application shell', () => {
   it('draws the driver’s four destinations, and only those', async () => {
@@ -210,15 +216,37 @@ describe('★ the driver’s application shell', () => {
     renderAt('/driver');
     await screen.findByText('Bạn chưa có chuyến nào hôm nay.');
 
+    // The phone's strip carries it joined to the portal's name; the desk column
+    // has the name at its head and the username at its foot. Both say it.
     expect(screen.getByText('Cổng tài xế · taixe.a')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Đăng xuất' })).toBeInTheDocument();
+    expect(screen.getByText('taixe.a')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Đăng xuất' })).toHaveLength(2);
   });
 
-  it('draws none of the Backoffice chrome: no sidebar toggle, no drawer', async () => {
+  /**
+   * ★ THE MENU IS NOT DRAWN TWICE (DL-114).
+   *
+   * The phone's bottom bar and the desk's column are ONE `<nav>` reshaped by
+   * CSS. Copying it into a second element would be the easy way to style the
+   * two, and would be the day a destination can appear on a desk but not on a
+   * phone. This counts them.
+   */
+  it('★ gives the phone bar and the desk column the same single navigation', async () => {
+    renderAt('/driver');
+    await screen.findByText('Bạn chưa có chuyến nào hôm nay.');
+
+    expect(screen.getAllByRole('navigation', { name: 'Cổng tài xế' })).toHaveLength(1);
+    // And one badge, so neither width can show a count the other contradicts.
+    expect(screen.getAllByTestId('unread-badge')).toHaveLength(1);
+  });
+
+  it('draws none of the Backoffice chrome: no collapse toggle, no drawer', async () => {
     renderAt('/driver');
     await screen.findByText('Bạn chưa có chuyến nào hôm nay.');
 
     expect(screen.queryByRole('button', { name: /ẩn\/hiện điều hướng/i })).not.toBeInTheDocument();
+    // The desk column is a plain `<div>`: on a phone the same element IS the
+    // primary navigation, and a `complementary` landmark would misname it.
     expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
   });
 
@@ -250,7 +278,8 @@ describe('★ the driver’s application shell', () => {
     renderAt('/driver');
     await screen.findByText('Bạn chưa có chuyến nào hôm nay.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Đăng xuất' }));
+    // The phone's, but both call the same `leave` — see the shell.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Đăng xuất' })[0]!);
 
     expect(await screen.findByRole('heading', { name: 'Đăng nhập' })).toBeInTheDocument();
     expect(session.signOut).toHaveBeenCalledTimes(1);
