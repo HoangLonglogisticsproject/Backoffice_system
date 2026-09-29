@@ -106,7 +106,8 @@ const DRIVER_TRIP_KEYS = [
   'driverInstructions',
   'assignment',
 ];
-const DETAIL_KEYS = [...DRIVER_TRIP_KEYS, 'events', 'expenses', 'accountability', 'completion'];
+// `closed`: the trip is finished — the detail of a "Đã chạy xong" card, drawn read-only.
+const DETAIL_KEYS = [...DRIVER_TRIP_KEYS, 'events', 'expenses', 'accountability', 'completion', 'closed'];
 const EVENT_KEYS = [
   'id',
   'tripId',
@@ -369,6 +370,7 @@ describe('driver portal (D1) against the real API', () => {
         expenses: [],
         accountability: 'NOT_DECLARED',
         completion: null,
+        closed: false,
       });
       expect(assignmentStatusOf(detail)).toBe('assigned');
       expect(JSON.stringify(detail)).not.toContain('4500000');
