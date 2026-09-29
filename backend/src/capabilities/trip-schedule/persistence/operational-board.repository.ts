@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
-import type { DateRange } from './trip-schedule.repository';
+import { LIFECYCLE_PREDICATE, type DateRange } from './trip-schedule.repository';
 import type { ExpenseDeclaration } from '../domain/trip-execution';
 
 /**
@@ -176,8 +176,16 @@ export class OperationalBoardRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * Every active assignment on every trip in the range, with its operational
-   * facts — plus one row for each trip that has nobody on it.
+   * Every active assignment on every UNFINISHED trip in the range, with its
+   * operational facts — plus one row for each such trip that has nobody on it.
+   *
+   * ★ OPERATIONAL MEANS NOT FINISHED — the canonical lifecycle, and the very
+   * predicate Lịch xe uses (`LIFECYCLE_PREDICATE.operational`). A finished trip
+   * is History, however it got there: approval of its last turn, or recorded
+   * finished after it ran. Not the date — an overdue trip nobody closed is
+   * exactly what this board is for — and not the crew either: a trip recorded
+   * after it ran has no active turn, and must not read as one waiting for a
+   * driver.
    *
    * ⚠ THE DATE RANGE IS MANDATORY, and it is the same one ADR-0003 requires of
    * the dispatch board — for the same reason. An unbounded scan of every trip
@@ -192,6 +200,7 @@ export class OperationalBoardRepository {
         WHERE t.scheduled_on >= $1::date
           AND t.scheduled_on <= $2::date
           AND t.archived_at IS NULL
+          ${LIFECYCLE_PREDICATE.operational}
         ORDER BY t.scheduled_on DESC, t.id DESC, a.assigned_at ASC, a.id ASC`,
       [range.from, range.to],
     );

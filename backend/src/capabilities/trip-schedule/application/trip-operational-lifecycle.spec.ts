@@ -47,6 +47,8 @@ const database = (): Database =>
 const openTrip = (over: Record<string, unknown> = {}) => ({
   id: TRIP,
   status: 'confirmed',
+  // NOT NULL on every stored row; the pickup's day on the business calendar.
+  scheduledOn: '2026-08-30',
   // ★ LEGACY, AND DELIBERATELY NOT THE ASSIGNMENT'S LORRY. Any snapshot that
   // reads this instead of the assignment fails the tests below.
   vehicleId: 'legacy-vehicle',
@@ -413,6 +415,8 @@ describe('the one write path to DONE', () => {
       history as never,
       // No places on these trips: every case here types its ends by hand.
       { findById: jest.fn().mockResolvedValue(null) } as never,
+      // No trip here is recorded after it ran, so no crew is written with one.
+      { recordEnded: jest.fn() } as never,
     );
 
     return { service, trips, history };

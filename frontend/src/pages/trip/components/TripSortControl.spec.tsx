@@ -23,7 +23,7 @@ describe('TripSortControl', () => {
     // which a new crew, a cost line or a driver milestone does not move.
     expect(
       Array.from((field as HTMLSelectElement).options).map((option) => option.textContent),
-    ).toEqual(['Ngày chạy', 'Booking mới nhất', 'Chỉnh sửa gần nhất']);
+    ).toEqual(['Ngày lấy hàng', 'Booking mới nhất', 'Chỉnh sửa gần nhất']);
     expect(field).toHaveValue('bookingCreated');
     expect(screen.getByLabelText('Thứ tự')).toHaveValue('asc');
   });

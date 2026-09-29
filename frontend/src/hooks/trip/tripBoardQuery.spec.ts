@@ -6,17 +6,19 @@ const FILTER: TripBoardListFilter = {
   from: '2026-09-01',
   to: '2026-09-30',
   assignment: 'unassigned',
+  lifecycle: 'history',
   sort: 'lastUpdated',
   direction: 'asc',
   costs: true,
 };
 
 describe('boardListRequest', () => {
-  it('sends the range, the tab, the order and the page', () => {
+  it('sends the range, the tab, the screen, the order and the page', () => {
     expect(boardListRequest(FILTER, { page: 3, limit: 50 })).toEqual({
       from: '2026-09-01',
       to: '2026-09-30',
       assignment: 'unassigned',
+      lifecycle: 'history',
       sort: 'lastUpdated',
       direction: 'asc',
       page: 3,
@@ -45,15 +47,17 @@ describe('boardListRequest', () => {
 });
 
 describe('unassignedCountRequest', () => {
-  it('★ asks for one uncrewed row of the range, and no order', () => {
+  it('★ asks for one uncrewed row of Lịch xe in the range, and no order', () => {
     const request = unassignedCountRequest(FILTER);
 
+    // Lịch xe whatever screen asks: a finished trip is nobody's work to crew.
     expect(request).toEqual({
       from: '2026-09-01',
       to: '2026-09-30',
       page: 1,
       limit: 1,
       assignment: 'unassigned',
+      lifecycle: 'operational',
     });
   });
 });

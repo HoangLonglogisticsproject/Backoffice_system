@@ -127,7 +127,8 @@ nới, lập luận trên hết hiệu lực và list phải quay về keyset.
 ## Sắp xếp và tổng chi phí trên board
 
 `?sort=executionDate|bookingCreated|lastUpdated&direction=asc|desc`, mặc định
-`executionDate desc` — đúng thứ tự trước đây. ⚠ `lastUpdated` là `updated_at` của
+`executionDate desc` — đúng thứ tự trước đây. `executionDate` là `scheduled_on`, tức
+ngày lấy hàng — UI "Ngày lấy hàng". ⚠ `lastUpdated` là `updated_at` của
 **dòng chuyến** (UI: "Chỉnh sửa gần nhất"), không phải hoạt động gộp: phân công, chi
 phí và mốc tài xế ghi bảng khác và không làm nó đổi. Enum → SQL ở **một** chỗ,
 `persistence/trip-board-order.ts`; mọi thứ tự kết thúc bằng `t.id` cùng chiều để
@@ -142,6 +143,53 @@ sổ rồi mới `GROUP BY`, nên không nhân dòng). Không có `cost.read` �
 quyết ai được thấy. Cùng câu đó tách `byCategory` (năm khoản mục) và `hires` — phần
 chi tiết cho export Excel, cộng lại đúng bằng `total`. ⚠ `hires` và "Giá cước mua"
 (`purchase_price`) có thể là cùng một khoản trả nhà xe, không có đối soát; đừng cộng.
+
+## Lịch xe và Lịch sử chuyến — một Trip, hai projection
+
+`?lifecycle=operational|history` (mặc định `operational`) trên `GET /trip-schedules`
+và `/export`. Lịch xe = `status <> 'finished'`, Lịch sử = `status = 'finished'` — tách
+ở trạng thái kết thúc chuẩn, **không** ở ngày: chuyến hôm qua chưa đóng vẫn là việc
+của Lịch xe. Không phải `closed_at`: chuyến `done` trước 0017 thành `finished` mà
+không có dấu đóng. Predicate trên chính dòng chuyến, không join, trong cùng khoảng
+ngày `idx_trip_schedule_page` đã đọc — không cần index mới.
+
+## Mô hình thời gian — `domain/trip-timeline.ts`
+
+`created_at` do hệ thống ghi, không back-date · `scheduled_on` = **ngày lấy hàng dự
+kiến** ("Ngày lấy hàng", luôn có) · `pickup_at` = giờ lấy hàng chính xác khi đã biết,
+và ngày (Hồ Chí Minh) của nó **là** `scheduled_on` · `delivery_at` = thời điểm giao khi
+đã biết. Kiểm trong `resolve()` — chung cho create, update và nhập chuyến cũ.
+
+* **Giao sau lấy, nghiêm ngặt**, chỉ khi có cả hai giờ — 422 `NOT_AFTER_PICKUP`. Như
+  kiểm tra danh mục, chỉ áp khi write **đổi** một mốc: dòng cũ vẫn được định giá.
+* **Ngày ↔ giờ lấy không lệch** — 422 `NOT_THE_PICKUP_DAY`. Dòng đang lệch giữ nguyên
+  qua sửa không liên quan; đổi pickup là thứ làm nó hội tụ. Không migration dữ liệu.
+* **Lịch theo ý định tạo** (`calendarRefusal`): `entryMode: operational` từ chối ngày
+  đã qua (`PAST_DAY`); `entryMode: historical` từ chối ngày sau hôm nay
+  (`FUTURE_DAY`) và giờ lấy / giao **có giá trị** mà sau thời điểm hiện tại
+  (`FUTURE_INSTANT`) — chuyến đã chạy thì đã xảy ra. Chỉ khi tạo.
+
+## Nhập chuyến cũ — cùng `POST /trip-schedules`, `entryMode: historical`
+
+Một route tạo, một quyền (`trip.create`), một pipeline (`TripScheduleService.create`).
+Client nói **vì sao** nhập chuyến (`entryMode`); server quyết **chuyến bắt đầu thế nào**
+(`initialLifecycle` trong `domain/trip-status-history.ts`): booking mở `pending` (hoặc
+trạng thái board cho phép, không bao giờ `finished`); chuyến đã chạy sinh ra `finished`
+bằng `createFinished` (dòng + `closed_by`/`closed_at` = người và lúc nhập), một dòng
+history `null → finished` lý do `historical_entry`, và crew
+(`application/trip-entry-crew.ts`) là assignment ghi-rồi-kết-thúc với cùng lý do — kiểm
+bằng đúng luật điều độ (`application/dispatch-eligibility.ts`). Không completion request,
+không execution event, không notification. Chi phí vào sau qua đường backoffice của sổ
+chi phí (`cost.create`), đường vốn không đọc trạng thái chuyến; khoản tài xế khai thì
+không.
+
+Đây là đường **thứ hai và duy nhất khác** vào `finished` — sinh ra, không chuyển tới;
+approval vẫn là đường duy nhất **chuyển** một chuyến sang `finished`
+(`tests/architecture/trip-write-paths.spec.ts`).
+
+⚠ Crew của board là assignment `active` — **và** trên chuyến `finished`, các lượt
+`ended` mang dấu `historical_entry` (`IS_CREW` trong repository). Lượt bị điều độ gỡ
+tay không bao giờ mang dấu đó.
 
 ## Hai cái bẫy về ngày, cả hai đều lệch một ngày
 
@@ -264,4 +312,7 @@ domain/trip-board.ts                 thứ tự board, TripCostSummary, canSeeTr
 application/trip-board.service.ts    trang board + tổng chi phí cho người có cost.read
 persistence/trip-board-order.ts      enum → ORDER BY cố định, luôn có tiebreaker id
 persistence/trip-board-cost.repository.ts  tổng chi phí cả trang trong một câu
+domain/trip-timeline.ts              giao sau lấy · ngày = ngày lấy hàng · lịch theo ý định
+application/trip-entry-crew.ts       crew của chuyến sinh ra đã đóng: ghi rồi kết thúc, một transaction
+application/dispatch-eligibility.ts  xe còn dùng · tài xế còn hoạt động — chung cho điều độ và nhập cũ
 ```

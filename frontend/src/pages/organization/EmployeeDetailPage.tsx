@@ -25,6 +25,7 @@ import { fetchEmployeeDetail } from '@/api/membership';
 import { fetchDriverTrips, type DriverTripHistoryRow } from '@/api/tripAssignment';
 import { disableUser } from '@/api/users';
 import { setDriverStatus } from '@/api/driverAccounts';
+import { endReasonText } from '@/utils/assignmentEndReason';
 import { isApiError } from '@/utils/errors';
 import type { AccountStatus, EmployeeDetail, EmployeeRole } from '@/types/organization';
 import type { TranslationKey } from '@/types/translate';
@@ -561,7 +562,7 @@ function DriverTrips({ userId }: Readonly<{ userId: string }>) {
                           the only thing that says why somebody came off. */}
                       {row.endReason && (
                         <span className="block whitespace-pre-line text-gray-500">
-                          {row.endReason}
+                          {endReasonText(row.endReason, t)}
                         </span>
                       )}
                     </div>

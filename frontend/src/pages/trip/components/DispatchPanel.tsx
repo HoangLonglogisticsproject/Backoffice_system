@@ -15,6 +15,7 @@ import { DriverSelect } from './DriverSelect';
 import type { DriverAssignment } from '@/api/tripAssignment';
 import type { UserSummary } from '@/types/organization';
 import type { TripAssignmentRef, TripScheduleWithRefs, TripVehicle } from '@/types/trip';
+import { endReasonText } from '@/utils/assignmentEndReason';
 
 interface Props {
   /** The trip being dispatched, or `null` when closed. */
@@ -405,7 +406,7 @@ function History({ turns }: Readonly<{ turns: DriverAssignment[] }>) {
             {' · '}
             {formatDateTime(turn.assignedAt, language)}
             {turn.endedAt ? ` → ${formatDateTime(turn.endedAt, language)}` : ''}
-            {turn.endReason ? ` · ${turn.endReason}` : ''}
+            {turn.endReason ? ` · ${endReasonText(turn.endReason, t)}` : ''}
           </li>
         ))}
       </ul>

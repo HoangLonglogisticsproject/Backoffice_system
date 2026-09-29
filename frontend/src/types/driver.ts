@@ -187,4 +187,10 @@ export interface DriverTripDetail extends DriverTrip {
   accountability: ExpenseAccountability;
   /** The latest attempt, or `null` when none has been made. */
   completion: CompletionRequest | null;
+  /**
+   * ★ THE TRIP IS FINISHED — this turn is a record, opened from "Đã chạy xong"
+   * or a past card. The screen draws no action for it (`driverExecution`); the
+   * server refuses every write on it regardless.
+   */
+  closed: boolean;
 }

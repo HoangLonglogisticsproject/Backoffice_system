@@ -16,6 +16,7 @@ import type { AssignmentStatus } from '@/utils/driverExecution';
  *   amber  waiting — on the driver's submission or on the office's review
  *   red    sent back: the driver has something to fix
  *   green  approved
+ *   gray   closed without this turn's approval — a record, nothing to do
  */
 const PRESENTATION: Record<AssignmentStatus, { label: TranslationKey; tone: StatusTone }> = {
   assigned: { label: 'driverStatusAssigned', tone: 'gray' },
@@ -26,6 +27,7 @@ const PRESENTATION: Record<AssignmentStatus, { label: TranslationKey; tone: Stat
   'completion-pending': { label: 'driverStatusCompletionPending', tone: 'amber' },
   'completion-rejected': { label: 'driverStatusCompletionRejected', tone: 'red' },
   approved: { label: 'driverStatusApproved', tone: 'green' },
+  closed: { label: 'driverStatusClosed', tone: 'gray' },
 };
 
 export function AssignmentStatusPill({ status }: Readonly<{ status: AssignmentStatus }>) {

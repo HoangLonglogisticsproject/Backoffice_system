@@ -23,6 +23,7 @@ const boardPage = (costs: boolean) => [
     from: '2026-09-01',
     to: '2026-09-30',
     assignment: 'all',
+    lifecycle: 'operational',
     sort: 'executionDate',
     direction: 'desc',
     costs,

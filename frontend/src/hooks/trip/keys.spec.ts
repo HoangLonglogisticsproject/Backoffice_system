@@ -6,6 +6,7 @@ const list = (costs: boolean) =>
     from: '2026-08-01',
     to: '2026-08-31',
     assignment: 'all',
+    lifecycle: 'operational',
     sort: 'executionDate',
     direction: 'desc',
     costs,

@@ -7,15 +7,27 @@ import type { TripBoardOrder } from '../domain/trip-board';
 import { optionalPoint } from '../domain/trip-location';
 import type {
   TripAssignmentFilter,
+  TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
   TripStatus,
 } from '../domain/trip-schedule';
 import {
+  boardDayFor,
+  calendarRefusal,
+  deliversBeforePickup,
+  instantMoved,
+  type CalendarRefusal,
+  type TripEntryMode,
+} from '../domain/trip-timeline';
+import {
   canTransition,
+  initialLifecycle,
   isCompletionOnlyStatus,
+  type InitialLifecycle,
   type TripStatusChange,
 } from '../domain/trip-status-history';
+import { TripEntryCrew, type CrewPair } from './trip-entry-crew';
 import {
   TripCustomerRepository,
   TripLocationRepository,
@@ -27,9 +39,9 @@ import {
 import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
 
 /**
- * What a caller may say when creating a trip. Everything but the day is
- * optional, because the workbook rows show that a trip is entered before it is
- * fully known — a customer with no addresses yet.
+ * What a caller may say when creating a trip. Everything is optional but a
+ * DAY — a pickup instant, or the bare day when no hour is known yet — because
+ * the workbook rows show that a trip is entered before it is fully known.
  *
  * ★ NO LORRY AND NO DRIVER HERE (ADR-0004). A trip is booked first; lorries and
  * their drivers are dispatched onto it afterwards, as assignments, through
@@ -37,7 +49,26 @@ import { TripStatusHistoryRepository } from '../persistence/trip-status-history.
  * writes `trip_schedules.vehicle_id` any more.
  */
 export interface CreateTripInput {
-  scheduledOn: string;
+  /**
+   * The planned pickup date — "Ngày lấy hàng". Required unless `pickupAt` is
+   * sent, whose business day it then is; the two may not disagree (see
+   * `boardDayFor`). A trip booked before anybody knows the hour sends this alone.
+   */
+  scheduledOn?: string;
+  /**
+   * Why the trip is being entered (`TripEntryMode`) — the create INTENT, never
+   * a status: `operational` books it, `historical` records a run that already
+   * ended. The server decides the lifecycle from it (`initialLifecycle`).
+   * Absent for in-process callers (fixtures, scripts): a booking, with no
+   * calendar policy; the timeline rule binds them all the same.
+   */
+  entryMode?: TripEntryMode;
+  /**
+   * The lorries and drivers a RECORDED run went out with — historical intent
+   * only: a closed trip takes no dispatch afterwards. A booking is crewed
+   * through the dispatch routes once it exists (`TripEntryCrew`).
+   */
+  crew?: CrewPair[];
   customerId?: string | null;
   cargoInfo?: string | null;
   pickupAddress?: string | null;
@@ -101,9 +132,10 @@ export interface CreateTripInput {
  * `scheduledOn` and `status` are optional but never nullable: a trip with no
  * day is not on the board at all, and a trip with no status has no colour. The
  * columns are NOT NULL, and the type says so rather than leaving the service to
- * discover it from a constraint violation.
+ * discover it from a constraint violation. No `entryMode`: correcting a trip is
+ * not entering one.
  */
-export type UpdateTripInput = Partial<CreateTripInput> & {
+export type UpdateTripInput = Omit<Partial<CreateTripInput>, 'entryMode' | 'crew'> & {
   scheduledOn?: string;
   status?: TripStatus;
 };
@@ -120,10 +152,12 @@ export type UpdateTripInput = Partial<CreateTripInput> & {
  */
 export interface TripBoardQuery extends DateRangePageQuery, TripBoardOrder {
   assignment: TripAssignmentFilter;
+  /** Lịch xe or Lịch sử chuyến — the same trips, split at `finished`. */
+  lifecycle: TripLifecycle;
 }
 
-/** The fields a patch may CLEAR with `null` — everything but the day and the status. */
-type NullableTripField = Exclude<keyof CreateTripInput, 'scheduledOn' | 'status'>;
+/** The fields a patch may CLEAR with `null` — everything but the day, the status and the intent. */
+type NullableTripField = Exclude<keyof CreateTripInput, 'scheduledOn' | 'status' | 'entryMode' | 'crew'>;
 
 /**
  * Trims a text field, and treats a field that is only whitespace as empty.
@@ -156,6 +190,7 @@ export class TripScheduleService {
     private readonly customers: TripCustomerRepository,
     private readonly history: TripStatusHistoryRepository,
     private readonly locations: TripLocationRepository,
+    private readonly crew: TripEntryCrew,
   ) {}
 
   /**
@@ -174,11 +209,12 @@ export class TripScheduleService {
    */
   async list(query: TripBoardQuery): Promise<OffsetPage<TripScheduleWithRefs>> {
     const range = { from: query.from, to: query.to };
+    const filter = { assignment: query.assignment, lifecycle: query.lifecycle };
     const offset = (query.page - 1) * query.limit;
 
     const { items, total } = await this.trips.listPage(
       range,
-      query.assignment,
+      filter,
       { sort: query.sort, direction: query.direction },
       query.limit,
       offset,
@@ -189,9 +225,7 @@ export class TripScheduleService {
     // a client holding a stale page number see the real `totalPages` and
     // recover, instead of being told the range is empty.
     const resolvedTotal =
-      items.length === 0 && query.page > 1
-        ? await this.trips.countInRange(range, query.assignment)
-        : total;
+      items.length === 0 && query.page > 1 ? await this.trips.countInRange(range, filter) : total;
 
     return toOffsetPage(items, resolvedTotal, query.page, query.limit);
   }
@@ -203,42 +237,75 @@ export class TripScheduleService {
   }
 
   /**
-   * Adds a row to the board.
+   * Adds a trip — a booking, or a run recorded after it ended (`entryMode`).
    *
-   * Anybody with a finished account may do this — dispatch is a shared record
+   * ★ ONE PIPELINE FOR BOTH. The same catalogue, snapshot, timeline and day
+   * rules (`prepareEntry`), the same transaction, the same first history row.
+   * The intent decides only how the trip STARTS (`initialLifecycle`): the
+   * caller says why it enters a trip, and never that the trip is closed.
+   *
+   * Anybody holding `trip.create` may do this — dispatch is a shared record,
    * and a trip that cannot be entered until an administrator is available is a
    * trip that gets entered in a WhatsApp message instead. `createdBy` comes
    * from the session, never from the body, so the row always says who wrote it.
    */
   async create(input: CreateTripInput & { createdBy: string }): Promise<TripSchedule> {
+    // Pure, so a request that cannot start a trip is refused before any read.
+    const start = startOf(input);
+
     return this.db.transaction(async (tx) => {
-      // No previous row, so every reference here is newly assigned and every
-      // one of them is checked against the catalogue — and both ends are
-      // snapshotted from their places, when places were named.
-      const values = await this.resolve(input, 'pending', tx, null, {
-        pickup: true,
-        delivery: true,
-      });
+      const values = await this.prepareEntry(input, tx);
+      const now = new Date();
+      const row = { ...values, status: start.status, createdBy: input.createdBy };
 
-      // ★ A TRIP CANNOT BE BORN CLOSED. `status` is an optional field of the
-      // create body, so without this a single POST produces a trip that is
-      // permanently closed, with no completion request, no approver, no frozen
-      // figures and — because 0025 makes `finished` terminal — no way back.
-      this.requireNotCompletionOnly(values.status);
-
-      const created = await this.trips.create({ ...values, createdBy: input.createdBy }, tx);
+      // ★ BORN CLOSED ONLY BY THE HISTORICAL INTENT: row, `finished` and the
+      // closing stamp (who recorded it, when) in one statement. Every other
+      // trip is born open and reaches `finished` only through approval.
+      const created = start.closed
+        ? await this.trips.createFinished(row, now, tx)
+        : await this.trips.create(row, tx);
 
       // ★ THE HISTORY STARTS AT THE FIRST ROW, NOT THE FIRST CHANGE. Without
       // this the earliest recorded transition would be `X -> Y` with nothing
-      // saying where X came from, and "which status did this trip open on"
-      // would be answerable only by assuming the default never moved.
+      // saying where X came from. A recorded run has this row and no other —
+      // `null → finished`, marked — because it never moved along the board.
       await this.history.record(
-        { tripId: created.id, from: null, to: created.status, reason: null, changedBy: input.createdBy },
+        { tripId: created.id, from: null, to: created.status, reason: start.reason, changedBy: input.createdBy },
         tx,
       );
 
+      if (start.closed) {
+        await this.crew.recordEnded(
+          created.id,
+          input.crew ?? [],
+          { by: input.createdBy, reason: start.reason, now },
+          tx,
+        );
+      }
       return created;
     });
+  }
+
+  /**
+   * A NEW trip's row, resolved and checked — every rule that does not depend
+   * on how the trip starts: catalogue, snapshot, timeline, the one-day rule.
+   *
+   * ★ AND THE CALENDAR POLICY OF THE INTENT (`calendarRefusal`). A booking is
+   * for work still to run, so a past day is refused and sent to "Nhập chuyến
+   * cũ"; a recorded run has ended, so neither its day nor any hour it gives may
+   * lie ahead. Create only: an overdue trip stays correctable, and nothing
+   * re-books it on an edit.
+   */
+  private async prepareEntry(input: CreateTripInput, tx: DatabaseQuery): Promise<TripScheduleValues> {
+    // No previous row, so every reference here is newly assigned and checked
+    // against the catalogue — and both ends are snapshotted from their places.
+    const values = await this.resolve(input, 'pending', tx, null, { pickup: true, delivery: true });
+
+    const refused = calendarRefusal(input.entryMode, values, new Date());
+    if (refused) {
+      throw new ValidationError(CALENDAR_REFUSALS[refused.reason], { [refused.field]: refused.reason });
+    }
+    return values;
   }
 
   /**
@@ -270,7 +337,9 @@ export class TripScheduleService {
         (key in patch ? patch[key] : current[key]) as CreateTripInput[K];
 
       const merged: CreateTripInput = {
-        scheduledOn: patch.scheduledOn ?? current.scheduledOn,
+        // As SENT, not merged: `boardDayFor` needs to know whether the patch
+        // named a day, and falls back to the stored one itself.
+        scheduledOn: patch.scheduledOn,
         customerId: sent('customerId'),
         cargoInfo: sent('cargoInfo'),
         pickupAddress: sent('pickupAddress'),
@@ -320,17 +389,10 @@ export class TripScheduleService {
         merged.deliveryLongitude = null;
       }
 
-      // ★ THE ROW'S EXISTING REFERENCE GOES WITH IT. `resolve` checks a
-      // reference against the catalogue only where it CHANGES, so retiring a
-      // customer does not freeze every trip that ever named them — see the
-      // comment on `resolve`.
-      const values = await this.resolve(
-        merged,
-        current.status,
-        tx,
-        { customerId: current.customerId },
-        resnapshot,
-      );
+      // ★ THE STORED ROW GOES WITH IT. `resolve` checks a reference, and the
+      // timeline, only where this write CHANGES them, so retiring a customer
+      // does not freeze every trip that ever named them — see `resolve`.
+      const values = await this.resolve(merged, current.status, tx, current, resnapshot);
 
       // ★ THE PATCH ROUTE CAN MOVE THE STATUS TOO, AND IT IS THE EASIER PATH
       // TO FORGET. `status` is a field of the create schema, so a general edit
@@ -430,9 +492,7 @@ export class TripScheduleService {
 
   private requireNotCompletionOnly(status: TripStatus): void {
     if (!isCompletionOnlyStatus(status)) return;
-    throw new ConflictError(
-      'A trip is completed by approving its completion request, not by setting its status.',
-    );
+    throw new ConflictError(COMPLETION_ONLY);
   }
 
   /**
@@ -497,15 +557,41 @@ export class TripScheduleService {
    * refused, on create and on update alike — that is F-002, and it is the case
    * this check exists for. Clearing a reference stays legal and always was: the
    * `if (id)` guard below skips `null`.
+   *
+   * ★ THE TIMELINE FOLLOWS THE SAME RULE. Delivery must come after pickup, on
+   * create and update alike — but only a write that MOVES either instant is
+   * held to it. A row typed backwards before the rule existed stays editable
+   * (an accountant pricing it must not be refused over a time they cannot
+   * change); correcting either time is what has to make it right.
    */
   private async resolve(
     input: CreateTripInput,
     fallbackStatus: TripStatus,
     tx: DatabaseQuery,
-    previous: { customerId: string | null } | null,
+    previous: TripSchedule | null,
     /** Which ends are copied afresh from their master place on this write. */
     resnapshot: { pickup: boolean; delivery: boolean },
   ): Promise<TripScheduleValues> {
+    const pickupAt = input.pickupAt ?? null;
+    const deliveryAt = input.deliveryAt ?? null;
+    const timesMoved =
+      instantMoved(pickupAt, previous?.pickupAt) || instantMoved(deliveryAt, previous?.deliveryAt);
+    if (timesMoved && deliversBeforePickup(pickupAt, deliveryAt)) {
+      throw new ValidationError('The delivery time must be after the pickup time.', {
+        deliveryAt: 'NOT_AFTER_PICKUP',
+      });
+    }
+
+    const board = boardDayFor({ pickupAt, scheduledOn: input.scheduledOn }, previous);
+    if (!board.ok) {
+      throw new ValidationError(
+        board.reason === 'DAY_REQUIRED'
+          ? 'A trip needs a pickup time or a day.'
+          : 'The day of a trip is its pickup day; change the pickup time instead.',
+        { scheduledOn: board.reason },
+      );
+    }
+
     const customerId = input.customerId ?? null;
     // `previous` is null on create, so `previous?.customerId` is `undefined` and
     // any id differs from it — the reference is checked, as it must be.
@@ -545,15 +631,15 @@ export class TripScheduleService {
     );
 
     return {
-      scheduledOn: input.scheduledOn,
+      scheduledOn: board.day,
       customerId,
       cargoInfo: blankToNull(input.cargoInfo),
       pickupAddress: pickup.address,
       deliveryAddress: delivery.address,
       pickupContact: pickup.contact,
       deliveryContact: delivery.contact,
-      pickupAt: input.pickupAt ?? null,
-      deliveryAt: input.deliveryAt ?? null,
+      pickupAt,
+      deliveryAt,
       pickupLatitude: pickup.latitude,
       pickupLongitude: pickup.longitude,
       deliveryLatitude: delivery.latitude,
@@ -649,6 +735,36 @@ export class TripScheduleService {
     };
   }
 }
+
+const COMPLETION_ONLY = 'A trip is completed by approving its completion request, not by setting its status.';
+
+/**
+ * How the create intent starts the trip, or the refusal — `initialLifecycle`
+ * decides; this says it. `finished` asked of a booking is the 409 the board
+ * gives; the other two are a body contradicting its own intent.
+ */
+const startOf = (input: CreateTripInput): Extract<InitialLifecycle, { ok: true }> => {
+  const start = initialLifecycle(input.entryMode, {
+    status: input.status,
+    crewSupplied: (input.crew?.length ?? 0) > 0,
+  });
+  if (start.ok) return start;
+  if (start.refusal === 'COMPLETION_ONLY') throw new ConflictError(COMPLETION_ONLY);
+  throw start.refusal === 'STATUS_SET_BY_ENTRY'
+    ? new ValidationError('A trip recorded after it ran is finished; it takes no status.', {
+        status: start.refusal,
+      })
+    : new ValidationError('A booking is crewed through the dispatch routes once it exists.', {
+        crew: start.refusal,
+      });
+};
+
+/** What each calendar refusal says — the field it concerns rides in `details`. */
+const CALENDAR_REFUSALS: Record<CalendarRefusal['reason'], string> = {
+  PAST_DAY: 'A new booking cannot run on a past day. Record a trip that already ran as a historical entry.',
+  FUTURE_DAY: 'A trip recorded as already run cannot be dated after today.',
+  FUTURE_INSTANT: 'A trip recorded as already run cannot pick up or deliver later than now.',
+};
 
 /** One end of a trip as it will be stored: the snapshot, and where it came from. */
 interface EndSnapshot {

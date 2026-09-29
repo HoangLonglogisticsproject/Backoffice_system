@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import { Archive, Pencil, Plus, Truck, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Modal } from '@/components/ui/modal';
 import { OffsetPagination } from '@/components/ui/pagination';
 import {
   Table,
@@ -16,7 +14,6 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { NoTripAccess } from '@/pages/trip/components/NoTripAccess';
 import { useSession } from '@/contexts/SessionProvider';
 import { useTripCatalogue, useTripSchedules } from '@/hooks/trip';
-import { archiveTripSchedule } from '@/api/tripSchedule';
 import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
 import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
@@ -35,8 +32,10 @@ import { TripStatusBadge } from './components/TripStatusBadge';
 import { TripStatusSelect } from './components/TripStatusSelect';
 import { TripCostModal } from './components/TripCostModal';
 import { TripCostCell } from './components/TripCostCell';
-import { TripSortControl } from './components/TripSortControl';
+import { TripRangeFilters } from './components/TripRangeFilters';
 import { DispatchPanel } from './components/DispatchPanel';
+import { ArchiveTripDialog } from './components/ArchiveTripDialog';
+import { Prose, Unset } from './components/TripCells';
 
 /**
  * The dispatch board — the screen that replaces `LỊCH XE - CHI PHÍ XE.xlsx`.
@@ -102,8 +101,9 @@ export default function TripSchedulePage() {
   const [assigningRow, setAssigningRow] = useState<TripScheduleWithRefs | null>(null);
 
   // The list, its date range and its page walk — see `useTripSchedules` for why
-  // those three are one hook and not three pieces of page state.
-  const trips = useTripSchedules();
+  // those three are one hook and not three pieces of page state. Lịch xe: every
+  // trip not yet finished; the finished ones are Lịch sử chuyến's.
+  const trips = useTripSchedules('operational');
 
   const assigning =
     assigningRow === null
@@ -175,51 +175,7 @@ export default function TripSchedulePage() {
           {trips.assignment === 'all' && <TripScheduleExportButton range={trips.range} />}
         </div>
 
-        {/*
-          Two groups on one row: the date range, and the order. The wider gap
-          between them is what says which controls belong together; when the
-          row runs out, the order wraps below as a whole.
-        */}
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-3 border-b border-gray-100 bg-gray-50/50 p-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex items-center gap-2">
-              <label htmlFor="trip-from" className="text-xs font-medium whitespace-nowrap text-gray-600">
-                {t('dateFrom')}
-              </label>
-              <Input
-                id="trip-from"
-                type="date"
-                value={trips.range.from}
-                onChange={(event) => trips.setFrom(event.target.value)}
-                className="h-9 w-[170px] bg-white"
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <label htmlFor="trip-to" className="text-xs font-medium whitespace-nowrap text-gray-600">
-                {t('dateTo')}
-              </label>
-              <Input
-                id="trip-to"
-                type="date"
-                value={trips.range.to}
-                onChange={(event) => trips.setTo(event.target.value)}
-                className="h-9 w-[170px] bg-white"
-              />
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9 bg-white"
-              onClick={trips.resetRange}
-            >
-              {t('thisMonth')}
-            </Button>
-          </div>
-
-          <TripSortControl value={trips.order} onChange={trips.setOrder} />
-        </div>
+        <TripRangeFilters trips={trips} />
 
         <div
           className={cn(
@@ -555,6 +511,9 @@ export default function TripSchedulePage() {
       <TripFormModal
         isOpen={formOpen}
         trip={editing}
+        // "Thêm chuyến" books work still to run; a past run is recorded from
+        // Lịch sử chuyến instead.
+        mode="operational"
         customers={catalogue.customers.items}
         // The same active lorries the dispatch panel offers, for the crew rows
         // on the create form. Dispatching is `dispatch.write`, which the create
@@ -677,19 +636,6 @@ function AssignmentTabs({
   );
 }
 
-/** A field the row genuinely has no value for — shown, not left blank. */
-function Unset() {
-  const { t } = useLanguage();
-  return <span className="text-gray-400">{t('notSelected')}</span>;
-}
-
-/** Every plate on the trip on one line, for a sentence that names the row. */
-const platesOf = (trip: TripScheduleWithRefs): string =>
-  trip.assignments
-    .map((turn) => (turn.vehicle ? formatPlate(turn.vehicle.plate) : ''))
-    .filter(Boolean)
-    .join('; ');
-
 /**
  * The board's row grain: one row per ACTIVE assignment, and exactly one row for
  * a trip with none — `[null]`, never `[]`, because an uncrewed trip is a
@@ -728,20 +674,6 @@ function Vehicle({
   );
 }
 
-/**
- * A multi-line cell from the workbook.
- *
- * `whitespace-pre-line` keeps the line breaks the source data has — an address
- * cell holds a company, a street, a ward and a phone on four lines — and the
- * width cap stops one long address from pushing every other column off screen.
- */
-function Prose({ value }: Readonly<{ value: string | null }>) {
-  if (!value) return <Unset />;
-  return (
-    <span className="block max-w-[22rem] whitespace-pre-line text-gray-700">{value}</span>
-  );
-}
-
 /** One end of a trip: where, who, and when. */
 function Leg({
   address,
@@ -763,75 +695,5 @@ function Leg({
       */}
       {at && <span className="block font-medium text-blue-700">{formatDateTime(at, language)}</span>}
     </div>
-  );
-}
-
-/**
- * Confirming an archive.
- *
- * ★ THE BODY SAYS WHAT ARCHIVING ACTUALLY DOES. The record is kept; the row
- * leaves the schedule. A dialog that said "delete permanently" would be false,
- * and one that said "remove" would leave the reader guessing which of the two
- * it meant — on an action they cannot undo from this screen.
- */
-function ArchiveTripDialog({
-  trip,
-  onClose,
-  onArchived,
-}: Readonly<{
-  trip: TripScheduleWithRefs | null;
-  onClose: () => void;
-  onArchived: () => void;
-}>) {
-  const { t, language } = useLanguage();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const confirm = async () => {
-    if (!trip) return;
-    setBusy(true);
-    setError(null);
-
-    try {
-      await archiveTripSchedule(trip.id);
-      onArchived();
-      onClose();
-    } catch (error_) {
-      setError(isApiError(error_) ? error_.message : t('saveFailed'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      isOpen={trip !== null}
-      onClose={onClose}
-      title={t('confirmArchiveTripTitle')}
-      footer={
-        <>
-          <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
-            {t('cancel')}
-          </Button>
-          <Button type="button" onClick={() => void confirm()} disabled={busy}>
-            {busy ? t('saving') : t('archive')}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-3">
-        <p className="text-sm text-gray-600">{t('confirmArchiveTripBody')}</p>
-        {trip && (
-          <p className="text-sm font-medium text-gray-900">
-            {`${formatCalendarDay(trip.scheduledOn, language)} · ${platesOf(trip) || '—'} · ${trip.customer?.name ?? '—'}`}
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-red-600">
-            {error}
-          </p>
-        )}
-      </div>
-    </Modal>
   );
 }

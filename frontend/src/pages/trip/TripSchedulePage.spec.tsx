@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripSchedulePage from './TripSchedulePage';
@@ -118,8 +118,9 @@ const trip = (over: Record<string, unknown> = {}) => ({
   deliveryAddress: 'TCS',
   pickupContact: null,
   deliveryContact: null,
-  pickupAt: null,
-  deliveryAt: null,
+  // 08:30 → 10:00 in Hồ Chí Minh: a valid timeline, so an edit can be saved.
+  pickupAt: '2026-08-04T01:30:00.000Z',
+  deliveryAt: '2026-08-04T03:00:00.000Z',
   price: null,
   note: null,
   status: 'confirmed',
@@ -163,6 +164,20 @@ const renderPage = () => {
     </QueryClientProvider>,
   );
 };
+
+/**
+ * The form's three temporal fields — the pickup DATE (compulsory), its hour and
+ * the delivery (both optional) — on a day that stays in the future, so the
+ * booking accepts it. Hours are on the business clock (Hồ Chí Minh).
+ */
+const fillTimes = (day = '2099-09-01', hour = '08:30', delivery = '2099-09-01T17:00') => {
+  fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: day } });
+  fireEvent.change(screen.getByLabelText('Giờ lấy hàng'), { target: { value: hour } });
+  fireEvent.change(screen.getByLabelText('Thời gian giao hàng'), { target: { value: delivery } });
+};
+
+/** An hour on a day in Hồ Chí Minh, as the ISO instant the API is sent. */
+const hcm = (day: string, hour: string): string => new Date(`${day}T${hour}:00+07:00`).toISOString();
 
 /**
  * What the dispatch board OFFERS, and what it says.
@@ -548,8 +563,9 @@ describe('TripSchedulePage', () => {
     // to every viewer west of UTC. The day is `04` and must stay `04`.
     renderPage();
 
-    const cell = await screen.findByText(/2026|4\/8|8\/4|04/);
-    expect(cell).toBeTruthy();
+    // All-of rather than one: the pickup and delivery cells carry the day too.
+    const cells = await screen.findAllByText(/2026|4\/8|8\/4|04/);
+    expect(cells.length).toBeGreaterThan(0);
     expect(screen.queryByText(/2026-08-03/)).toBeNull();
   });
 
@@ -592,9 +608,8 @@ describe('TripSchedulePage', () => {
       ]);
       renderPage();
       fireEvent.click(await screen.findByRole('button', { name: 'Thêm chuyến' }));
-      fireEvent.change(await screen.findByLabelText('Ngày chạy'), {
-        target: { value: '2026-09-01' },
-      });
+      await screen.findByLabelText('Ngày lấy hàng *');
+      fillTimes();
     };
 
     /** Adds a row and fills it; `''` leaves that half of the pair empty. */
@@ -798,7 +813,7 @@ describe('TripSchedulePage', () => {
       await screen.findByText(/đã tạo chuyến/i);
 
       // The dispatcher corrects the trip itself while they are here...
-      fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-15' } });
+      fireEvent.change(screen.getByLabelText('Giờ lấy hàng'), { target: { value: '09:15' } });
       // ...and puts a different driver on the lorry that was refused.
       const drivers = screen.getAllByLabelText('Chọn tài xế');
       expect(drivers).toHaveLength(1); // the row that landed is gone
@@ -811,7 +826,8 @@ describe('TripSchedulePage', () => {
       await waitFor(() => expect(updateTripSchedule).toHaveBeenCalledTimes(1));
       const [id, body] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
       expect(id).toBe('t1');
-      expect(body).toMatchObject({ scheduledOn: '2026-09-15' });
+      // The date and its hour travel as a pair, on the business clock.
+      expect(body).toMatchObject({ scheduledOn: '2099-09-01', pickupAt: hcm('2099-09-01', '09:15') });
 
       // Only the unassigned row is retried, carrying the correction.
       await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(3));
@@ -1113,7 +1129,7 @@ describe('TripSchedulePage', () => {
       // The typed-address fields for that end are gone: the place is the source.
       expect(screen.queryByLabelText('Địa chỉ lấy hàng')).toBeNull();
 
-      fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-01' } });
+      fillTimes();
       const saves = screen.getAllByRole('button', { name: 'Lưu' });
       fireEvent.click(saves[saves.length - 1]!);
 
@@ -1270,7 +1286,7 @@ describe('TripSchedulePage', () => {
         await openAddForm();
         await chooseCustomer('c9');
         await choose('Điểm giao hàng', 'l2');
-        fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-01' } });
+        fillTimes();
         const saves = screen.getAllByRole('button', { name: 'Lưu' });
         fireEvent.click(saves[saves.length - 1]!);
 
@@ -1325,7 +1341,7 @@ describe('TripSchedulePage', () => {
       await chooseCustomer('c9');
 
       fireEvent.change(screen.getByLabelText('Địa chỉ giao hàng'), { target: { value: 'Bãi tạm Q9' } });
-      fireEvent.change(screen.getByLabelText('Ngày chạy'), { target: { value: '2026-09-01' } });
+      fillTimes();
       const saves = screen.getAllByRole('button', { name: 'Lưu' });
       fireEvent.click(saves[saves.length - 1]!);
 
@@ -1841,6 +1857,143 @@ describe('TripSchedulePage', () => {
     });
   });
 
+  describe('★ the form’s timeline — Lịch xe books work still to run', () => {
+    const openCreate = async () => {
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+      await screen.findByLabelText('Ngày lấy hàng *');
+    };
+    const save = () => fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+    const delivery = () => screen.getByLabelText('Thời gian giao hàng') as HTMLInputElement;
+    const REFUSAL = 'Thời gian giao hàng phải sau thời gian lấy hàng.';
+
+    it('★ asks for the pickup DATE, and the hours only when they are known', async () => {
+      await openCreate();
+
+      expect(screen.getByRole('heading', { name: 'Tạo chuyến mới' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Ngày lấy hàng *')).toHaveAttribute('type', 'date');
+      expect(screen.getByLabelText('Ngày lấy hàng *')).toBeRequired();
+      expect(screen.getByLabelText('Giờ lấy hàng')).toHaveAttribute('type', 'time');
+      expect(screen.getByLabelText('Giờ lấy hàng')).not.toBeRequired();
+      expect(delivery()).toHaveAttribute('type', 'datetime-local');
+      expect(delivery()).not.toBeRequired();
+      expect(screen.queryByLabelText(/Ngày chạy/)).toBeNull();
+    });
+
+    it('★ books a DATE with no hour yet — no instant is invented', async () => {
+      await openCreate();
+      fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: '2099-09-23' } });
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+      expect(createTripSchedule.mock.calls[0]![0]).toMatchObject({
+        scheduledOn: '2099-09-23',
+        pickupAt: null,
+        deliveryAt: null,
+      });
+    });
+
+    it('★ refuses 17:36 → 16:36 on one day at the field, as it is typed — and sends nothing', async () => {
+      await openCreate();
+      fillTimes('2099-09-23', '17:36', '2099-09-23T16:36');
+
+      const message = screen.getByText(REFUSAL);
+      expect(delivery()).toHaveAttribute('aria-invalid', 'true');
+      expect(delivery().getAttribute('aria-describedby')).toContain(message.id);
+      // The browser's own validation holds it too: the submit stops on this field.
+      expect(delivery().validity.valid).toBe(false);
+
+      save();
+      // And a submit that never went through the browser's check.
+      fireEvent.submit(delivery().form!);
+      await act(async () => {});
+      expect(createTripSchedule).not.toHaveBeenCalled();
+    });
+
+    it('refuses a delivery at the pickup instant itself', async () => {
+      await openCreate();
+      fillTimes('2099-09-23', '17:36', '2099-09-23T17:36');
+
+      expect(screen.getByText(REFUSAL)).toBeInTheDocument();
+    });
+
+    it('★ accepts 17:36 → 16:36 the NEXT day, and sends the date with both instants', async () => {
+      await openCreate();
+      fillTimes('2099-09-23', '17:36', '2099-09-24T16:36');
+      expect(screen.queryByText(REFUSAL)).toBeNull();
+
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      expect(body).toMatchObject({
+        scheduledOn: '2099-09-23',
+        pickupAt: hcm('2099-09-23', '17:36'),
+        deliveryAt: hcm('2099-09-24', '16:36'),
+      });
+      // The one create route, told this is a booking.
+      expect(body).toMatchObject({ entryMode: 'operational' });
+      expect(body).not.toHaveProperty('crew');
+    });
+
+    it('★ sends a past date to “Nhập chuyến cũ” instead of booking it here', async () => {
+      await openCreate();
+      fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: '2020-09-23' } });
+
+      expect(screen.getByLabelText('Ngày lấy hàng *')).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByText(/Nhập chuyến cũ/)).toBeInTheDocument();
+
+      fireEvent.submit(delivery().form!);
+      await act(async () => {});
+      expect(createTripSchedule).not.toHaveBeenCalled();
+    });
+
+    it('★ corrects a record with no hours — the note alone — without asking for any', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ pickupAt: null, deliveryAt: null })],
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      });
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+      fireEvent.change(await screen.findByLabelText('Ghi chú'), { target: { value: 'đã đối chiếu' } });
+      save();
+
+      await waitFor(() => expect(updateTripSchedule).toHaveBeenCalledTimes(1));
+      const [, body] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+      expect(body).toMatchObject({ note: 'đã đối chiếu' });
+      for (const key of ['scheduledOn', 'pickupAt', 'deliveryAt']) expect(body).not.toHaveProperty(key);
+    });
+
+    it('★ refuses an edit that turns a valid trip backwards, and corrects an overdue one freely', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+      await screen.findByLabelText('Thời gian giao hàng');
+
+      // The fixture ran in August 2026 — long past — and it is still correctable.
+      expect(screen.queryByText(/Nhập chuyến cũ/)).toBeNull();
+
+      // The fixture picks up at 08:30 on 04/08; 07:00 the same day is before it.
+      fireEvent.change(delivery(), { target: { value: '2026-08-04T07:00' } });
+      expect(screen.getByText(REFUSAL)).toBeInTheDocument();
+      fireEvent.submit(delivery().form!);
+      await act(async () => {});
+      expect(updateTripSchedule).not.toHaveBeenCalled();
+    });
+
+    it('★ reads Lịch xe from the server — the finished trips are Lịch sử chuyến’s', async () => {
+      renderPage();
+      await screen.findByText('WWL');
+
+      expect(listCalls()[0]![0]).toMatchObject({ lifecycle: 'operational' });
+    });
+  });
+
   describe('the date filter', () => {
     it('★ does not fire a request per keystroke of the date input', async () => {
       // `<input type="date">` reports every COMPONENT of the date separately, so
@@ -2111,6 +2264,7 @@ describe('TripSchedulePage', () => {
       await screen.findByText('WWL');
       fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
       await screen.findByLabelText('Thông tin hàng');
+      fillTimes();
 
       fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
 
@@ -2230,6 +2384,7 @@ describe('TripSchedulePage', () => {
       // Grouped for reading; the payload below is what actually travels.
       expect(sell.value).toBe('4,500,000');
       expect(buy.value).toBe('3,000,000');
+      fillTimes();
 
       fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
 

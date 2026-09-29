@@ -227,6 +227,14 @@ describe('MainLayout', () => {
       expect(hrefOf('Tổng quan')).toBe('/organization/dashboard');
     });
 
+    it('★ puts Lịch sử chuyến beside Lịch xe under ĐIỀU PHỐI, for whoever reads trips', () => {
+      useSession.mockReturnValue({ ...ready('sales', 'MEMBER'), can: (p: string) => p === 'trip.read' });
+      renderLayout();
+
+      expect(hrefOf('Lịch xe')).toBe('/dispatch/trip-schedule');
+      expect(hrefOf('Lịch sử chuyến')).toBe('/dispatch/trip-history');
+    });
+
     it('★ gives a SUPERADMIN driver management and the request queue, under SYSTEM', () => {
       useSession.mockReturnValue(ready('boss', 'SUPERADMIN'));
       renderLayout();

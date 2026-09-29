@@ -18,8 +18,10 @@ import { DriverPortalService } from '../application/driver-portal.service';
 import { TripCompletionService } from '../application/trip-completion.service';
 import { TripCostService } from '../application/trip-cost.service';
 import { TripExecutionService } from '../application/trip-execution.service';
+import { DriverTripReadModelRepository } from '../persistence/driver-read-model.repository';
 import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
 import { ActiveAssignmentGuard } from './active-assignment.guard';
+import { ReadableAssignmentGuard } from './readable-assignment.guard';
 import { DriverPortalController } from './driver-portal.controller';
 
 /**
@@ -46,7 +48,9 @@ import { DriverPortalController } from './driver-portal.controller';
  * `'any'`) or say far too much (`trip.write` is `head-anywhere`, `cost.*` is
  * `global`). `ActiveAssignmentGuard` asks the only question that matters, and
  * these cases are what stop it being quietly replaced by a decorator that
- * looks tidier.
+ * looks tidier. The one READ of a turn asks `ReadableAssignmentGuard` — the
+ * same question, widened to the caller's turns on a finished trip, and no
+ * further: reading one grants no action on it.
  */
 describe('driver-portal HTTP security', () => {
   const TOKEN = 'a-session-token-value';
@@ -62,8 +66,15 @@ describe('driver-portal HTTP security', () => {
   const ASSIGNMENT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   /** Driver B's turn, on the SAME trip. A knows this id — that is the premise. */
   const ASSIGNMENT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  /** A turn driver A once held, ended before it started. */
+  /** A turn driver A once held, ended before it started — on a trip still open. */
   const ASSIGNMENT_ENDED = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  /**
+   * A turn driver A held on a trip that has since FINISHED — ended (replaced
+   * before the end, or recorded after the run). "Đã chạy xong" lists it.
+   */
+  const ASSIGNMENT_FINISHED = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  /** Driver B's turn on a finished trip. */
+  const ASSIGNMENT_B_FINISHED = 'bfbfbfbf-bfbf-4fbf-8fbf-bfbfbfbfbfbf';
   /** Never existed. */
   const ASSIGNMENT_MISSING = '77777777-7777-4777-8777-777777777777';
 
@@ -82,6 +93,7 @@ describe('driver-portal HTTP security', () => {
   let money: { declareCost: jest.Mock; editCost: jest.Mock };
   let completion: { submit: jest.Mock };
   let assignments: { findActiveById: jest.Mock };
+  let readModel: { findForDriver: jest.Mock };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: DRIVER_A,
@@ -120,6 +132,23 @@ describe('driver-portal HTTP security', () => {
       }),
     };
 
+    // The read side, faked at the same edge: `findForDriver` answers a turn only
+    // to its own driver, and only while it is readable (active, or on a
+    // finished trip) — as its SQL does. The ended turn on an open trip is
+    // neither, so it answers `null`, like a missing id.
+    const readable: Record<string, { driver: string; closed: boolean }> = {
+      [ASSIGNMENT_A]: { driver: DRIVER_A, closed: false },
+      [ASSIGNMENT_B]: { driver: DRIVER_B, closed: false },
+      [ASSIGNMENT_FINISHED]: { driver: DRIVER_A, closed: true },
+      [ASSIGNMENT_B_FINISHED]: { driver: DRIVER_B, closed: true },
+    };
+    readModel = {
+      findForDriver: jest.fn().mockImplementation(async (id: string, driver: string) => {
+        const row = readable[id];
+        return row?.driver === driver ? { tripId: TRIP, assignment: { id }, closed: row.closed } : null;
+      }),
+    };
+
     const moduleRef = await Test.createTestingModule({
       controllers: [DriverPortalController],
       providers: [
@@ -129,11 +158,13 @@ describe('driver-portal HTTP security', () => {
         DriverOnlyGuard,
         ProvisionedAccountGuard,
         ActiveAssignmentGuard,
+        ReadableAssignmentGuard,
         { provide: DriverPortalService, useValue: portal },
         { provide: TripExecutionService, useValue: execution },
         { provide: TripCostService, useValue: money },
         { provide: TripCompletionService, useValue: completion },
         { provide: DriverAssignmentRepository, useValue: assignments },
+        { provide: DriverTripReadModelRepository, useValue: readModel },
         { provide: AppConfig, useValue: { isProduction: true } },
         {
           provide: SessionService,
@@ -271,10 +302,40 @@ describe('driver-portal HTTP security', () => {
   describe('★ an assignment that has ended — even the caller’s own', () => {
     it.each<Route>(scopedRoutes(ASSIGNMENT_ENDED))('refuses %s %s with 403', async (method, path) => {
       // ADR-0004: nothing may be reported, declared or asked against a turn
-      // that is over. The guard reads only ACTIVE rows, so an ended one is
-      // indistinguishable from a missing one.
+      // that is over. The write guard reads only ACTIVE rows, and the read
+      // guard adds only turns on a FINISHED trip — this one's trip is open —
+      // so an ended turn is indistinguishable from a missing one.
       const response = await authed(method, path).send(anyBody);
       expect(response.status).toBe(403);
+    });
+  });
+
+  describe('★ the caller’s own turn on a FINISHED trip — readable, never actionable', () => {
+    it('opens it: "Đã chạy xong" links here, and the read must follow the list', async () => {
+      await authed('get', `/driver/assignments/${ASSIGNMENT_FINISHED}`).expect(200);
+
+      expect(readModel.findForDriver).toHaveBeenCalledWith(ASSIGNMENT_FINISHED, DRIVER_A);
+      expect(portal.findMyAssignment).toHaveBeenCalledWith(ASSIGNMENT_FINISHED, DRIVER_A);
+    });
+
+    it.each<Route>(scopedRoutes(ASSIGNMENT_FINISHED).filter(([method]) => method !== 'get'))(
+      '★ still refuses %s %s with 403 — reading a turn grants no action on it',
+      async (method, path) => {
+        const response = await authed(method, path).send(anyBody);
+
+        expect(response.status).toBe(403);
+        noWriteHappened();
+      },
+    );
+
+    it("★ never opens driver B's finished turn to A — and answers as for a missing id", async () => {
+      const foreign = await authed('get', `/driver/assignments/${ASSIGNMENT_B_FINISHED}`).send();
+      const missing = await authed('get', `/driver/assignments/${ASSIGNMENT_MISSING}`).send();
+
+      expect(foreign.status).toBe(403);
+      expect(foreign.body.error.code).toBe(missing.body.error.code);
+      expect(missing.status).toBe(403);
+      noWriteHappened();
     });
   });
 
@@ -776,7 +837,7 @@ describe('driver-portal HTTP security', () => {
     });
 
     it('★ answers a malformed assignment id with 403, not 422', async () => {
-      // Guards run BEFORE pipes in Nest, so `ActiveAssignmentGuard` sees the
+      // Guards run BEFORE pipes in Nest, so the assignment guard sees the
       // raw string, finds no assignment for it and refuses. That ordering is
       // the better one and worth pinning: a 422 would tell an unauthorized
       // caller that their id was merely misspelt, which is one bit more than

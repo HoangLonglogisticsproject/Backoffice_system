@@ -162,4 +162,15 @@ export interface DriverTripDetail extends DriverTrip {
    * all: a driver told only "rejected" has nothing to correct.
    */
   completion: CompletionRequest | null;
+
+  /**
+   * ★ THE TRIP THIS TURN BELONGS TO IS FINISHED — the screen is a record now.
+   *
+   * A boolean, not the dispatch status (which stays out of this file): it is
+   * what "Đã chạy xong" already tells the driver about every row it lists, and
+   * the one fact the handset needs to draw no action. PRESENTATION ONLY — no
+   * write path reads it. An ended turn is refused by `ActiveAssignmentGuard`,
+   * and an active turn on a closed trip by each service's closed-trip check.
+   */
+  closed: boolean;
 }

@@ -67,7 +67,7 @@ export class DriverPortalService {
     });
 
     const trips = rows.slice(0, limit);
-    const last = trips[trips.length - 1];
+    const last = trips.at(-1);
 
     return {
       trips,
@@ -101,10 +101,9 @@ export class DriverPortalService {
   async findMyAssignment(assignmentId: string, driverUserId: string): Promise<DriverTripDetail> {
     const trip = await this.trips.findForDriver(assignmentId, driverUserId);
     // An assignment that exists but belongs to somebody else answers exactly as
-    // one that does not exist. The guard has already refused this caller, so
-    // reaching here means the turn ended between the two — but the reasoning
-    // holds either way: "not found" tells them nothing about work that is not
-    // theirs.
+    // one that does not exist. The guard asked this same statement, so reaching
+    // here means the row changed between the two — but the reasoning holds
+    // either way: "not found" tells them nothing about work that is not theirs.
     if (!trip) throw new NotFoundError('Assignment not found.');
 
     const [events, expenses, requests] = await Promise.all([

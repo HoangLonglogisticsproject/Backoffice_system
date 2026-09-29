@@ -1,3 +1,4 @@
+import { entryCrewOn } from '../helpers/trip-board-fixture';
 import { Pool } from 'pg';
 import {
   TEST_URL,
@@ -98,6 +99,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       new TripCustomerRepository(database),
       new TripStatusHistoryRepository(database),
       new TripLocationRepository(database),
+      entryCrewOn(database),
     );
     money = new TripCostService(
       database,
@@ -590,6 +592,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       // The crew filter and the order the controller's pipe defaults in.
       // Irrelevant to money, but the board's query carries them now.
       assignment: 'all' as const,
+      lifecycle: 'operational' as const,
       ...DEFAULT_TRIP_BOARD_ORDER,
     });
 

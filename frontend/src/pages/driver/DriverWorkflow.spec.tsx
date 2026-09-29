@@ -104,6 +104,7 @@ const trip = (over: Record<string, unknown> = {}) => ({
   expenses: [],
   accountability: 'NOT_DECLARED',
   completion: null,
+  closed: false,
   ...over,
 });
 

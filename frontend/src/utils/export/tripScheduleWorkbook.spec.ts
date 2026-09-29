@@ -47,13 +47,13 @@ describe('downloadTripScheduleWorkbook — the cost block in the file', () => {
   beforeEach(() => writeFile.mockReset());
 
   /** Three rows: recorded costs (one fractional), no figure at all, and a counted zero. */
-  const exportTwo = async (includeCosts: boolean) => {
+  const exportTwo = async (includeCosts: boolean, lifecycle: 'operational' | 'history' = 'operational') => {
     const counted = { total: '600000.50', itemCount: 3, hires: '0.00', byCategory: { ...ZERO, fuel: '600000.50' } };
     const nothingRecorded = { total: '0.00', itemCount: 0, hires: '0.00', byCategory: ZERO };
     return downloadTripScheduleWorkbook({
       trips: [trip('t1', counted), trip('t2', null), trip('t3', nothingRecorded)],
       t, language: 'vi', range: { from: '2026-08-01', to: '2026-08-31' },
-      includePrices: true, includeCosts,
+      includePrices: true, includeCosts, lifecycle,
     });
   };
 
@@ -97,6 +97,43 @@ describe('downloadTripScheduleWorkbook — the cost block in the file', () => {
 
   it('★ writes no cost column at all without cost.read', async () => {
     await exportTwo(false);
+    const { columns, widths } = written();
+
+    expect([...columns.keys()]).not.toContain('Tổng chi phí chuyến');
+    expect(widths).toBe(columns.size);
+  });
+});
+
+describe('downloadTripScheduleWorkbook — Lịch sử chuyến', () => {
+  beforeEach(() => writeFile.mockReset());
+
+  const exportHistory = (includeCosts: boolean) =>
+    downloadTripScheduleWorkbook({
+      trips: [trip('t1', { total: '800000.00', itemCount: 1, hires: '0.00', byCategory: { ...ZERO, fuel: '800000.00' } })],
+      t, language: 'vi', range: { from: '2026-08-01', to: '2026-08-31' },
+      includePrices: true, includeCosts, lifecycle: 'history',
+    });
+
+  it('★ names the file and the sheet after the screen it came from', async () => {
+    await exportHistory(true);
+    const [book, fileName] = writeFile.mock.calls[0] as [WorkBook, string];
+
+    expect(fileName).toBe('lich-su-chuyen_2026-08-01_2026-08-31.xlsx');
+    expect(book.SheetNames).toEqual(['Lịch sử chuyến']);
+  });
+
+  it('★ drops the status column — every row is finished — and keeps the money, numeric', async () => {
+    await exportHistory(true);
+    const { columns, widths } = written();
+
+    expect([...columns.keys()]).not.toContain('Trạng thái');
+    expect(columns.get('Dầu')?.[0]).toMatchObject({ t: 'n', v: 800000, z: '#,##0' });
+    expect(columns.get('Giá cước bán')?.[0]).toMatchObject({ t: 'n', v: 6000000 });
+    expect(widths).toBe(columns.size);
+  });
+
+  it('writes no cost column without the export key, on this screen too', async () => {
+    await exportHistory(false);
     const { columns, widths } = written();
 
     expect([...columns.keys()]).not.toContain('Tổng chi phí chuyến');

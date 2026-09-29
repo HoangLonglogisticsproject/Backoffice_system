@@ -3,11 +3,13 @@ import { DATABASE, type Database, type DatabaseQuery } from '../../../common/typ
 import {
   TripAssignmentFilter,
   TripAssignmentRef,
+  TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
   TripStatus,
 } from '../domain/trip-schedule';
 import type { TripBoardOrder } from '../domain/trip-board';
+import { HISTORICAL_ENTRY_REASON } from '../domain/trip-status-history';
 import { orderBySql } from './trip-board-order';
 
 /**
@@ -75,6 +77,27 @@ const ASSIGNMENT_PREDICATE: Record<TripAssignmentFilter, string> = {
   unassigned: `AND NOT EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
   assigned: `AND EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
 };
+
+/**
+ * Lịch xe or Lịch sử chuyến, in SQL — the same trusted-map shape as above.
+ * Exported because every OPERATIONAL read says it the same way (the dispatch
+ * board here, the operational board beside it): one predicate, not two.
+ * A predicate on the row itself: no join, so each trip is still one row, and
+ * it filters the same bounded range `idx_trip_schedule_page` already reads.
+ */
+export const LIFECYCLE_PREDICATE: Record<TripLifecycle, string> = {
+  operational: `AND t.status <> 'finished'`,
+  history: `AND t.status = 'finished'`,
+};
+
+/** What narrows a board read on top of its range. */
+export interface BoardFilter {
+  assignment: TripAssignmentFilter;
+  lifecycle: TripLifecycle;
+}
+
+const filterSql = ({ assignment, lifecycle }: BoardFilter): string =>
+  `${ASSIGNMENT_PREDICATE[assignment]} ${LIFECYCLE_PREDICATE[lifecycle]}`;
 
 /** One element of the `assignments` JSON array the read below aggregates. */
 interface AssignmentJson {
@@ -201,6 +224,17 @@ const tripColumns = (alias: 't.' | ''): string =>
 const RETURNING_TRIP = `RETURNING ${tripColumns('')}`;
 
 /**
+ * Which turns are the trip's crew: every ACTIVE one — and, on a trip recorded
+ * after it ran, the pairs it was recorded with. Those are written `ended`
+ * (`TripEntryCrew`), so no driver portal or operational board treats
+ * a finished run as work; `finished` + the entry's own mark is what tells them
+ * apart from a turn somebody ended by hand. A trusted constant, not input.
+ */
+const IS_CREW = `(a.state = 'active'
+                   OR (t.status = 'finished' AND a.state = 'ended'
+                       AND a.end_reason = '${HISTORICAL_ENTRY_REASON}'))`;
+
+/**
  * The read projection: the row, the customer name, the author, the crew.
  *
  * ★ THE CREW IS AGGREGATED, NOT JOINED. A trip carries 0..N active assignments
@@ -243,7 +277,7 @@ const tripsWithRefs = (extraSelect = ''): string => `
         FROM trip_driver_assignments a
         JOIN users du ON du.id = a.driver_user_id
         LEFT JOIN trip_vehicles v ON v.id = a.vehicle_id
-       WHERE a.trip_id = t.id AND a.state = 'active'
+       WHERE a.trip_id = t.id AND ${IS_CREW}
     ) crew ON true
     LEFT JOIN trip_locations pl ON pl.id = t.pickup_location_id
     LEFT JOIN trip_locations dl ON dl.id = t.delivery_location_id`;
@@ -355,7 +389,7 @@ export class TripScheduleRepository {
    */
   async listPage(
     range: DateRange,
-    assignment: TripAssignmentFilter,
+    filter: BoardFilter,
     order: TripBoardOrder,
     limit: number,
     offset: number,
@@ -366,7 +400,7 @@ export class TripScheduleRepository {
          WHERE t.archived_at IS NULL
            AND t.scheduled_on >= $1::date
            AND t.scheduled_on <= $2::date
-           ${ASSIGNMENT_PREDICATE[assignment]}
+           ${filterSql(filter)}
          ${orderBySql(order)}
          LIMIT $3 OFFSET $4`,
       [range.from, range.to, limit, offset],
@@ -393,7 +427,7 @@ export class TripScheduleRepository {
    */
   async countInRange(
     range: DateRange,
-    assignment: TripAssignmentFilter,
+    filter: BoardFilter,
     executor: DatabaseQuery = this.db,
   ): Promise<number> {
     const rows = await executor.query<{ total: string }>(
@@ -402,7 +436,7 @@ export class TripScheduleRepository {
         WHERE t.archived_at IS NULL
           AND t.scheduled_on >= $1::date
           AND t.scheduled_on <= $2::date
-          ${ASSIGNMENT_PREDICATE[assignment]}`,
+          ${filterSql(filter)}`,
       [range.from, range.to],
     );
     return Number(rows[0]?.total ?? 0);
@@ -459,6 +493,30 @@ export class TripScheduleRepository {
     input: TripScheduleValues & { createdBy: string },
     executor: DatabaseQuery = this.db,
   ): Promise<TripSchedule> {
+    return this.insert(input, null, executor);
+  }
+
+  /**
+   * ★ A TRIP BORN FINISHED — the historical entry's row, and nothing else's.
+   *
+   * Status, closing stamp and row in ONE statement: there is no instant at
+   * which the recorded trip exists open, and 0017's both-or-neither CHECK sees
+   * the stamp arrive whole. `closedAt` is when it was recorded, never when it
+   * ran — that is `pickup_at` / `delivery_at`.
+   */
+  async createFinished(
+    input: TripScheduleValues & { createdBy: string },
+    closedAt: Date,
+    executor: DatabaseQuery,
+  ): Promise<TripSchedule> {
+    return this.insert({ ...input, status: 'finished' }, { by: input.createdBy, at: closedAt }, executor);
+  }
+
+  private async insert(
+    input: TripScheduleValues & { createdBy: string },
+    closing: { by: string; at: Date } | null,
+    executor: DatabaseQuery,
+  ): Promise<TripSchedule> {
     const rows = await executor.query<TripRow>(
       `INSERT INTO trip_schedules
          (scheduled_on, customer_id, cargo_info,
@@ -466,11 +524,11 @@ export class TripScheduleRepository {
           pickup_at, delivery_at, note, status,
           pickup_latitude, pickup_longitude, delivery_latitude, delivery_longitude,
           pickup_location_id, delivery_location_id, sell_price, purchase_price,
-          created_by)
+          created_by, closed_by, closed_at)
        VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               $12, $13, $14, $15, $16, $17, $18, $19, $20)
+               $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
        ${RETURNING_TRIP}`,
-      [...valueParams(input), input.createdBy],
+      [...valueParams(input), input.createdBy, closing?.by ?? null, closing?.at ?? null],
     );
 
     const row = rows[0];

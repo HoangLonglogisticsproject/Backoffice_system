@@ -26,6 +26,7 @@ import {
 } from '../domain/trip-execution';
 import { isRecordableAmount, TRIP_COST_CATEGORIES } from '../domain/trip-cost';
 import { ActiveAssignmentGuard } from './active-assignment.guard';
+import { ReadableAssignmentGuard } from './readable-assignment.guard';
 
 /**
  * The Driver Portal's whole API surface.
@@ -242,9 +243,16 @@ export class DriverPortalController {
     });
   }
 
-  /** One assignment, whitelisted — see `DriverTrip` for what is absent and why. */
+  /**
+   * One assignment, whitelisted — see `DriverTrip` for what is absent and why.
+   *
+   * ★ `ReadableAssignmentGuard`, NOT `ActiveAssignmentGuard`: the only route
+   * here that READS one turn. It opens every card either list shows — live
+   * work, and a turn on a finished trip (`closed: true`, drawn read-only). The
+   * four routes below act, and keep the active-only guard.
+   */
   @Get('assignments/:assignmentId')
-  @UseGuards(AuthGuard, DriverOnlyGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, DriverOnlyGuard, ReadableAssignmentGuard)
   async findMyAssignment(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @CurrentUser() actor: SessionUser,

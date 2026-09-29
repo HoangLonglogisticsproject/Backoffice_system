@@ -61,10 +61,10 @@ const HEAD = ['trip.read', 'trip.price.read'];
 const DISPATCHER = ['trip.read'];
 const vi_ = (key: Parameters<typeof translate>[1]) => translate('vi', key);
 
-const renderButton = () =>
+const renderButton = (lifecycle?: 'operational' | 'history') =>
   render(
     <LanguageProvider>
-      <TripScheduleExportButton range={RANGE} />
+      <TripScheduleExportButton range={RANGE} lifecycle={lifecycle} />
     </LanguageProvider>,
   );
 
@@ -89,7 +89,20 @@ describe('TripScheduleExportButton', () => {
     fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
 
     await waitFor(() =>
-      expect(fetchAllTripSchedules).toHaveBeenCalledWith({ ...RANGE, assignment: 'all' }),
+      expect(fetchAllTripSchedules).toHaveBeenCalledWith({ ...RANGE, assignment: 'all', lifecycle: 'operational' }),
+    );
+  });
+
+  it('★ on Lịch sử chuyến, reads and writes Lịch sử chuyến — never the board', async () => {
+    renderButton('history');
+
+    fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
+
+    await waitFor(() =>
+      expect(fetchAllTripSchedules).toHaveBeenCalledWith({ ...RANGE, assignment: 'all', lifecycle: 'history' }),
+    );
+    await waitFor(() =>
+      expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'history' })),
     );
   });
 

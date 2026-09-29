@@ -71,19 +71,23 @@ describe('trip_schedules.status — the write paths', () => {
   });
 
   it('refuses `finished` on every route the dispatch board offers', async () => {
-    // Both ordinary paths run through `requireDispatchTransition`, and creation
-    // runs through the same guard it delegates to — so a trip can neither be
-    // moved to `finished` nor born that way.
+    // Both ordinary paths run through `requireDispatchTransition`; creation
+    // resolves its start through `initialLifecycle`, which refuses a booking
+    // asking for `finished` by the same `isCompletionOnlyStatus` — so a trip
+    // can neither be MOVED to `finished` nor BOOKED that way.
     const service = code(await read('application', 'trip-schedule.service.ts'));
+    const lifecycle = code(await read('domain', 'trip-status-history.ts'));
 
-    expect(service).toContain('this.requireNotCompletionOnly(values.status)');
     expect(service.match(/requireDispatchTransition\(/g)).toHaveLength(3);
     expect(service).toContain('isCompletionOnlyStatus');
+    expect(service).toContain('initialLifecycle(');
+    expect(lifecycle).toContain("if (isCompletionOnlyStatus(status)) return { ok: false, refusal: 'COMPLETION_ONLY' };");
   });
 
   it('has no second implementation of closing a trip', async () => {
-    // `markClosed` writes `closed_at`/`closed_by`. Closing belongs to approval,
-    // and a copy of it elsewhere is an answer waiting to drift from the first.
+    // `markClosed` writes `closed_at`/`closed_by`. Closing a trip that RAN on
+    // the board belongs to approval, and a copy of it elsewhere is an answer
+    // waiting to drift from the first.
     const callers: string[] = [];
 
     for (const folder of ['api', 'application']) {
@@ -93,6 +97,36 @@ describe('trip_schedules.status — the write paths', () => {
     }
 
     expect(callers).toEqual(['application/trip-completion.service.ts']);
+  });
+
+  it('★ is BORN finished by exactly one statement, and only for a run recorded after it ended', async () => {
+    // The second way into `finished`, sanctioned and single: the create
+    // intent `historical`. It creates the row finished and stamped in one
+    // statement — it never MOVES a trip there, so the approval rule above stays
+    // whole. The client names the intent; only `initialLifecycle` turns that
+    // into `closed`, and only for `historical`.
+    const callers: string[] = [];
+    for (const folder of ['api', 'application']) {
+      for (const file of await listFiles(folder)) {
+        if (/createFinished\(/.test(code(await read(folder, file)))) callers.push(`${folder}/${file}`);
+      }
+    }
+    expect(callers).toEqual(['application/trip-schedule.service.ts']);
+
+    const service = code(await read('application', 'trip-schedule.service.ts'));
+    expect(service).toContain('start.closed');
+    const lifecycle = code(await read('domain', 'trip-status-history.ts'));
+    // The value, not the type: one place writes `closed: true,`.
+    expect(lifecycle.match(/closed: true,/g)).toHaveLength(1);
+    expect(lifecycle).toMatch(/mode === 'historical'[\s\S]{0,200}closed: true,/);
+  });
+
+  it('★ writes a recorded crew as history — never an ACTIVE turn, never an invented execution', async () => {
+    const crew = code(await read('application', 'trip-entry-crew.ts'));
+
+    expect(crew.match(/this\.assignments\.assign\(/g)).toHaveLength(1);
+    expect(crew.match(/this\.assignments\.end\(/g)).toHaveLength(1);
+    expect(crew).not.toMatch(/updateStatus\(|markClosed\(|completion|recordEvent|notification/i);
   });
 });
 
@@ -259,20 +293,29 @@ describe("★ the driver read model — what cannot leave", () => {
 });
 
 describe('★ driver write routes — resource scope', () => {
-  it('guards every route that names an assignment', async () => {
+  it('guards every route that names an assignment — to ACT on an active turn, to READ one of its own', async () => {
     const controller = await read('api', 'driver-portal.controller.ts');
     const routes = [...controller.matchAll(/@(Get|Post|Patch)\('([^']*)'\)/g)];
     const guards = [...controller.matchAll(/@UseGuards\(([^)]*)\)/g)].map((m) => m[1]);
 
     expect(routes).toHaveLength(guards.length);
 
+    const guardOf = (on: string): string => {
+      if (on.includes('ActiveAssignmentGuard')) return 'active';
+      if (on.includes('ReadableAssignmentGuard')) return 'readable';
+      return 'none';
+    };
+    const expectedFor = (method: string, path: string): string => {
+      // The lists name no `:assignmentId` — their scope IS the session user.
+      if (!path.includes(':assignmentId')) return 'none';
+      // ★ Only the one read of a turn may take the wider guard: reading a
+      // finished turn never widens what may be ACTED on.
+      return method === 'Get' ? 'readable' : 'active';
+    };
+
     routes.forEach((match, index) => {
-      // The one route without the guard is the list, which has no
-      // `:assignmentId` to check — its scope IS the session user.
-      const path = match[2] ?? '';
-      const needsGuard = path.includes(':assignmentId');
-      const guarded = (guards[index] ?? '').includes('ActiveAssignmentGuard');
-      expect([path, guarded]).toEqual([path, needsGuard]);
+      const [, method = '', path = ''] = match;
+      expect([method, path, guardOf(guards[index] ?? '')]).toEqual([method, path, expectedFor(method, path)]);
     });
   });
 

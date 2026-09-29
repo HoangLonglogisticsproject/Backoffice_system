@@ -5,7 +5,7 @@ import { useSession } from '@/contexts/SessionProvider';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useOffsetPages, type OffsetPages } from '@/hooks/useOffsetPages';
 import { currentMonthRange } from '@/utils/format/datetime';
-import type { TripAssignmentFilter } from '@/types/trip';
+import type { TripAssignmentFilter, TripLifecycle } from '@/types/trip';
 import { DEFAULT_TRIP_BOARD_ORDER, type TripBoardOrder, type TripBoardRow } from '@/types/tripBoard';
 import { tripKeys, type TripBoardListFilter } from './keys';
 import { boardListRequest, unassignedCountRequest, withoutRows } from './tripBoardQuery';
@@ -31,7 +31,8 @@ export interface TripSchedules extends OffsetPages<TripBoardRow> {
   setOrder: (order: TripBoardOrder) => void;
   /**
    * How many trips in the range still have nobody on them — the number on the
-   * tab, whichever tab is open. `null` until it has been read once.
+   * tab, whichever tab is open. `null` until it has been read once, and always
+   * on Lịch sử chuyến, which has no crew queue.
    */
   unassignedCount: number | null;
   /** Re-read the list — after a save or an archive. */
@@ -60,7 +61,9 @@ const SCHEDULE_STALE_MS = 30 * 1000;
 const FILTER_DEBOUNCE_MS = 300;
 
 /**
- * The dispatch board's list: the date range, the page walk, and the reload.
+ * The dispatch board's list: the date range, the page walk, and the reload —
+ * for Lịch xe or, with `lifecycle: 'history'`, Lịch sử chuyến. One hook for
+ * both, because they are the same list split at `finished` by the server.
  *
  * ★ THE RANGE LIVES HERE, NOT IN THE PAGE, because it is not a display
  * preference — it is half the query. `GET /trip-schedules` is offset-paginated
@@ -88,7 +91,7 @@ const FILTER_DEBOUNCE_MS = 300;
  * the debounce passes that first value straight through rather than delaying
  * the initial load by 300ms.
  */
-export function useTripSchedules(): TripSchedules {
+export function useTripSchedules(lifecycle: TripLifecycle = 'operational'): TripSchedules {
   const queryClient = useQueryClient();
   const { state, can } = useSession();
 
@@ -100,7 +103,7 @@ export function useTripSchedules(): TripSchedules {
   // The list's identity: its cache key, and — through `boardListRequest` — its
   // request. `costs` keeps a page fetched with money apart from one fetched
   // without; see `tripKeys.scheduleList`.
-  const filter: TripBoardListFilter = { ...queried, assignment, ...order, costs: can('cost.read') };
+  const filter: TripBoardListFilter = { ...queried, assignment, lifecycle, ...order, costs: can('cost.read') };
 
   const pages = useOffsetPages<TripBoardRow>(
     tripKeys.scheduleList(filter),
@@ -125,7 +128,7 @@ export function useTripSchedules(): TripSchedules {
   const count = useQuery({
     queryKey: tripKeys.unassignedCount(queried),
     queryFn: async () => withoutRows(await fetchTripSchedules(unassignedCountRequest(queried))),
-    enabled: state?.status === 'ready',
+    enabled: state?.status === 'ready' && lifecycle === 'operational',
     staleTime: SCHEDULE_STALE_MS,
     select: (page) => page.total,
   });

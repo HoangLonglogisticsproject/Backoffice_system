@@ -53,7 +53,11 @@ export const OPERATIONAL_STAGES = [
   'COMPLETION_PENDING',
   /** Sent back. The driver has to correct something and ask again. */
   'COMPLETION_REJECTED',
-  /** Approved and closed. */
+  /**
+   * THIS turn approved. On the operational board it is a turn done while its
+   * trip still has others open — a trip whose last turn is approved is
+   * finished, and finished trips are History, not this board.
+   */
   'DONE',
 ] as const;
 
