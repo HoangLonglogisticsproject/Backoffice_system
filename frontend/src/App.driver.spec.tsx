@@ -37,6 +37,10 @@ vi.mock('@/api/notifications', () => ({
 vi.mock('@/api/driverPortal', () => ({
   fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),
   fetchMyAssignment: (...a: unknown[]) => fetchMyAssignment(...a),
+  // Present so the module mock stays a complete stand-in: the hooks file
+  // imports it at load, and a missing export would be `undefined` waiting for
+  // the first test that happens to render the history screen.
+  fetchMyHistory: vi.fn().mockResolvedValue({ trips: [], nextCursor: null }),
   recordExecutionEvent: vi.fn(),
   declareExpense: vi.fn(),
   editExpense: vi.fn(),
@@ -184,16 +188,20 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
 
 /**
  * ★ ITS OWN PHONE-FIRST SHELL, NOT `AppShell` (DL-114). A top bar that says
- * whose portal it is, the driver's three destinations where a thumb reaches
+ * whose portal it is, the driver's four destinations where a thumb reaches
  * them, and nothing the Backoffice offers — no sidebar, no drawer.
  */
 describe('★ the driver’s application shell', () => {
-  it('draws the driver’s three destinations, and only those', async () => {
+  it('draws the driver’s four destinations, and only those', async () => {
     renderAt('/driver');
     await screen.findByText('Bạn chưa có chuyến nào hôm nay.');
 
-    expect(within(driverNav()).getAllByRole('link')).toHaveLength(3);
+    // The count is asserted, not just the four names: the menu must not grow a
+    // link to a screen the server would answer 403 to, and a menu that offers
+    // what the server refuses is worse than no menu.
+    expect(within(driverNav()).getAllByRole('link')).toHaveLength(4);
     expect(navLink('Lịch làm việc')).toHaveAttribute('href', '/driver');
+    expect(navLink('Đã chạy xong')).toHaveAttribute('href', '/driver/history');
     expect(navLink(/^Thông báo/)).toHaveAttribute('href', '/driver/notifications');
     expect(navLink('Hồ sơ')).toHaveAttribute('href', '/driver/account/security');
   });

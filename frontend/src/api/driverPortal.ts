@@ -1,6 +1,8 @@
 import { httpClient } from './client';
 import type {
   CompletionRequest,
+  DriverHistoryCursor,
+  DriverHistoryPage,
   DriverTrip,
   DriverTripDetail,
   ExecutionEvent,
@@ -58,6 +60,28 @@ const READ_TIMEOUT_MS = 10_000;
 /** Every turn this driver holds — one per lorry, one card each on the schedule. */
 export async function fetchMyAssignments(): Promise<DriverTrip[]> {
   const { data } = await httpClient.get<DriverTrip[]>('/driver/assignments', { timeout: READ_TIMEOUT_MS });
+  return data;
+}
+
+/**
+ * The trips this driver has already run to the end, newest first.
+ *
+ * ★ NO PARAMETER NAMES A DRIVER, HERE OR ANYWHERE IN THIS FILE. The scope is
+ * the session; the cursor only says where to resume, so it can move this
+ * driver's own window and nothing else.
+ */
+export async function fetchMyHistory(
+  params: { limit?: number; before?: DriverHistoryCursor | null } = {},
+): Promise<DriverHistoryPage> {
+  const { data } = await httpClient.get<DriverHistoryPage>('/driver/history', {
+    timeout: READ_TIMEOUT_MS,
+    // Both halves of the cursor or neither — the server refuses half of one
+    // rather than quietly serving the first page again.
+    params: {
+      ...(params.limit === undefined ? {} : { limit: params.limit }),
+      ...(params.before ? { before: params.before.assignedAt, beforeId: params.before.id } : {}),
+    },
+  });
   return data;
 }
 

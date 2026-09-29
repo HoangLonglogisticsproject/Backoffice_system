@@ -1,15 +1,26 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   declareExpense,
   editExpense,
   fetchMyAssignment,
   fetchMyAssignments,
+  fetchMyHistory,
   recordExecutionEvent,
   submitCompletion,
   type DeclareExpenseInput,
   type RecordEventInput,
 } from '@/api/driverPortal';
-import type { DriverTrip, DriverTripDetail, ExpenseDeclaration } from '@/types/driver';
+import type {
+  DriverHistoryCursor,
+  DriverTrip,
+  DriverTripDetail,
+  ExpenseDeclaration,
+} from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
 import { isFinalRefusal } from '@/utils/driverErrors';
 import { ApiError, isApiError } from '@/utils/errors';
@@ -38,6 +49,13 @@ export const driverKeys = {
   all: ['driver'] as const,
   assignments: () => [...driverKeys.all, 'assignments'] as const,
   assignment: (assignmentId: string) => [...driverKeys.assignments(), assignmentId] as const,
+  /**
+   * ★ NOT UNDER `assignments()`. Finishing a trip removes it from the live list
+   * and adds it to this one, and every mutation invalidates `assignments()` —
+   * nesting history beneath it would throw away every page the driver had
+   * scrolled each time they tapped anything.
+   */
+  history: () => [...driverKeys.all, 'history'] as const,
 };
 
 const asApiError = (error: unknown): ApiError | null => {
@@ -78,6 +96,53 @@ export function useMyAssignments(): {
     assignments: query.data ?? [],
     loading: query.isLoading,
     error: asApiError(query.error),
+    reload: () => void query.refetch(),
+  };
+}
+
+/**
+ * The trips this driver has already run to the end — a page at a time.
+ *
+ * ★ `useInfiniteQuery`, BECAUSE HISTORY IS READ BY SCROLLING AND NEVER BY PAGE
+ * NUMBER. Each page is keyed by the cursor the previous one returned, so pages
+ * accumulate rather than replace — going back from a trip's detail finds the
+ * scroll position still loaded instead of restarting at the top.
+ *
+ * ★ A LONGER `staleTime` THAN THE LIVE LIST, AND THE REASON IS THE DATA. A
+ * finished trip does not change again — DONE is permanent, enforced by a
+ * database trigger. Re-reading it on every focus would spend a driver's mobile
+ * data on an answer that cannot have moved.
+ */
+export function useMyHistory(): {
+  trips: DriverTrip[];
+  loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
+  error: ApiError | null;
+  loadMore: () => void;
+  reload: () => void;
+} {
+  const query = useInfiniteQuery({
+    queryKey: driverKeys.history(),
+    queryFn: ({ pageParam }) => fetchMyHistory({ before: pageParam }),
+    initialPageParam: null as DriverHistoryCursor | null,
+    // `null` is the server saying there is nothing older. TanStack reads
+    // `undefined` as "no more", so the two are mapped here rather than leaving
+    // a `null` that would look like a valid cursor forever.
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    staleTime: 5 * 60_000,
+    // Same reason as the live list: offline must fail fast and say so, not park
+    // the query and leave an empty history looking like "you have run nothing".
+    networkMode: 'always',
+  });
+
+  return {
+    trips: query.data?.pages.flatMap((page) => page.trips) ?? [],
+    loading: query.isLoading,
+    loadingMore: query.isFetchingNextPage,
+    hasMore: query.hasNextPage,
+    error: asApiError(query.error),
+    loadMore: () => void query.fetchNextPage(),
     reload: () => void query.refetch(),
   };
 }
