@@ -67,7 +67,7 @@ export class DriverPortalService {
     });
 
     const trips = rows.slice(0, limit);
-    const last = trips[trips.length - 1];
+    const last = trips.at(-1);
 
     return {
       trips,
