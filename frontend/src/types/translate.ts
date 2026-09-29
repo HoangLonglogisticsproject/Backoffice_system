@@ -1042,8 +1042,8 @@ const PHRASES = {
   colCargo: { vi: 'Hàng hoá', en: 'Cargo' },
   colPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
   colDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },
-  colPickupAt: { vi: 'Thời gian lấy hàng', en: 'Pickup time' },
-  colDeliveryAt: { vi: 'Thời gian giao hàng', en: 'Delivery time' },
+  // Lịch sử chuyến's date column: the planned pickup day, `scheduled_on`.
+  colPickupDate: { vi: 'Ngày lấy hàng', en: 'Pickup date' },
   colSellPrice: { vi: 'Giá cước bán', en: 'Selling price' },
   colPurchasePrice: { vi: 'Giá cước mua', en: 'Buying price' },
   colNote: { vi: 'Ghi chú', en: 'Note' },

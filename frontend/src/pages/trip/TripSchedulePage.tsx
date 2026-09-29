@@ -16,7 +16,7 @@ import { useSession } from '@/contexts/SessionProvider';
 import { useTripCatalogue, useTripSchedules } from '@/hooks/trip';
 import { isApiError } from '@/utils/errors';
 import { cn } from '@/utils/cn';
-import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
+import { formatCalendarDay } from '@/utils/format/datetime';
 import { formatPlate } from '@/utils/format';
 import { formatMoney } from '@/utils/format/money';
 import {
@@ -35,7 +35,7 @@ import { TripCostCell } from './components/TripCostCell';
 import { TripRangeFilters } from './components/TripRangeFilters';
 import { DispatchPanel } from './components/DispatchPanel';
 import { ArchiveTripDialog } from './components/ArchiveTripDialog';
-import { Prose, Unset } from './components/TripCells';
+import { Leg, Prose, Unset } from './components/TripCells';
 
 /**
  * The dispatch board — the screen that replaces `LỊCH XE - CHI PHÍ XE.xlsx`.
@@ -671,29 +671,5 @@ function Vehicle({
     formatPlate(turn.vehicle.plate)
   ) : (
     <span className="text-xs font-normal text-amber-700">{t('dispatchMissingVehicle')}</span>
-  );
-}
-
-/** One end of a trip: where, who, and when. */
-function Leg({
-  address,
-  contact,
-  at,
-}: Readonly<{ address: string | null; contact: string | null; at: string | null }>) {
-  const { language } = useLanguage();
-
-  if (!address && !contact && !at) return <Unset />;
-
-  return (
-    <div className="max-w-[22rem] space-y-1 text-sm">
-      {address && <span className="block whitespace-pre-line text-gray-900">{address}</span>}
-      {contact && <span className="block whitespace-pre-line text-gray-500">{contact}</span>}
-      {/*
-        A full date and time, not just the hour: delivery routinely falls on a
-        later day than the trip's own date, and showing `09:00` alone would
-        quietly claim it happens the same day.
-      */}
-      {at && <span className="block font-medium text-blue-700">{formatDateTime(at, language)}</span>}
-    </div>
   );
 }

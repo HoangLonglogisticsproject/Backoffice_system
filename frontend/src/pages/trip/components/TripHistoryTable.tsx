@@ -7,19 +7,25 @@ import { useSession } from '@/contexts/SessionProvider';
 import type { TranslationKey } from '@/types/translate';
 import type { TripBoardRow } from '@/types/tripBoard';
 import { formatPlate } from '@/utils/format';
-import { formatDateTime } from '@/utils/format/datetime';
+import { formatCalendarDay } from '@/utils/format/datetime';
 import { formatMoney } from '@/utils/format/money';
 import { TripCostCell } from './TripCostCell';
-import { Prose, Unset } from './TripCells';
+import { Leg, Prose, Unset } from './TripCells';
 
 /**
  * Lịch sử chuyến's table: what happened, one row per trip.
  *
+ * ★ IT SCANS LIKE LỊCH XE: # · Ngày lấy hàng · Xe · Tài xế · Khách hàng · Hàng
+ * hoá · Điểm lấy hàng · Điểm giao hàng · Chi phí chuyến · Giá cước bán · Giá
+ * cước mua · Người tạo — each exact time INSIDE its place's cell (the board's
+ * own `Leg`), never a column of its own.
+ *
  * ★ ONE ROW PER TRIP, THE CREW LISTED IN ONE CELL — not spanned per lorry as on
  * the board, where each pair is still being worked (ADR-0004: 0..N assignments,
- * none flattened into the trip). ★ NO STATUS COLUMN: every row is `finished`.
- * Actions and permissions are the board's: accounting still prices a finished
- * trip, and the cost dialog is the trip's detail.
+ * none flattened into the trip). ★ NO STATUS AND NO PHÂN CÔNG COLUMN: every row
+ * is "Đã xác nhận", and no pair here is still being worked. Actions and
+ * permissions are the board's: accounting still prices a finished trip, and the
+ * cost dialog is the trip's detail.
  */
 export function TripHistoryTable({
   rows,
@@ -45,15 +51,12 @@ export function TripHistoryTable({
   const head = (key: TranslationKey, right = false) => (
     <TableHead className={`${right ? 'text-right ' : ''}font-semibold text-gray-600`}>{t(key)}</TableHead>
   );
-  const at = (iso: string | null) => (iso ? formatDateTime(iso, language) : <Unset />);
-
   return (
     <Table stickyScrollbar>
       <TableHeader className="bg-gray-50/50">
         <TableRow>
           {head('colIndex')}
-          {head('colPickupAt')}
-          {head('colDeliveryAt')}
+          {head('colPickupDate')}
           {head('colVehicle')}
           {head('colDriver')}
           {head('colCustomer')}
@@ -71,8 +74,7 @@ export function TripHistoryTable({
         {rows.map((trip, index) => (
           <TableRow key={trip.id} className="align-top transition-colors hover:bg-blue-50/30">
             <TableCell className="text-center font-medium text-gray-500">{firstRowNumber + index}</TableCell>
-            <TableCell className="whitespace-nowrap font-medium text-gray-900">{at(trip.pickupAt)}</TableCell>
-            <TableCell className="whitespace-nowrap font-medium text-gray-900">{at(trip.deliveryAt)}</TableCell>
+            <TableCell className="whitespace-nowrap text-gray-900">{formatCalendarDay(trip.scheduledOn, language)}</TableCell>
             <TableCell>
               <Lines value={platesOf(trip)} strong />
             </TableCell>
@@ -84,10 +86,10 @@ export function TripHistoryTable({
               <Prose value={trip.cargoInfo} />
             </TableCell>
             <TableCell>
-              <Prose value={placeOf(trip.pickupAddress, trip.pickupContact)} />
+              <Leg address={trip.pickupAddress} contact={trip.pickupContact} at={trip.pickupAt} />
             </TableCell>
             <TableCell>
-              <Prose value={placeOf(trip.deliveryAddress, trip.deliveryContact)} />
+              <Leg address={trip.deliveryAddress} contact={trip.deliveryContact} at={trip.deliveryAt} />
             </TableCell>
             {canViewCost && (
               <TableCell className="text-right">
@@ -127,10 +129,6 @@ const platesOf = (trip: TripBoardRow): string | null =>
 /** Every driver once — the same person on two lorries is one name. */
 const driversOf = (trip: TripBoardRow): string | null =>
   [...new Set(trip.assignments.map((turn) => turn.driver.displayName))].join('\n') || null;
-
-/** Where, and who to ask there. The time has its own column here. */
-const placeOf = (address: string | null, contact: string | null): string | null =>
-  [address, contact].filter(Boolean).join('\n') || null;
 
 /** One name per line, never broken inside one — a plate split at its hyphen reads as two lorries. */
 function Lines({ value, strong = false }: Readonly<{ value: string | null; strong?: boolean }>) {

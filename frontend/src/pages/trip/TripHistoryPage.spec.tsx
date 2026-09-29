@@ -6,6 +6,7 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 import { translate, type TranslationKey } from '@/types/translate';
 import type { TripBoardRow } from '@/types/tripBoard';
 import { toTripSheetRows } from '@/utils/export/tripScheduleSheet';
+import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
 
 const fetchTripSchedules = vi.fn();
 const fetchAllTripSchedules = vi.fn();
@@ -115,10 +116,37 @@ describe('TripHistoryPage', () => {
     expect(table.getAllByRole('row')).toHaveLength(2); // the heading and ONE trip
     expect(table.getByText(/50H-49266/)).toBeInTheDocument();
     expect(table.getByText(/51D-65233/)).toBeInTheDocument();
-    for (const heading of ['Thời gian lấy hàng', 'Thời gian giao hàng', 'Điểm lấy hàng', 'Người tạo']) {
-      expect(table.getByRole('columnheader', { name: heading })).toBeInTheDocument();
-    }
     expect(table.queryByRole('columnheader', { name: 'Trạng thái' })).toBeNull();
+    expect(table.queryByRole('columnheader', { name: 'Phân công' })).toBeNull();
+  });
+
+  it('★ G. scans like Lịch xe — the column order, and each exact time INSIDE its place', async () => {
+    useSession.mockReturnValue(
+      session(['trip.read', 'trip.write', 'trip.price.read', 'cost.read']),
+    );
+    renderPage();
+    const table = within((await screen.findByText('WWL')).closest('table')!);
+
+    expect(table.getAllByRole('columnheader').map((heading) => heading.textContent)).toEqual([
+      '#',
+      'Ngày lấy hàng',
+      'Xe',
+      'Tài xế',
+      'Khách hàng',
+      'Hàng hoá',
+      'Điểm lấy hàng',
+      'Điểm giao hàng',
+      'Chi phí chuyến',
+      'Giá cước bán',
+      'Giá cước mua',
+      'Người tạo',
+      'Thao tác',
+    ]);
+    // The pickup's exact time lives in the pickup cell, the delivery's in the delivery cell.
+    const cells = table.getAllByRole('row')[1]!.querySelectorAll('td');
+    expect(cells[1]!.textContent).toBe(formatCalendarDay(finished.scheduledOn, 'vi'));
+    expect(cells[6]!.textContent).toBe(`BÃI XE MIỀN NAM${formatDateTime(finished.pickupAt, 'vi')}`);
+    expect(cells[7]!.textContent).toBe(`TCS${formatDateTime(finished.deliveryAt, 'vi')}`);
   });
 
   it('★ shows the crew in the SERVER’s order, pairs kept whole — the same order the Excel row writes', async () => {
