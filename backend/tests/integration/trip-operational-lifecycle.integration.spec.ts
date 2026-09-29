@@ -4231,14 +4231,32 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
   });
 
-  describe('★ a recorded crew is history — never Driver Portal work', () => {
-    it('lists no recorded turn to its driver, opens none, and never shows it as a running turn', async () => {
-      const portal = new DriverPortalService(
+  // ============================ the driver's own record: read, never act ==
+
+  describe('★ Driver Portal: a turn "Đã chạy xong" lists, its detail opens — read-only', () => {
+    let portal: DriverPortalService;
+    beforeEach(() => {
+      portal = new DriverPortalService(
         new DriverTripReadModelRepository(database),
         eventRows,
         costs,
         new CompletionRequestRepository(database),
       );
+    });
+
+    /** The history page's first page for a driver, as assignment ids. */
+    const historyOf = async (driver: string): Promise<string[]> =>
+      (await portal.listMyFinishedTrips(driver, { limit: 50 })).trips.map((trip) => trip.assignment.id);
+
+    /** Every driver write, attempted on one turn — each must be refused. */
+    const everyWrite = (assignment: string, driver: string) => [
+      () =>
+        execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: `w-${assignment}`, recordedBy: driver }),
+      () => money.declareCost({ assignmentId: assignment, category: 'fuel', amount: '100000.00', declaredBy: driver }),
+      () => completion.submit(assignment, driver, 'none'),
+    ];
+
+    it('★ a recorded run: not live work, IN the history, opens read-only, and takes no action', async () => {
       const live = await runningTrip(); // the control: an active turn IS the driver's work
       const recorded = await board.create({
         scheduledOn: '2026-08-20',
@@ -4246,18 +4264,78 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         crew: [{ vehicleId: await newVehicle(plate()), driverUserId: driverA }],
         createdBy: operator,
       });
-      const [turn] = (await sql(`SELECT id, state FROM trip_driver_assignments WHERE trip_id = $1`, [
+      const [turn] = (await sql(`SELECT id, state, end_reason FROM trip_driver_assignments WHERE trip_id = $1`, [
         recorded.id,
-      ])) as { id: string; state: string }[];
-      expect(turn!.state).toBe('ended');
+      ])) as { id: string; state: string; end_reason: string }[];
+      expect(turn).toMatchObject({ state: 'ended', end_reason: 'historical_entry' });
 
-      const mine = await portal.listMyAssignments(driverA);
-      expect(mine.map((trip) => trip.assignment.id)).toEqual([live.assignment]);
-      await expect(portal.findMyAssignment(turn!.id, driverA)).rejects.toThrow(NotFoundError);
+      expect((await portal.listMyAssignments(driverA)).map((trip) => trip.assignment.id)).toEqual([live.assignment]);
+      expect(await historyOf(driverA)).toEqual([turn!.id]);
+
+      const detail = await portal.findMyAssignment(turn!.id, driverA);
+      expect(detail).toMatchObject({ tripId: recorded.id, closed: true, events: [], expenses: [], completion: null });
+
+      for (const write of everyWrite(turn!.id, driverA)) await expect(write()).rejects.toThrow(NotFoundError);
+      const invented = (await sql(
+        `SELECT (SELECT count(*) FROM trip_execution_events WHERE trip_id = $1)
+              + (SELECT count(*) FROM trip_completion_requests WHERE trip_id = $1)
+              + (SELECT count(*) FROM notifications WHERE trip_id = $1) AS n`,
+        [recorded.id],
+      )) as { n: string }[];
+      expect(Number(invented[0]!.n)).toBe(0);
 
       const rows = await operations.list({ from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 });
       expect(rows.some((row) => row.assignmentId === turn!.id)).toBe(false);
     });
-  });
 
+    it('★ a driver replaced before the end: once the trip finishes, their turn is history and opens', async () => {
+      const { trip, assignment } = await runningTrip();
+      const replacement = await execution.replaceDriver(trip, assignment, driverB, { by: operator, reason: 'A báo ốm.' });
+      // While the trip runs, A's ended turn is nobody's to open — not even A's.
+      await expect(portal.findMyAssignment(assignment, driverA)).rejects.toThrow(NotFoundError);
+      expect(await historyOf(driverA)).toEqual([]);
+
+      await completion.submit(replacement.id, driverB, 'none');
+      await approve(trip);
+
+      expect(await historyOf(driverA)).toEqual([assignment]);
+      expect(await portal.findMyAssignment(assignment, driverA)).toMatchObject({ tripId: trip, closed: true });
+      for (const write of everyWrite(assignment, driverA)) await expect(write()).rejects.toThrow(NotFoundError);
+    });
+
+    it('a normally completed turn opens closed, and every write on it is refused by the service', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+      await approve(trip);
+
+      expect(await historyOf(driverA)).toEqual([assignment]);
+      expect(await portal.findMyAssignment(assignment, driverA)).toMatchObject({ closed: true });
+      // Still `active` (approval never ends a turn), so the guard would pass —
+      // the services' own closed-trip checks are what refuse it.
+      for (const write of everyWrite(assignment, driverA)) await expect(write()).rejects.toThrow(ConflictError);
+    });
+
+    it('★ never opens another driver’s finished turn, nor an unknown id — and live work is unchanged', async () => {
+      const recorded = await board.create({
+        scheduledOn: '2026-08-20',
+        entryMode: 'historical',
+        crew: [{ vehicleId: await newVehicle(plate()), driverUserId: driverB }],
+        createdBy: operator,
+      });
+      const [bTurn] = (await sql(`SELECT id FROM trip_driver_assignments WHERE trip_id = $1`, [recorded.id])) as {
+        id: string;
+      }[];
+      const live = await runningTrip();
+
+      await expect(portal.findMyAssignment(bTurn!.id, driverA)).rejects.toThrow(NotFoundError);
+      expect(await historyOf(driverA)).toEqual([]);
+      await expect(portal.findMyAssignment('00000000-0000-4000-8000-000000000000', driverA)).rejects.toThrow(
+        NotFoundError,
+      );
+      expect(await portal.findMyAssignment(live.assignment, driverA)).toMatchObject({
+        tripId: live.trip,
+        closed: false,
+      });
+    });
+  });
 });

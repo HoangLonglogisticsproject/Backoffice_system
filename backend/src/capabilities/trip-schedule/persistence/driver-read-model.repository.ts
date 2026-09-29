@@ -75,6 +75,21 @@ const FROM_ASSIGNMENT = `
     LEFT JOIN trip_vehicles v  ON v.id = a.vehicle_id
     LEFT JOIN trip_customers c ON c.id = t.customer_id`;
 
+/**
+ * ★ WHICH OF THEIR OWN TURNS A DRIVER MAY OPEN — TO READ, NEVER TO ACT.
+ *
+ * Their live work (`active`), and every turn of theirs on a trip that has finished,
+ * whatever became of the turn: approved, replaced before the end, or recorded
+ * after the run ("Nhập chuyến cũ"). That is exactly the union of the two lists
+ * above, so a card in either one opens. It is the TRIP's terminal state, never
+ * `end_reason` — how a turn ended grants nothing.
+ *
+ * Acting is a different question with a different answer, and nothing here
+ * widens it: every write route keeps `ActiveAssignmentGuard`, and every write
+ * service refuses a closed trip under its own lock.
+ */
+const READABLE_BY_ITS_DRIVER = `(a.state = 'active' OR t.status = 'finished')`;
+
 interface DriverTripRow {
   trip_id: string;
   scheduled_on: string;
@@ -210,28 +225,32 @@ export class DriverTripReadModelRepository {
   }
 
   /**
-   * One assignment, if it is this driver's and still active.
+   * One assignment, if it is this driver's and they may read it
+   * (`READABLE_BY_ITS_DRIVER`), with whether its trip is closed.
    *
    * Returns `null` for an assignment that exists but belongs to somebody else,
    * which the service turns into the same 404 a missing one gets: telling a
    * caller that it exists but is not theirs is telling them something about
-   * somebody else's work.
+   * somebody else's work. `ReadableAssignmentGuard` asks this same statement,
+   * so the route and the service cannot disagree about who may open what.
    */
   async findForDriver(
     assignmentId: string,
     driverUserId: string,
     executor: DatabaseQuery = this.db,
-  ): Promise<DriverTrip | null> {
-    const rows = await executor.query<DriverTripRow>(
-      `SELECT ${DRIVER_TRIP_COLUMNS}
+  ): Promise<(DriverTrip & { closed: boolean }) | null> {
+    const rows = await executor.query<DriverTripRow & { closed: boolean }>(
+      `SELECT ${DRIVER_TRIP_COLUMNS},
+              t.status = 'finished' AS closed
        ${FROM_ASSIGNMENT}
         WHERE a.id = $1
           AND a.driver_user_id = $2
-          AND a.state = 'active'
+          AND ${READABLE_BY_ITS_DRIVER}
           AND a.vehicle_id IS NOT NULL
           AND t.archived_at IS NULL`,
       [assignmentId, driverUserId],
     );
-    return rows[0] ? toDriverTrip(rows[0]) : null;
+    const row = rows[0];
+    return row ? { ...toDriverTrip(row), closed: row.closed } : null;
   }
 }

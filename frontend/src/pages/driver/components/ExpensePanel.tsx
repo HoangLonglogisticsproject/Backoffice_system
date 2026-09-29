@@ -9,8 +9,8 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
 import {
   allowedCategories,
+  canCorrectExpense,
   canDeclareExpense,
-  isEditable,
   liveExpenses,
   vehicleOwnershipOf,
 } from '@/utils/driverExecution';
@@ -64,14 +64,16 @@ const NOTE_HINT: Record<TripCostCategory, TranslationKey> = {
 /**
  * Why the declaration form is not on screen.
  *
- * ★ THREE REASONS, ASKED IN THE ORDER THEY OVERRIDE EACH OTHER. No lorry means
- * no trip to spend against and nothing else matters; an approved trip is closed
- * for good; anything else still open is merely waiting on the review. As nested
- * ternaries inside the markup that precedence was real but invisible.
+ * ★ FOUR REASONS, ASKED IN THE ORDER THEY OVERRIDE EACH OTHER. No lorry means
+ * no trip to spend against and nothing else matters; an approved turn is final
+ * for good; a trip that finished without it (replaced, or recorded after the
+ * run) is closed; anything else still open is merely waiting on the review. As
+ * nested ternaries inside the markup that precedence was real but invisible.
  */
 const lockedReasonKey = (trip: DriverTripDetail): TranslationKey => {
   if (trip.vehicle === null) return 'driverNeedVehicleFirst';
   if (trip.accountability === 'APPROVED_IMMUTABLE') return 'driverExpenseFinal';
+  if (trip.closed) return 'driverExpenseClosedHint';
   return 'driverExpenseLocked';
 };
 
@@ -86,6 +88,7 @@ const lockedReasonKey = (trip: DriverTripDetail): TranslationKey => {
  */
 const expenseState = (trip: DriverTripDetail): { label: TranslationKey; tone: StatusTone } => {
   if (trip.accountability === 'APPROVED_IMMUTABLE') return { label: 'driverExpenseApproved', tone: 'green' };
+  if (trip.closed) return { label: 'driverExpenseClosed', tone: 'gray' };
   if (trip.completion?.state === 'pending') return { label: 'driverExpenseSent', tone: 'amber' };
   if (trip.accountability === 'REJECTED_NEEDS_CORRECTION') return { label: 'driverExpenseSentBack', tone: 'gray' };
   return { label: 'driverExpenseOpen', tone: 'gray' };
@@ -207,7 +210,7 @@ export function ExpensePanel({
                 ) : (
                   <LineRow
                     line={line}
-                    onEdit={isEditable(line) ? () => setEditingId(line.id) : undefined}
+                    onEdit={canCorrectExpense(trip, line) ? () => setEditingId(line.id) : undefined}
                   />
                 )}
               </li>

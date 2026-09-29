@@ -4,6 +4,7 @@ import { IdentityModule } from '../../core/identity/identity.module';
 import { UsersModule } from '../../core/users/users.module';
 import { NotificationModule } from '../notification/notification.module';
 import { ActiveAssignmentGuard } from './api/active-assignment.guard';
+import { ReadableAssignmentGuard } from './api/readable-assignment.guard';
 import { DriverPortalController } from './api/driver-portal.controller';
 import { TripCatalogueController } from './api/trip-catalogue.controller';
 import { TripCompletionController } from './api/trip-completion.controller';
@@ -73,6 +74,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     DriverPortalService,
     OperationalBoardService,
     ActiveAssignmentGuard,
+    ReadableAssignmentGuard,
     TripScheduleRepository,
     TripVehicleRepository,
     TripCustomerRepository,

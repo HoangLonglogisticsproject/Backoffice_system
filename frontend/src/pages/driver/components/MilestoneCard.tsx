@@ -67,7 +67,8 @@ export function MilestoneCard({ end, trip, now, onReport, reporting, locating = 
 
   const steps = executionSteps(trip).filter((step) => EVENTS_OF[end].includes(step.type));
   const next = nextEvent(trip.events);
-  const live = next !== null && EVENTS_OF[end].includes(next);
+  // A closed trip reports nothing more, whatever step was never reported.
+  const live = !trip.closed && next !== null && EVENTS_OF[end].includes(next);
   const done = steps.every((step) => step.state === 'done');
 
   const address = end === 'pickup' ? trip.pickupAddress : trip.deliveryAddress;

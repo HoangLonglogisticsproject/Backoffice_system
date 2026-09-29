@@ -89,6 +89,14 @@ describe('DriverHistoryPage', () => {
     expect(screen.getAllByText(/51C-22222/).length).toBeGreaterThan(0);
   });
 
+  it('★ opens each card on its own assignment — the detail reads a finished turn', async () => {
+    history.mockResolvedValue({ trips: [trip('a1', '2026-09-12', '51C-111.11')], nextCursor: null });
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: /51C-11111/ });
+    expect(link).toHaveAttribute('href', '/driver/assignments/a1');
+  });
+
   it('says so when a driver has completed nothing', async () => {
     history.mockResolvedValue({ trips: [], nextCursor: null });
     renderPage();

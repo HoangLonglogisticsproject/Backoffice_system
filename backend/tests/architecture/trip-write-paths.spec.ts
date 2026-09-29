@@ -293,20 +293,29 @@ describe("★ the driver read model — what cannot leave", () => {
 });
 
 describe('★ driver write routes — resource scope', () => {
-  it('guards every route that names an assignment', async () => {
+  it('guards every route that names an assignment — to ACT on an active turn, to READ one of its own', async () => {
     const controller = await read('api', 'driver-portal.controller.ts');
     const routes = [...controller.matchAll(/@(Get|Post|Patch)\('([^']*)'\)/g)];
     const guards = [...controller.matchAll(/@UseGuards\(([^)]*)\)/g)].map((m) => m[1]);
 
     expect(routes).toHaveLength(guards.length);
 
+    const guardOf = (on: string): string => {
+      if (on.includes('ActiveAssignmentGuard')) return 'active';
+      if (on.includes('ReadableAssignmentGuard')) return 'readable';
+      return 'none';
+    };
+    const expectedFor = (method: string, path: string): string => {
+      // The lists name no `:assignmentId` — their scope IS the session user.
+      if (!path.includes(':assignmentId')) return 'none';
+      // ★ Only the one read of a turn may take the wider guard: reading a
+      // finished turn never widens what may be ACTED on.
+      return method === 'Get' ? 'readable' : 'active';
+    };
+
     routes.forEach((match, index) => {
-      // The one route without the guard is the list, which has no
-      // `:assignmentId` to check — its scope IS the session user.
-      const path = match[2] ?? '';
-      const needsGuard = path.includes(':assignmentId');
-      const guarded = (guards[index] ?? '').includes('ActiveAssignmentGuard');
-      expect([path, guarded]).toEqual([path, needsGuard]);
+      const [, method = '', path = ''] = match;
+      expect([method, path, guardOf(guards[index] ?? '')]).toEqual([method, path, expectedFor(method, path)]);
     });
   });
 

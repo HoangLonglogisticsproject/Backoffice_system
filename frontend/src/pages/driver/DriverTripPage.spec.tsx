@@ -117,6 +117,7 @@ const trip = (over: Record<string, unknown> = {}) => ({
   expenses: [],
   accountability: 'NOT_DECLARED',
   completion: null,
+  closed: false,
   ...over,
 });
 
@@ -1727,5 +1728,34 @@ describe('★ confirming a delivery with the phone’s location', () => {
     fireEvent.click(await screen.findByRole('button', { name: /đã giao hàng xong/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/chưa ở đúng điểm/i);
+  });
+});
+
+describe('★ a closed trip — opened from "Đã chạy xong", read-only', () => {
+  it('draws the record and no action: no step to report, no figure, no completion', async () => {
+    // Replaced before the end, or recorded after the run: nothing reported,
+    // nothing sent — exactly the turn that used to answer "not found".
+    fetchMyAssignment.mockResolvedValue(trip({ closed: true }));
+    renderDetail();
+
+    expect(await screen.findByText('Chuyến đã chạy xong')).toBeInTheDocument();
+    expect(screen.getByText('Đã chạy xong')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /tôi đã đến điểm lấy hàng/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /thêm khoản chi/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /gửi hoàn tất chuyến/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/có phát sinh chi phí không/i)).not.toBeInTheDocument();
+    // Nor does it claim the figures are still open, or under review.
+    expect(screen.getByText('Đã đóng')).toBeInTheDocument();
+    expect(screen.getByText('Chuyến đã kết thúc — không khai thêm được')).toBeInTheDocument();
+    expect(screen.queryByText('Còn sửa được')).not.toBeInTheDocument();
+    expect(screen.queryByText(/đang chờ duyệt/i)).not.toBeInTheDocument();
+  });
+
+  it('offers no correction of a figure the server still calls editable', async () => {
+    fetchMyAssignment.mockResolvedValue(trip({ closed: true, expenses: [cost()] }));
+    renderDetail();
+
+    expect((await screen.findAllByText('1,500,000')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Sửa' })).not.toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   allowedCategories,
   assignmentStatusOf,
+  canCorrectExpense,
   canDeclareExpense,
   canSubmitCompletion,
   completionStage,
@@ -121,6 +122,7 @@ const trip = (over: Partial<DriverTripDetail> = {}): DriverTripDetail => ({
   expenses: [],
   accountability: 'NOT_DECLARED',
   completion: null,
+  closed: false,
   ...over,
 });
 
@@ -525,5 +527,40 @@ describe('★ where one assignment stands — assignmentStatusOf', () => {
     { name: 'pickup confirmation voided', over: { events: [AP, event('PICKUP_CONFIRMED', { voidedAt: EARLIER })] }, status: 'at-pickup' },
   ])('$name → $status', ({ over, status }) => {
     expect(assignmentStatusOf(trip(over))).toBe(status);
+  });
+});
+
+describe('★ a closed trip — a record the driver reads, never acts on', () => {
+  // Replaced before the end, or recorded after the run: nothing reported,
+  // nothing sent — and the trip finished anyway.
+  const ALL = [event('ARRIVED_PICKUP'), event('PICKUP_CONFIRMED'), event('ARRIVED_DELIVERY'), event('DELIVERY_CONFIRMED')];
+
+  it('lights no stage, so nothing reads as the next thing to do', () => {
+    const record = trip({ closed: true });
+
+    expect(currentStage(record)).toBeNull();
+    expect(workflowStages(record).map((step) => step.state)).toEqual(['upcoming', 'upcoming', 'upcoming', 'upcoming']);
+  });
+
+  it('offers no new figure, no correction and no completion — even where an open trip would', () => {
+    const line = cost();
+    const open = trip({ events: ALL, expenses: [line] });
+    const closed = { ...open, closed: true };
+
+    expect([canDeclareExpense(open), canCorrectExpense(open, line), canSubmitCompletion(open)]).toEqual([true, true, true]);
+    expect([canDeclareExpense(closed), canCorrectExpense(closed, line), canSubmitCompletion(closed)]).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('says "closed" — unless this turn was approved itself, which outranks it', () => {
+    expect(assignmentStatusOf(trip({ closed: true }))).toBe('closed');
+    expect(
+      assignmentStatusOf(
+        trip({ closed: true, accountability: 'APPROVED_IMMUTABLE', completion: request({ state: 'approved' }) }),
+      ),
+    ).toBe('approved');
   });
 });

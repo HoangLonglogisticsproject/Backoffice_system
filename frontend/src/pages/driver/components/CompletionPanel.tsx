@@ -84,6 +84,24 @@ export function CompletionPanel({
     );
   }
 
+  // ★ A CLOSED TRIP ASKS NOTHING MORE. It finished without this turn's own
+  // approval — the driver was replaced before the end, or the run was recorded
+  // after it ended — so there is nothing to send and nothing to wait on.
+  if (trip.closed) {
+    return (
+      <Card>
+        <CardContent className="text-center">
+          <CheckCircle2 className="mx-auto mb-2 size-7 text-muted-foreground" aria-hidden />
+          <p className="font-semibold">{t('driverClosedTitle')}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t('driverClosedHint')}</p>
+        </CardContent>
+        <CardContent>
+          <TripSummary trip={trip} />
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (stage === 'pending') {
     return (
       <Card className={cn(live && 'ring-primary/60')}>

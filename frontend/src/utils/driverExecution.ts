@@ -250,9 +250,14 @@ export const isEditable = (line: TripCost): boolean =>
  * money must not be frozen by a completion under review.
  */
 export const canDeclareExpense = (trip: DriverTripDetail): boolean =>
+  !trip.closed &&
   trip.vehicle !== null &&
   trip.completion?.state !== 'pending' &&
   trip.accountability !== 'APPROVED_IMMUTABLE';
+
+/** A figure the driver may correct on THIS screen: editable, on a trip still open. */
+export const canCorrectExpense = (trip: DriverTripDetail, line: TripCost): boolean =>
+  !trip.closed && isEditable(line);
 
 /** Lines that still count. A withdrawn figure is not one. */
 export const liveExpenses = (expenses: readonly TripCost[]): TripCost[] =>
@@ -328,6 +333,9 @@ const stateOf = (done: boolean, current: boolean): StepState => {
 export const workflowStages = (trip: DriverTripDetail): WorkflowStep[] => {
   const next = nextEvent(trip.events);
   const completion = completionStage(trip);
+  // ★ A CLOSED TRIP HAS NO CURRENT STAGE: what was reported still reads as
+  // done, and nothing is lit as the next thing to do.
+  const open = !trip.closed;
 
   const pickupDone = next === null || next === 'ARRIVED_DELIVERY' || next === 'DELIVERY_CONFIRMED';
   const journeyDone = next === null;
@@ -336,10 +344,10 @@ export const workflowStages = (trip: DriverTripDetail): WorkflowStep[] => {
   const declared = completion === 'pending' || completion === 'approved';
 
   return [
-    { stage: 'pickup', state: stateOf(pickupDone, !pickupDone) },
-    { stage: 'delivery', state: stateOf(journeyDone, pickupDone && !journeyDone) },
-    { stage: 'expense', state: stateOf(declared, journeyDone && !declared) },
-    { stage: 'completion', state: stateOf(completion === 'approved', completion === 'pending') },
+    { stage: 'pickup', state: stateOf(pickupDone, open && !pickupDone) },
+    { stage: 'delivery', state: stateOf(journeyDone, open && pickupDone && !journeyDone) },
+    { stage: 'expense', state: stateOf(declared, open && journeyDone && !declared) },
+    { stage: 'completion', state: stateOf(completion === 'approved', open && completion === 'pending') },
   ];
 };
 
@@ -372,7 +380,9 @@ export type AssignmentStatus =
   | 'awaiting-completion'
   | 'completion-pending'
   | 'completion-rejected'
-  | 'approved';
+  | 'approved'
+  /** The trip finished without this turn's own approval — replaced, or recorded after the run. */
+  | 'closed';
 
 /** What the journey says, named by the step still owed. */
 const OWING: Record<ExecutionEventType, AssignmentStatus> = {
@@ -391,6 +401,7 @@ const REVIEW: Partial<Record<CompletionStage, AssignmentStatus>> = {
 export const assignmentStatusOf = (trip: DriverTripDetail): AssignmentStatus => {
   const reviewed = REVIEW[completionStage(trip)];
   if (reviewed) return reviewed;
+  if (trip.closed) return 'closed';
 
   const owed = nextEvent(trip.events);
   return owed === null ? 'awaiting-completion' : OWING[owed];
@@ -398,6 +409,7 @@ export const assignmentStatusOf = (trip: DriverTripDetail): AssignmentStatus => 
 
 /** May the driver send, or send again, right now? */
 export const canSubmitCompletion = (trip: DriverTripDetail): boolean => {
+  if (trip.closed) return false;
   const stage = completionStage(trip);
   return stage === 'ready' || stage === 'rejected';
 };

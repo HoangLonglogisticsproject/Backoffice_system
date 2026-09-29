@@ -214,6 +214,13 @@ const PHRASES = {
   driverStatusCompletionPending: { vi: 'Chờ duyệt', en: 'Waiting for review' },
   driverStatusCompletionRejected: { vi: 'Bị trả lại', en: 'Sent back' },
   driverStatusApproved: { vi: 'Đã duyệt', en: 'Approved' },
+  // The words of the history tab itself ("Đã chạy xong"): the same fact.
+  driverStatusClosed: { vi: 'Đã chạy xong', en: 'Completed' },
+  driverClosedTitle: { vi: 'Chuyến đã chạy xong', en: 'This trip is completed' },
+  driverClosedHint: {
+    vi: 'Đây là bản ghi để xem lại — không còn thao tác nào cần làm.',
+    en: 'This is a record to look back on — nothing is left to do.',
+  },
 
   driverVehicle: { vi: 'Xe', en: 'Vehicle' },
   driverCustomer: { vi: 'Khách hàng', en: 'Customer' },
@@ -397,6 +404,12 @@ const PHRASES = {
   driverEdit: { vi: 'Sửa', en: 'Edit' },
   driverExpenseLocked: { vi: 'Đang chờ duyệt — chưa sửa được', en: 'Under review — locked' },
   driverExpenseFinal: { vi: 'Đã duyệt — không sửa được', en: 'Approved — final' },
+  // A trip that finished without this turn's approval: not "under review".
+  driverExpenseClosed: { vi: 'Đã đóng', en: 'Closed' },
+  driverExpenseClosedHint: {
+    vi: 'Chuyến đã kết thúc — không khai thêm được',
+    en: 'The trip is closed — nothing more can be declared',
+  },
   driverExpenseRejected: { vi: 'Bị từ chối — cần sửa', en: 'Sent back — needs correction' },
   // The lifecycle in one word each, for the pill: editable → sent → sent back → approved.
   driverExpenseSent: { vi: 'Đã gửi', en: 'Sent' },
