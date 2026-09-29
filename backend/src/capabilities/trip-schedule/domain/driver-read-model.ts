@@ -95,6 +95,40 @@ export interface DriverTrip {
 }
 
 /**
+ * Where a page of history stops, so the next page can start there.
+ *
+ * ★ THE PAIR, NOT JUST THE TIMESTAMP. One dispatch action can create several
+ * turns in the same statement, so `assignedAt` is not unique; a cursor on it
+ * alone would either repeat those rows on the next page or skip them.
+ */
+export interface DriverHistoryCursor {
+  assignedAt: Date;
+  id: string;
+}
+
+export interface DriverHistoryQuery {
+  limit: number;
+  /** `null`/absent is the first page — the newest trips. */
+  before?: DriverHistoryCursor | null;
+}
+
+/**
+ * One page of finished trips.
+ *
+ * ★ NO TOTAL COUNT, AND NOT ONLY TO SAVE A QUERY. "How many trips have I run"
+ * is a figure Operations reconciles pay against; this screen exists so a driver
+ * can look their own work up, not so it can become a number either side quotes.
+ * If that number is wanted later it is a decision to take deliberately, with
+ * Business, rather than something that arrives because a paginator usually has
+ * one.
+ */
+export interface DriverHistoryPage {
+  trips: DriverTrip[];
+  /** `null` when there is nothing older — the screen stops asking. */
+  nextCursor: DriverHistoryCursor | null;
+}
+
+/**
  * One trip, opened.
  *
  * Everything in `DriverTrip`, plus the driver's own working state: what they
