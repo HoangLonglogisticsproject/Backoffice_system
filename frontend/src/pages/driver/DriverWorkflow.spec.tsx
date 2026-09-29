@@ -341,9 +341,14 @@ describe('★ the work schedule', () => {
     ]);
   });
 
-  it('★ “Đã qua” reads backward, most recent day first, and never claims the work was finished', async () => {
+  it('★ “Chuyến đã chạy” reads backward, most recent day first, and never claims the work was finished', async () => {
     // The list carries no completion state (contract §5.4.1): an earlier day
     // is a date, not a verdict — a trip there may still be waiting for review.
+    //
+    // ⚠ WHICH IS WHY THE LAST ASSERTION MATTERS MORE THAN THE TAB'S NAME. The
+    // tab reads "Chuyến đã chạy", a phrase that sounds like a verdict; the
+    // panel beneath it must still say nothing about completion. The sentence
+    // this test is really defending is that one.
     fetchMyAssignments.mockResolvedValue([
       turn('a-28', { scheduledOn: '2026-08-28' }),
       turn('a-29', { scheduledOn: '2026-08-29' }),
@@ -351,7 +356,7 @@ describe('★ the work schedule', () => {
     renderAt('/driver?view=past');
 
     await screen.findByRole('region', { name: 'Thứ Bảy, 29/08/2026' });
-    expect(tab('Đã qua')).toHaveAttribute('aria-selected', 'true');
+    expect(tab('Chuyến đã chạy')).toHaveAttribute('aria-selected', 'true');
     expect(dayHeadings()).toEqual(['Thứ Bảy, 29/08/2026', 'Thứ Sáu, 28/08/2026']);
     const panel = screen.getByRole('tabpanel');
     expect(hrefs(within(panel).getAllByRole('link'))).toEqual(['/driver/assignments/a-29', '/driver/assignments/a-28']);
@@ -361,7 +366,7 @@ describe('★ the work schedule', () => {
   it.each([
     ['/driver', 'Hôm nay', 'Bạn chưa có chuyến nào hôm nay.'],
     ['/driver?view=upcoming', 'Sắp tới', 'Chưa có lịch sắp tới.'],
-    ['/driver?view=past', 'Đã qua', 'Chưa có chuyến nào đã qua.'],
+    ['/driver?view=past', 'Chuyến đã chạy', 'Chưa có chuyến nào đã qua.'],
     ['/driver?view=nonsense', 'Hôm nay', 'Bạn chưa có chuyến nào hôm nay.'],
   ])('opens %s on “%s”, and says so when nothing is assigned there', async (path, label, empty) => {
     renderAt(path);
@@ -380,12 +385,12 @@ describe('★ the work schedule', () => {
     expect(screen.getAllByRole('tab').map((option) => option.textContent)).toEqual([
       'Hôm nay 2',
       'Sắp tới 1',
-      'Đã qua 0',
+      'Chuyến đã chạy 0',
     ]);
     // The count is part of the name a screen reader announces, as a separate word.
     expect(screen.getByRole('tab', { name: 'Hôm nay 2' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Sắp tới 1' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Đã qua 0' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Chuyến đã chạy 0' })).toBeInTheDocument();
   });
 
   it('selecting a tab rewrites the URL in place, and today is the bare /driver', async () => {

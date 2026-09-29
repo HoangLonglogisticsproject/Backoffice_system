@@ -177,10 +177,22 @@ const PHRASES = {
   driverHistoryEnd: { vi: 'Đã hết.', en: 'That is everything.' },
   // ★ THE SCHEDULE IS SPLIT BY THE TRIP'S DAY, NOT BY A STATUS: the list the
   // server sends carries no execution state, so "done" is not something it can
-  // say. "Earlier" is a date, and says nothing about whether the work is closed.
+  // say. This third tab is EVERY assignment whose day has gone by — including
+  // one still waiting for the office to approve it.
+  //
+  // ⚠ ITS NAME PROMISES MORE THAN IT HOLDS, AND THAT IS A KNOWN TRADE. "Chuyến
+  // đã chạy" reads as a verdict, which the tab cannot give; it was chosen over
+  // "Đã qua" because a driver reads it as "trips I have driven" and that is
+  // what they are looking for. THE SCREEN BENEATH IT STILL SAYS NOTHING ABOUT
+  // COMPLETION — `DriverWorkflow.spec` holds that line.
+  //
+  // ⚠ NOT THE SAME LIST AS `driverHistory` ("Đã chạy xong", `/driver/history`),
+  // which asks the server for trips that really are `finished`. These two
+  // overlap and are not equal: a trip finished today is in both; a trip run
+  // last week and still unapproved is only here.
   driverViewToday: { vi: 'Hôm nay', en: 'Today' },
   driverViewUpcoming: { vi: 'Sắp tới', en: 'Upcoming' },
-  driverViewPast: { vi: 'Chuyến đã chạy', en: 'Finised trip' },
+  driverViewPast: { vi: 'Chuyến đã chạy', en: 'Trips driven' },
   driverEmptyToday: { vi: 'Bạn chưa có chuyến nào hôm nay.', en: 'You have no trips today.' },
   driverEmptyUpcoming: { vi: 'Chưa có lịch sắp tới.', en: 'Nothing is scheduled yet.' },
   driverEmptyPast: { vi: 'Chưa có chuyến nào đã qua.', en: 'No earlier trips.' },
