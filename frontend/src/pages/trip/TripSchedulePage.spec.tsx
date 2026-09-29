@@ -666,6 +666,32 @@ describe('TripSchedulePage', () => {
       expect(createTripSchedule).toHaveBeenCalledTimes(1);
     });
 
+    /**
+     * ★ ONE PAIR AT A TIME — THE CREW'S ORDER IS THE ORDER IT LANDS. Each
+     * dispatch stamps `assigned_at` with its own transaction's START, and the
+     * crew is read back `assigned_at, id`. Sent together, every transaction
+     * would begin before any of them held the trip lock, and the lorries would
+     * come back in network-arrival order — or by random id. Each would also
+     * hold a pooled connection while it queued on that one lock.
+     */
+    it('★ gửi cặp kế tiếp chỉ sau khi cặp trước đã được trả lời', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      await addRow('v2', 'd2');
+      let answer!: (value: unknown) => void;
+      assignDriver.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+      save();
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(assignDriver).toHaveBeenCalledTimes(1);
+
+      answer({ id: 'a1' });
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(2));
+      expect(assignDriver.mock.calls[1]![1]).toEqual({ vehicleId: 'v2', driverUserId: 'd2' });
+    });
+
     it('★ mỗi dòng phải có CẢ xe và tài xế — báo tại dòng, và không tạo gì cả', async () => {
       dispatcher();
       await openForm();
