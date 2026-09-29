@@ -92,11 +92,14 @@ export class LegacyConfirmedNormalization {
 
   /** Closes each approved id that is STILL eligible. `by` is the authorized person running it. */
   async apply(ids: readonly string[], by: string, now = new Date()): Promise<{ id: string; outcome: LegacyOutcome }[]> {
-    const results: { id: string; outcome: LegacyOutcome }[] = [];
-    for (const id of new Set(ids)) {
-      results.push({ id, outcome: await this.db.transaction((tx) => this.normalizeOne(id, by, now, tx)) });
-    }
-    return results;
+    // Independent rows — one transaction and one row lock each, no lock shared
+    // between two ids — so they run together; the report keeps the order given.
+    return Promise.all(
+      [...new Set(ids)].map(async (id) => ({
+        id,
+        outcome: await this.db.transaction((tx) => this.normalizeOne(id, by, now, tx)),
+      })),
+    );
   }
 
   private async normalizeOne(id: string, by: string, now: Date, tx: DatabaseQuery): Promise<LegacyOutcome> {
