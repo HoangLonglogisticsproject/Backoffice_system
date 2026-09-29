@@ -71,19 +71,23 @@ describe('trip_schedules.status — the write paths', () => {
   });
 
   it('refuses `finished` on every route the dispatch board offers', async () => {
-    // Both ordinary paths run through `requireDispatchTransition`, and creation
-    // runs through the same guard it delegates to — so a trip can neither be
-    // moved to `finished` nor born that way.
+    // Both ordinary paths run through `requireDispatchTransition`; creation
+    // resolves its start through `initialLifecycle`, which refuses a booking
+    // asking for `finished` by the same `isCompletionOnlyStatus` — so a trip
+    // can neither be MOVED to `finished` nor BOOKED that way.
     const service = code(await read('application', 'trip-schedule.service.ts'));
+    const lifecycle = code(await read('domain', 'trip-status-history.ts'));
 
-    expect(service).toContain('this.requireNotCompletionOnly(values.status)');
     expect(service.match(/requireDispatchTransition\(/g)).toHaveLength(3);
     expect(service).toContain('isCompletionOnlyStatus');
+    expect(service).toContain('initialLifecycle(');
+    expect(lifecycle).toContain("if (isCompletionOnlyStatus(status)) return { ok: false, refusal: 'COMPLETION_ONLY' };");
   });
 
   it('has no second implementation of closing a trip', async () => {
-    // `markClosed` writes `closed_at`/`closed_by`. Closing belongs to approval,
-    // and a copy of it elsewhere is an answer waiting to drift from the first.
+    // `markClosed` writes `closed_at`/`closed_by`. Closing a trip that RAN on
+    // the board belongs to approval, and a copy of it elsewhere is an answer
+    // waiting to drift from the first.
     const callers: string[] = [];
 
     for (const folder of ['api', 'application']) {
@@ -93,6 +97,36 @@ describe('trip_schedules.status — the write paths', () => {
     }
 
     expect(callers).toEqual(['application/trip-completion.service.ts']);
+  });
+
+  it('★ is BORN finished by exactly one statement, and only for a run recorded after it ended', async () => {
+    // The second way into `finished`, sanctioned and single: the create
+    // intent `historical`. It creates the row finished and stamped in one
+    // statement — it never MOVES a trip there, so the approval rule above stays
+    // whole. The client names the intent; only `initialLifecycle` turns that
+    // into `closed`, and only for `historical`.
+    const callers: string[] = [];
+    for (const folder of ['api', 'application']) {
+      for (const file of await listFiles(folder)) {
+        if (/createFinished\(/.test(code(await read(folder, file)))) callers.push(`${folder}/${file}`);
+      }
+    }
+    expect(callers).toEqual(['application/trip-schedule.service.ts']);
+
+    const service = code(await read('application', 'trip-schedule.service.ts'));
+    expect(service).toContain('start.closed');
+    const lifecycle = code(await read('domain', 'trip-status-history.ts'));
+    // The value, not the type: one place writes `closed: true,`.
+    expect(lifecycle.match(/closed: true,/g)).toHaveLength(1);
+    expect(lifecycle).toMatch(/mode === 'historical'[\s\S]{0,200}closed: true,/);
+  });
+
+  it('★ writes a recorded crew as history — never an ACTIVE turn, never an invented execution', async () => {
+    const crew = code(await read('application', 'trip-entry-crew.ts'));
+
+    expect(crew.match(/this\.assignments\.assign\(/g)).toHaveLength(1);
+    expect(crew.match(/this\.assignments\.end\(/g)).toHaveLength(1);
+    expect(crew).not.toMatch(/updateStatus\(|markClosed\(|completion|recordEvent|notification/i);
   });
 });
 

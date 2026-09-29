@@ -557,12 +557,46 @@ describe('trip-schedule HTTP security', () => {
       context = asContext({ global: true });
     });
 
-    it('refuses a trip with no day', async () => {
-      const response = await authed('post', '/trip-schedules').send({ note: 'x' });
+    it('★ takes a pickup instant as the day — "no day at all" is a 422 from the service, which sees the pair', async () => {
+      await authed('post', '/trip-schedules')
+        .send({ pickupAt: '2026-10-02T01:30:00.000Z', sellPrice: '4500000' })
+        .expect(201);
+
+      const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+      expect(input).not.toHaveProperty('scheduledOn');
+      expect(input['pickupAt']).toEqual(new Date('2026-10-02T01:30:00.000Z'));
+    });
+
+    it('★ books unless told otherwise — a client that never heard of `entryMode` still books', async () => {
+      await authed('post', '/trip-schedules').send({ scheduledOn: '2026-10-02', sellPrice: '1' }).expect(201);
+
+      const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+      expect(input['entryMode']).toBe('operational');
+    });
+
+    it('refuses an entry mode it does not have, before any write', async () => {
+      const response = await authed('post', '/trip-schedules').send({
+        scheduledOn: '2026-10-02',
+        sellPrice: '1',
+        entryMode: 'finished',
+      });
 
       expect(response.status).toBe(422);
-      expect(response.body.error.code).toBe('VALIDATION_FAILED');
-      expect(response.body.error.details).toHaveProperty('scheduledOn');
+      expect(response.body.error.details).toHaveProperty('entryMode');
+      expect(trips.create).not.toHaveBeenCalled();
+    });
+
+    it('★ has ONE create route — the separate historical one is gone', async () => {
+      const response = await authed('post', '/trip-schedules/historical').send({ scheduledOn: '2026-09-22' });
+
+      expect(response.status).toBe(404);
+      expect(trips.create).not.toHaveBeenCalled();
+    });
+
+    it('carries no entry mode on a correction — a patch enters nothing', async () => {
+      await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x', entryMode: 'historical' }).expect(200);
+
+      expect(trips.update).toHaveBeenCalledWith(TRIP, { note: 'x' }, ACTOR);
     });
 
     it('refuses a day written any other way', async () => {
@@ -647,6 +681,62 @@ describe('trip-schedule HTTP security', () => {
    * A CALLER WHO MAY NOT SEE IT. `cost.read` is global-only: accounting reads
    * the prices and still gets `costSummary: null`, with no aggregate run.
    */
+  describe('★ "Nhập chuyến cũ" — the same POST /trip-schedules, `entryMode: historical`', () => {
+    const DISPATCH_VEHICLE = '6a6a6a6a-6a6a-4a6a-8a6a-6a6a6a6a6a6a';
+    const body = { scheduledOn: '2026-09-22', pickupAt: '2026-09-22T10:36:00.000Z', note: 'x', entryMode: 'historical' };
+
+    it('★ hands the intent to the ONE create path, with the author from the session', async () => {
+      context = asContext({ memberOf: [DEPT], functions: ['sales'] });
+      await authed('post', '/trip-schedules').send(body).expect(201);
+
+      expect(trips.create).toHaveBeenCalledWith(
+        expect.objectContaining({ note: 'x', entryMode: 'historical', createdBy: ACTOR }),
+      );
+    });
+
+    it('★ passes a status through as SENT — the service refuses it for this intent, it is never obeyed here', async () => {
+      context = asContext({ memberOf: [DEPT], functions: ['sales'] });
+      await authed('post', '/trip-schedules').send({ ...body, status: 'finished' }).expect(201);
+
+      // The route decides nothing about lifecycle; `initialLifecycle` does, and
+      // refuses a status beside `historical` (pinned against a real database).
+      const [input] = trips.create.mock.calls[0] as [Record<string, unknown>];
+      expect(input).toMatchObject({ entryMode: 'historical', status: 'finished' });
+    });
+
+    it('asks `trip.create` — the same key booking asks, for both intents', async () => {
+      context = asContext({ memberOf: [DEPT], functions: [] });
+      await authed('post', '/trip-schedules').send(body).expect(403);
+      await authed('post', '/trip-schedules').send({ ...body, entryMode: 'operational' }).expect(403);
+
+      expect(trips.create).not.toHaveBeenCalled();
+    });
+
+    it('★ refuses a crew from somebody who may not dispatch — 403, not a crew silently dropped', async () => {
+      context = asContext({ memberOf: [DEPT], functions: ['sales'] });
+      const crew = [{ vehicleId: DISPATCH_VEHICLE, driverUserId: DRIVER_USER }];
+      await authed('post', '/trip-schedules').send({ ...body, crew }).expect(403);
+
+      expect(trips.create).not.toHaveBeenCalled();
+    });
+
+    it('carries the crew for the dispatch function', async () => {
+      context = asContext({ memberOf: [DEPT], functions: ['dispatch'] });
+      const crew = [{ vehicleId: DISPATCH_VEHICLE, driverUserId: DRIVER_USER }];
+      await authed('post', '/trip-schedules').send({ ...body, crew }).expect(201);
+
+      expect(trips.create).toHaveBeenCalledWith(expect.objectContaining({ crew }));
+    });
+
+    it('holds a price-setter to the selling price, as booking does', async () => {
+      context = asContext({ global: true });
+      const response = await authed('post', '/trip-schedules').send(body);
+
+      expect(response.status).toBe(422);
+      expect(trips.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('★ the board list — its order and its one cost figure', () => {
     const sales = () => asContext({ memberOf: [DEPT], functions: ['sales'] });
 
@@ -1322,6 +1412,20 @@ describe('trip-schedule HTTP security', () => {
         const price = row.priceWrite ? { sellPrice: '4500000' } : {};
         const response = await authed('post', '/trip-schedules').send({ scheduledOn: '2026-08-04', ...price });
         expect(response.status).toBe(expectStatus(row.trip, 201));
+      });
+
+      // ★ A TRIP BORN FINISHED, from whoever may book one — `trip.create` — and
+      // with a crew only from whoever may dispatch. Decided by the server's
+      // guard, not by which buttons a screen draws.
+      it(`historical create → ${row.trip ? 201 : 403}; with a crew → ${row.trip && row.dispatch ? 201 : 403}`, async () => {
+        const body = { scheduledOn: '2026-09-22', ...(row.priceWrite ? { sellPrice: '4500000' } : {}) };
+        const crew = [{ vehicleId: VEHICLE, driverUserId: DRIVER_USER }];
+        const bare = await authed('post', '/trip-schedules').send({ ...body, entryMode: 'historical' });
+        const crewed = await authed('post', '/trip-schedules').send({ ...body, entryMode: 'historical', crew });
+        expect([bare.status, crewed.status]).toEqual([
+          expectStatus(row.trip, 201),
+          expectStatus(row.trip && row.dispatch, 201),
+        ]);
       });
 
       it(`customer create → ${row.customer ? 201 : 403}`, async () => {

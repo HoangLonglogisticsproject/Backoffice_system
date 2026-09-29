@@ -1,5 +1,6 @@
 import type { UserSummary } from '../../../common/types/user-summary';
 import type { LegacyTripStatus, TripStatus } from './trip-schedule';
+import type { TripEntryMode } from './trip-timeline';
 
 /**
  * One move along the dispatch board.
@@ -71,3 +72,49 @@ export const canTransition = (from: TripStatus, to: TripStatus): boolean =>
  * through the repository directly, inside the transaction that does the rest.
  */
 export const isCompletionOnlyStatus = (status: TripStatus): boolean => status === 'finished';
+
+/**
+ * ★ THE MARK OF A TRIP RECORDED AFTER IT RAN, rather than run through the board.
+ *
+ * Written as the `reason` of the one history row a historical entry has
+ * (`null → finished`) and as the `end_reason` of the crew it was recorded
+ * with. A reason, not a status: the trip is `finished` like any other, and
+ * this only says how it got there. System-written, so a fixed token.
+ */
+export const HISTORICAL_ENTRY_REASON = 'historical_entry';
+
+/** How a new trip starts its life, or why the request cannot start it. */
+export type InitialLifecycle =
+  | { ok: true; status: TripStatus; closed: false; reason: null }
+  /** Born closed — and then the reason the history and the crew carry. */
+  | { ok: true; status: 'finished'; closed: true; reason: string }
+  | { ok: false; refusal: 'COMPLETION_ONLY' | 'STATUS_SET_BY_ENTRY' | 'CREW_AFTER_BOOKING' };
+
+/**
+ * ★ THE CLIENT SAYS WHY A TRIP IS ENTERED; THE SERVER DECIDES HOW IT STARTS.
+ *
+ *   operational   a booking: `pending`, or another status the board may set —
+ *                 never `finished`, which only approval reaches. Its crew is
+ *                 dispatched afterwards, through the dispatch routes, which
+ *                 tell the driver — so none is taken with the booking.
+ *   historical    a run that already happened and ended: `finished`, closed,
+ *                 its one history row marked `historical_entry`. The status
+ *                 is not the caller's to name; its crew rides with it, since
+ *                 a closed trip takes no dispatch afterwards.
+ *
+ * `undefined` — an in-process caller (fixtures, scripts) — books.
+ */
+export const initialLifecycle = (
+  mode: TripEntryMode | undefined,
+  requested: { status?: TripStatus; crewSupplied: boolean },
+): InitialLifecycle => {
+  if (mode === 'historical') {
+    return requested.status === undefined
+      ? { ok: true, status: 'finished', closed: true, reason: HISTORICAL_ENTRY_REASON }
+      : { ok: false, refusal: 'STATUS_SET_BY_ENTRY' };
+  }
+  const status = requested.status ?? 'pending';
+  if (isCompletionOnlyStatus(status)) return { ok: false, refusal: 'COMPLETION_ONLY' };
+  if (requested.crewSupplied) return { ok: false, refusal: 'CREW_AFTER_BOOKING' };
+  return { ok: true, status, closed: false, reason: null };
+};

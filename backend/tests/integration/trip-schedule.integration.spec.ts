@@ -1,3 +1,4 @@
+import { entryCrewOn } from '../helpers/trip-board-fixture';
 import { Pool } from 'pg';
 import {
   TEST_URL,
@@ -126,6 +127,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       customers,
       new TripStatusHistoryRepository(database),
       new TripLocationRepository(database),
+      entryCrewOn(database),
     );
     catalogue = new TripCatalogueService(vehicles, customers, new TripLocationRepository(database));
 

@@ -174,17 +174,28 @@ export class DriverAssignmentRepository {
    * the same instant both read the same empty state, and one of them has to
    * lose at COMMIT rather than at a SELECT neither of them can trust. The
    * service checks first only to answer with a readable 409.
+   *
+   *
+   * ★ `ordinal` IS THE TURN'S PLACE AMONG TURNS WRITTEN IN ONE TRANSACTION. A
+   * turn is stamped with the transaction's `now()` — exactly what dispatch,
+   * one turn per transaction, has always got (`ordinal` 0). A crew recorded
+   * WITH a trip writes several turns in one transaction, where `now()` is one
+   * instant for all of them, and every crew is read back `assigned_at, id` —
+   * so each is stamped `now()` plus its input index in MICROSECONDS, the
+   * column's resolution. That makes the order the entry order by construction:
+   * no clock reading between inserts, and never the random id, decides it.
    */
   async assign(
     input: { tripId: string; vehicleId: string; driverUserId: string; assignedBy: string },
     executor: DatabaseQuery = this.db,
+    ordinal = 0,
   ): Promise<DriverAssignment> {
     const rows = await executor.query<AssignmentRow>(
       assignmentWriteReturning(
-        `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by)
-         VALUES ($1, $2, $3, $4)`,
+        `INSERT INTO trip_driver_assignments (trip_id, vehicle_id, driver_user_id, assigned_by, assigned_at)
+         VALUES ($1, $2, $3, $4, now() + $5::int * interval '1 microsecond')`,
       ),
-      [input.tripId, input.vehicleId, input.driverUserId, input.assignedBy],
+      [input.tripId, input.vehicleId, input.driverUserId, input.assignedBy, ordinal],
     );
 
     const row = rows[0];

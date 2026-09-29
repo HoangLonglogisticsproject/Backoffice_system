@@ -16,6 +16,7 @@ import { OperationalBoardService } from './application/operational-board.service
 import { TripCompletionService } from './application/trip-completion.service';
 import { TripCostService } from './application/trip-cost.service';
 import { TripExecutionService } from './application/trip-execution.service';
+import { TripEntryCrew } from './application/trip-entry-crew';
 import { TripScheduleService } from './application/trip-schedule.service';
 import {
   TripCustomerRepository,
@@ -68,6 +69,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     TripCostService,
     TripExecutionService,
     TripCompletionService,
+    TripEntryCrew,
     DriverPortalService,
     OperationalBoardService,
     ActiveAssignmentGuard,

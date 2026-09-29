@@ -2,6 +2,8 @@ import type { Pool } from 'pg';
 import type { Database } from '@common/types/database.port';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripBoardService } from '../../src/capabilities/trip-schedule/application/trip-board.service';
+import { TripEntryCrew } from '../../src/capabilities/trip-schedule/application/trip-entry-crew';
+import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
 import {
   TripScheduleService,
   type TripBoardQuery,
@@ -12,6 +14,7 @@ import { TripBoardCostRepository } from '../../src/capabilities/trip-schedule/pe
 import {
   TripCustomerRepository,
   TripLocationRepository,
+  TripVehicleRepository,
 } from '../../src/capabilities/trip-schedule/persistence/trip-catalogue.repository';
 import { TripCostTotalsRepository } from '../../src/capabilities/trip-schedule/persistence/trip-cost.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
@@ -34,6 +37,8 @@ import {
 export interface TripBoardFixture {
   pool: Pool;
   board: TripBoardService;
+  /** The write path behind the board — book, record a past run, correct — with every rule. */
+  trips: TripScheduleService;
   /** The canonical per-trip totals — what the cost dialog shows. */
   totals: TripCostTotalsRepository;
   author: string;
@@ -63,6 +68,7 @@ export async function openTripBoard(schema: string): Promise<TripBoardFixture> {
     new TripCustomerRepository(counted),
     new TripStatusHistoryRepository(counted),
     new TripLocationRepository(counted),
+    entryCrewOn(counted),
   );
   const users = new UserRepository(base);
   const author = (await users.insertUser({ displayName: 'Điều Độ' })).id;
@@ -71,12 +77,17 @@ export async function openTripBoard(schema: string): Promise<TripBoardFixture> {
   return {
     pool,
     board: new TripBoardService(trips, new TripBoardCostRepository(counted)),
+    trips,
     totals: new TripCostTotalsRepository(base),
     author,
     driver,
     statements,
   };
 }
+
+/** The crew writer `TripScheduleService` takes, on `db` — for specs that build the service by hand. */
+export const entryCrewOn = (db: Database): TripEntryCrew =>
+  new TripEntryCrew(new DriverAssignmentRepository(db), new TripVehicleRepository(db), new UserRepository(db));
 
 /** August 2026, first page, the default order — override what a case is about. */
 export const boardQuery = (over: Partial<TripBoardQuery> = {}): TripBoardQuery => ({

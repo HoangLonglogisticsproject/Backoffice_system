@@ -56,6 +56,7 @@ import {
   type TripSchedule,
   type TripScheduleWithRefs,
 } from '../domain/trip-schedule';
+import { TRIP_ENTRY_MODES } from '../domain/trip-timeline';
 
 /**
  * The dispatch board.
@@ -159,8 +160,10 @@ const price = z
   .nullable();
 
 const createTripSchema = z.object({
-  // The only required field. A trip with no day is not on the board at all.
-  scheduledOn: boardDay,
+  // ★ THE PLANNED PICKUP DATE — "Ngày lấy hàng". Optional on the wire only
+  // because an exact `pickupAt` carries its own day (`boardDayFor`); "neither"
+  // is the service's 422, where the pair is seen together.
+  scheduledOn: boardDay.optional(),
 
   // ★ NO `vehicleId` (ADR-0004). A lorry reaches a trip as a dispatch
   // assignment, paired with its driver, through the routes below — never as a
@@ -184,7 +187,23 @@ const createTripSchema = z.object({
   purchasePrice: price.optional(),
 
   note: text.optional(),
+  // A board status to OPEN a booking on. Never `finished`, and never with a
+  // historical entry — the server decides that lifecycle (`initialLifecycle`).
   status: tripStatus.optional(),
+
+  // ★ THE CREATE INTENT — why the trip is entered, NOT how it starts. One
+  // create route for both: "Thêm chuyến" books (`operational`), "Nhập chuyến
+  // cũ" records a run that already ended (`historical`). An unknown value is a
+  // 422; an absent one books, as every client did before this field existed.
+  entryMode: z.enum(TRIP_ENTRY_MODES).default('operational'),
+
+  // The lorries and drivers a RECORDED run went out with — each pair the one
+  // the dispatch routes take, and asking `dispatch.write` as they do. A booking
+  // is crewed through those routes once it exists.
+  crew: z
+    .array(z.object({ vehicleId: z.string().uuid(), driverUserId: z.string().uuid() }))
+    .max(20)
+    .optional(),
 });
 
 /** The two body keys this route guards. Written once so the checks agree. */
@@ -233,6 +252,18 @@ const requirePriceAuthority = (
   if (sellPriceRequired && (body.sellPrice === undefined || body.sellPrice === null)) {
     throw new ValidationError('A selling price is required.');
   }
+};
+
+/**
+ * A crew named on the create body is DISPATCH, and asks what the dispatch
+ * routes ask: `dispatch.write`. 403 before any write — a crew silently dropped
+ * would record a run without the lorries somebody typed. No crew, no question.
+ */
+const requireCrewAuthority = (body: { crew?: unknown[] }, request: Request): void => {
+  if ((body.crew?.length ?? 0) === 0) return;
+  const authorization = authorizationOf(request);
+  if (authorization && can(authorization, 'dispatch.write')) return;
+  throw new ForbiddenError('You are not allowed to dispatch a crew onto a trip.');
 };
 
 /**
@@ -288,8 +319,12 @@ const requirePatchAuthority = (body: Record<string, unknown>, request: Request):
  * An empty body is legal and changes nothing. A strange request, but not a
  * wrong one, and answering 422 to it would force every client to work out which
  * of its own fields are dirty before it may send any of them.
+ *
+ * No `entryMode` and no `crew`: they describe ENTERING a trip, and a correction
+ * enters nothing. Stripped, like any key the schema does not name.
  */
-const updateTripSchema = createTripSchema.partial();
+const updateTripSchema = createTripSchema.omit({ entryMode: true, crew: true }).partial();
+
 
 /**
  * A board move, optionally explained.
@@ -539,9 +574,11 @@ export class TripScheduleController {
     // there. Both answers have to arrive before a row exists, because neither
     // is fixable by redacting the response.
     requirePriceAuthority(body, request, { sellPriceRequired: true });
+    requireCrewAuthority(body, request);
 
     // `createdBy` from the session, never from the body. A body that names its
-    // own author is a body that can name somebody else's.
+    // own author is a body that can name somebody else's. The intent rides in
+    // the body; how the trip STARTS is the service's to decide from it.
     const trip = await this.trips.create({ ...body, createdBy: actor.id });
 
     // Redacted on the way back too, though only a caller who may price a trip

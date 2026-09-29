@@ -1,3 +1,4 @@
+import { entryCrewOn } from '../helpers/trip-board-fixture';
 import { Pool, type PoolClient } from 'pg';
 import {
   TEST_URL,
@@ -155,6 +156,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       customers,
       history,
       new TripLocationRepository(database),
+      entryCrewOn(database),
     );
     const users = new UserRepository(database);
     notificationRows = new NotificationRepository(database);
