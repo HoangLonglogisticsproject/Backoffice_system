@@ -96,6 +96,17 @@ export const TRIP_ASSIGNMENT_FILTERS: readonly TripAssignmentFilter[] = [
   'assigned',
 ];
 
+/**
+ * ★ WHICH SCREEN A TRIP IS ON — `?lifecycle=` on `GET /trip-schedules`.
+ *
+ *   operational   Lịch xe: every trip not yet finished, overdue ones included.
+ *   history       Lịch sử chuyến: finished trips only.
+ *
+ * Two projections of ONE trip, split by the server at the canonical terminal
+ * state — never by date, and never in the browser.
+ */
+export type TripLifecycle = 'operational' | 'history';
+
 export type CatalogueStatus = 'active' | 'archived';
 
 /** A trip as the WRITE paths return it: ids, no joined names. */

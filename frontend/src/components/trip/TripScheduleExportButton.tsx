@@ -4,6 +4,7 @@ import { fetchAllTripSchedules } from '@/api/tripSchedule';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
+import type { TripLifecycle } from '@/types/trip';
 import { downloadTripScheduleWorkbook } from '@/utils/export/tripScheduleWorkbook';
 import { notifyApiError, notifyError, notifySuccess } from '@/utils/toast';
 
@@ -22,13 +23,18 @@ import { notifyApiError, notifyError, notifySuccess } from '@/utils/toast';
  * be wrong. On the other tabs there is no button rather than a button that
  * means something different.
  *
+ * ★ AND THE SCREEN IT SITS ON, NEVER THE OTHER ONE. Lịch xe exports Lịch xe;
+ * Lịch sử chuyến exports Lịch sử chuyến — `lifecycle` goes to the same
+ * export route, so each file holds exactly the rows its screen lists.
+ *
  * ★ NO SPINNER OVER THE TABLE, ONLY IN THE BUTTON. The board behind stays
  * usable while a long range downloads; the one control that must not be pressed
  * twice is this one, and it disables itself.
  */
 export function TripScheduleExportButton({
   range,
-}: Readonly<{ range: { from: string; to: string } }>) {
+  lifecycle = 'operational',
+}: Readonly<{ range: { from: string; to: string }; lifecycle?: TripLifecycle }>) {
   const { t, language } = useLanguage();
   const { can } = useSession();
   const [running, setRunning] = useState(false);
@@ -38,7 +44,7 @@ export function TripScheduleExportButton({
     try {
       // `assignment` is pinned to the whole board rather than passed in — see
       // the note above about which rows this file is understood to contain.
-      const trips = await fetchAllTripSchedules({ ...range, assignment: 'all' });
+      const trips = await fetchAllTripSchedules({ ...range, assignment: 'all', lifecycle });
 
       // An empty range is not a failure, and it must not produce a file. A
       // workbook with a heading row and nothing under it looks exactly like a
@@ -62,6 +68,7 @@ export function TripScheduleExportButton({
         range,
         includePrices: can('trip.price.read'),
         includeCosts: can('cost.export'),
+        lifecycle,
       });
       notifySuccess('exportDone', {
         description: `${written} ${t('exportRowsUnit')}`,

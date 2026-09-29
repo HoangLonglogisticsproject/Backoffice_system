@@ -1,6 +1,7 @@
 import { httpClient } from './client';
 import type {
   TripAssignmentFilter,
+  TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
   TripStatus,
@@ -91,6 +92,8 @@ export type UpdateTripInput = Partial<CreateTripInput>;
  */
 export interface TripScheduleQuery extends OffsetPageRequest {
   assignment?: TripAssignmentFilter;
+  /** Lịch xe or Lịch sử chuyến. Omitted, the server reads Lịch xe. */
+  lifecycle?: TripLifecycle;
   /**
    * The server's order, never a sort applied here: a page is not the result
    * set, so sorting it in the browser would reorder twenty rows of a list of
@@ -143,6 +146,7 @@ async function readTripPage(
       page: request.page,
       limit: request.limit,
       assignment: request.assignment,
+      lifecycle: request.lifecycle,
       sort: request.sort,
       direction: request.direction,
     },

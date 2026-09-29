@@ -1,4 +1,5 @@
-import type { Language } from '@/types/translate';
+import type { Language, TranslationKey } from '@/types/translate';
+import type { TripLifecycle } from '@/types/trip';
 import type { TripBoardRow } from '@/types/tripBoard';
 import { SHEET_MONEY_FORMAT } from './sheetMoney';
 import { tripSheetCostHeadings } from './tripScheduleCostCells';
@@ -42,11 +43,21 @@ export interface TripScheduleExport {
    * the cost block rather than export a column of blanks.
    */
   includeCosts: boolean;
+  /** Which screen the rows are of — it names the file and the sheet, and shapes one column. */
+  lifecycle: TripLifecycle;
 }
 
+/** What each screen's file is called, and what its one sheet is titled. */
+const EXPORT_NAMES: Record<TripLifecycle, { file: string; sheet: TranslationKey }> = {
+  operational: { file: 'lich-xe', sheet: 'tripScheduleTitle' },
+  history: { file: 'lich-su-chuyen', sheet: 'tripHistoryTitle' },
+};
+
 /** `lich-xe_2026-09-01_2026-09-30.xlsx` — the range is in the name, so two exports never collide. */
-export const tripScheduleFileName = (range: { from: string; to: string }): string =>
-  `lich-xe_${range.from}_${range.to}.xlsx`;
+export const tripScheduleFileName = (
+  range: { from: string; to: string },
+  lifecycle: TripLifecycle = 'operational',
+): string => `${EXPORT_NAMES[lifecycle].file}_${range.from}_${range.to}.xlsx`;
 
 /**
  * Builds the workbook and hands it to the browser as a download.
@@ -62,14 +73,15 @@ export async function downloadTripScheduleWorkbook({
   range,
   includePrices,
   includeCosts,
+  lifecycle,
 }: TripScheduleExport): Promise<number> {
   const XLSX = await import('xlsx');
 
   const visible = { prices: includePrices, costs: includeCosts };
-  const rows = toTripSheetRows(trips, t, language, visible);
+  const rows = toTripSheetRows(trips, t, language, visible, lifecycle);
   const sheet = XLSX.utils.json_to_sheet(rows);
 
-  sheet['!cols'] = tripSheetColumnWidths(visible).map((wch) => ({ wch }));
+  sheet['!cols'] = tripSheetColumnWidths(visible, lifecycle).map((wch) => ({ wch }));
 
   // The heading row, as a filter — the first thing anybody does with an export
   // of a hundred trips is narrow it to one truck.
@@ -82,9 +94,9 @@ export async function downloadTripScheduleWorkbook({
   // Sheet names are capped at 31 characters and may not contain : \ / ? * [ ],
   // which a date range cannot produce — but the range belongs in the file name
   // rather than here, where it would push against that cap.
-  XLSX.utils.book_append_sheet(book, sheet, t('tripScheduleTitle').slice(0, 31));
+  XLSX.utils.book_append_sheet(book, sheet, t(EXPORT_NAMES[lifecycle].sheet).slice(0, 31));
 
-  XLSX.writeFile(book, tripScheduleFileName(range));
+  XLSX.writeFile(book, tripScheduleFileName(range, lifecycle));
 
   return rows.length;
 }

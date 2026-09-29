@@ -1,4 +1,4 @@
-import { TRIP_STATUS_LABELS } from '@/types/trip';
+import { TRIP_STATUS_LABELS, type TripLifecycle } from '@/types/trip';
 import type { Language, TranslationKey } from '@/types/translate';
 import { formatPlate } from '@/utils/format';
 import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
@@ -79,12 +79,18 @@ export interface SheetVisibility {
  * `startIndex` is 1-based and exists so the STT column counts the EXPORT, not
  * the page a row happened to arrive on — the export is one list, so its numbers
  * run 1..n whatever the page size was.
+ *
+ * ★ `lifecycle` IS WHICH SCREEN THE FILE IS OF, AND IT CHANGES ONE COLUMN.
+ * Lịch sử chuyến holds finished trips only, so a status column there would say
+ * "Hoàn thành" on every row — it is left out. Everything else, the money
+ * included, is the same composition: one row shaper, not two.
  */
 export function toTripSheetRows(
   trips: readonly TripBoardRow[],
   t: Translate,
   language: Language,
   { prices = false, costs = false }: SheetVisibility = {},
+  lifecycle: TripLifecycle = 'operational',
 ): TripSheetRow[] {
   const heading = {
     index: t('colIndex'),
@@ -144,9 +150,7 @@ export function toTripSheetRows(
       // The label a dispatcher reads, not the enum. An unknown sixth status
       // from the server falls back to its raw value — visibly wrong beats
       // blank, the same rule the badge follows.
-      [heading.status]: TRIP_STATUS_LABELS[trip.status]
-        ? t(TRIP_STATUS_LABELS[trip.status])
-        : trip.status,
+      ...(lifecycle === 'operational' ? { [heading.status]: statusLabel(trip.status, t) } : {}),
       // ★ BOTH COLUMNS ARE OMITTED ENTIRELY FOR A VIEWER WHO MAY NOT SEE
       // PRICES, exactly as the board drops them. The server has already blanked
       // the values, so keeping the headings would export two columns of empty
@@ -182,13 +186,21 @@ export function toTripSheetRows(
  * optional block would have turned into four hand-kept variants.
  * `tripScheduleSheet.costs.spec` pins that the widths always match the columns.
  */
-const LEADING_WIDTHS = [6, 12, 14, 20, 24, 30, 32, 20, 18, 32, 20, 18, 16];
+const LEADING_WIDTHS = [6, 12, 14, 20, 24, 30, 32, 20, 18, 32, 20, 18];
+const STATUS_WIDTHS = [16];
 const PRICE_WIDTHS = [14, 14];
 const TRAILING_WIDTHS = [40, 20];
 
-export const tripSheetColumnWidths = ({ prices = false, costs = false }: SheetVisibility = {}): number[] => [
+export const tripSheetColumnWidths = (
+  { prices = false, costs = false }: SheetVisibility = {},
+  lifecycle: TripLifecycle = 'operational',
+): number[] => [
   ...LEADING_WIDTHS,
+  ...(lifecycle === 'operational' ? STATUS_WIDTHS : []),
   ...(prices ? PRICE_WIDTHS : []),
   ...(costs ? TRIP_SHEET_COST_WIDTHS : []),
   ...TRAILING_WIDTHS,
 ];
+
+const statusLabel = (status: TripBoardRow['status'], t: Translate): string =>
+  TRIP_STATUS_LABELS[status] ? t(TRIP_STATUS_LABELS[status]) : status;

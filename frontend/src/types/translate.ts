@@ -983,6 +983,7 @@ const PHRASES = {
   dispatchSection: { vi: 'ĐIỀU PHỐI', en: 'DISPATCH' },
   tripSchedule: { vi: 'Lịch xe', en: 'Trip schedule' },
   tripScheduleTitle: { vi: 'Lịch xe', en: 'Trip schedule' },
+  tripHistoryTitle: { vi: 'Lịch sử chuyến', en: 'Trip history' },
   tripMasterData: { vi: 'Danh mục xe & khách', en: 'Vehicles & customers' },
 
   // Actions shared by both dispatch screens.
