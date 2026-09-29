@@ -32,6 +32,9 @@ import {
   ExecutionEventRepository,
 } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
 import { OperationalBoardService } from '../../src/capabilities/trip-schedule/application/operational-board.service';
+import { DriverPortalService } from '../../src/capabilities/trip-schedule/application/driver-portal.service';
+import { DriverTripReadModelRepository } from '../../src/capabilities/trip-schedule/persistence/driver-read-model.repository';
+import { businessToday } from '@common/pagination/date-range-page-query.dto';
 import { OperationalBoardRepository } from '../../src/capabilities/trip-schedule/persistence/operational-board.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
@@ -4060,6 +4063,120 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
   });
 
+
+  // ============================ Lịch xe → Lịch sử chuyến, and only this way ==
+
+  describe('★ Lịch xe → Lịch sử chuyến: only the canonical lifecycle moves a trip', () => {
+    /** Which read lists the trip — Lịch xe (`operational`) or History — asked for its own day. */
+    const where = async (trip: string) => {
+      const [row] = (await sql(`SELECT scheduled_on::text AS day FROM trip_schedules WHERE id = $1`, [trip])) as {
+        day: string;
+      }[];
+      const listed = async (lifecycle: 'operational' | 'history') =>
+        (
+          await board.list({
+            from: row!.day,
+            to: row!.day,
+            page: 1,
+            limit: 200,
+            assignment: 'all',
+            lifecycle,
+            sort: 'executionDate',
+            direction: 'desc',
+          })
+        ).items.some((listedTrip) => listedTrip.id === trip);
+      return { operational: await listed('operational'), history: await listed('history') };
+    };
+    const ON_BOARD = { operational: true, history: false };
+    const IN_HISTORY = { operational: false, history: true };
+
+    const statusOf = async (trip: string): Promise<string> =>
+      ((await sql(`SELECT status FROM trip_schedules WHERE id = $1`, [trip])) as { status: string }[])[0]!.status;
+    /** One assignment's own pending request — a trip with two lorries has two. */
+    const requestOf = async (assignment: string): Promise<string> =>
+      (
+        (await sql(
+          `SELECT id FROM trip_completion_requests WHERE driver_assignment_id = $1 AND state = 'pending'`,
+          [assignment],
+        )) as { id: string }[]
+      )[0]!.id;
+
+    it('A. a booking starts pending — on Lịch xe, not in History', async () => {
+      const day = businessToday(new Date(Date.now() + 3 * 86_400_000));
+      const booked = await board.create({ scheduledOn: day, entryMode: 'operational', createdBy: operator });
+
+      expect(booked.status).toBe('pending');
+      expect(await where(booked.id)).toEqual(ON_BOARD);
+    });
+
+    it('B. ★ a PAST day moves nothing — an overdue trip nobody closed is still work', async () => {
+      const trip = await newTrip(); // 30/08/2026: long past
+      await board.updateStatus(trip, 'executing', operator);
+
+      expect(await statusOf(trip)).toBe('executing');
+      expect(await where(trip)).toEqual(ON_BOARD);
+    });
+
+    it('C. ★ the driver ASKING to close it moves nothing — the request waits on a reviewer', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+
+      expect(await statusOf(trip)).not.toBe('finished');
+      expect(await where(trip)).toEqual(ON_BOARD);
+    });
+
+    it('D. ★ two lorries: approving one turn leaves the trip on Lịch xe; approving the last moves it', async () => {
+      const trip = await newTrip();
+      const a = await assignTo(trip, driverA);
+      const b = await assignTo(trip, driverB);
+      await completion.submit(a.id, driverA, 'none');
+      await completion.submit(b.id, driverB, 'none');
+
+      await completion.approve(trip, await requestOf(a.id), reviewer);
+      expect(await statusOf(trip)).not.toBe('finished');
+      expect(await where(trip)).toEqual(ON_BOARD);
+
+      await completion.approve(trip, await requestOf(b.id), reviewer);
+      expect(await statusOf(trip)).toBe('finished');
+      expect(await where(trip)).toEqual(IN_HISTORY);
+    });
+
+    it('E. ★ the approval that closes it: finished, stamped, recorded — off Lịch xe, into History', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+      const before = await statusOf(trip);
+
+      await approve(trip);
+
+      const [row] = (await sql(`SELECT status, closed_at, closed_by FROM trip_schedules WHERE id = $1`, [trip])) as {
+        status: string;
+        closed_at: Date | null;
+        closed_by: string | null;
+      }[];
+      expect(row).toMatchObject({ status: 'finished', closed_by: reviewer });
+      expect(row!.closed_at).toBeInstanceOf(Date);
+      const moves = (await sql(
+        `SELECT from_status, to_status, reason, changed_by FROM trip_status_history
+          WHERE trip_id = $1 ORDER BY changed_at, id`,
+        [trip],
+      )) as unknown[];
+      expect(moves.at(-1)).toEqual({
+        from_status: before,
+        to_status: 'finished',
+        reason: 'All assignments approved.',
+        changed_by: reviewer,
+      });
+      expect(await where(trip)).toEqual(IN_HISTORY);
+    });
+
+    it('F. the ONE exception: a run recorded after it ended is born finished, straight into History', async () => {
+      const recorded = await board.create({ scheduledOn: '2026-08-20', entryMode: 'historical', createdBy: operator });
+
+      expect(recorded.status).toBe('finished');
+      expect(await where(recorded.id)).toEqual(IN_HISTORY);
+    });
+  });
+
   describe('★ the operational board lists UNFINISHED trips — by lifecycle, never by date', () => {
     /** The board's rows for one trip, asked for exactly its own day. */
     const onBoard = async (trip: string) => {
@@ -4111,6 +4228,35 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
       expect(rows.filter((row) => row.tripId === recorded.id)).toEqual([]);
       expect(rows.some((row) => row.stage === 'NO_DRIVER' && row.tripId === recorded.id)).toBe(false);
+    });
+  });
+
+  describe('★ a recorded crew is history — never Driver Portal work', () => {
+    it('lists no recorded turn to its driver, opens none, and never shows it as a running turn', async () => {
+      const portal = new DriverPortalService(
+        new DriverTripReadModelRepository(database),
+        eventRows,
+        costs,
+        new CompletionRequestRepository(database),
+      );
+      const live = await runningTrip(); // the control: an active turn IS the driver's work
+      const recorded = await board.create({
+        scheduledOn: '2026-08-20',
+        entryMode: 'historical',
+        crew: [{ vehicleId: await newVehicle(plate()), driverUserId: driverA }],
+        createdBy: operator,
+      });
+      const [turn] = (await sql(`SELECT id, state FROM trip_driver_assignments WHERE trip_id = $1`, [
+        recorded.id,
+      ])) as { id: string; state: string }[];
+      expect(turn!.state).toBe('ended');
+
+      const mine = await portal.listMyAssignments(driverA);
+      expect(mine.map((trip) => trip.assignment.id)).toEqual([live.assignment]);
+      await expect(portal.findMyAssignment(turn!.id, driverA)).rejects.toThrow(NotFoundError);
+
+      const rows = await operations.list({ from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 });
+      expect(rows.some((row) => row.assignmentId === turn!.id)).toBe(false);
     });
   });
 
