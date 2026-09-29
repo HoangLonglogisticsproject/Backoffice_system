@@ -1218,7 +1218,7 @@ thứ tự và đúng các field như trước, cộng thêm một field nó có
 
 | Query | Giá trị | Mặc định | Sai → |
 |---|---|---|---|
-| `sort` | `executionDate` → `scheduled_on`, UI **"Ngày chạy"** (cùng nhãn form chuyến) · `bookingCreated` → `created_at`, UI **"Booking mới nhất"** · `lastUpdated` → `updated_at` của dòng chuyến, UI **"Chỉnh sửa gần nhất"** | `executionDate` | **422** `details.sort` — không lặng lẽ về mặc định |
+| `sort` | `executionDate` → `scheduled_on`, UI **"Ngày lấy hàng"** (từ §23: `scheduled_on` là ngày của thời gian lấy hàng) · `bookingCreated` → `created_at`, UI **"Booking mới nhất"** · `lastUpdated` → `updated_at` của dòng chuyến, UI **"Chỉnh sửa gần nhất"** | `executionDate` | **422** `details.sort` — không lặng lẽ về mặc định |
 | `direction` | `asc` · `desc` | `desc` | **422** `details.direction` |
 
 * Mọi thứ tự kết thúc bằng `id` cùng chiều → ổn định giữa các trang; đổi thứ tự thì
@@ -1286,3 +1286,74 @@ trong trang (chuyến không có dòng nào → toàn `"0.00"`), nên B không b
 Chi phí xuất Excel là **chi phí đã ghi nhận vận hành, không đồng nghĩa chi phí kế toán
 đã duyệt**: gồm mọi dòng còn hiệu lực (không bị huỷ), **kể cả dòng tài xế khai còn chờ
 duyệt** — khớp board và hộp thoại chi phí chuyến.
+
+## 23. Lịch xe / Lịch sử chuyến và mô hình thời gian (2026-09-29)
+
+**Một Trip, hai projection.** `GET /trip-schedules` và `GET /trip-schedules/export`
+nhận thêm `lifecycle`:
+
+| `lifecycle` | Màn hình | Điều kiện | Sai → |
+|---|---|---|---|
+| `operational` (**mặc định**) | Lịch xe | `status <> 'finished'` — kể cả chuyến quá hạn chưa kết thúc | **422** `details.lifecycle` |
+| `history` | Lịch sử chuyến | `status = 'finished'` (chỉ đạt qua duyệt hoàn tất) | |
+
+* ⚠ **Đổi mặc định**: chuyến `finished` **không còn** trả về khi không gửi `lifecycle`.
+* Không lọc theo ngày: một chuyến hôm qua chưa kết thúc vẫn ở Lịch xe; một chuyến
+  `finished` có ngày tương lai vẫn ở Lịch sử. Không dùng `closed_at` — chuyến `done`
+  trước 0017 được remap thành `finished` mà không có dấu đóng.
+* Khoảng ngày (`from`/`to`, ADR-0003) và `sort` giữ nguyên. Excel mỗi màn hình đọc
+  `/export` với `lifecycle` của chính nó (file `lich-xe_…` / `lich-su-chuyen_…`; bản
+  Lịch sử bỏ cột "Trạng thái").
+
+**Bốn mốc, không lẫn nhau.**
+
+| Field | Nghĩa | UI | Bắt buộc |
+|---|---|---|---|
+| `createdAt` | lúc bản ghi vào hệ thống — hệ thống ghi, không bao giờ là input, **không back-date** | — | — |
+| `scheduledOn` | **ngày lấy hàng dự kiến** (date-level) | "Ngày lấy hàng \*" | ✓ (hoặc suy từ `pickupAt`) |
+| `pickupAt` | giờ lấy hàng chính xác, **khi đã biết**; là một giờ *trên* `scheduledOn` (Asia/Ho_Chi_Minh) | "Giờ lấy hàng" | ✗ |
+| `deliveryAt` | ngày **và** giờ giao chính xác, khi đã biết | "Thời gian giao hàng" | ✗ |
+
+* `scheduledOn` và ngày (HCM) của `pickupAt` **không được lệch**: gửi cả hai mà lệch →
+  **422** `details.scheduledOn: 'NOT_THE_PICKUP_DAY'`; thiếu cả hai → **422**
+  `'DAY_REQUIRED'`. Đổi `pickupAt` thì `scheduledOn` theo nó. Dòng cũ đang lệch được
+  **giữ nguyên** qua mọi lần sửa không động tới hai field này.
+* **`deliveryAt > pickupAt`, nghiêm ngặt** (bằng nhau cũng từ chối), chỉ khi **cả hai**
+  đều có, trên mọi route ghi → **422** `details.deliveryAt: 'NOT_AFTER_PICKUP'`. Chỉ
+  kiểm khi request **đổi** một mốc: dòng cũ đã sai vẫn sửa note / giá được.
+* Không có "ngày giao không kèm giờ": `delivery_at` là một thời điểm; lưu một ngày
+  trơn sẽ cần cột mới. Giờ chưa biết thì để trống — **không bao giờ** thành 00:00.
+* Form Backoffice gửi các field thời gian khi **tạo**; khi **sửa** chỉ gửi field đã bị
+  chạm (ngày + giờ lấy đi thành cặp).
+
+**Một route tạo, ý định nằm trong body — không suy từ ngày.** `POST /trip-schedules`,
+quyền **`trip.create`** cho cả hai; thêm `entryMode: 'operational' | 'historical'`
+(mặc định `operational`; giá trị khác → **422** `details.entryMode`). `entryMode` là
+**ý định tạo**, không phải trạng thái, không lưu vào chuyến. Server quyết trạng thái
+khởi đầu (`initialLifecycle`):
+
+| `entryMode` | Màn hình | Trạng thái khởi đầu | Lịch | Crew trong body |
+|---|---|---|---|---|
+| `operational` | Lịch xe — "Thêm chuyến" | `status` gửi lên (mặc định `pending`); `finished` → **409** | ngày lấy hàng **trước hôm nay** → **422** `details.scheduledOn: 'PAST_DAY'` | **422** `details.crew: 'CREW_AFTER_BOOKING'` — điều độ qua route phân công sau khi có chuyến (như trước) |
+| `historical` | Lịch sử chuyến — "Nhập chuyến cũ" | **`finished` do server đặt**; gửi kèm `status` bất kỳ → **422** `details.status: 'STATUS_SET_BY_ENTRY'` | ngày **sau hôm nay** → **422** `'FUTURE_DAY'`; `pickupAt` / `deliveryAt` **có giá trị** mà sau thời điểm hiện tại → **422** `details.pickupAt` / `details.deliveryAt: 'FUTURE_INSTANT'` | `crew?: { vehicleId, driverUserId }[]` (≤ 20), cần **`dispatch.write`** (thiếu → **403**); trùng xe → **422** `details.crew: 'DUPLICATE_VEHICLE'` |
+
+`POST /trip-schedules/historical` **không còn** (404). Với `historical`, cùng một
+transaction ghi:
+
+* dòng `trip_schedules` qua đúng luật danh mục / snapshot / timeline / ngày như mọi
+  chuyến, `status = 'finished'`, `closed_by` = người nhập, `closed_at` = `created_at` =
+  lúc nhập;
+* **một** dòng `trip_status_history`: `null → finished`, `reason = 'historical_entry'`
+  (siêu dữ liệu audit, không phải trạng thái; không dùng để phân quyền hay lọc);
+* mỗi cặp crew là một assignment **ghi rồi kết thúc ngay** (`state = 'ended'`,
+  `end_reason = 'historical_entry'`) — không để assignment ACTIVE trên chuyến đã
+  kết thúc, nên Driver Portal và operational board không coi là việc cần làm. Board
+  (`assignments[]`) và Excel Lịch sử vẫn liệt kê crew đó.
+* **Không** tạo completion request, execution event hay notification nào.
+
+Chuyến nhập cũ sau đó sửa được như mọi chuyến `finished` (vd. Kế toán nhập giá).
+**Chi phí** bổ sung qua đúng đường của sổ chi phí: `POST /trip-schedules/:id/costs` và
+`/outsource-hires` (`cost.create`, hiện chỉ SuperAdmin) — đường này không đọc trạng
+thái chuyến, như với mọi chuyến `finished`; chỉ khoản **tài xế khai** trên Driver
+Portal bị từ chối khi chuyến đã đóng. Crew thì chỉ ghi được lúc nhập (điều độ từ chối
+chuyến đã đóng).
