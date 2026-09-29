@@ -144,7 +144,7 @@ describe('TripHistoryPage', () => {
     expect(screen.getByText(/vào thẳng Lịch sử chuyến/)).toBeInTheDocument();
     // What it will be, frozen — there is no status to choose.
     expect(screen.getByLabelText('Trạng thái')).toBeDisabled();
-    expect(screen.getByLabelText('Trạng thái')).toHaveDisplayValue('Hoàn thành');
+    expect(screen.getByLabelText('Trạng thái')).toHaveDisplayValue('Đã xác nhận');
 
     fill('2020-09-23', '17:36', '2020-09-24T16:36');
     expect(screen.getByLabelText('Ngày lấy hàng *')).not.toHaveAttribute('aria-invalid');

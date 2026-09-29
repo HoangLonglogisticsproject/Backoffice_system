@@ -15,7 +15,9 @@ import {
 } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
+import { COMPLETION_APPROVED_REASON, MANUAL_COMPLETION_REASON } from '../domain/trip-status-history';
 import { NotificationService } from '../../notification/application/notification.service';
+import { closeTrip } from './trip-closure';
 import { eventKeys } from '../../notification/domain/notification';
 
 /**
@@ -47,6 +49,11 @@ export class TripCompletionService {
     private readonly history: TripStatusHistoryRepository,
     private readonly notifications: NotificationService,
   ) {}
+
+  /** What `closeTrip` writes through — this service's own repositories. */
+  private get closing() {
+    return { trips: this.trips, history: this.history };
+  }
 
   /**
    * The driver asks for their assignment to be closed.
@@ -162,7 +169,7 @@ export class TripCompletionService {
       await this.costs.finalizeForAssignment(pending.driverAssignmentId, tx);
 
       if (!(await this.requests.hasUnapprovedActiveAssignment(tripId, tx))) {
-        await this.finishTrip(trip, decidedBy, tx);
+        await closeTrip(this.closing, trip, { by: decidedBy, reason: COMPLETION_APPROVED_REASON, at: new Date() }, tx);
       }
 
       // ★ THE PERSON WHO ASKED, read off the request. Never "whoever is on the
@@ -273,30 +280,28 @@ export class TripCompletionService {
   }
 
   /**
-   * Closes the trip: status, history, stamp — together, once.
+   * ★ THE SUPERADMIN DECLARES THE TRIP DONE — "Đã xác nhận" on the board.
    *
-   * ★ THE ONLY WRITER OF `finished` IN THE CODEBASE, as it has always been.
-   * Reached only from `approve`, under the trip lock, after the last active
-   * assignment's approval was written — so two approvals racing on two turns
-   * of one trip arrive here one at a time, and only the one that observed
-   * "nothing left unapproved" gets in. `markClosed` is `WHERE closed_at IS
-   * NULL` as a second line.
+   * TEMPORARY, until the Driver flow is the only way: the same closure as the
+   * approval of a last turn (`closeTrip`), in ONE step. Nothing asks for a
+   * second confirmation afterwards, because this is the confirmation.
+   *
+   * ★ REFUSED WHILE A DRIVER'S REQUEST WAITS. That request IS the completion
+   * being asked for — deciding it is the way; closing around it would leave a
+   * request nobody could ever decide. The money is not frozen here: every
+   * driver write refuses a closed trip, and the backoffice ledger stays open
+   * for a finished trip exactly as it is for any other.
    */
-  private async finishTrip(trip: TripSchedule, decidedBy: string, tx: DatabaseQuery): Promise<void> {
-    const closed = await this.trips.updateStatus(trip.id, 'finished', tx);
-    if (!closed) throw new Error('Locked trip disappeared during completion.');
-
-    await this.history.record(
-      {
-        tripId: trip.id,
-        from: trip.status,
-        to: 'finished',
-        reason: 'All assignments approved.',
-        changedBy: decidedBy,
-      },
-      tx,
-    );
-    await this.trips.markClosed(trip.id, decidedBy, new Date(), tx);
+  async completeManually(tripId: string, decidedBy: string): Promise<TripSchedule> {
+    return this.db.transaction(async (tx) => {
+      const trip = await this.lockOpenTrip(tripId, tx);
+      if (await this.requests.hasPendingOnTrip(tripId, tx)) {
+        throw new ConflictError(
+          "A driver's completion request on this trip is waiting — approve or reject it instead.",
+        );
+      }
+      return closeTrip(this.closing, trip, { by: decidedBy, reason: MANUAL_COMPLETION_REASON, at: new Date() }, tx);
+    });
   }
 
   /**

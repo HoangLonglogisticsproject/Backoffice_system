@@ -54,10 +54,11 @@ describe('trip_schedules.status — the write paths', () => {
     }
   });
 
-  it('★ reaches `finished` from exactly one place: the completion service', async () => {
+  it('★ reaches `finished` from exactly one place: the canonical closure', async () => {
     // The single most important assertion here. 0025 makes `finished` terminal,
     // so a second way in is a way to close a trip permanently while skipping the
-    // approval, the expense freeze and the closing stamp.
+    // closing stamp and the history. "Đã xác nhận" — approval, the SuperAdmin's
+    // manual completion, the legacy normalization — all go through `closeTrip`.
     const offenders: string[] = [];
 
     for (const folder of ['api', 'application']) {
@@ -67,7 +68,23 @@ describe('trip_schedules.status — the write paths', () => {
       }
     }
 
-    expect(offenders).toEqual(['application/trip-completion.service.ts']);
+    expect(offenders).toEqual(['application/trip-closure.ts']);
+  });
+
+  it('★ closes a trip only through the completion service, and names each door in the history', async () => {
+    const callers: string[] = [];
+    for (const folder of ['api', 'application', 'cli']) {
+      for (const file of await listFiles(folder)) {
+        if (/\bcloseTrip\(/.test(code(await read(folder, file))) && file !== 'trip-closure.ts') {
+          callers.push(`${folder}/${file}`);
+        }
+      }
+    }
+    expect(callers).toEqual(['application/trip-completion.service.ts']);
+
+    const completion = code(await read('application', 'trip-completion.service.ts'));
+    expect(completion).toContain('reason: COMPLETION_APPROVED_REASON');
+    expect(completion).toContain('reason: MANUAL_COMPLETION_REASON');
   });
 
   it('refuses `finished` on every route the dispatch board offers', async () => {
@@ -96,7 +113,7 @@ describe('trip_schedules.status — the write paths', () => {
       }
     }
 
-    expect(callers).toEqual(['application/trip-completion.service.ts']);
+    expect(callers).toEqual(['application/trip-closure.ts']);
   });
 
   it('★ is BORN finished by exactly one statement, and only for a run recorded after it ended', async () => {
@@ -147,12 +164,13 @@ describe('trip_status_history — no bypass', () => {
   it('is recorded by every service that moves a status, and only inside a transaction', async () => {
     // Two files write the status; both must record. `record` takes its executor
     // with NO DEFAULT, so a caller without a transaction in hand cannot call it
-    // at all — the type checker holds that half.
+    // at all — the type checker holds that half. Closing records through the
+    // canonical closure, in the same call that writes `finished`.
     const schedule = code(await read('application', 'trip-schedule.service.ts'));
-    const completion = code(await read('application', 'trip-completion.service.ts'));
+    const closure = code(await read('application', 'trip-closure.ts'));
 
     expect(schedule).toContain('this.history.record(');
-    expect(completion).toContain('this.history.record(');
+    expect(closure).toContain('repositories.history.record(');
 
     const historyRepository = code(await read('persistence', 'trip-status-history.repository.ts'));
     expect(historyRepository).toContain('executor: DatabaseQuery,');

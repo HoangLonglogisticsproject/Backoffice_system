@@ -1,7 +1,8 @@
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useSession } from '@/contexts/SessionProvider';
 import { useUpdateTripStatus } from '@/hooks/trip';
 import { cn } from '@/utils/cn';
-import { DISPATCH_SELECTABLE_STATUSES, type TripStatus } from '@/types/trip';
+import { boardStatusOptions, type TripStatus } from '@/types/trip';
 import { TripStatusBadge } from './TripStatusBadge';
 import { TRIP_STATUS_STYLES } from './tripStatus';
 
@@ -40,7 +41,10 @@ export function TripStatusSelect({
   status,
 }: Readonly<{ tripId: string; status: TripStatus }>) {
   const { t } = useLanguage();
+  const { can } = useSession();
   const mutation = useUpdateTripStatus();
+  // "Đã xác nhận" completes the trip, so only whoever may complete one sees it.
+  const options = boardStatusOptions(can('trip.complete.review'));
 
   const style = TRIP_STATUS_STYLES[status];
 
@@ -88,7 +92,13 @@ export function TripStatusSelect({
         )}
       >
         {!style && <option value={status}>{status}</option>}
-        {DISPATCH_SELECTABLE_STATUSES.map((option) => (
+        {/* The truth, not a choice: a retired `confirmed` row still says so. */}
+        {style && !options.includes(status) && (
+          <option value={status} disabled>
+            {t(style.label)}
+          </option>
+        )}
+        {options.map((option) => (
           <option key={option} value={option} className="bg-white text-gray-900">
             {t(TRIP_STATUS_STYLES[option].label)}
           </option>

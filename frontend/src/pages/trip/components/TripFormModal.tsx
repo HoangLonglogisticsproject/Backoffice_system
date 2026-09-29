@@ -792,6 +792,13 @@ export function TripFormModal({
               {statusLocked && (
                 <option value="finished">{t(TRIP_STATUS_STYLES.finished.label)}</option>
               )}
+              {/* A retired `confirmed` row: shown as it is, never offered — the
+                  form re-sends it unchanged, which the server accepts as no move. */}
+              {!statusLocked && !DISPATCH_SELECTABLE_STATUSES.includes(form.status) && (
+                <option value={form.status} disabled>
+                  {t(TRIP_STATUS_STYLES[form.status].label)}
+                </option>
+              )}
               {DISPATCH_SELECTABLE_STATUSES.map((status) => (
                 <option key={status} value={status}>
                   {t(TRIP_STATUS_STYLES[status].label)}

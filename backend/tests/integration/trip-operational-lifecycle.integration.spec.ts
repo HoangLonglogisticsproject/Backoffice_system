@@ -2380,12 +2380,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('records both ends of every board move, with who and why', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'confirmed', operator, 'Đã có khách.');
+      await board.updateStatus(trip, 'executing', operator, 'Đã có khách.');
 
       const history = await board.statusHistory(trip);
       expect(history[0]).toMatchObject({
         from: 'pending',
-        to: 'confirmed',
+        to: 'executing',
         reason: 'Đã có khách.',
         changedBy: operator,
       });
@@ -2417,15 +2417,15 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ every status the trip ever held is reconstructible', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'confirmed', operator);
+      await board.updateStatus(trip, 'executing', operator);
       await board.updateStatus(trip, 'pending', operator);
-      await board.updateStatus(trip, 'confirmed', operator);
+      await board.updateStatus(trip, 'executing', operator);
 
       const history = await board.statusHistory(trip);
       expect(history.map((h) => h.to)).toEqual([
-        'confirmed',
+        'executing',
         'pending',
-        'confirmed',
+        'executing',
         'pending',
       ]);
     });
@@ -4338,4 +4338,144 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
     });
   });
+
+  // ============================ "Đã xác nhận" = finished — one closure, three doors ==
+
+  describe('★ "Đã xác nhận" is `finished` — the manual completion', () => {
+    let portal: DriverPortalService;
+    beforeEach(() => {
+      portal = new DriverPortalService(
+        new DriverTripReadModelRepository(database),
+        eventRows,
+        costs,
+        new CompletionRequestRepository(database),
+      );
+    });
+
+    type Row = { status: string; closed_at: Date | null; closed_by: string | null; day: string };
+    const rowOf = async (trip: string): Promise<Row & Record<string, unknown>> =>
+      ((await sql(
+        `SELECT status, closed_at, closed_by, customer_id, cargo_info, sell_price::text AS sell,
+                purchase_price::text AS purchase, pickup_at, delivery_at, scheduled_on::text AS day
+           FROM trip_schedules WHERE id = $1`,
+        [trip],
+      )) as (Row & Record<string, unknown>)[])[0]!;
+    const lastMove = async (trip: string) =>
+      (
+        await sql(
+          `SELECT from_status, to_status, reason, changed_by FROM trip_status_history
+            WHERE trip_id = $1 ORDER BY changed_at DESC, id DESC LIMIT 1`,
+          [trip],
+        )
+      )[0];
+    /** Which reads list the trip, each asked for the trip's own day. */
+    const seenIn = async (trip: string) => {
+      const { day } = await rowOf(trip);
+      const listed = async (lifecycle: 'operational' | 'history') =>
+        (
+          await board.list({
+            from: day,
+            to: day,
+            page: 1,
+            limit: 200,
+            assignment: 'all',
+            lifecycle,
+            sort: 'executionDate',
+            direction: 'desc',
+          })
+        ).items.some((listedTrip) => listedTrip.id === trip);
+      return {
+        lichXe: await listed('operational'),
+        history: await listed('history'),
+        operationalBoard: (await operations.list({ from: day, to: day, page: 1, limit: 200 })).some(
+          (row) => row.tripId === trip,
+        ),
+        reviewQueue: (await operations.listUnresolvedCompletions()).some((row) => row.tripId === trip),
+      };
+    };
+    const IN_HISTORY_ONLY = { lichXe: false, history: true, operationalBoard: false, reviewQueue: false };
+    const invented = async (trip: string): Promise<number> =>
+      Number(
+        (
+          (await sql(
+            `SELECT (SELECT count(*) FROM trip_execution_events WHERE trip_id = $1)
+                  + (SELECT count(*) FROM trip_completion_requests WHERE trip_id = $1)
+                  + (SELECT count(*) FROM notifications WHERE trip_id = $1) AS n`,
+            [trip],
+          )) as { n: string }[]
+        )[0]!.n,
+      );
+    const driverSees = async (assignment: string) => ({
+      liveWork: (await portal.listMyAssignments(driverA)).some((t) => t.assignment.id === assignment),
+      history: (await portal.listMyFinishedTrips(driverA, { limit: 50 })).trips.some(
+        (t) => t.assignment.id === assignment,
+      ),
+      detailClosed: (await portal.findMyAssignment(assignment, driverA)).closed,
+    });
+
+    it('A/B. ★ the SuperAdmin chooses "Đã xác nhận": finished, stamped, recorded — in ONE step, into History', async () => {
+      const { trip, assignment } = await runningTrip();
+      const before = (await rowOf(trip)).status;
+      const alreadyWritten = await invented(trip); // dispatch told the driver: one notification
+
+      const closed = await completion.completeManually(trip, reviewer);
+
+      expect(closed.status).toBe('finished');
+      const row = await rowOf(trip);
+      expect(row).toMatchObject({ status: 'finished', closed_by: reviewer });
+      expect(row.closed_at).toBeInstanceOf(Date);
+      expect(await lastMove(trip)).toEqual({
+        from_status: before,
+        to_status: 'finished',
+        reason: 'manual_completion',
+        changed_by: reviewer,
+      });
+      expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+      expect(await driverSees(assignment)).toEqual({ liveWork: false, history: true, detailClosed: true });
+      // ★ NO SECOND CONFIRMATION: nothing is pending, and nothing more is asked of anybody.
+      expect(await invented(trip)).toBe(alreadyWritten);
+      await expect(completion.completeManually(trip, reviewer)).rejects.toThrow(ConflictError);
+    });
+
+    it('refuses while a driver request waits — deciding it is the way, and that ends in the SAME finished', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+
+      await expect(completion.completeManually(trip, reviewer)).rejects.toThrow(ConflictError);
+      expect((await rowOf(trip)).status).not.toBe('finished');
+
+      await approve(trip); // F. the Driver-driven path: the same closure, its own reason
+      expect(await rowOf(trip)).toMatchObject({ status: 'finished', closed_by: reviewer });
+      expect(await lastMove(trip)).toMatchObject({ to_status: 'finished', reason: 'All assignments approved.' });
+      expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+    });
+
+    it('a request sent back before "Đã xác nhận" leaves the review queue with the trip', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+      await reject(trip, 'Thiếu chứng từ.');
+      expect((await seenIn(trip)).reviewQueue).toBe(true);
+
+      await completion.completeManually(trip, reviewer);
+
+      expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+    });
+
+    it('C. pending ↔ executing unchanged; the retired `confirmed` is written by nobody; a plain move never closes', async () => {
+      const trip = await newTrip();
+      await board.updateStatus(trip, 'executing', operator);
+      await board.updateStatus(trip, 'pending', operator);
+      expect((await rowOf(trip)).status).toBe('pending');
+
+      await expect(board.updateStatus(trip, 'confirmed', operator)).rejects.toThrow(ValidationError);
+      await expect(board.update(trip, { status: 'confirmed' }, operator)).rejects.toThrow(ValidationError);
+      await expect(
+        board.create({ scheduledOn: '2026-08-30', status: 'confirmed', createdBy: operator }),
+      ).rejects.toThrow(ValidationError);
+      await expect(board.updateStatus(trip, 'finished', operator)).rejects.toThrow(ConflictError);
+      expect((await rowOf(trip)).status).toBe('pending');
+    });
+
+  });
+
 });
