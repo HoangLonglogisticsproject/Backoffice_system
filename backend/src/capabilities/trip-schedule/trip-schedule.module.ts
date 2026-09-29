@@ -18,6 +18,7 @@ import { TripCompletionService } from './application/trip-completion.service';
 import { TripCostService } from './application/trip-cost.service';
 import { TripExecutionService } from './application/trip-execution.service';
 import { TripEntryCrew } from './application/trip-entry-crew';
+import { LegacyConfirmedNormalization } from './application/legacy-confirmed-normalization';
 import { TripScheduleService } from './application/trip-schedule.service';
 import {
   TripCustomerRepository,
@@ -71,6 +72,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     TripExecutionService,
     TripCompletionService,
     TripEntryCrew,
+    LegacyConfirmedNormalization,
     DriverPortalService,
     OperationalBoardService,
     ActiveAssignmentGuard,

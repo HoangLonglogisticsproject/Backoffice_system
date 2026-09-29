@@ -20,7 +20,8 @@
     "dev:seed-departments": "ts-node -T src/core/organization/cli/seed-departments.cli.ts",
     "sonar": "bash scripts/sonar-findings.sh",
     "test:integration": "jest --config jest.integration.config.js",
-    "dev:seed-driver-history": "ts-node -T src/capabilities/trip-schedule/cli/seed-driver-history.cli.ts"
+    "dev:seed-driver-history": "ts-node -T src/capabilities/trip-schedule/cli/seed-driver-history.cli.ts",
+    "trips:normalize-confirmed": "ts-node -T src/capabilities/trip-schedule/cli/normalize-legacy-confirmed.cli.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

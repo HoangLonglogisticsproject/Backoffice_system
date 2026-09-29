@@ -71,7 +71,7 @@ describe('trip_schedules.status — the write paths', () => {
     expect(offenders).toEqual(['application/trip-closure.ts']);
   });
 
-  it('★ closes a trip only through the completion service, and names each door in the history', async () => {
+  it('★ closes a trip from exactly three doors, and names each one in the history', async () => {
     const callers: string[] = [];
     for (const folder of ['api', 'application', 'cli']) {
       for (const file of await listFiles(folder)) {
@@ -80,11 +80,16 @@ describe('trip_schedules.status — the write paths', () => {
         }
       }
     }
-    expect(callers).toEqual(['application/trip-completion.service.ts']);
+    expect(callers).toEqual(['application/legacy-confirmed-normalization.ts', 'application/trip-completion.service.ts']);
 
     const completion = code(await read('application', 'trip-completion.service.ts'));
+    const legacy = code(await read('application', 'legacy-confirmed-normalization.ts'));
     expect(completion).toContain('reason: COMPLETION_APPROVED_REASON');
     expect(completion).toContain('reason: MANUAL_COMPLETION_REASON');
+    expect(legacy).toContain('reason: LEGACY_NORMALIZATION_REASON');
+    // ★ AND FABRICATES NOTHING: the normalization writes no event, request,
+    // approval or notification, and ends no turn.
+    expect(legacy).not.toMatch(/recordEvent|requests\.|decide\(|notification|\.end\(|assign\(/i);
   });
 
   it('refuses `finished` on every route the dispatch board offers', async () => {
