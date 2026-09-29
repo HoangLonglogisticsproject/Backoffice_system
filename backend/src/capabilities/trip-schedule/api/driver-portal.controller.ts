@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { ZodValidationPipe } from '../../../common/http/zod-validation.pipe';
@@ -12,7 +12,11 @@ import { DriverPortalService } from '../application/driver-portal.service';
 import { TripCompletionService } from '../application/trip-completion.service';
 import { TripCostService } from '../application/trip-cost.service';
 import { TripExecutionService } from '../application/trip-execution.service';
-import type { DriverTrip, DriverTripDetail } from '../domain/driver-read-model';
+import type {
+  DriverHistoryPage,
+  DriverTrip,
+  DriverTripDetail,
+} from '../domain/driver-read-model';
 import type { TripCost } from '../domain/trip-cost';
 import {
   EXECUTION_EVENT_TYPES,
@@ -143,6 +147,33 @@ const submitCompletionSchema = z.object({
   expenseDeclaration: z.enum(EXPENSE_DECLARATIONS),
 });
 
+/**
+ * One page of history.
+ *
+ * ★ A CEILING ON `limit`, BECAUSE THE CALLER PICKS IT. Without one, `?limit=1000000`
+ * is a whole driver's history assembled in memory on request — cheap to ask for
+ * and not cheap to serve. Fifty is more than a phone screen and small enough
+ * that the worst case is uninteresting.
+ *
+ * ★ THE CURSOR IS TWO PARAMETERS, NOT AN ENCODED BLOB. A base64 token would
+ * only be this pair with a step that hides it; plain parameters are readable in
+ * a log and in a bug report, and they carry no authority either way — the query
+ * filters on the session's driver id whatever the cursor says.
+ *
+ * Both halves or neither: half a cursor is a caller mistake, and silently
+ * treating it as "first page" would show them a page they did not ask for.
+ */
+const historyQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    before: z.coerce.date().optional(),
+    beforeId: z.string().uuid().optional(),
+  })
+  .refine((query) => (query.before === undefined) === (query.beforeId === undefined), {
+    message: 'A page cursor needs both `before` and `beforeId`, or neither.',
+  });
+
+type HistoryQuery = z.infer<typeof historyQuerySchema>;
 type RecordEventBody = z.infer<typeof recordEventSchema>;
 type DeclareExpenseBody = z.infer<typeof declareExpenseSchema>;
 type EditExpenseBody = z.infer<typeof editExpenseSchema>;
@@ -176,6 +207,39 @@ export class DriverPortalController {
   @UseGuards(AuthGuard, DriverOnlyGuard, ProvisionedAccountGuard)
   async listMyAssignments(@CurrentUser() actor: SessionUser): Promise<DriverTrip[]> {
     return this.portal.listMyAssignments(actor.id);
+  }
+
+  /**
+   * The trips this driver has already run to the end, newest first.
+   *
+   * ★ `driver/history`, NOT `driver/assignments/history`. The route below is
+   * `assignments/:assignmentId`, and Nest matches in declaration order — a
+   * literal segment sitting under a parameter route is read as an id, and
+   * `UuidParam` then answers 400 for a word. Its own path cannot collide.
+   *
+   * ★ SAME GUARDS AS THE LIVE LIST, AND FOR THE SAME REASONS. No
+   * `ActiveAssignmentGuard`: there is no `:assignmentId` to check, and the
+   * scope IS the session user. `ProvisionedAccountGuard` still applies — a
+   * driver holding a temporary password must not read addresses and cargo,
+   * and past trips are no less readable than live ones.
+   *
+   * ★ THE CURSOR IS THE CALLER'S, NOT AN AUTHORITY. It only says where to
+   * resume; the query filters on the session's driver id regardless, so a
+   * forged cursor moves somebody's own window and nothing else.
+   */
+  @Get('history')
+  @UseGuards(AuthGuard, DriverOnlyGuard, ProvisionedAccountGuard)
+  async listMyHistory(
+    @Query(new ZodValidationPipe(historyQuerySchema)) query: HistoryQuery,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<DriverHistoryPage> {
+    return this.portal.listMyFinishedTrips(actor.id, {
+      limit: query.limit,
+      before:
+        query.before && query.beforeId
+          ? { assignedAt: query.before, id: query.beforeId }
+          : null,
+    });
   }
 
   /** One assignment, whitelisted — see `DriverTrip` for what is absent and why. */

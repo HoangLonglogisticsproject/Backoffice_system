@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { NotFoundError } from '../../../common/errors/domain.error';
-import type { DriverTrip, DriverTripDetail } from '../domain/driver-read-model';
+import type {
+  DriverHistoryPage,
+  DriverHistoryQuery,
+  DriverTrip,
+  DriverTripDetail,
+} from '../domain/driver-read-model';
 import { accountabilityOf } from '../domain/trip-execution';
 import { DriverTripReadModelRepository } from '../persistence/driver-read-model.repository';
 import { TripCostRepository } from '../persistence/trip-cost.repository';
@@ -37,6 +42,42 @@ export class DriverPortalService {
   /** The assignments this driver holds right now — one per lorry. */
   async listMyAssignments(driverUserId: string): Promise<DriverTrip[]> {
     return this.trips.listForDriver(driverUserId);
+  }
+
+  /**
+   * The trips this driver has already run to the end, newest first.
+   *
+   * ★ ONE PAGE PLUS ONE ROW, WHICH IS HOW "is there more" IS ANSWERED WITHOUT A
+   * COUNT. `COUNT(*)` over a driver's whole history is a second scan of the
+   * same index to learn one boolean; asking for `limit + 1` rows and throwing
+   * the extra away costs nothing and cannot disagree with the page it describes.
+   *
+   * ★ THE CURSOR IS OPAQUE TO THE CALLER AND CHECKED HERE. It names a row the
+   * driver has already been shown, so it carries no authority of its own — the
+   * query still filters on `driverUserId` regardless of what the cursor says.
+   * A forged cursor can move somebody's own window, and nothing else.
+   */
+  async listMyFinishedTrips(
+    driverUserId: string,
+    { limit, before }: DriverHistoryQuery,
+  ): Promise<DriverHistoryPage> {
+    const rows = await this.trips.listFinishedForDriver(driverUserId, {
+      limit: limit + 1,
+      before: before ?? null,
+    });
+
+    const trips = rows.slice(0, limit);
+    const last = trips[trips.length - 1];
+
+    return {
+      trips,
+      // `null` means "that was the end", which the screen needs in order to
+      // stop asking. An empty page and a last page are the same answer here.
+      nextCursor:
+        rows.length > limit && last
+          ? { assignedAt: last.assignment.assignedAt, id: last.assignment.id }
+          : null,
+    };
   }
 
   /**

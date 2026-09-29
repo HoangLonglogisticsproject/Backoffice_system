@@ -158,12 +158,29 @@ const PHRASES = {
   companyName: { vi: 'Hoàng Long', en: 'Hoàng Long' },
   driverPortal: { vi: 'Cổng tài xế', en: 'Driver Portal' },
   driverSchedule: { vi: 'Lịch làm việc', en: 'Work schedule' },
+  // ★ "ĐÃ CHẠY XONG", NOT "LỊCH SỬ CHUYẾN". What belongs here is defined by the
+  // TRIP having finished, and the label says exactly that — a driver swapped
+  // off a trip that later finished still finds it, and one still on the road
+  // does not.
+  driverHistory: { vi: 'Đã chạy xong', en: 'Completed' },
+  driverHistoryHint: {
+    vi: 'Các chuyến đã hoàn thành, mới nhất trước.',
+    en: 'Trips that have been completed, newest first.',
+  },
+  driverHistoryEmpty: {
+    vi: 'Chưa có chuyến nào hoàn thành.',
+    en: 'No completed trips yet.',
+  },
+  driverHistoryMore: { vi: 'Xem thêm', en: 'Show more' },
+  // Said out loud: a list that simply stops looks like one that failed to load
+  // the rest.
+  driverHistoryEnd: { vi: 'Đã hết.', en: 'That is everything.' },
   // ★ THE SCHEDULE IS SPLIT BY THE TRIP'S DAY, NOT BY A STATUS: the list the
   // server sends carries no execution state, so "done" is not something it can
   // say. "Earlier" is a date, and says nothing about whether the work is closed.
   driverViewToday: { vi: 'Hôm nay', en: 'Today' },
   driverViewUpcoming: { vi: 'Sắp tới', en: 'Upcoming' },
-  driverViewPast: { vi: 'Đã qua', en: 'Earlier' },
+  driverViewPast: { vi: 'Chuyến đã chạy', en: 'Finised trip' },
   driverEmptyToday: { vi: 'Bạn chưa có chuyến nào hôm nay.', en: 'You have no trips today.' },
   driverEmptyUpcoming: { vi: 'Chưa có lịch sắp tới.', en: 'Nothing is scheduled yet.' },
   driverEmptyPast: { vi: 'Chưa có chuyến nào đã qua.', en: 'No earlier trips.' },

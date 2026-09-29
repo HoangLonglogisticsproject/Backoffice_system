@@ -68,7 +68,7 @@ services:
       # says it is unavailable, while the OpenStreetMap pin and the two
       # coordinate fields still locate a place. Get one at account.goong.io.
       GOONG_API_KEY: ${GOONG_API_KEY:-}
-    ports:
+    ports:  
       - '127.0.0.1:3000:3000'
     healthcheck:
       test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:3000/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']

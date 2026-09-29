@@ -32,6 +32,7 @@ import EmployeeManagementPage from './pages/organization/EmployeeManagementPage'
 import AccountSecurityPage from './pages/account/AccountSecurityPage'
 import DriverTripsPage from './pages/driver/DriverTripsPage'
 import DriverTripPage from './pages/driver/DriverTripPage'
+import DriverHistoryPage from './pages/driver/DriverHistoryPage'
 import DriverNotificationsPage from './pages/driver/DriverNotificationsPage'
 import { RequireSession } from './components/common/SessionGuard'
 
@@ -59,6 +60,9 @@ function App() {
       >
         <Route path="/driver" element={<DriverTripsPage />} />
         <Route path="/driver/assignments/:assignmentId" element={<DriverTripPage />} />
+        {/* The trips already run to the end. Declared before the catch-all
+            below, which would otherwise send it back to the schedule. */}
+        <Route path="/driver/history" element={<DriverHistoryPage />} />
         {/* What the driver has been told. The API's list, not the stream's. */}
         <Route path="/driver/notifications" element={<DriverNotificationsPage />} />
         {/* The one account function a driver has: their password. Same page

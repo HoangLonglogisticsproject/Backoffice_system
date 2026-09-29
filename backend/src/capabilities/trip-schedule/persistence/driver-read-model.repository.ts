@@ -156,6 +156,60 @@ export class DriverTripReadModelRepository {
   }
 
   /**
+   * The trips this driver has already run to the end.
+   *
+   * ★ `t.status = 'finished'` IS THE WHOLE DEFINITION, AND IT IS NOT THE TURN'S
+   * STATE. A completed trip leaves its assignments `active` (DL-97: the trip
+   * closes when every active assignment has been approved), so filtering on
+   * `a.state = 'ended'` would return the opposite of this list — the turns
+   * somebody was taken OFF, and none of the work they actually finished.
+   *
+   * Filtering on the TRIP also means a driver swapped out of a trip that later
+   * finished still sees it, which is right: they drove part of it. What they
+   * are not shown is WHY they were swapped — `end_reason` is free text written
+   * by Operations, and §5.2 keeps unclassified free text away from a driver for
+   * the same reason `note` is absent from this file entirely.
+   *
+   * ★ NO NEW COLUMN IS SELECTED, AND THAT IS DELIBERATE. Every row here is
+   * finished by construction, so there is no outcome to report; and `status`
+   * itself is the dispatch board's vocabulary, which `DriverTrip` documents as
+   * out of scope for a driver. The whitelist is unchanged, so this query cannot
+   * leak anything the live list could not.
+   *
+   * ★ KEYSET, NOT OFFSET (ADR-0002). This list only grows, and it is read from
+   * a phone: `OFFSET` re-walks every earlier row on each page, and a row
+   * arriving mid-scroll shifts everything by one. The cursor is the pair
+   * `(assigned_at, id)` — `assigned_at` alone is not unique, since one dispatch
+   * action can create several turns in the same statement.
+   *
+   * `ORDER BY a.assigned_at DESC, a.id DESC` is exactly
+   * `idx_trip_driver_assignment_driver_history` from 0023, which was created
+   * for this screen and until now had no reader.
+   */
+  async listFinishedForDriver(
+    driverUserId: string,
+    { limit, before }: { limit: number; before: { assignedAt: Date; id: string } | null },
+    executor: DatabaseQuery = this.db,
+  ): Promise<DriverTrip[]> {
+    // One statement either way: a `null` cursor is the first page, and passing
+    // the bound as two nullable parameters keeps the SQL single rather than
+    // branching into two near-identical strings that can drift apart.
+    const rows = await executor.query<DriverTripRow>(
+      `SELECT ${DRIVER_TRIP_COLUMNS}
+       ${FROM_ASSIGNMENT}
+        WHERE a.driver_user_id = $1
+          AND t.status = 'finished'
+          AND a.vehicle_id IS NOT NULL
+          AND t.archived_at IS NULL
+          AND ($3::timestamptz IS NULL OR (a.assigned_at, a.id) < ($3::timestamptz, $4::uuid))
+        ORDER BY a.assigned_at DESC, a.id DESC
+        LIMIT $2`,
+      [driverUserId, limit, before?.assignedAt ?? null, before?.id ?? null],
+    );
+    return rows.map(toDriverTrip);
+  }
+
+  /**
    * One assignment, if it is this driver's and still active.
    *
    * Returns `null` for an assignment that exists but belongs to somebody else,

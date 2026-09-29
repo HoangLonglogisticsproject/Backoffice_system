@@ -73,7 +73,11 @@ describe('driver-portal HTTP security', () => {
   let context: AuthorizationContext;
   let accountType: AccountType;
 
-  let portal: { listMyAssignments: jest.Mock; findMyAssignment: jest.Mock };
+  let portal: {
+    listMyAssignments: jest.Mock;
+    findMyAssignment: jest.Mock;
+    listMyFinishedTrips: jest.Mock;
+  };
   let execution: { recordEvent: jest.Mock };
   let money: { declareCost: jest.Mock; editCost: jest.Mock };
   let completion: { submit: jest.Mock };
@@ -95,6 +99,7 @@ describe('driver-portal HTTP security', () => {
 
     portal = {
       listMyAssignments: jest.fn().mockResolvedValue([]),
+      listMyFinishedTrips: jest.fn().mockResolvedValue({ trips: [], nextCursor: null }),
       findMyAssignment: jest.fn().mockResolvedValue({ tripId: TRIP, assignment: { id: ASSIGNMENT_A } }),
     };
     execution = { recordEvent: jest.fn().mockResolvedValue({ id: 'event-1' }) };
@@ -201,7 +206,14 @@ describe('driver-portal HTTP security', () => {
   // ------------------------------------------------------------- anonymous --
 
   describe('without authentication', () => {
-    it.each<Route>([['get', '/driver/assignments'], ...scopedRoutes(ASSIGNMENT_A)])(
+    it.each<Route>([
+      ['get', '/driver/assignments'],
+      // The two routes whose scope IS the session user, so neither carries an
+      // assignment for a guard to check — and both read addresses, contacts
+      // and cargo, which is exactly what these gates exist to withhold.
+      ['get', '/driver/history'],
+      ...scopedRoutes(ASSIGNMENT_A),
+    ])(
       'refuses %s %s with 401, and reaches no service at all',
       async (method, path) => {
         const response = await request(app.getHttpServer())
@@ -325,7 +337,14 @@ describe('driver-portal HTTP security', () => {
       context = asContext({ headOf: ['11111111-1111-1111-1111-111111111111'], memberOf: ['11111111-1111-1111-1111-111111111111'], functions: ['dispatch'] });
     });
 
-    it.each<Route>([['get', '/driver/assignments'], ...scopedRoutes(ASSIGNMENT_A)])(
+    it.each<Route>([
+      ['get', '/driver/assignments'],
+      // The two routes whose scope IS the session user, so neither carries an
+      // assignment for a guard to check — and both read addresses, contacts
+      // and cargo, which is exactly what these gates exist to withhold.
+      ['get', '/driver/history'],
+      ...scopedRoutes(ASSIGNMENT_A),
+    ])(
       'refuses %s %s with 403 — the mirror of BackofficeOnlyGuard',
       async (method, path) => {
         const response = await authed(method, path).send(anyBody);
@@ -364,6 +383,45 @@ describe('driver-portal HTTP security', () => {
     it('lists their own assignments from the session, with no parameter to widen it', async () => {
       await authed('get', '/driver/assignments').expect(200);
       expect(portal.listMyAssignments).toHaveBeenCalledWith(DRIVER_A);
+    });
+
+    it('lists their own finished trips from the session, with no parameter to widen it', async () => {
+      await authed('get', '/driver/history').expect(200);
+      expect(portal.listMyFinishedTrips).toHaveBeenCalledWith(DRIVER_A, {
+        limit: 20,
+        before: null,
+      });
+    });
+
+    it('★ the page cursor moves the window and cannot move the DRIVER', async () => {
+      await authed(
+        'get',
+        `/driver/history?limit=5&before=2026-08-01T00:00:00.000Z&beforeId=${ASSIGNMENT_B}`,
+      ).expect(200);
+
+      // The cursor names a row, and `ASSIGNMENT_B` here is deliberately one the
+      // caller may not read. It still reaches the service as nothing but a
+      // position, because the driver id comes from the session — a forged
+      // cursor can only move somebody's own window.
+      expect(portal.listMyFinishedTrips).toHaveBeenCalledWith(DRIVER_A, {
+        limit: 5,
+        before: { assignedAt: new Date('2026-08-01T00:00:00.000Z'), id: ASSIGNMENT_B },
+      });
+    });
+
+    // 422, not 400: `ValidationError` is mapped to UNPROCESSABLE_ENTITY for
+    // every route in this codebase (`domain-error.filter.ts`).
+    it('refuses half a cursor rather than quietly serving the first page', async () => {
+      // Half a cursor is a caller mistake. Treating it as "start from the top"
+      // would show them a page they did not ask for and look like data loss.
+      await authed('get', '/driver/history?before=2026-08-01T00:00:00.000Z').expect(422);
+      expect(portal.listMyFinishedTrips).not.toHaveBeenCalled();
+    });
+
+    it('refuses a page size beyond the ceiling', async () => {
+      // Without a ceiling, one request assembles a whole history in memory.
+      await authed('get', '/driver/history?limit=1000000').expect(422);
+      expect(portal.listMyFinishedTrips).not.toHaveBeenCalled();
     });
 
     it('records an execution event against the session user and the route’s assignment', async () => {

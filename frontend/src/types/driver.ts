@@ -152,6 +152,33 @@ export interface DriverTrip {
   assignment: { id: string; assignedAt: string };
 }
 
+/**
+ * Where a page of history stopped. Opaque to this app: it is handed back to the
+ * server unchanged.
+ *
+ * ★ THE PAIR, NOT THE TIMESTAMP ALONE. One dispatch action can create several
+ * turns in the same statement, so `assignedAt` is not unique — a cursor on it
+ * by itself would repeat those rows or skip them.
+ */
+export interface DriverHistoryCursor {
+  assignedAt: string;
+  id: string;
+}
+
+/**
+ * One page of finished trips, newest first.
+ *
+ * ★ NO TOTAL COUNT, AND THAT IS THE SERVER'S DECISION SHOWING THROUGH. "How
+ * many trips have I run" is a figure pay is reconciled against; this screen
+ * exists so a driver can look their own work up, not so it becomes a number
+ * either side quotes.
+ */
+export interface DriverHistoryPage {
+  trips: DriverTrip[];
+  /** `null` when there is nothing older — the screen stops asking. */
+  nextCursor: DriverHistoryCursor | null;
+}
+
 export interface DriverTripDetail extends DriverTrip {
   /** This trip's timeline. Voided events are already excluded by the server. */
   events: ExecutionEvent[];
