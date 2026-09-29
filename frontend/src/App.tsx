@@ -16,6 +16,7 @@ import MyWorkPage from './pages/worklist/MyWorkPage'
 import WorkListPage from './pages/worklist/WorkListPage'
 
 import TripSchedulePage from './pages/trip/TripSchedulePage'
+import TripHistoryPage from './pages/trip/TripHistoryPage'
 import TripMasterDataPage from './pages/trip/TripMasterDataPage'
 import LocationCataloguePage from './pages/trip/LocationCataloguePage'
 import CompletionReviewPage from './pages/trip/CompletionReviewPage'
@@ -110,6 +111,8 @@ function App() {
         {/* Dispatch. No department segment on purpose — the trip schedule is
             company-wide data, so there is no unit to scope it to (§21). */}
         <Route path="/dispatch/trip-schedule" element={<TripSchedulePage />} />
+        {/* The same trips, once finished — a projection, not a second store. */}
+        <Route path="/dispatch/trip-history" element={<TripHistoryPage />} />
         <Route path="/dispatch/master-data" element={<TripMasterDataPage />} />
         {/* Every place, shared and customer-owned. The customer's own door into
             the same table stays on the master data screen. */}

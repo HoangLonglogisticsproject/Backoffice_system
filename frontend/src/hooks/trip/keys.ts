@@ -1,4 +1,4 @@
-import type { TripAssignmentFilter } from '@/types/trip';
+import type { TripAssignmentFilter, TripLifecycle } from '@/types/trip';
 import type { TripBoardOrder } from '@/types/tripBoard';
 
 /**
@@ -9,6 +9,8 @@ export interface TripBoardListFilter extends TripBoardOrder {
   from: string;
   to: string;
   assignment: TripAssignmentFilter;
+  /** Lịch xe or Lịch sử chuyến — two lists, two totals, two cache entries. */
+  lifecycle: TripLifecycle;
   costs: boolean;
 }
 

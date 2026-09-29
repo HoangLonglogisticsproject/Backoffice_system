@@ -20,9 +20,9 @@ import type { TripBoardListFilter } from './keys';
  * the server's decision, from the session — never from anything sent here.
  */
 export const boardListRequest = (
-  { from, to, assignment, sort, direction }: TripBoardListFilter,
+  { from, to, assignment, lifecycle, sort, direction }: TripBoardListFilter,
   { page, limit }: OffsetPageRequest,
-): TripScheduleQuery => ({ from, to, assignment, sort, direction, page, limit });
+): TripScheduleQuery => ({ from, to, assignment, lifecycle, sort, direction, page, limit });
 
 /**
  * The tab badge's read: how many trips in the range still have nobody on them.
@@ -41,6 +41,8 @@ export const unassignedCountRequest = ({
   page: 1,
   limit: 1,
   assignment: 'unassigned',
+  // The queue is Lịch xe's: a finished trip is nobody's work to crew.
+  lifecycle: 'operational',
 });
 
 /**

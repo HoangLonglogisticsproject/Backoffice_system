@@ -546,6 +546,21 @@ describe('EmployeeDetailPage', () => {
       expect(screen.getByText('A báo ốm.')).toBeInTheDocument();
     });
 
+    it('★ words a reason the SYSTEM wrote — "Nhập chuyến cũ", never the raw `historical_entry` token', async () => {
+      // The crew of a trip recorded after it ran ends with that stored token.
+      // It stays as stored (audit data); a person reads the words.
+      asDriver();
+      fetchDriverTrips.mockResolvedValue({
+        items: [trip({ state: 'ended', endedAt: '2026-09-29T08:00:00.000Z', endReason: 'historical_entry' })],
+        nextCursor: null,
+        hasMore: false,
+      });
+      renderPage();
+
+      expect(await screen.findByText('Nhập chuyến cũ')).toBeInTheDocument();
+      expect(screen.queryByText(/historical_entry/)).toBeNull();
+    });
+
     it('keeps the calendar day the board shows', async () => {
       // `2026-08-30` is a day on a wall calendar. Parsing it into a Date would
       // render the 29th for anybody west of UTC.

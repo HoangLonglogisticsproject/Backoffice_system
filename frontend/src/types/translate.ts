@@ -983,7 +983,14 @@ const PHRASES = {
   dispatchSection: { vi: 'ĐIỀU PHỐI', en: 'DISPATCH' },
   tripSchedule: { vi: 'Lịch xe', en: 'Trip schedule' },
   tripScheduleTitle: { vi: 'Lịch xe', en: 'Trip schedule' },
+  // ★ LỊCH SỬ CHUYẾN — những chuyến ĐÃ HOÀN TẤT (`finished`), không phải
+  // những chuyến có ngày đã qua. Cùng một chuyến, hai màn hình.
+  tripHistory: { vi: 'Lịch sử chuyến', en: 'Trip history' },
   tripHistoryTitle: { vi: 'Lịch sử chuyến', en: 'Trip history' },
+  emptyTripHistory: {
+    vi: 'Không có chuyến nào đã hoàn tất trong khoảng ngày này.',
+    en: 'No completed trips in this date range.',
+  },
   tripMasterData: { vi: 'Danh mục xe & khách', en: 'Vehicles & customers' },
 
   // Actions shared by both dispatch screens.
@@ -996,6 +1003,22 @@ const PHRASES = {
   // Trip schedule — the table
   addTrip: { vi: 'Thêm chuyến', en: 'Add trip' },
   editTrip: { vi: 'Sửa chuyến', en: 'Edit trip' },
+  // ★ HAI Ý ĐỊNH, HAI CÁCH GỌI, MỘT FORM. "Thêm chuyến" đặt việc sắp chạy;
+  // "Nhập chuyến cũ" ghi nhận một chuyến đã chạy — ngày trong quá khứ là hợp lệ.
+  createTripTitle: { vi: 'Tạo chuyến mới', en: 'New trip' },
+  importTrip: { vi: 'Nhập chuyến cũ', en: 'Record a past trip' },
+  // The wording of the system-written end reason `historical_entry` — the crew
+  // of a trip recorded after it ran. The stored token is audit data; this is
+  // only what a person reads (`utils/assignmentEndReason`).
+  historicalEntryReason: { vi: 'Nhập chuyến cũ', en: 'Recorded past trip' },
+  importTripSaved: {
+    vi: 'Đã ghi nhận chuyến vào Lịch sử chuyến.',
+    en: 'Trip recorded in Trip history.',
+  },
+  importTripHint: {
+    vi: 'Ghi nhận một chuyến đã chạy và đã kết thúc. Chuyến được lưu ở trạng thái Hoàn thành và vào thẳng Lịch sử chuyến — không xuất hiện ở Lịch xe.',
+    en: 'Records a trip that already ran and ended. It is saved as completed and goes straight to Trip history — never onto the schedule.',
+  },
   dateFrom: { vi: 'Từ ngày', en: 'From' },
   dateTo: { vi: 'Đến ngày', en: 'To' },
   thisMonth: { vi: 'Tháng này', en: 'This month' },
@@ -1005,6 +1028,8 @@ const PHRASES = {
   colCargo: { vi: 'Hàng hoá', en: 'Cargo' },
   colPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
   colDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },
+  colPickupAt: { vi: 'Thời gian lấy hàng', en: 'Pickup time' },
+  colDeliveryAt: { vi: 'Thời gian giao hàng', en: 'Delivery time' },
   colSellPrice: { vi: 'Giá cước bán', en: 'Selling price' },
   colPurchasePrice: { vi: 'Giá cước mua', en: 'Buying price' },
   colNote: { vi: 'Ghi chú', en: 'Note' },
@@ -1048,9 +1073,10 @@ const PHRASES = {
   // The board's order. Every one is a date, so the direction reads as time.
   // Keys follow the server's sort names; only the words are presentation.
   tripSortBy: { vi: 'Sắp xếp theo', en: 'Sort by' },
-  // ★ "Ngày chạy" BECAUSE THE TRIP FORM ALREADY CALLS THIS FIELD THAT
-  // (`fieldDate`). One field, one name on every screen that shows it.
-  tripSortExecutionDate: { vi: 'Ngày chạy', en: 'Trip date' },
+  // ★ "NGÀY LẤY HÀNG", NOT "NGÀY CHẠY". The key orders by `scheduled_on`,
+  // which is now the pickup's day (derived from "Thời gian lấy hàng"), and it
+  // is day-level — so the label names the day, not the instant.
+  tripSortExecutionDate: { vi: 'Ngày lấy hàng', en: 'Pickup day' },
   tripSortBookingCreated: { vi: 'Booking mới nhất', en: 'Latest booking' },
   // ★ "CHỈNH SỬA", NOT "CẬP NHẬT". The key is the trip ROW's `updated_at`: an
   // edit or a status move changes it; a new crew, a cost line or a driver's
@@ -1077,7 +1103,6 @@ const PHRASES = {
   notSelected: { vi: 'Chưa chọn', en: 'Not selected' },
 
   // Trip schedule — the form
-  fieldDate: { vi: 'Ngày chạy', en: 'Trip date' },
   fieldStatus: { vi: 'Trạng thái', en: 'Status' },
   fieldVehicle: { vi: 'Xe', en: 'Vehicle' },
   fieldCustomer: { vi: 'Khách hàng', en: 'Customer' },
@@ -1086,7 +1111,32 @@ const PHRASES = {
   fieldDeliveryAddress: { vi: 'Địa chỉ giao hàng', en: 'Delivery address' },
   fieldPickupContact: { vi: 'Liên hệ lấy hàng', en: 'Pickup contact' },
   fieldDeliveryContact: { vi: 'Liên hệ giao hàng', en: 'Delivery contact' },
+  // The driver's card shows the HOUR alone under this one — "Giờ" is right there.
   fieldPickupAt: { vi: 'Giờ lấy hàng', en: 'Pickup time' },
+  // ★ EACH LABEL SAYS WHAT ITS CONTROL HOLDS. "Ngày" is a day — the planned
+  // pickup date, `scheduled_on`, not the booking date and not when a driver
+  // started; "Giờ" an hour on it (the key above, shared with the driver's
+  // card); "Thời gian" a date AND an hour. Only the date is compulsory: a
+  // trip is booked for a day before anybody knows the hour.
+  fieldPickupDate: { vi: 'Ngày lấy hàng *', en: 'Pickup date *' },
+  fieldDeliveryDateTime: { vi: 'Thời gian giao hàng', en: 'Delivery date & time' },
+  timeMayBeUnknown: { vi: 'Để trống nếu chưa chốt giờ.', en: 'Leave empty until the hour is agreed.' },
+  historicalInstantInFuture: {
+    vi: 'Chuyến cũ không thể có thời gian sau thời điểm hiện tại.',
+    en: 'A past trip cannot have a time later than now.',
+  },
+  historicalInFuture: {
+    vi: 'Chuyến cũ phải có ngày lấy hàng không muộn hơn hôm nay.',
+    en: 'A past trip cannot have a pickup date after today.',
+  },
+  deliveryNotAfterPickup: {
+    vi: 'Thời gian giao hàng phải sau thời gian lấy hàng.',
+    en: 'The delivery time must be after the pickup time.',
+  },
+  pickupOnPastDay: {
+    vi: 'Ngày lấy hàng đã qua. Chuyến đã chạy được ghi nhận bằng “Nhập chuyến cũ” ở Lịch sử chuyến.',
+    en: 'This pickup date has passed. Record a trip that already ran with “Record a past trip” in Trip history.',
+  },
   // ------------------------------------------------ customer locations --
   locationsTitle: { vi: 'Địa điểm', en: 'Locations' },
   manageLocations: { vi: 'Địa điểm', en: 'Locations' },
@@ -1255,7 +1305,6 @@ const PHRASES = {
     vi: 'Toạ độ lấy hàng dùng để kiểm tra vị trí GPS khi tài xế xác nhận lấy hàng. Nhập cả hai hoặc để trống cả hai.',
     en: 'Pickup coordinates are what the driver’s GPS is checked against on pickup. Enter both or leave both empty.',
   },
-  fieldDeliveryAt: { vi: 'Giờ giao hàng', en: 'Delivery time' },
   // ★ THE STAR ON THE SELLING PRICE IS THE FIELD'S ONLY MARK OF BEING
   // COMPULSORY, and it matches every other required label in this file.
   fieldSellPrice: { vi: 'Giá cước bán (VND) *', en: 'Selling price (VND) *' },
@@ -1289,8 +1338,8 @@ const PHRASES = {
   fieldNote: { vi: 'Ghi chú', en: 'Note' },
   // Why the delivery control asks for a date as well as a time.
   deliveryMayBeLater: {
-    vi: 'Giờ giao có thể rơi sang ngày khác ngày lấy hàng.',
-    en: 'Delivery may fall on a later day than pickup.',
+    vi: 'Có thể rơi sang ngày sau ngày lấy hàng. Để trống nếu chưa biết.',
+    en: 'Delivery may fall on a later day than pickup. Leave empty if unknown.',
   },
   catalogueHint: {
     vi: 'Chưa có xe hoặc khách trong danh mục? Bấm + để thêm ngay tại đây.',

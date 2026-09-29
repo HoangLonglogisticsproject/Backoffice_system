@@ -2,7 +2,6 @@ import { useEffect, useState, type ComponentProps } from 'react';
 import { MapPin, Plus } from 'lucide-react';
 import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -12,21 +11,17 @@ import { assignDriver } from '@/api/tripAssignment';
 import {
   createTripSchedule,
   updateTripSchedule,
-  type CreateTripInput,
   type UpdateTripInput,
 } from '@/api/tripSchedule';
 import { isApiError } from '@/utils/errors';
 import { formatPlate } from '@/utils/format';
-import {
-  fromDateTimeLocalValue,
-  todayAsCalendarDay,
-  toDateTimeLocalValue,
-} from '@/utils/format/datetime';
+import { timelineErrors } from '@/utils/tripTimeline';
 import { useTripLocations } from '@/hooks/trip';
 import { useEligibleDrivers } from '@/hooks/trip/useTripAssignment';
 import {
   DISPATCH_SELECTABLE_STATUSES,
   type TripCustomer,
+  type TripEntryMode,
   type TripLocation,
   type TripSchedule,
   type TripScheduleWithRefs,
@@ -36,12 +31,23 @@ import {
 import { CatalogueSelect } from './CatalogueSelect';
 import { DriverSelect } from './DriverSelect';
 import { LocationFormModal } from './LocationFormModal';
+import { TripTimeField } from './TripTimeField';
+import { instantsOf, timesOf, timesPayload, type FormTimes } from './tripFormTimes';
 import { TRIP_STATUS_STYLES } from './tripStatus';
 
 interface TripFormModalProps {
   isOpen: boolean;
   /** Absent means "add". Present means "correct this row" — GLOBAL only. */
   trip?: TripScheduleWithRefs | null;
+  /**
+   * ★ WHY A NEW TRIP IS BEING ENTERED — set by the button that opened this
+   * form, never guessed from the dates typed into it. `operational` (Lịch xe,
+   * "Thêm chuyến") books work still to run; `historical` (Lịch sử chuyến,
+   * "Nhập chuyến cũ") records a run that already happened, so a past day is
+   * accepted. Nothing else differs — one form, one set of integrity rules.
+   * Ignored when correcting a row.
+   */
+  mode?: TripEntryMode;
   customers: TripCustomer[];
   /**
    * The active lorries, for the crew rows below.
@@ -74,17 +80,17 @@ interface TripFormModalProps {
   onCatalogueChanged: () => void;
 }
 
-/** Every field, as the form holds it: strings, because that is what inputs give. */
-interface FormState {
-  scheduledOn: string;
+/**
+ * Every field, as the form holds it: strings, because that is what inputs give.
+ * The three temporal ones — date, hour, delivery — are `FormTimes`.
+ */
+interface FormState extends FormTimes {
   customerId: string | null;
   cargoInfo: string;
   pickupAddress: string;
   deliveryAddress: string;
   pickupContact: string;
   deliveryContact: string;
-  pickupAt: string;
-  deliveryAt: string;
   /** The customer's place for each end, or `null` for a hand-typed address. */
   pickupLocationId: string | null;
   deliveryLocationId: string | null;
@@ -106,15 +112,13 @@ interface FormState {
 }
 
 const emptyForm = (): FormState => ({
-  scheduledOn: todayAsCalendarDay(),
+  ...timesOf(null),
   customerId: null,
   cargoInfo: '',
   pickupAddress: '',
   deliveryAddress: '',
   pickupContact: '',
   deliveryContact: '',
-  pickupAt: '',
-  deliveryAt: '',
   pickupLocationId: null,
   deliveryLocationId: null,
   sellPrice: '',
@@ -158,18 +162,13 @@ const withCurrentReference = (
 };
 
 const formFor = (trip: TripScheduleWithRefs): FormState => ({
-  // Copied through as the STRING it is. Never `new Date(trip.scheduledOn)` —
-  // that is midnight UTC, and it would move the trip a day back on the way into
-  // the form for anybody west of UTC.
-  scheduledOn: trip.scheduledOn,
+  ...timesOf(trip),
   customerId: trip.customerId,
   cargoInfo: trip.cargoInfo ?? '',
   pickupAddress: trip.pickupAddress ?? '',
   deliveryAddress: trip.deliveryAddress ?? '',
   pickupContact: trip.pickupContact ?? '',
   deliveryContact: trip.deliveryContact ?? '',
-  pickupAt: toDateTimeLocalValue(trip.pickupAt),
-  deliveryAt: toDateTimeLocalValue(trip.deliveryAt),
   pickupLocationId: trip.pickupLocationId,
   deliveryLocationId: trip.deliveryLocationId,
   // ★ THE SERVER'S `"4500000.00"` GOES IN AS IT CAME. Trimming the decimals
@@ -347,7 +346,8 @@ const endFields = (
 
 /**
  * Everything the form sends. Every field it owns is always present, with
- * `''` as `null` — except the two prices, which are dropped entirely for a
+ * `''` as `null` — except the temporal ones, sent on a correction only when
+ * touched (`timesPayload`), and the two prices, which are dropped entirely for a
  * viewer without the permission: the server REFUSES a body carrying either
  * from such a caller rather than ignoring it, so `'' → null` would turn every
  * save they make into a 403. For a viewer who holds it, `''` clears the
@@ -358,25 +358,35 @@ const tripPayload = (
   trip: TripScheduleWithRefs | null,
   mayPrice: boolean,
   refreshed: EndFlags,
-): CreateTripInput & UpdateTripInput => ({
-  scheduledOn: form.scheduledOn,
+): UpdateTripInput => ({
   customerId: form.customerId,
   cargoInfo: blank(form.cargoInfo),
   ...endFields(form, trip, 'pickup', refreshed.pickup),
   ...endFields(form, trip, 'delivery', refreshed.delivery),
-  pickupAt: fromDateTimeLocalValue(form.pickupAt),
-  deliveryAt: fromDateTimeLocalValue(form.deliveryAt),
+  ...timesPayload(form, trip),
   ...(mayPrice ? { sellPrice: blank(form.sellPrice), purchasePrice: blank(form.purchasePrice) } : {}),
   note: blank(form.note),
   status: form.status,
 });
 
-/** An existing row is patched; a new one is created. */
-const saveTrip = (
-  trip: TripScheduleWithRefs | null,
-  payload: CreateTripInput & UpdateTripInput,
-): Promise<TripSchedule> =>
-  trip ? updateTripSchedule(trip.id, payload) : createTripSchedule(payload);
+/** An existing row is patched; a new one is booked — the create intent said out loud. */
+const saveTrip = (trip: TripScheduleWithRefs | null, payload: UpdateTripInput): Promise<TripSchedule> =>
+  trip ? updateTripSchedule(trip.id, payload) : createTripSchedule({ ...payload, entryMode: 'operational' });
+
+/**
+ * "Nhập chuyến cũ": the SAME create, with the intent `historical` — the server
+ * records the trip finished. So no status travels (the server refuses one
+ * beside this intent), and the crew rides in the same request: a finished trip
+ * takes no dispatch afterwards, and there is no half-saved state to retry.
+ */
+const recordHistorical = (payload: UpdateTripInput, crew: readonly CrewRow[]): Promise<TripSchedule> => {
+  const { status: _setByTheServer, ...booking } = payload;
+  return createTripSchedule({
+    ...booking,
+    entryMode: 'historical',
+    crew: crew.map(({ vehicleId, driverUserId }) => ({ vehicleId, driverUserId })),
+  });
+};
 
 /**
  * One row of "Phương tiện điều độ" while it is being typed.
@@ -449,6 +459,7 @@ const dispatchCrew = async (
 export function TripFormModal({
   isOpen,
   trip = null,
+  mode = 'operational',
   customers,
   vehicles,
   mayDispatch,
@@ -502,6 +513,20 @@ export function TripFormModal({
   const [refreshed, setRefreshed] = useState<EndFlags>(NO_REFRESH);
 
   const editing = trip !== null;
+  /** Recording a past run: born finished, crew in the same request. */
+  const historicalEntry = !editing && mode === 'historical';
+
+  /**
+   * ★ CHECKED AS IT IS TYPED, per field. The calendar policy is the entry
+   * intent's and binds only a NEW trip — an overdue one is corrected, not
+   * re-booked. The timeline binds every save, once both hours are known. The
+   * server holds both anyway.
+   */
+  const timeline = timelineErrors(
+    { scheduledOn: form.scheduledOn, ...instantsOf(form) },
+    editing ? null : mode,
+  );
+  const timelineRefused = Object.values(timeline).some((refusal) => refusal !== null);
 
   // Reloading the form when the dialog opens on a different row. Keyed on the
   // id rather than on the object, so an unrelated list refresh that produces a
@@ -636,6 +661,11 @@ export function TripFormModal({
     event.preventDefault();
     setError(null);
 
+    // The browser already stops a submit on a refused date or instant (see
+    // `TripTimeField`); this covers a submit that did not come through it.
+    // A price-only save sends no instant, so nothing here can block it.
+    if (!priceOnly && timelineRefused) return;
+
     const checked = checkCrew(crew);
     setCrew(checked);
     if (checked.some((row) => row.error !== null)) return;
@@ -648,6 +678,13 @@ export function TripFormModal({
       // dispatcher who fixes a refused lorry AND corrects the date in the same
       // breath expects both to land — and the first press is exactly when a
       // wrong date gets noticed, because that is when the row appears.
+      if (historicalEntry) {
+        await recordHistorical(tripPayload(form, trip, mayEditPrices, refreshed), checked);
+        onSaved();
+        onClose();
+        return;
+      }
+
       let tripId: string;
       if (priceOnly && trip) {
         // Only the two keys the caller may set. Anything else in the body
@@ -700,14 +737,17 @@ export function TripFormModal({
    * Every other field of a finished trip stays editable. Whether a closed trip
    * should be read-only in full is a separate decision nobody has taken, and
    * this is not the place to take it.
+   *
+   * A trip being RECORDED after it ran shows the same frozen `finished`: that
+   * is what it will be, and the request carries no status to choose.
    */
-  const statusLocked = trip?.status === 'finished';
+  const statusLocked = trip?.status === 'finished' || historicalEntry;
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={close}
-      title={editing ? t('editTrip') : t('addTrip')}
+      title={formTitle(editing, mode, t)}
       className="max-w-2xl"
       footer={
         <>
@@ -729,41 +769,20 @@ export function TripFormModal({
         {/*
           ★ EVERYTHING THAT IS NOT A PRICE SITS IN A `fieldset`, disabled for a
           price-only editor. A disabled control is skipped by the browser's
-          constraint validation, so the compulsory day does not block a save
-          that will not send it anyway.
+          constraint validation, so the compulsory instants do not block a save
+          that will not send them anyway.
         */}
         {priceOnly && <p className="text-xs text-gray-500">{t('priceOnlyEdit')}</p>}
+        {!editing && mode === 'historical' && <p className="text-xs text-gray-500">{t('importTripHint')}</p>}
         <fieldset disabled={priceOnly} className="min-w-0 space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <label htmlFor="trip-date" className="text-sm font-medium text-gray-700">
-              {t('fieldDate')}
-            </label>
-            {/*
-              A native date input. This repo has no date-picker component and no
-              date library; adding `react-day-picker` for two fields would be a
-              dependency for a control every browser already ships — including
-              the phones this is entered on.
-
-              `type="date"` speaks `YYYY-MM-DD`, which is exactly the string the
-              API wants, so the value moves in and out untouched.
-            */}
-            <Input
-              id="trip-date"
-              type="date"
-              value={form.scheduledOn}
-              onChange={(event) => set('scheduledOn', event.target.value)}
-              required
-            />
-          </div>
-
           <div className="space-y-2">
             <label htmlFor="trip-status" className="text-sm font-medium text-gray-700">
               {t('fieldStatus')}
             </label>
             <select
               id="trip-status"
-              value={form.status}
+              value={statusLocked ? 'finished' : form.status}
               onChange={(event) => set('status', event.target.value as TripStatus)}
               disabled={statusLocked}
               className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
@@ -845,80 +864,90 @@ export function TripFormModal({
         />
 
         <fieldset disabled={priceOnly} className="min-w-0 space-y-4">
+        {/*
+          ★ EACH END IS ONE COLUMN: where, who — and WHEN. The instant belongs
+          to its end, so a dispatcher reads "Điểm lấy hàng … Thời gian lấy
+          hàng" top to bottom, and the delivery column says the same of its own.
+        */}
         <div className="grid gap-4 sm:grid-cols-2">
-          <LocationEnd
-            end="pickup"
-            label={t('fieldPickupLocation')}
-            customerId={form.customerId}
-            locations={locations.data ?? []}
-            current={snapshotOf(trip, 'pickup')}
-            chosen={placeAt('pickup')}
-            value={form.pickupLocationId}
-            onChange={(id) => set('pickupLocationId', id)}
-            canAdd={mayCreatePlace}
-            onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
-            onSetup={setupHandlerFor(mayManagePlaces, 'pickup', setPlaceDialog)}
-            address={form.pickupAddress}
-            contact={form.pickupContact}
-            onAddress={(value) => set('pickupAddress', value)}
-            onContact={(value) => set('pickupContact', value)}
-          />
-          <LocationEnd
-            end="delivery"
-            label={t('fieldDeliveryLocation')}
-            customerId={form.customerId}
-            locations={locations.data ?? []}
-            current={snapshotOf(trip, 'delivery')}
-            chosen={placeAt('delivery')}
-            value={form.deliveryLocationId}
-            onChange={(id) => set('deliveryLocationId', id)}
-            canAdd={mayCreatePlace}
-            onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
-            onSetup={setupHandlerFor(mayManagePlaces, 'delivery', setPlaceDialog)}
-            address={form.deliveryAddress}
-            contact={form.deliveryContact}
-            onAddress={(value) => set('deliveryAddress', value)}
-            onContact={(value) => set('deliveryContact', value)}
-          />
+          <div className="min-w-0 space-y-4">
+            <LocationEnd
+              end="pickup"
+              label={t('fieldPickupLocation')}
+              customerId={form.customerId}
+              locations={locations.data ?? []}
+              current={snapshotOf(trip, 'pickup')}
+              chosen={placeAt('pickup')}
+              value={form.pickupLocationId}
+              onChange={(id) => set('pickupLocationId', id)}
+              canAdd={mayCreatePlace}
+              onAdd={() => setPlaceDialog({ end: 'pickup', editing: null })}
+              onSetup={setupHandlerFor(mayManagePlaces, 'pickup', setPlaceDialog)}
+              address={form.pickupAddress}
+              contact={form.pickupContact}
+              onAddress={(value) => set('pickupAddress', value)}
+              onContact={(value) => set('pickupContact', value)}
+            />
+            {/* The DATE is the booking's; the hour is known when it is known. */}
+            <div className="grid grid-cols-2 gap-3">
+              <TripTimeField
+                id="trip-date"
+                label={t('fieldPickupDate')}
+                type="date"
+                value={form.scheduledOn}
+                onChange={(value) => set('scheduledOn', value)}
+                error={timeline.scheduledOn && t(timeline.scheduledOn)}
+                required
+              />
+              <TripTimeField
+                id="trip-pickup-time"
+                label={t('fieldPickupAt')}
+                type="time"
+                value={form.pickupTime}
+                onChange={(value) => set('pickupTime', value)}
+                error={timeline.pickupAt && t(timeline.pickupAt)}
+                hint={t('timeMayBeUnknown')}
+              />
+            </div>
+          </div>
+          <div className="min-w-0 space-y-4">
+            <LocationEnd
+              end="delivery"
+              label={t('fieldDeliveryLocation')}
+              customerId={form.customerId}
+              locations={locations.data ?? []}
+              current={snapshotOf(trip, 'delivery')}
+              chosen={placeAt('delivery')}
+              value={form.deliveryLocationId}
+              onChange={(id) => set('deliveryLocationId', id)}
+              canAdd={mayCreatePlace}
+              onAdd={() => setPlaceDialog({ end: 'delivery', editing: null })}
+              onSetup={setupHandlerFor(mayManagePlaces, 'delivery', setPlaceDialog)}
+              address={form.deliveryAddress}
+              contact={form.deliveryContact}
+              onAddress={(value) => set('deliveryAddress', value)}
+              onContact={(value) => set('deliveryContact', value)}
+            />
+            {/*
+              A full datetime, not a time. Delivery routinely lands on a LATER
+              day than pickup — the sheet writes `08H30` in one cell and
+              `09H00 SÁNG 04 AUG 2026` in the next — and it must land AFTER it.
+            */}
+            <TripTimeField
+              id="trip-delivery-at"
+              label={t('fieldDeliveryDateTime')}
+              type="datetime-local"
+              value={form.deliveryAt}
+              onChange={(value) => set('deliveryAt', value)}
+              error={timeline.deliveryAt && t(timeline.deliveryAt)}
+              hint={t('deliveryMayBeLater')}
+            />
+          </div>
 
           {/* ★ THE TRIP'S READINESS, IN ONE LINE, once there is a customer
               whose places could make it ready. Said here so the office sees
               it before the driver does. */}
           {form.customerId !== null ? <TripReadiness ready={tripLocationReady} /> : null}
-
-          <div className="space-y-2">
-            <label htmlFor="trip-pickup-at" className="text-sm font-medium text-gray-700">
-              {t('fieldPickupAt')}
-            </label>
-            <Input
-              id="trip-pickup-at"
-              type="datetime-local"
-              value={form.pickupAt}
-              onChange={(event) => set('pickupAt', event.target.value)}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="trip-delivery-at" className="text-sm font-medium text-gray-700">
-              {t('fieldDeliveryAt')}
-            </label>
-            {/*
-              A full datetime, not a time. Delivery routinely lands on a LATER
-              day than pickup — the sheet writes `08H30` in one cell and
-              `09H00 SÁNG 04 AUG 2026` in the next — and a time-only control
-              would force that into the note, where nothing can query it.
-            */}
-            <Input
-              id="trip-delivery-at"
-              type="datetime-local"
-              value={form.deliveryAt}
-              onChange={(event) => set('deliveryAt', event.target.value)}
-              aria-describedby="trip-delivery-hint"
-            />
-            <p id="trip-delivery-hint" className="text-xs text-gray-500">
-              {t('deliveryMayBeLater')}
-            </p>
-          </div>
         </div>
 
         {/* ★ THE CREW, TYPED WITH THE TRIP — AND STILL ONE ASSIGNMENT PER PAIR.
@@ -1165,6 +1194,16 @@ function CrewFields({
   );
 }
 
+/** The dialog's name: the correction, or which of the two ways a trip is entered. */
+const formTitle = (
+  editing: boolean,
+  mode: TripEntryMode,
+  t: ReturnType<typeof useLanguage>['t'],
+): string => {
+  if (editing) return t('editTrip');
+  return mode === 'historical' ? t('importTrip') : t('createTripTitle');
+};
+
 /**
  * Books the trip, or corrects the one this form booked moments ago.
  *
@@ -1177,7 +1216,7 @@ function CrewFields({
 const persistTrip = async (
   trip: TripScheduleWithRefs | null,
   createdTripId: string | null,
-  payload: Parameters<typeof saveTrip>[1],
+  payload: UpdateTripInput,
 ): Promise<string> => {
   if (createdTripId !== null) {
     await updateTripSchedule(createdTripId, payload);

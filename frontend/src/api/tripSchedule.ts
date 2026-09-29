@@ -1,6 +1,7 @@
 import { httpClient } from './client';
 import type {
   TripAssignmentFilter,
+  TripEntryMode,
   TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
@@ -29,15 +30,22 @@ import type { SortDirection, TripBoardRow, TripBoardSort } from '@/types/tripBoa
  * endpoint ACCEPTS.
  */
 export interface CreateTripInput {
-  /** `YYYY-MM-DD`. The only required field. */
-  scheduledOn: string;
+  /**
+   * `YYYY-MM-DD` — the planned pickup date, "Ngày lấy hàng". Always known;
+   * `pickupAt`, when there is one, is an hour ON this day and the server
+   * refuses the two disagreeing (422).
+   */
+  scheduledOn?: string;
   customerId?: string | null;
   cargoInfo?: string | null;
   pickupAddress?: string | null;
   deliveryAddress?: string | null;
   pickupContact?: string | null;
   deliveryContact?: string | null;
-  /** ISO instant, or null. May land on a later day than `scheduledOn`. */
+  /**
+   * ISO instants, or null. Delivery must be strictly after pickup — the
+   * server refuses anything else with a 422, whichever route sent it.
+   */
   pickupAt?: string | null;
   deliveryAt?: string | null;
   /**
@@ -69,7 +77,19 @@ export interface CreateTripInput {
   sellPrice?: string | null;
   purchasePrice?: string | null;
   note?: string | null;
+  /** A board status to open a BOOKING on — never with a historical entry. */
   status?: TripStatus;
+  /**
+   * ★ WHY THE TRIP IS ENTERED — the create intent, never a status. "Thêm
+   * chuyến" sends `operational`; "Nhập chuyến cũ" sends `historical`, and the
+   * SERVER then records the trip finished. Same route, same `trip.create`.
+   */
+  entryMode?: TripEntryMode;
+  /**
+   * The lorries and drivers a RECORDED run went out with (`historical` only;
+   * needs `dispatch.write`). A booking is crewed through the dispatch routes.
+   */
+  crew?: { vehicleId: string; driverUserId: string }[];
 }
 
 /**
@@ -80,7 +100,7 @@ export interface CreateTripInput {
  * `field || undefined` can therefore never empty a field the user has cleared —
  * send `null` for that, and omit only what the user did not touch.
  */
-export type UpdateTripInput = Partial<CreateTripInput>;
+export type UpdateTripInput = Omit<Partial<CreateTripInput>, 'entryMode' | 'crew'>;
 
 /**
  * What narrows the board, on top of the range and the page.

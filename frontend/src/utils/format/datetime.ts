@@ -191,6 +191,33 @@ export function todayAsCalendarDay(now: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * A day on the business calendar and a wall-clock hour there, as the instant
+ * they name — `"2026-09-23"` + `"17:36"` → `2026-09-23T10:36:00.000Z`.
+ *
+ * ★ ON THE BUSINESS CALENDAR, NOT THE VIEWER'S, because the day it is paired
+ * with is `scheduled_on` and the server holds the two to one day: a pickup
+ * typed as "17:36" beside "23/09" must BE 23/09 in Hồ Chí Minh wherever the
+ * browser is. Fixed +07:00 — Vietnam keeps no daylight saving.
+ */
+export function businessInstant(day: string, time: string): string {
+  return new Date(`${day}T${time}:00+07:00`).toISOString();
+}
+
+/** The inverse's hour: an instant as `"HH:mm"` on the business clock. */
+export function businessClockOf(iso: string): string {
+  const parts = businessClock.formatToParts(new Date(iso));
+  const part = (type: 'hour' | 'minute') => parts.find((p) => p.type === type)?.value ?? '00';
+  return `${part('hour')}:${part('minute')}`;
+}
+
+const businessClock = new Intl.DateTimeFormat('en-GB', {
+  timeZone: BUSINESS_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 /** The first and last day of the month containing `now`, on the viewer's calendar. */
 /**
  * The month a date filter opens on.
