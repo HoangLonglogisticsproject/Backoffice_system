@@ -96,6 +96,7 @@ export const boardQuery = (over: Partial<TripBoardQuery> = {}): TripBoardQuery =
   page: 1,
   limit: 50,
   assignment: 'all',
+  lifecycle: 'operational',
   ...DEFAULT_TRIP_BOARD_ORDER,
   ...over,
 });

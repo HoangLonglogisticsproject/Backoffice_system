@@ -8,6 +8,7 @@ const QUERY: TripBoardQuery = {
   page: 1,
   limit: 20,
   assignment: 'all',
+  lifecycle: 'operational',
   sort: 'executionDate',
   direction: 'desc',
 };

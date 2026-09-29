@@ -24,6 +24,7 @@ import { TripScheduleService } from '../../src/capabilities/trip-schedule/applic
 import { DEFAULT_TRIP_BOARD_ORDER } from '../../src/capabilities/trip-schedule/domain/trip-board';
 import type {
   TripAssignmentFilter,
+  TripLifecycle,
   TripStatus,
 } from '../../src/capabilities/trip-schedule/domain/trip-schedule';
 
@@ -67,6 +68,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   const asQuery = (raw: Record<string, unknown>, nowIso = '2026-08-15T03:00:00Z') => ({
     ...buildDateRangePageQuerySchema(() => new Date(nowIso)).parse(raw),
     assignment: (raw['assignment'] as TripAssignmentFilter | undefined) ?? 'all',
+    lifecycle: (raw['lifecycle'] as TripLifecycle | undefined) ?? 'operational',
     // The order the pipe defaults in. Other orders: `trip-board.integration.spec.ts`.
     ...DEFAULT_TRIP_BOARD_ORDER,
   });

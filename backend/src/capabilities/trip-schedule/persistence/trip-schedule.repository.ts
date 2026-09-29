@@ -3,6 +3,7 @@ import { DATABASE, type Database, type DatabaseQuery } from '../../../common/typ
 import {
   TripAssignmentFilter,
   TripAssignmentRef,
+  TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
   TripStatus,
@@ -76,6 +77,27 @@ const ASSIGNMENT_PREDICATE: Record<TripAssignmentFilter, string> = {
   unassigned: `AND NOT EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
   assigned: `AND EXISTS (${ACTIVE_ASSIGNMENT_EXISTS})`,
 };
+
+/**
+ * Lịch xe or Lịch sử chuyến, in SQL — the same trusted-map shape as above.
+ * Exported because every OPERATIONAL read says it the same way (the dispatch
+ * board here, the operational board beside it): one predicate, not two.
+ * A predicate on the row itself: no join, so each trip is still one row, and
+ * it filters the same bounded range `idx_trip_schedule_page` already reads.
+ */
+export const LIFECYCLE_PREDICATE: Record<TripLifecycle, string> = {
+  operational: `AND t.status <> 'finished'`,
+  history: `AND t.status = 'finished'`,
+};
+
+/** What narrows a board read on top of its range. */
+export interface BoardFilter {
+  assignment: TripAssignmentFilter;
+  lifecycle: TripLifecycle;
+}
+
+const filterSql = ({ assignment, lifecycle }: BoardFilter): string =>
+  `${ASSIGNMENT_PREDICATE[assignment]} ${LIFECYCLE_PREDICATE[lifecycle]}`;
 
 /** One element of the `assignments` JSON array the read below aggregates. */
 interface AssignmentJson {
@@ -367,7 +389,7 @@ export class TripScheduleRepository {
    */
   async listPage(
     range: DateRange,
-    assignment: TripAssignmentFilter,
+    filter: BoardFilter,
     order: TripBoardOrder,
     limit: number,
     offset: number,
@@ -378,7 +400,7 @@ export class TripScheduleRepository {
          WHERE t.archived_at IS NULL
            AND t.scheduled_on >= $1::date
            AND t.scheduled_on <= $2::date
-           ${ASSIGNMENT_PREDICATE[assignment]}
+           ${filterSql(filter)}
          ${orderBySql(order)}
          LIMIT $3 OFFSET $4`,
       [range.from, range.to, limit, offset],
@@ -405,7 +427,7 @@ export class TripScheduleRepository {
    */
   async countInRange(
     range: DateRange,
-    assignment: TripAssignmentFilter,
+    filter: BoardFilter,
     executor: DatabaseQuery = this.db,
   ): Promise<number> {
     const rows = await executor.query<{ total: string }>(
@@ -414,7 +436,7 @@ export class TripScheduleRepository {
         WHERE t.archived_at IS NULL
           AND t.scheduled_on >= $1::date
           AND t.scheduled_on <= $2::date
-          ${ASSIGNMENT_PREDICATE[assignment]}`,
+          ${filterSql(filter)}`,
       [range.from, range.to],
     );
     return Number(rows[0]?.total ?? 0);

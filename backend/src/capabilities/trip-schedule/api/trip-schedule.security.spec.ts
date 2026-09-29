@@ -758,6 +758,28 @@ describe('trip-schedule HTTP security', () => {
       );
     });
 
+    it('★ reads Lịch xe unless asked for Lịch sử chuyến — on the board and on the export alike', async () => {
+      context = asContext({ global: true });
+      await authed('get', '/trip-schedules').expect(200);
+      await authed('get', '/trip-schedules?lifecycle=history').expect(200);
+      await authed('get', '/trip-schedules/export?lifecycle=history').expect(200);
+
+      expect(trips.list.mock.calls.map(([query]) => (query as { lifecycle: string }).lifecycle)).toEqual([
+        'operational',
+        'history',
+        'history',
+      ]);
+    });
+
+    it('★ refuses a lifecycle it does not have — a status name included — before any read', async () => {
+      context = asContext({ global: true });
+      const response = await authed('get', '/trip-schedules?lifecycle=finished');
+
+      expect(response.status).toBe(422);
+      expect(response.body.error.details).toHaveProperty('lifecycle');
+      expect(trips.list).not.toHaveBeenCalled();
+    });
+
     it('★ refuses an order it does not have — a raw column included — before any read', async () => {
       context = asContext({ global: true });
       const column = await authed('get', '/trip-schedules?sort=created_at');

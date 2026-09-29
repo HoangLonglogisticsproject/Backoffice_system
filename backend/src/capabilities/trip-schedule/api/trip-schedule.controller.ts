@@ -52,6 +52,7 @@ import type {
 import type { TripStatusChange } from '../domain/trip-status-history';
 import {
   TRIP_ASSIGNMENT_FILTERS,
+  TRIP_LIFECYCLES,
   TRIP_STATUSES,
   type TripSchedule,
   type TripScheduleWithRefs,
@@ -362,6 +363,13 @@ const includeVoidedSchema = z.object({ includeVoided: z.enum(['true', 'false']).
  */
 const boardFilterSchema = z.object({
   assignment: z.enum(TRIP_ASSIGNMENT_FILTERS).default('all'),
+  /**
+   * `?lifecycle=history` — Lịch sử chuyến; Lịch xe by default. Two projections
+   * of the same trips, split at the canonical `finished`, answered in SQL like
+   * the crew filter. The export route takes the same, so each screen's file
+   * holds exactly that screen's rows.
+   */
+  lifecycle: z.enum(TRIP_LIFECYCLES).default('operational'),
   /**
    * `?sort=bookingCreated&direction=asc`. Both default to the order the board
    * always had, so a caller that sends neither reads the same rows in the same

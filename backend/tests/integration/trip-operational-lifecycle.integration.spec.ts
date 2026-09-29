@@ -2611,12 +2611,17 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(row!.pickupDelayMinutes).toBe(20);
     });
 
-    it('reports the completion states and the rejection reason', async () => {
-      const { trip, assignment } = await runningTrip();
-      await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+    it('reports the completion states and the rejection reason — and a finished trip leaves the board', async () => {
+      // Two lorries, so an APPROVED turn can be seen on a trip still open: once
+      // the last turn is approved the trip is finished, and finished is History.
+      const trip = await newTrip();
+      const first = await assignTo(trip, driverA);
+      const second = await assignTo(trip, driverB);
+      const rowOf = async () => (await view()).find((row) => row.assignmentId === first.id);
 
-      expect((await view())[0]).toMatchObject({
+      await declare(first.id);
+      await completion.submit(first.id, driverA, 'expenses');
+      expect(await rowOf()).toMatchObject({
         stage: 'COMPLETION_PENDING',
         accountability: 'DECLARED_WITH_EXPENSE',
         expenseDeclaration: 'expenses',
@@ -2624,22 +2629,25 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
 
       await reject(trip, 'Thieu chung tu dau.');
-
-      expect((await view())[0]).toMatchObject({
+      expect(await rowOf()).toMatchObject({
         stage: 'COMPLETION_REJECTED',
         accountability: 'REJECTED_NEEDS_CORRECTION',
         completionRejectionReason: 'Thieu chung tu dau.',
       });
 
-      await completion.submit(assignment, driverA, 'expenses');
+      await completion.submit(first.id, driverA, 'expenses');
       await approve(trip);
-
-      expect((await view())[0]).toMatchObject({
+      expect(await rowOf()).toMatchObject({
         stage: 'DONE',
         accountability: 'APPROVED_IMMUTABLE',
         completionAttempts: 2,
         completionRejectionReason: null,
       });
+
+      // The last turn approved finishes the trip: off this board entirely.
+      await completion.submit(second.id, driverB, 'none');
+      await approve(trip);
+      expect((await view()).some((row) => row.tripId === trip)).toBe(false);
     });
 
     it('tells NOT_DECLARED apart from DECLARED_NO_EXPENSE', async () => {
@@ -4049,6 +4057,60 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       await completion.approve(trip, (await ask(a, driverA)).id, reviewer);
 
       await expect(assignTo(trip, driverB)).rejects.toThrow(ConflictError);
+    });
+  });
+
+  describe('★ the operational board lists UNFINISHED trips — by lifecycle, never by date', () => {
+    /** The board's rows for one trip, asked for exactly its own day. */
+    const onBoard = async (trip: string) => {
+      const [row] = (await sql(`SELECT scheduled_on::text AS day FROM trip_schedules WHERE id = $1`, [trip])) as {
+        day: string;
+      }[];
+      return (await operations.list({ from: row!.day, to: row!.day, page: 1, limit: 50 })).filter(
+        (boardRow) => boardRow.tripId === trip,
+      );
+    };
+
+    it('1. lists a pending trip', async () => {
+      const trip = await newTrip();
+
+      expect(await onBoard(trip)).toHaveLength(1);
+    });
+
+    it('2. ★ lists an executing trip whose day passed a month ago — the date decides nothing', async () => {
+      const { trip } = await runningTrip(); // 30/08/2026
+      await board.updateStatus(trip, 'executing', operator);
+
+      expect(await onBoard(trip)).toHaveLength(1);
+    });
+
+    it('3. ★ drops a trip the moment its final approval finishes it — and not before', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+      expect(await onBoard(trip)).toHaveLength(1);
+
+      await approve(trip);
+
+      expect(await onBoard(trip)).toEqual([]);
+    });
+
+    it('4. ★ never lists a trip recorded finished (entryMode historical)', async () => {
+      const recorded = await board.create({ scheduledOn: '2026-08-20', entryMode: 'historical', createdBy: operator });
+
+      expect(await onBoard(recorded.id)).toEqual([]);
+    });
+
+    it('5. ★ a recorded crew surfaces as no row at all — above all not a NO_DRIVER one', async () => {
+      const recorded = await board.create({
+        scheduledOn: '2026-08-20',
+        entryMode: 'historical',
+        crew: [{ vehicleId: await newVehicle(plate()), driverUserId: driverA }],
+        createdBy: operator,
+      });
+      const rows = await operations.list({ from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 });
+
+      expect(rows.filter((row) => row.tripId === recorded.id)).toEqual([]);
+      expect(rows.some((row) => row.stage === 'NO_DRIVER' && row.tripId === recorded.id)).toBe(false);
     });
   });
 

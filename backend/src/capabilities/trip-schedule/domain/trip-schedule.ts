@@ -83,6 +83,22 @@ export const TRIP_ASSIGNMENT_FILTERS = [
 export type TripAssignmentFilter = (typeof TRIP_ASSIGNMENT_FILTERS)[number];
 
 /**
+ * ★ WHICH SIDE OF THE FINISH LINE — two projections of ONE trip, not two kinds.
+ *
+ *   operational   Lịch xe: every trip not yet finished, overdue ones included.
+ *   history       Lịch sử chuyến: finished trips, and only those.
+ *
+ * Decided by the canonical terminal state (`status = 'finished'`, reached only
+ * through completion approval) and NEVER by the calendar: yesterday's trip that
+ * nobody has closed is still work, and stays on the board. Not `closed_at`
+ * either — trips closed as `done` before 0017 were remapped to `finished` with
+ * no closing stamp, and they are history all the same.
+ */
+export const TRIP_LIFECYCLES = ['operational', 'history'] as const;
+
+export type TripLifecycle = (typeof TRIP_LIFECYCLES)[number];
+
+/**
  * One row of the dispatch board.
  *
  * The eight free-text fields are free text ON PURPOSE. They are the parts of

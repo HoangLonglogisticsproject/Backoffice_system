@@ -7,6 +7,7 @@ import type { TripBoardOrder } from '../domain/trip-board';
 import { optionalPoint } from '../domain/trip-location';
 import type {
   TripAssignmentFilter,
+  TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
   TripStatus,
@@ -151,6 +152,8 @@ export type UpdateTripInput = Omit<Partial<CreateTripInput>, 'entryMode' | 'crew
  */
 export interface TripBoardQuery extends DateRangePageQuery, TripBoardOrder {
   assignment: TripAssignmentFilter;
+  /** Lịch xe or Lịch sử chuyến — the same trips, split at `finished`. */
+  lifecycle: TripLifecycle;
 }
 
 /** The fields a patch may CLEAR with `null` — everything but the day, the status and the intent. */
@@ -206,11 +209,12 @@ export class TripScheduleService {
    */
   async list(query: TripBoardQuery): Promise<OffsetPage<TripScheduleWithRefs>> {
     const range = { from: query.from, to: query.to };
+    const filter = { assignment: query.assignment, lifecycle: query.lifecycle };
     const offset = (query.page - 1) * query.limit;
 
     const { items, total } = await this.trips.listPage(
       range,
-      query.assignment,
+      filter,
       { sort: query.sort, direction: query.direction },
       query.limit,
       offset,
@@ -221,9 +225,7 @@ export class TripScheduleService {
     // a client holding a stale page number see the real `totalPages` and
     // recover, instead of being told the range is empty.
     const resolvedTotal =
-      items.length === 0 && query.page > 1
-        ? await this.trips.countInRange(range, query.assignment)
-        : total;
+      items.length === 0 && query.page > 1 ? await this.trips.countInRange(range, filter) : total;
 
     return toOffsetPage(items, resolvedTotal, query.page, query.limit);
   }
