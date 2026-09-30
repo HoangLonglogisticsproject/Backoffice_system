@@ -139,11 +139,16 @@ describe('RequireSession', () => {
     expect(screen.getByText('change-password @ /change-password')).toBeInTheDocument();
   });
 
-  it('renders nothing while the session is still being asked', () => {
+  it('waits visibly, and sends nobody anywhere, while the session is still being asked', () => {
     // Redirecting here would bounce a signed-in user out on every cold load.
+    // ★ AND IT SHOWS THE WAIT. This branch covers a whole page reload; drawn as
+    // nothing, it was reported as the app hanging.
     useSession.mockReturnValue({ state: null, loading: true });
-    const { container } = renderAt('/driver');
+    renderAt('/driver');
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByRole('status')).toHaveTextContent('Đang tải');
+    for (const shell of ['login', 'change-password', 'driver', 'backoffice']) {
+      expect(screen.queryByText(new RegExp(`^${shell} @`))).not.toBeInTheDocument();
+    }
   });
 });

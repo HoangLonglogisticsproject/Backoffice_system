@@ -1,6 +1,8 @@
+import { Suspense } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PageFallback } from '@/components/common/PageFallback';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useNotificationStream, useNotifications } from '@/hooks/notifications';
@@ -156,7 +158,12 @@ export default function DriverLayout() {
        */}
       <main className="w-full px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:min-w-0 md:flex-1 md:px-8 md:py-8">
         <div className="mx-auto w-full max-w-2xl md:max-w-4xl">
-          <Outlet />
+          {/* Same boundary, same reason as the Backoffice shell: the portal's
+              tab bar is how a driver knows where they are, so it must not
+              disappear while the next screen's chunk is on its way. */}
+          <Suspense fallback={<PageFallback />}>
+            <Outlet />
+          </Suspense>
         </div>
       </main>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { MapPin, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,7 +23,22 @@ import {
   type AdminAreaValue,
 } from '@/components/trip/AdminAreaFields';
 import { StatusPill } from '@/components/common/StatusPill';
-import { LocationMap } from './LocationMap';
+
+/**
+ * ★ LEAFLET ARRIVES WHEN THE DIALOG DOES, NOT WHEN THE BOARD DOES.
+ *
+ * This modal hangs off the dispatch board, so a static import put Leaflet and
+ * its stylesheet — 1.1 MB in development, ~145 KB in the build — on the path of
+ * every reload of `/dispatch/trip-schedule`, for a map most dispatchers never
+ * open. Split here, the board loads without it and the dialog fetches it on the
+ * one click that needs it.
+ *
+ * `LocationMap` is a named export, hence the unwrap: `lazy` wants a module
+ * whose `default` is the component.
+ */
+const LocationMap = lazy(() =>
+  import('./LocationMap').then((module) => ({ default: module.LocationMap })),
+);
 import type { Coordinates } from '@/types/driver';
 import type { TripLocation } from '@/types/trip';
 
@@ -875,7 +890,16 @@ function LocationSetupModal({
             setDraft(place);
           }}
         />
-        <LocationMap point={draft} onMove={(moved) => setDraft({ ...moved, address: null })} />
+        {/* The fallback is `h-64` because `LocationMap`'s own frame is, so the
+            dialog does not resize under the operator's cursor when the map
+            lands. */}
+        <Suspense
+          fallback={
+            <div className="h-64 w-full animate-pulse rounded-lg border border-gray-200 bg-gray-50" />
+          }
+        >
+          <LocationMap point={draft} onMove={(moved) => setDraft({ ...moved, address: null })} />
+        </Suspense>
         <p className="text-xs text-gray-500">{t('locationPinHint')}</p>
       </div>
     </Modal>

@@ -1,10 +1,11 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, Suspense, useCallback, useContext, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { Button } from '@/components/ui/button';
+import { PageFallback } from '@/components/common/PageFallback';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { isNavActive } from './navActive';
 
@@ -207,8 +208,16 @@ export function AppShell({
             <nav className="flex-1 overflow-y-auto py-4 custom-scrollbar">{navigation}</nav>
           </aside>
 
+          {/* ★ THE BOUNDARY IS HERE, AROUND THE CONTENT, NOT AROUND THE SHELL.
+              Every page is `lazy` (see App.tsx), so each navigation suspends
+              until its chunk arrives. Caught at this depth, the sidebar and the
+              header stay on screen and only the panel they frame is replaced —
+              caught higher up, the whole frame would blink away and come back
+              on every click, which reads as the app restarting. */}
           <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-gray-50">
-            <Outlet />
+            <Suspense fallback={<PageFallback />}>
+              <Outlet />
+            </Suspense>
           </main>
         </div>
       </div>
