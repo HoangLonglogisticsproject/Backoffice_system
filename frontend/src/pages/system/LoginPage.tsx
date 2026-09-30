@@ -5,7 +5,19 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import logo from '@/assets/img/LOGO.png'
-import bgImage from '@/assets/img/bg-login.png'
+/**
+ * ★ WEBP, AND THE PNG IT REPLACED WAS 2.1 MB FOR NO REASON.
+ *
+ * The source was a photograph saved as lossless 32-bit RGBA PNG — decoded, its
+ * alpha channel was 1,064,448 pixels of solid 0xFF, so a quarter of the file
+ * was a constant. On a throttled connection it was measured taking 18.2 s, and
+ * it was the single heaviest thing this screen loads. Re-encoded at the same
+ * 1584×672, WebP q80 is 135 kB: the same picture, 1/15th of the bytes, behind
+ * a dark overlay and a card where the difference is not visible.
+ *
+ * The PNG is kept in the repo as the master to re-encode from.
+ */
+import bgImage from '@/assets/img/bg-login.webp'
 import { useSession } from '@/contexts/SessionProvider'
 import { homeOf } from '@/utils/portal'
 import { loginErrorMessage } from './loginErrorMessage'
@@ -17,6 +29,25 @@ import { loginErrorMessage } from './loginErrorMessage'
  * The email field submits as `subject` — that mapping lives in the repository
  * (contract §1), not here.
  */
+/**
+ * Where the guard asked us to send them back to, if it named anywhere.
+ *
+ * ★ READ BY BOTH EXITS FROM THIS SCREEN, WHICH IS THE WHOLE POINT. Only the
+ * sign-in handler used to read it. The other exit — already signed in, so
+ * redirect — sent everybody to `homeOf(...)`, and a session that resolved a
+ * moment AFTER the guard had already bounced it here took that exit: the user
+ * pressed F5 on `/dispatch/trip-schedule` and landed on `/`, with the
+ * destination the guard had carefully attached sitting unread in
+ * `location.state`.
+ *
+ * `/login` is excluded because returning somebody to the screen they are
+ * standing on is a loop, not a destination.
+ */
+const returnTo = (locationState: unknown): string | undefined => {
+  const from = (locationState as { from?: string } | null)?.from
+  return from && from !== '/login' ? from : undefined
+}
+
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [email, setEmail] = useState('')
@@ -30,7 +61,14 @@ export default function LoginPage() {
 
   // Already signed in: `password-change-required` has its own screen, and
   // sending it to "/" would bounce straight back here.
-  if (state?.status === 'ready') return <Navigate to={homeOf(state.authorization)} replace />
+  //
+  // The aimed-at page wins over the home screen — a reload that passed through
+  // here must end where it started. `homeOf` is the fallback, for somebody who
+  // opened `/login` on their own; the guard still re-routes a driver holding a
+  // Backoffice URL, so honouring `from` cannot land anyone in the wrong shell.
+  if (state?.status === 'ready') {
+    return <Navigate to={returnTo(location.state) ?? homeOf(state.authorization)} replace />
+  }
   if (state?.status === 'password-change-required') return <Navigate to="/change-password" replace />
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -42,9 +80,10 @@ export default function LoginPage() {
       await signIn(email, password)
       // Where to go next is the SESSION's answer, not this screen's: a
       // temporary credential must land on the change-password screen. The
-      // guard reads the reloaded state and routes accordingly.
-      const from = (location.state as { from?: string } | null)?.from
-      navigate(from && from !== '/login' ? from : '/', { replace: true })
+      // guard reads the reloaded state and routes accordingly — which is also
+      // why the fallback here is `/` rather than `homeOf`: the new session has
+      // not arrived yet at this point, so there is nothing to ask.
+      navigate(returnTo(location.state) ?? '/', { replace: true })
     } catch (error_) {
       setError(loginErrorMessage(error_))
     } finally {
