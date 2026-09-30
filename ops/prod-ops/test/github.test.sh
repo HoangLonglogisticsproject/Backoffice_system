@@ -8,11 +8,16 @@ readonly GH
 readonly A1=a0000000-0000-4000-8000-000000000001 A2=a0000000-0000-4000-8000-000000000002
 readonly SHA=0123456789abcdef0123456789abcdef01234567
 pass=0 failed=0
-ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
-nok() { failed=$((failed + 1)); printf '  FAIL  %s\n' "$1"; [[ -z "${2:-}" ]] || sed 's/^/          /' <<< "$2"; }
+ok()  { local what="$1"; pass=$((pass + 1)); printf '  ok    %s\n' "$what"; }
+nok() {
+  local what="$1" detail="${2:-}"
+  failed=$((failed + 1)); printf '  FAIL  %s\n' "$what"
+  [[ -z "$detail" ]] || sed 's/^/          /' <<< "$detail"
+}
 request() {  # request <ids> [email] [sha]: sets RC and OUT
+  local ids="$1" email="${2-ops@example.com}" sha="${3-$SHA}"
   set +e
-  OUT="$(TRIP_IDS="$1" ACTOR_EMAIL="${2-ops@example.com}" EXPECTED_RELEASE_SHA="${3-$SHA}" bash "$GH/normalize-request.sh" 2>&1)"
+  OUT="$(TRIP_IDS="$ids" ACTOR_EMAIL="$email" EXPECTED_RELEASE_SHA="$sha" bash "$GH/normalize-request.sh" 2>&1)"
   RC=$?
   set -e
 }
@@ -40,9 +45,10 @@ echo "== connect.sh: a pinned host key or nothing"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 connect() {  # connect <known_hosts>: sets RC and OUT
+  local known_hosts="$1"
   set +e
   OUT="$(RUNNER_TEMP="$tmp" GITHUB_ENV="$tmp/env" PROD_OPS_HOST=203.0.113.7 PROD_OPS_PORT=24700 \
-    PROD_OPS_SSH_KEY='-----BEGIN OPENSSH PRIVATE KEY-----' PROD_OPS_KNOWN_HOSTS="$1" bash "$GH/connect.sh" 2>&1)"
+    PROD_OPS_SSH_KEY='-----BEGIN OPENSSH PRIVATE KEY-----' PROD_OPS_KNOWN_HOSTS="$known_hosts" bash "$GH/connect.sh" 2>&1)"
   RC=$?
   set -e
 }

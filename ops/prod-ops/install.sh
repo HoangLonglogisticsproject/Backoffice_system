@@ -31,6 +31,9 @@ for tool in visudo sudo docker sha256sum stat install cmp mktemp awk; do
   command -v "$tool" >/dev/null || die "$tool is not installed"
 done
 id -u "$OPS_USER" >/dev/null 2>&1 || die "the $OPS_USER account does not exist yet - create it first (README.md)"
+# Never add a rule to a sudo configuration that is already invalid: the final
+# check could then not tell our mistake from one that was already there.
+visudo -c >/dev/null || die "sudo's configuration is already invalid (visudo -c above) - fix that first; nothing was installed"
 OPS_HOME="$(awk -F: -v u="$OPS_USER" '$1 == u { print $6 }' /etc/passwd)"
 readonly OPS_HOME
 [[ "$OPS_HOME" == /* && -d "$OPS_HOME" ]] || die "$OPS_USER has no home directory"

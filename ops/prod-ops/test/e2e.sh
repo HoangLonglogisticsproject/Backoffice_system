@@ -23,6 +23,7 @@ readonly A3=a0000000-0000-4000-8000-000000000003 A4=a0000000-0000-4000-8000-0000
 readonly A5=a0000000-0000-4000-8000-000000000005 A6=a0000000-0000-4000-8000-000000000006
 readonly A7=a0000000-0000-4000-8000-000000000007 A8=a0000000-0000-4000-8000-000000000008
 readonly NOBODY_ID=f0000000-0000-4000-8000-00000000ffff
+readonly AUDIT_RAN='count\|confirmed_total'  # a line only a completed audit prints
 pass=0 failed=0 ALL=""
 
 (( EUID == 0 )) || { echo "e2e.sh must run as root (it installs the wrapper)" >&2; exit 1; }
@@ -40,9 +41,13 @@ for image in postgres:17-alpine node:24-alpine; do
   docker image inspect "$image" >/dev/null 2>&1 || docker pull -q "$image" >/dev/null
 done
 
-ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
-nok() { failed=$((failed + 1)); printf '  FAIL  %s\n' "$1"; [[ -z "${2:-}" ]] || sed 's/^/          /' <<< "$2"; }
-check() { if eval "$2"; then ok "$1"; else nok "$1" "${3:-}"; fi; }
+ok()  { local what="$1"; pass=$((pass + 1)); printf '  ok    %s\n' "$what"; }
+nok() {
+  local what="$1" detail="${2:-}"
+  failed=$((failed + 1)); printf '  FAIL  %s\n' "$what"
+  [[ -z "$detail" ]] || sed 's/^/          /' <<< "$detail"
+}
+check() { local what="$1" assertion="$2" detail="${3:-}"; if eval "$assertion"; then ok "$what"; else nok "$what" "$detail"; fi; }
 # run <op...> : the wrapper as root with $REQ on stdin; sets RC and OUT
 run() { set +e; OUT="$(printf '%s' "${REQ:-}" | "$BIN" "$@" 2>&1)"; RC=$?; set -e; ALL+="$OUT"$'\n'; }
 # as_ops <command...> : as the bo-ops account, $REQ on stdin
@@ -56,17 +61,23 @@ expect() {  # expect <description> <exit code> [regex that must appear...]
   done
   ok "$what"
 }
-normalize_req() { printf 'ids=%s\nby=ops@example.com\nexpected_release=%s\ngithub_run=42-1\ngithub_actor=octocat\n' "$1" "${2:-$RELEASE}"; }
+normalize_req() {
+  local ids="$1" release="${2:-$RELEASE}"
+  printf 'ids=%s\nby=ops@example.com\nexpected_release=%s\ngithub_run=42-1\ngithub_actor=octocat\n' "$ids" "$release"
+}
 psql_pg() { docker exec -i -e PGOPTIONS='-c client_min_messages=warning' "$PG" psql -X -q -A -t -v ON_ERROR_STOP=1 -U ops -d bo "$@"; }
 wait_pg() { local i; for i in $(seq 1 60); do psql_pg -c 'SELECT 1' >/dev/null 2>&1 && return 0; sleep 1; done; echo "postgres never came up" >&2; exit 1; }
-labels() { printf -- '--label %s --label %s --label com.docker.compose.service=%s' "$TEST_LABEL" "$PROJECT_LABEL" "$1"; }
-cli_calls() { docker exec "$BE" sh -c 'cat /tmp/cli-calls 2>/dev/null; rm -f /tmp/cli-calls' || true; }
-steer_cli() { docker exec -i "$BE" sh -c 'cat > /tmp/outcomes' <<< "$1"; }
+labels() { local service="$1"; printf -- '--label %s --label %s --label com.docker.compose.service=%s' "$TEST_LABEL" "$PROJECT_LABEL" "$service"; }
+# The fake CLI's record and steering live in /app/e2e (root-only), not in /tmp.
+cli_calls() { docker exec "$BE" sh -c 'cat /app/e2e/cli-calls 2>/dev/null; rm -f /app/e2e/cli-calls' || true; }
+steer_cli() { local script="$1"; docker exec -i "$BE" sh -c 'cat > /app/e2e/outcomes' <<< "$script"; }
 start_backend() {  # start_backend <release.sha label or ""> <image tag>
+  local release="$1" tag="$2"
   docker rm -f "$BE" >/dev/null 2>&1 || true
-  docker tag node:24-alpine "hoanglong-bo-backend:$2"
+  docker tag node:24-alpine "hoanglong-bo-backend:$tag"
   # shellcheck disable=SC2046 # labels() is word-split on purpose
-  docker run -d --name "$BE" $(labels backend) ${1:+--label "release.sha=$1"} "hoanglong-bo-backend:$2" sleep infinity >/dev/null
+  docker run -d --name "$BE" $(labels backend) ${release:+--label "release.sha=$release"} "hoanglong-bo-backend:$tag" sleep infinity >/dev/null
+  docker exec "$BE" install -d -m 700 /app/e2e
   docker exec -i "$BE" sh -c "mkdir -p '$(dirname "$CLI_PATH")' && cat > '$CLI_PATH'" < "$HERE/fake-normalize-cli.js"
 }
 
@@ -96,6 +107,11 @@ chown nobody "$LIB/SOURCE"
 check "install.sh refuses a target that is not root's" '! bash "$OPS/install.sh" "$RELEASE" >/dev/null 2>&1'
 chown root:root "$LIB/SOURCE"
 check "install.sh refuses a non-sha source commit" '! bash "$OPS/install.sh" main >/dev/null 2>&1'
+printf 'this is not sudoers syntax\n' > /etc/sudoers.d/zz-e2e-broken
+chmod 440 /etc/sudoers.d/zz-e2e-broken
+log="$(bash "$OPS/install.sh" "$RELEASE" 2>&1 || true)"
+check "install.sh refuses to add to a sudo configuration that is already invalid" 'grep -q "already invalid" <<< "$log"' "$log"
+rm -f /etc/sudoers.d/zz-e2e-broken
 
 echo "== requests are refused before anything else happens"
 REQ='' run bogus-operation;                         expect "unknown operation"          2 'error\|2\|unknown operation'
@@ -137,7 +153,7 @@ REQ=$'github_run=42-1\ngithub_actor=octocat\n' run trip-confirmed-audit
 expect "exactly one target: the audit runs" 0 "meta\|container\|$PG$" 'meta\|database\|bo$' 'meta\|transaction_read_only\|on$' \
   'meta\|compose_project\|hoanglong-bo$' 'meta\|compose_service\|postgres$' "meta\|audit_sql_sha256\|$pin$" "meta\|installed_from\|$RELEASE$" \
   'meta\|backend_release\|unavailable$' 'meta\|closed_state_constraint\|validated$'
-expect "counts by classification and stamp" 0 'count\|confirmed_total\|5$' 'count\|ELIGIBLE\|3$' 'count\|CONFLICT_PENDING_COMPLETION\|1$' \
+expect "counts by classification and stamp" 0 "$AUDIT_RAN\|5$" 'count\|ELIGIBLE\|3$' 'count\|CONFLICT_PENDING_COMPLETION\|1$' \
   'count\|CONFLICT_CLOSED_PARTIAL\|0$' 'count\|SKIPPED_ARCHIVED\|1$' 'count\|CLOSED_COMPLETE\|1$' 'count\|CLOSED_MISSING\|4$' 'count\|CLOSED_PARTIAL\|0$'
 expect "assignment and temporal summaries" 0 'assignments\|active\|1$' 'assignments\|ended\|1$' 'temporal\|pickup_day_mismatch\|1$' 'temporal\|delivery_not_after_pickup\|1$'
 expect "complete id lists, in date order" 0 "ids\|ELIGIBLE\|$A1,$A2,$A5$" "ids\|CONFLICT_PENDING_COMPLETION\|$A3$" "ids\|SKIPPED_ARCHIVED\|$A4$" 'ids\|CLOSED_PARTIAL\|$'
@@ -199,7 +215,7 @@ steer_cli '{"mode": "drop-last"}'
 REQ="$(normalize_req "$A1,$A2")" run trip-confirmed-normalize; expect "an id missing from the CLI output: fail" 1 'cannot verify'
 steer_cli '{"mode": "fail"}'
 REQ="$(normalize_req "$A1")" run trip-confirmed-normalize;  expect "CLI failure: fail, state unknown" 1 'MAY have been normalized'
-docker exec "$BE" rm -f /tmp/outcomes /tmp/cli-calls
+docker exec "$BE" rm -f /app/e2e/outcomes /app/e2e/cli-calls
 
 echo "== the transport: connect.sh -> sshd -> forced command -> sudo -> wrapper"
 if [[ -x /usr/sbin/sshd ]] && command -v ssh >/dev/null; then
@@ -221,15 +237,16 @@ EOF
     'KbdInteractiveAuthentication no' 'StrictModes yes' > "$ssh_dir/sshd_config"
   /usr/sbin/sshd -f "$ssh_dir/sshd_config" -E "$ssh_dir/sshd.log"
   prepare() {  # prepare <host public key file>: runs connect.sh as a workflow would
+    local host_key="$1"
     RUNNER_TEMP="$ssh_dir" GITHUB_ENV="$ssh_dir/env" PROD_OPS_HOST=127.0.0.1 PROD_OPS_PORT=2222 \
-      PROD_OPS_SSH_KEY="$(cat "$ssh_dir/client")" PROD_OPS_KNOWN_HOSTS="[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$1")" \
+      PROD_OPS_SSH_KEY="$(cat "$ssh_dir/client")" PROD_OPS_KNOWN_HOSTS="[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$host_key")" \
       bash "$OPS/github/connect.sh" >/dev/null
   }
   over_ssh() { set +e; OUT="$(printf '%s' "${REQ:-}" | ssh -F "$ssh_dir/prod-ops-ssh/config" "$@" 2>&1)"; RC=$?; set -e; ALL+="$OUT"$'\n'; }
   prepare "$ssh_dir/host.pub"
   for _ in $(seq 1 20); do REQ='' over_ssh prod-ops trip-confirmed-audit; [[ "$RC" == 255 ]] || break; sleep 0.5; done
   REQ=$'github_run=7-1\ngithub_actor=octocat\n' over_ssh prod-ops trip-confirmed-audit
-  expect "the audit, over ssh, exactly as the workflow sends it" 0 'count\|confirmed_total\|6$' "ids\|ELIGIBLE\|$A1,$A2,$A5$"
+  expect "the audit, over ssh, exactly as the workflow sends it" 0 "$AUDIT_RAN\|6$" "ids\|ELIGIBLE\|$A1,$A2,$A5$"
   REQ="$(normalize_req "$A1")" over_ssh prod-ops trip-confirmed-normalize
   expect "the normalization, over ssh, request on stdin" 0 "result\|$A1\|NORMALIZED$"
   for hostile in 'trip-confirmed-audit; id' 'id' 'sh -c id' 'sudo -n /bin/sh' ''; do
@@ -250,16 +267,16 @@ echo "== integrity: the wrapper refuses files it cannot trust"
 printf ' ' >> "$LIB/trip-confirmed-audit.sql"
 REQ='' run trip-confirmed-audit;      expect "a modified audit SQL" 3 'reviewed checksum'
 bash "$OPS/install.sh" "$RELEASE" >/dev/null
-chmod o+w "$LIB"
-REQ='' run trip-confirmed-audit;      expect "a world-writable asset directory" 3 "$LIB is missing, not root-owned"
+chmod g+w "$LIB"
+REQ='' run trip-confirmed-audit;      expect "a group-writable asset directory" 3 "$LIB is missing, not root-owned"
 chmod 755 "$LIB"
 chown nobody "$BIN"
 REQ='' run trip-confirmed-audit;      expect "a wrapper not owned by root" 3 "$BIN is missing, not root-owned"
 chown root:root "$BIN"
-REQ='' run trip-confirmed-audit;      expect "restored: runs again" 0 'count\|confirmed_total'
+REQ='' run trip-confirmed-audit;      expect "restored: runs again" 0 "$AUDIT_RAN"
 
 echo "== sudo: exactly two commands, one argument each, this exact file"
-REQ='' as_ops sudo -n "$BIN" trip-confirmed-audit;     expect "bo-ops may run the audit" 0 'count\|confirmed_total'
+REQ='' as_ops sudo -n "$BIN" trip-confirmed-audit;     expect "bo-ops may run the audit" 0 "$AUDIT_RAN"
 REQ="$(normalize_req "$A1")" as_ops sudo -n "$BIN" trip-confirmed-normalize; expect "bo-ops may run the normalization" 0 "result\|$A1\|NORMALIZED$"
 for denied in "$BIN trip-confirmed-audit extra" "$BIN trip-confirmed-audit;id" "$BIN" "$BIN bogus" "/bin/sh -c id" "/usr/bin/docker ps" "-E $BIN trip-confirmed-audit" "-u nobody $BIN trip-confirmed-audit"; do
   # shellcheck disable=SC2086 # the word split is the test
@@ -269,7 +286,7 @@ done
 REQ='' as_ops env 'SSH_ORIGINAL_COMMAND=trip-confirmed-audit; id' sh -c 'sudo -n /usr/local/sbin/bo-prod-ops "$SSH_ORIGINAL_COMMAND"'
 check "the forced command passes a hostile ssh command as ONE refused argument" '[[ "$RC" != 0 ]] && ! grep -q "uid=" <<< "$OUT"' "$OUT"
 REQ='' as_ops env 'SSH_ORIGINAL_COMMAND=trip-confirmed-audit' sh -c 'sudo -n /usr/local/sbin/bo-prod-ops "$SSH_ORIGINAL_COMMAND"'
-expect "the forced command runs the audit it names" 0 'count\|confirmed_total'
+expect "the forced command runs the audit it names" 0 "$AUDIT_RAN"
 printf '\n# tampered\n' >> "$BIN"
 REQ='' as_ops sudo -n "$BIN" trip-confirmed-audit
 check "sudo refuses a wrapper whose sha256 is not the installed one" '[[ "$RC" != 0 ]] && ! grep -q "count|" <<< "$OUT"' "$OUT"
@@ -291,7 +308,7 @@ for dir in /usr/sbin /usr/bin /sbin /bin; do
   if [[ -e "$dir/logger" || -L "$dir/logger" ]]; then mv "$dir/logger" "$dir/logger.e2e-off"; hidden+=("$dir/logger"); fi
 done
 REQ='' run trip-confirmed-audit
-expect "without a logger the wrapper says so, and still runs" 0 'warn\|journal\|logger unavailable' 'count\|confirmed_total'
+expect "without a logger the wrapper says so, and still runs" 0 'warn\|journal\|logger unavailable' "$AUDIT_RAN"
 for moved in "${hidden[@]}"; do mv "$moved.e2e-off" "$moved"; done
 for secret in "$PG_PASSWORD" PII-SENTINEL 7777777 6666666 5555555; do
   check "never printed: $secret" '! grep -qF -- "$secret" <<< "$ALL"'

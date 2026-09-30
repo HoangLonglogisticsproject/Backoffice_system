@@ -21,6 +21,7 @@ while IFS='|' read -r section key value; do
     count | temporal | assignments) counts+=("| $section | $key | $value |") ;;
     preflight | result) checks+=("| $section | \`$key\` | $value |") ;;
     ids)       ids+=("$key|$value") ;;
+    *)         ;;  # stays in the log; the summary shows only what it knows how to render
   esac
 done < "$file"
 

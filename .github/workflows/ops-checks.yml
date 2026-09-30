@@ -40,6 +40,12 @@ jobs:
       - name: Test dependencies
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends openssh-server python3-yaml
 
+      # The runner image ships /etc/sudoers.d/runner with a mode `visudo -c`
+      # rejects, and install.sh rightly refuses to add a rule to a sudo
+      # configuration that does not validate. Normalise the runner's own file.
+      - name: Normalise the runner's sudoers
+        run: sudo chmod 0440 /etc/sudoers.d/runner && sudo visudo -c
+
       - name: shellcheck
         run: shellcheck ops/prod-ops/bo-prod-ops ops/prod-ops/install.sh ops/prod-ops/github/*.sh ops/prod-ops/test/*.sh
 

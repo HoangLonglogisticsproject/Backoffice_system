@@ -1,14 +1,17 @@
 // Stand-in for the trip capability's normalization CLI, installed at the real
 // path inside the e2e test's fake backend container. Same argv contract, same
 // JSON shape (README.md, "Contract with the trip capability"). It writes nothing
-// but /tmp/cli-calls, so the test can prove when it was - and was NOT - called.
-// /tmp/outcomes steers it: {"<id>": "<OUTCOME>"} or {"mode": "fail" | "garbage" | "drop-last"}.
+// but a record of its calls, so the test can prove when it was - and was NOT -
+// called. State lives in /app/e2e, a root-only directory the test creates, not /tmp.
+// `outcomes` there steers it: {"<id>": "<OUTCOME>"} or {"mode": "fail" | "garbage" | "drop-last"}.
 const fs = require('node:fs');
 
+const STATE = '/app/e2e';
 const argv = process.argv.slice(2);
-fs.appendFileSync('/tmp/cli-calls', `${JSON.stringify(argv)}\n`);
+fs.appendFileSync(`${STATE}/cli-calls`, `${JSON.stringify(argv)}\n`);
 const value = (flag) => argv[argv.indexOf(flag) + 1];
-const script = fs.existsSync('/tmp/outcomes') ? JSON.parse(fs.readFileSync('/tmp/outcomes', 'utf8')) : {};
+const steering = `${STATE}/outcomes`;
+const script = fs.existsSync(steering) ? JSON.parse(fs.readFileSync(steering, 'utf8')) : {};
 
 if (script.mode === 'fail') {
   console.error('simulated failure after an unknown number of writes');
