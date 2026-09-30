@@ -390,6 +390,11 @@ GitHub Actions
   -> exec /opt/hoanglong-bo/.github/scripts/vps-release.sh <sha>
 ```
 
+Production **data** operations (audits, normalizations) never use this account:
+they run as a separate `bo-ops` account through the root-owned `bo-prod-ops`,
+approved on the `production` environment — see `ops/prod-ops/README.md`.
+`deploy` gains no new privilege from them.
+
 ### Why the wrapper is split in two
 
 `/usr/local/bin/bo-release` lives on the box, is root-owned, and almost never

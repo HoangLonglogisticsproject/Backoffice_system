@@ -1,0 +1,58 @@
+name: Production Trip Audit
+
+# ★ READ ONLY, AND ONLY BY HAND. It runs exactly one thing on the VPS -
+# `bo-prod-ops trip-confirmed-audit` - which opens a read-only session, runs the
+# reviewed audit SQL and rolls back. It never triggers the normalization: that
+# is a separate workflow a person starts after reading this one's output.
+#
+# No push, pull_request or schedule trigger, ever: a production credential is
+# only handed to a run somebody chose to start, from `main`, and that the
+# `production` environment's reviewers approved. See ops/prod-ops/README.md.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One production operation at a time, and never cancelled halfway.
+concurrency:
+  group: production-ops
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: audit · legacy confirmed trips (read only)
+    # The environment's branch policy is the real gate; this makes a run from
+    # any other ref stop before it even asks for approval.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Prepare the pinned SSH connection
+        env:
+          PROD_OPS_HOST: ${{ secrets.PROD_OPS_HOST }}
+          PROD_OPS_PORT: ${{ secrets.PROD_OPS_PORT }}
+          PROD_OPS_SSH_KEY: ${{ secrets.PROD_OPS_SSH_KEY }}
+          PROD_OPS_KNOWN_HOSTS: ${{ secrets.PROD_OPS_KNOWN_HOSTS }}
+        run: bash ops/prod-ops/github/connect.sh
+
+      # The request carries only who asked and which run this is, for the
+      # server's log. The operation name is the whole command.
+      - name: Run the read-only audit
+        run: |
+          set -o pipefail
+          printf 'github_run=%s-%s\ngithub_actor=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_ACTOR" \
+            | ssh -F "$PROD_OPS_SSH_CONFIG" prod-ops trip-confirmed-audit | tee "$RUNNER_TEMP/audit.txt"
+
+      - name: Summarize
+        if: always()
+        run: bash ops/prod-ops/github/summarize.sh "Production trip audit (read only)" "$RUNNER_TEMP/audit.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the SSH material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/prod-ops-ssh"

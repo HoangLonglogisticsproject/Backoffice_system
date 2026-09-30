@@ -1,0 +1,111 @@
+name: Normalize Legacy Confirmed Trips
+
+# ★ WRITES PRODUCTION DATA, SO EVERY STEP TOWARDS IT IS EXPLICIT.
+#   1. A person reads `Production Trip Audit` and copies the ELIGIBLE ids and
+#      the backend_release it reported.
+#   2. They start THIS workflow with exactly those ids, their own app email and
+#      that release. Inputs are validated before any secret exists in the run.
+#   3. The `production` environment's reviewers approve the run.
+#   4. On the VPS `bo-prod-ops trip-confirmed-normalize` refuses unless the
+#      deployed release is the approved one and every id is ELIGIBLE right now;
+#      then the trip capability's own CLI closes those ids, re-checking each
+#      under its row lock.
+#   5. The audit runs again, so the run ends showing what is left.
+# Never triggered by anything but a person: no push, pull_request or schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      trip_ids:
+        description: 'ELIGIBLE trip UUIDs from the audit, comma- or newline-separated. No "all".'
+        required: true
+        type: string
+      actor_email:
+        description: 'Your app account email - must hold trip.complete.review.'
+        required: true
+        type: string
+      expected_release_sha:
+        description: 'The 40-character backend_release the audit reported. The run refuses any other.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-ops
+  cancel-in-progress: false
+
+jobs:
+  # No environment, no secrets: a malformed request fails here, before anyone is
+  # asked to approve anything and before a production credential exists.
+  validate:
+    name: validate · inputs
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Validate the request
+        env:
+          TRIP_IDS: ${{ inputs.trip_ids }}
+          ACTOR_EMAIL: ${{ inputs.actor_email }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+        run: bash ops/prod-ops/github/normalize-request.sh > /dev/null
+
+  normalize:
+    name: normalize · explicit ids, approved release
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Build the request
+        env:
+          TRIP_IDS: ${{ inputs.trip_ids }}
+          ACTOR_EMAIL: ${{ inputs.actor_email }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+        run: |
+          bash ops/prod-ops/github/normalize-request.sh > "$RUNNER_TEMP/request.txt"
+          printf 'github_run=%s-%s\ngithub_actor=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_ACTOR" >> "$RUNNER_TEMP/request.txt"
+
+      - name: Prepare the pinned SSH connection
+        id: conn
+        env:
+          PROD_OPS_HOST: ${{ secrets.PROD_OPS_HOST }}
+          PROD_OPS_PORT: ${{ secrets.PROD_OPS_PORT }}
+          PROD_OPS_SSH_KEY: ${{ secrets.PROD_OPS_SSH_KEY }}
+          PROD_OPS_KNOWN_HOSTS: ${{ secrets.PROD_OPS_KNOWN_HOSTS }}
+        run: bash ops/prod-ops/github/connect.sh
+
+      # Exit codes are the wrapper's: 5 wrong release, 6 an id is not ELIGIBLE
+      # (nothing written), 7 applied but some ids were left unchanged. Any
+      # non-zero fails the run - a partial result is never reported green.
+      - name: Normalize (preflight, release check, apply)
+        run: |
+          set -o pipefail
+          ssh -F "$PROD_OPS_SSH_CONFIG" prod-ops trip-confirmed-normalize < "$RUNNER_TEMP/request.txt" \
+            | tee "$RUNNER_TEMP/normalize.txt"
+
+      - name: Audit again (read only)
+        if: always() && steps.conn.outcome == 'success'
+        run: |
+          set -o pipefail
+          printf 'github_run=%s-%s\ngithub_actor=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_ACTOR" \
+            | ssh -F "$PROD_OPS_SSH_CONFIG" prod-ops trip-confirmed-audit | tee "$RUNNER_TEMP/post-audit.txt"
+
+      - name: Summarize
+        if: always()
+        run: |
+          bash ops/prod-ops/github/summarize.sh "Normalization" "$RUNNER_TEMP/normalize.txt" >> "$GITHUB_STEP_SUMMARY"
+          bash ops/prod-ops/github/summarize.sh "Audit after the normalization" "$RUNNER_TEMP/post-audit.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the SSH material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/prod-ops-ssh"

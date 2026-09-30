@@ -1,0 +1,55 @@
+name: Ops checks
+
+# The production-ops wrapper, its audit SQL, its installer and the two manual
+# workflows - tested on every change to them.
+#
+# ★ NO ENVIRONMENT, NO SECRET, NO SSH. This never touches production: it
+# installs the real wrapper on the throwaway runner and drives it against
+# throwaway containers (a real postgres:17-alpine with this repository's
+# migrations, a stand-in backend) through real sudo.
+on:
+  pull_request:
+    paths:
+      - 'ops/**'
+      - 'backend/migrations/**'
+      - '.github/workflows/prod-trip-*.yml'
+      - '.github/workflows/ops-checks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/**'
+      - 'backend/migrations/**'
+      - '.github/workflows/prod-trip-*.yml'
+      - '.github/workflows/ops-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ops:
+    name: ops · wrapper, audit SQL, installer, workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # sshd for the transport test (ssh -> forced command -> sudo), PyYAML for
+      # the workflow rules. Both from the runner's own distribution.
+      - name: Test dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends openssh-server python3-yaml
+
+      - name: shellcheck
+        run: shellcheck ops/prod-ops/bo-prod-ops ops/prod-ops/install.sh ops/prod-ops/github/*.sh ops/prod-ops/test/*.sh
+
+      - name: Workflow rules
+        run: python3 ops/prod-ops/test/workflows.py
+
+      - name: Runner-side scripts
+        run: bash ops/prod-ops/test/github.test.sh
+
+      # Root because it installs the wrapper, a sudoers rule and the bo-ops
+      # account - on this disposable VM, exactly as the bootstrap would on the VPS.
+      - name: End to end (real docker, postgres, sudo)
+        run: sudo bash ops/prod-ops/test/e2e.sh
