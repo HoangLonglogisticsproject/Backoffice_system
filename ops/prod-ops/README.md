@@ -291,16 +291,20 @@ sshd -T | grep -Ei '^(allowusers|allowgroups|denyusers|denygroups|authorizedkeys
 ssh-keygen -t ed25519 -N '' -C bo-prod-ops@github-actions -f bo-prod-ops     # on your machine
 #    copy bo-prod-ops.pub to /root/bo-prod-ops.pub on the VPS
 
-# 3. The reviewed sources, from main - never from a branch.
-SHA=<the merge commit on main>
-git -C /opt/hoanglong-bo fetch --quiet origin
-git -C /opt/hoanglong-bo merge-base --is-ancestor "$SHA" origin/main && echo "on main"
-rm -rf /root/bo-prod-ops-src && mkdir -p /root/bo-prod-ops-src
-git -C /opt/hoanglong-bo archive "$SHA" ops/prod-ops | tar -x -C /root/bo-prod-ops-src
-
-# 4. Install. Checks everything, validates the sudo rule with visudo -cf, then
-#    writes atomically; prints checksums, modes and `sudo -l -U bo-ops`.
-bash /root/bo-prod-ops-src/ops/prod-ops/install.sh "$SHA" /root/bo-prod-ops.pub
+# 3 + 4. The reviewed sources, from main - never from a branch - then install.
+#    ONE subshell with `set -e`: if the commit is not on origin/main, or any
+#    step fails, nothing after it runs (and your root shell stays open).
+#    install.sh checks everything, validates the sudo rule with visudo -cf, then
+#    writes atomically; it prints checksums, modes and `sudo -l -U bo-ops`.
+( set -euo pipefail
+  SHA=<the merge commit on main>
+  git -C /opt/hoanglong-bo fetch --quiet origin
+  git -C /opt/hoanglong-bo merge-base --is-ancestor "$SHA" origin/main \
+    || { echo "REFUSING: $SHA is not on origin/main" >&2; exit 1; }
+  rm -rf /root/bo-prod-ops-src && mkdir -p /root/bo-prod-ops-src
+  git -C /opt/hoanglong-bo archive "$SHA" ops/prod-ops | tar -x -C /root/bo-prod-ops-src
+  bash /root/bo-prod-ops-src/ops/prod-ops/install.sh "$SHA" /root/bo-prod-ops.pub
+)
 
 # 5. Prove it - every "denied" line MUST be denied, every listing MUST match.
 sudo -u bo-ops sudo -n /usr/local/sbin/bo-prod-ops trip-confirmed-audit </dev/null  # runs

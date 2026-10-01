@@ -65,7 +65,7 @@ if [[ $RC == 0 ]] && grep -q '^  StrictHostKeyChecking yes$' "$config" && grep -
 else
   nok "pinned host config" "$OUT"
 fi
-[[ "$(stat -c '%a' "$tmp/prod-ops-ssh/key" 2>/dev/null || echo 600)" == 600 ]] && ok "the private key is written 0600" || nok "key mode"
+[[ -f "$tmp/prod-ops-ssh/key" && "$(stat -c '%a' "$tmp/prod-ops-ssh/key")" == 600 ]] && ok "the private key is written 0600" || nok "key mode"
 grep -q 'BEGIN OPENSSH' <<< "$OUT" && nok "connect.sh printed the private key" || ok "connect.sh never prints the key"
 
 echo "== summarize.sh"

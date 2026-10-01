@@ -34,7 +34,10 @@ jobs:
           persist-credentials: false
 
       # Pushes to main always run the whole suite; a pull request runs it when
-      # its diff touches what this guards.
+      # its diff touches what this guards. ★ FAIL-CLOSED: the suite is skipped
+      # only when the diff was computed AND matched nothing. The diff is
+      # captured first, so a matcher that stops early can never SIGPIPE it into
+      # an error that reads as "nothing changed".
       - name: Does this change touch the ops surface?
         id: scope
         env:
@@ -43,13 +46,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" != pull_request ] \
-             || git diff --name-only "$BASE...$HEAD_SHA" | grep -qE '^(ops/|backend/migrations/|\.github/workflows/(prod-trip-|ops-checks))'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Nothing under ops/, backend/migrations/ or the ops workflows changed - nothing to test."
+          run=true
+          if [ "$EVENT" = pull_request ]; then
+            if changed="$(git diff --name-only "$BASE...$HEAD_SHA")"; then
+              grep -E '^(ops/|backend/migrations/|\.github/workflows/(prod-trip-|ops-checks))' <<< "$changed" > /dev/null || run=false
+            else
+              echo "::warning::Could not compute the diff - running everything."
+            fi
           fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          [ "$run" = true ] || echo "Nothing under ops/, backend/migrations/ or the ops workflows changed - nothing to test."
 
       # sshd for the transport tests, xauth so the unrestricted control key can
       # prove X11 forwarding works on that sshd, PyYAML for the workflow rules.
