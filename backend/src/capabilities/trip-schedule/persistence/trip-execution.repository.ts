@@ -807,6 +807,19 @@ export class CompletionRequestRepository {
    * approved request, and the trip may close. Ended assignments do not count:
    * a turn ended before it started has nothing to approve.
    */
+  /**
+   * Is a driver's completion request on this trip waiting for a decision?
+   * Asked under the trip lock before a manual completion, which must not leave
+   * a request nobody can decide any more.
+   */
+  async hasPendingOnTrip(tripId: string, executor: DatabaseQuery): Promise<boolean> {
+    const rows = await executor.query<{ one: number }>(
+      `SELECT 1 AS one FROM trip_completion_requests WHERE trip_id = $1 AND state = 'pending' LIMIT 1`,
+      [tripId],
+    );
+    return rows.length > 0;
+  }
+
   async hasUnapprovedActiveAssignment(tripId: string, executor: DatabaseQuery): Promise<boolean> {
     const rows = await executor.query<{ one: number }>(
       `SELECT 1 AS one

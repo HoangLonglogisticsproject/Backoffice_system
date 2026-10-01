@@ -576,9 +576,9 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
       await catalogue.archiveCustomer(customer.id);
 
-      const updated = await trips.update(trip.id, { status: 'confirmed' }, author);
+      const updated = await trips.update(trip.id, { status: 'executing' }, author);
 
-      expect(updated.status).toBe('confirmed');
+      expect(updated.status).toBe('executing');
       expect(updated.customerId).toBe(customer.id);
     });
 
@@ -680,9 +680,9 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   describe('★ BD-01 — `done` is terminal, and the board cannot reach it', () => {
     const OTHERS = [
       'pending',
-      'confirmed',
+      'executing',
       'pending',
-      'confirmed',
+      'executing',
     ] as const;
 
     const tripWith = async (status: TripStatus) =>
@@ -700,30 +700,30 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
      * approval leaves behind.
      */
     const doneTrip = async () => {
-      const trip = await tripWith('confirmed');
+      const trip = await tripWith('executing');
       await pool.query("UPDATE trip_schedules SET status = 'finished' WHERE id = $1", [trip.id]);
       return trip;
     };
 
     describe('★ reaching done — refused, whichever door is used', () => {
       it('refuses it through the status endpoint', async () => {
-        const trip = await tripWith('confirmed');
+        const trip = await tripWith('executing');
 
         await expect(trips.updateStatus(trip.id, 'finished', author)).rejects.toBeInstanceOf(
           ConflictError,
         );
 
-        expect((await trips.findById(trip.id))?.status).toBe('confirmed');
+        expect((await trips.findById(trip.id))?.status).toBe('executing');
       });
 
       it('refuses it through the FULL PATCH too — the rule is not bypassable', async () => {
-        const trip = await tripWith('confirmed');
+        const trip = await tripWith('executing');
 
         await expect(trips.update(trip.id, { status: 'finished' }, author)).rejects.toBeInstanceOf(
           ConflictError,
         );
 
-        expect((await trips.findById(trip.id))?.status).toBe('confirmed');
+        expect((await trips.findById(trip.id))?.status).toBe('executing');
       });
 
       it('★ refuses a trip BORN done — a trip cannot be created closed', async () => {
@@ -748,7 +748,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         // second door onto the same column.
         const trip = await doneTrip();
 
-        await expect(trips.update(trip.id, { status: 'confirmed' }, author)).rejects.toBeInstanceOf(
+        await expect(trips.update(trip.id, { status: 'executing' }, author)).rejects.toBeInstanceOf(
           ConflictError,
         );
 
@@ -762,7 +762,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         await trips.update(trip.id, { note: 'trước' }, author);
 
         await expect(
-          trips.update(trip.id, { status: 'confirmed', note: 'sau', cargoInfo: '17CTN' }, author),
+          trips.update(trip.id, { status: 'executing', note: 'sau', cargoInfo: '17CTN' }, author),
         ).rejects.toBeInstanceOf(ConflictError);
 
         const after = await trips.findById(trip.id);
@@ -790,16 +790,16 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         expect(updated.status).toBe('finished');
       });
 
-      it('★ leaves the four non-terminal statuses freely interchangeable', async () => {
+      it('★ leaves the open statuses freely interchangeable (the retired `confirmed` is written by nobody)', async () => {
         // Deliberately NOT a pipeline. Walking them in an order the legend does
         // not describe must succeed, or somebody has invented a workflow.
         const trip = await tripWith('pending');
 
         for (const next of [
-          'confirmed',
+          'executing',
           'pending',
           'pending',
-          'confirmed',
+          'executing',
         ] as const) {
           const moved = await trips.updateStatus(trip.id, next, author);
           expect(moved.status).toBe(next);
@@ -809,7 +809,7 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
 
     describe('interaction with the rules that already existed', () => {
       it('answers 404 for an archived trip before it ever considers the status', async () => {
-        const trip = await tripWith('confirmed');
+        const trip = await tripWith('executing');
         await trips.archive(trip.id, author);
 
         await expect(
@@ -835,8 +835,8 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const trip = await doneTrip();
 
       const results = await Promise.allSettled([
-        trips.updateStatus(trip.id, 'confirmed', author),
-        trips.updateStatus(trip.id, 'confirmed', author),
+        trips.updateStatus(trip.id, 'executing', author),
+        trips.updateStatus(trip.id, 'executing', author),
       ]);
 
       // ★ NEITHER MAY WIN. Whichever order the lock granted, both read a row
@@ -850,13 +850,13 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       const trip = await tripWith('pending');
 
       const results = await Promise.allSettled([
-        trips.updateStatus(trip.id, 'confirmed', author),
-        trips.updateStatus(trip.id, 'confirmed', author),
+        trips.updateStatus(trip.id, 'executing', author),
+        trips.updateStatus(trip.id, 'executing', author),
       ]);
 
       expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
       // The row holds whichever landed second; both were legal in either order.
-      expect(['confirmed', 'confirmed']).toContain(
+      expect(['executing', 'executing']).toContain(
         (await trips.findById(trip.id))?.status,
       );
     });

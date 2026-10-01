@@ -24,15 +24,27 @@ import type { VehicleOwnership } from './trip-execution';
 export const TRIP_STATUSES = [
   /** CHỜ XỬ LÝ — booked; nothing about the run is settled yet. */
   'pending',
-  /** ĐÃ XÁC NHẬN — the run is arranged: a lorry of ours, or a carrier booked. */
+  /**
+   * ⚠ RETIRED (business owner, 2026-09-29). Once read as "the run is arranged";
+   * the business has since said that "Đã xác nhận" means the trip is DONE —
+   * which is `finished`. Kept only so the rows still holding it read, until
+   * `npm run trips:normalize-confirmed` moves them; nothing may write it
+   * (`isRetiredStatus`). Dropping it from the CHECK is a migration for after.
+   */
   'confirmed',
   /** ĐANG THỰC HIỆN — on the road. */
   'executing',
-  /** HOÀN THÀNH — delivered and closed. Terminal; see `canTransition`. */
+  /**
+   * ĐÃ XÁC NHẬN — the trip is DONE: the canonical terminal state, and the only
+   * way into Lịch sử chuyến. Reached by `closeTrip` alone; see `canTransition`.
+   */
   'finished',
 ] as const;
 
 export type TripStatus = (typeof TRIP_STATUSES)[number];
+
+/** A status stored rows may still hold but no write may set. */
+export const isRetiredStatus = (status: TripStatus): boolean => status === 'confirmed';
 
 /**
  * ★ THE FIVE WORDS THE BOARD USED BEFORE 0025, WHICH STILL EXIST IN ONE PLACE.

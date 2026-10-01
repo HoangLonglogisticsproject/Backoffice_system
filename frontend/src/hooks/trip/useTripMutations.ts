@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import { updateTripStatus } from '@/api/tripSchedule';
+import { completeTrip, updateTripStatus } from '@/api/tripSchedule';
 import type { OffsetPage } from '@/types/pagination';
 import {
   TRIP_STATUS_LABELS,
@@ -74,7 +74,9 @@ export function useUpdateTripStatus(): UseMutationResult<
   const fire = useRef<((variables: UpdateStatusVariables) => void) | null>(null);
 
   const mutation = useMutation({
-    mutationFn: ({ tripId, status }: UpdateStatusVariables) => updateTripStatus(tripId, status),
+    // "Đã xác nhận" (`finished`) is the completion, not a move — its own route.
+    mutationFn: ({ tripId, status }: UpdateStatusVariables) =>
+      status === 'finished' ? completeTrip(tripId) : updateTripStatus(tripId, status),
 
     onMutate: async ({ tripId, status }) => {
       // In-flight reads would land AFTER the optimistic write and undo it.
@@ -119,7 +121,10 @@ export function useUpdateTripStatus(): UseMutationResult<
     onSuccess: (_data, { tripId, status }, context) => {
       const previous = context?.previous ?? null;
 
-      if (!previous) return notifySuccess('toastTripStatusUpdated');
+      // ★ NO UNDO where there is no way back: a completed trip is terminal, and
+      // the retired `confirmed` is written by nobody.
+      if (status === 'finished') return notifySuccess('toastTripConfirmed');
+      if (!previous || previous === 'confirmed') return notifySuccess('toastTripStatusUpdated');
 
       notifySuccess('toastTripStatusUpdated', {
         description: `${translateNow(TRIP_STATUS_LABELS[previous])} → ${translateNow(TRIP_STATUS_LABELS[status])}`,

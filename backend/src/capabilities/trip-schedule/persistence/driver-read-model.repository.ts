@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { DriverTrip } from '../domain/driver-read-model';
 import type { Coordinates } from '../domain/trip-location';
+import { LIFECYCLE_PREDICATE } from './trip-schedule.repository';
 
 /**
  * The driver's view of the board, as SQL.
@@ -152,6 +153,12 @@ export class DriverTripReadModelRepository {
    *
    * Archived trips are excluded — a row taken off the board is not work. So
    * are the pre-0027 turns with no lorry: there is nothing to drive.
+   *
+   * ★ AND A FINISHED TRIP IS NOT WORK EITHER, whatever its turn's state: the
+   * same `status <> 'finished'` as Lịch xe. Approval leaves turns `active`, and
+   * "Đã xác nhận" or the legacy normalization close trips whose turns never
+   * ended — all of them are "Đã chạy xong" now (`listFinishedForDriver`),
+   * opened read-only, never listed as something still to do.
    */
   async listForDriver(
     driverUserId: string,
@@ -164,6 +171,7 @@ export class DriverTripReadModelRepository {
           AND a.state = 'active'
           AND a.vehicle_id IS NOT NULL
           AND t.archived_at IS NULL
+          ${LIFECYCLE_PREDICATE.operational}
         ORDER BY t.scheduled_on DESC, t.id DESC, a.assigned_at ASC, a.id ASC`,
       [driverUserId],
     );

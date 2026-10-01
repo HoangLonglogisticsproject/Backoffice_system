@@ -183,13 +183,46 @@ không execution event, không notification. Chi phí vào sau qua đường bac
 chi phí (`cost.create`), đường vốn không đọc trạng thái chuyến; khoản tài xế khai thì
 không.
 
-Đây là đường **thứ hai và duy nhất khác** vào `finished` — sinh ra, không chuyển tới;
-approval vẫn là đường duy nhất **chuyển** một chuyến sang `finished`
+Đây là đường duy nhất **sinh ra** `finished` (`createFinished`); mọi đường **chuyển**
+một chuyến sang `finished` đều qua `closeTrip` — mục dưới
 (`tests/architecture/trip-write-paths.spec.ts`).
 
 ⚠ Crew của board là assignment `active` — **và** trên chuyến `finished`, các lượt
 `ended` mang dấu `historical_entry` (`IS_CREW` trong repository). Lượt bị điều độ gỡ
 tay không bao giờ mang dấu đó.
+
+## "Đã xác nhận" = `finished` — một closure, ba cửa (2026-09-29)
+
+Chủ doanh nghiệp chốt ba trạng thái CEO nhìn thấy: Chờ xử lý (`pending`), Đang thực
+hiện (`executing`) và **Đã xác nhận (`finished`) — chuyến đã XONG**, không phải "đã chốt
+xe". `confirmed` **ngừng dùng**: dòng cũ vẫn đọc được (UI "Đã xác nhận (dữ liệu cũ)"),
+nhưng tạo chuyến, PATCH và đổi trạng thái đều từ chối ghi nó — 422 `RETIRED_STATUS`
+(`isRetiredStatus`). Bỏ `confirmed` khỏi CHECK là migration SAU khi production đã chuẩn hoá.
+
+Chỉ `closeTrip` (`application/trip-closure.ts`) ghi `finished` + `closed_by`/`closed_at`
++ một dòng history, trong transaction của người gọi. Ba cửa, cùng một nghĩa, phân biệt
+bằng `reason`:
+
+| Cửa | `reason` |
+|---|---|
+| duyệt lượt cuối (`TripCompletionService.approve`) — luồng đích, do tài xế | `All assignments approved.` |
+| SuperAdmin chọn "Đã xác nhận" — `POST /trip-schedules/:id/complete`, `trip.complete.review`; **tạm thời**, tới khi luồng tài xế là đường duy nhất | `manual_completion` |
+| chuẩn hoá `confirmed` cũ (`LegacyConfirmedNormalization`) | `legacy_status_normalization` |
+
+`PATCH /trip-schedules/:id/status` không bao giờ đóng chuyến (`finished` → 409). Đóng tay
+bị từ chối (409) khi tài xế còn yêu cầu hoàn tất đang chờ — duyệt yêu cầu đó mới là cách.
+Chuyến `finished` không còn là việc của ai: danh sách việc của tài xế và hàng chờ duyệt
+loại nó; mọi thao tác ghi của tài xế từ chối chuyến đã đóng (kể cả sửa chi phí, `editCost`).
+
+**Chuẩn hoá `confirmed` cũ** — không phải migration (migration chạy mỗi lần deploy):
+`npm run trips:normalize-confirmed` mặc định là dry run trong transaction READ ONLY, phân
+loại `ELIGIBLE` / `CONFLICT_PENDING_COMPLETION` / `CONFLICT_CLOSED_PARTIAL` /
+`SKIPPED_ARCHIVED` (`domain/legacy-confirmed.ts`). Ghi cần `--apply --by <email> --ids
+<id,…>` — người có `trip.complete.review`, đúng các id đã duyệt từ dry run; mỗi id một
+transaction, kiểm lại dưới khoá, id không còn eligible được báo và để nguyên. Dấu đóng sẵn
+có được giữ; thiếu thì ghi người chạy và lúc chạy; nửa dấu đóng không bao giờ bị ghép.
+Không bịa event, request, notification; không kết thúc lượt xe; không đụng mốc thời gian.
+Kiểm toán production trước khi deploy: `backend/scripts/legacy-confirmed-dry-run.sql` (chỉ đọc).
 
 ## Hai cái bẫy về ngày, cả hai đều lệch một ngày
 
@@ -305,7 +338,8 @@ persistence/trip-catalogue.repository.ts  hai class song sinh — xem comment đ
 api/trip-schedule.controller.ts      zod DTO khai ngay trong file
 api/trip-catalogue.controller.ts
 application/trip-execution.service.ts   assign / replace / end theo assignment; requireNotStarted → 409
-application/trip-completion.service.ts  approve / reject theo request; finishTrip khi assignment ACTIVE cuối cùng
+application/trip-completion.service.ts  approve / reject theo request; completeManually ("Đã xác nhận")
+application/trip-closure.ts          closeTrip — đường duy nhất chuyển một chuyến sang finished
 api/active-assignment.guard.ts          tài xế chỉ vào assignment của mình, theo :assignmentId
 api/trip-schedule.security.spec.ts   61 case: ai được gì, trên từng route
 domain/trip-board.ts                 thứ tự board, TripCostSummary, canSeeTripCosts
@@ -315,4 +349,7 @@ persistence/trip-board-cost.repository.ts  tổng chi phí cả trang trong mộ
 domain/trip-timeline.ts              giao sau lấy · ngày = ngày lấy hàng · lịch theo ý định
 application/trip-entry-crew.ts       crew của chuyến sinh ra đã đóng: ghi rồi kết thúc, một transaction
 application/dispatch-eligibility.ts  xe còn dùng · tài xế còn hoạt động — chung cho điều độ và nhập cũ
+domain/legacy-confirmed.ts           phân loại confirmed cũ: ELIGIBLE / CONFLICT_* / SKIPPED_ARCHIVED
+application/legacy-confirmed-normalization.ts  dry run + apply theo từng id đã duyệt
+cli/normalize-legacy-confirmed.cli.ts  CLI (mặc định dry run); scripts/legacy-confirmed-dry-run.sql cho production
 ```

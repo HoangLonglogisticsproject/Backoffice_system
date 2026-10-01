@@ -41,7 +41,7 @@ describe('trip-completion HTTP security', () => {
 
   let app: INestApplication;
   let context: AuthorizationContext;
-  let completion: { listRequests: jest.Mock; approve: jest.Mock; reject: jest.Mock };
+  let completion: { listRequests: jest.Mock; approve: jest.Mock; reject: jest.Mock; completeManually: jest.Mock };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: ACTOR,
@@ -60,6 +60,7 @@ describe('trip-completion HTTP security', () => {
       listRequests: jest.fn().mockResolvedValue([]),
       approve: jest.fn().mockResolvedValue({ id: REQUEST, state: 'approved' }),
       reject: jest.fn().mockResolvedValue({ id: REQUEST, state: 'rejected' }),
+      completeManually: jest.fn().mockResolvedValue({ id: TRIP, status: 'finished' }),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -105,10 +106,16 @@ describe('trip-completion HTTP security', () => {
   const APPROVE = `/trip-schedules/${TRIP}/completion-requests/${REQUEST}/approve`;
   const REJECT = `/trip-schedules/${TRIP}/completion-requests/${REQUEST}/reject`;
   const LIST = `/trip-schedules/${TRIP}/completion-requests`;
+  /** "Đã xác nhận" on the board: the SuperAdmin declares the trip done. */
+  const COMPLETE = `/trip-schedules/${TRIP}/complete`;
 
+  // ★ THE MANUAL COMPLETION IS A DECISION LIKE THE OTHER TWO, so every refusal
+  // below — anonymous, a head of a function, a temporary credential, no CSRF
+  // header — is asserted for it as well.
   const DECISIONS = [
     ['post', APPROVE],
     ['post', REJECT],
+    ['post', COMPLETE],
   ] as const;
 
   const anyBody = { reason: 'Thiếu chứng từ dầu.' };
@@ -153,6 +160,14 @@ describe('trip-completion HTTP security', () => {
         by: ACTOR,
         reason: 'Thiếu chứng từ dầu.',
       });
+    });
+
+    it('★ completes the trip named in the route in ONE call, as themselves — "Đã xác nhận"', async () => {
+      const response = await authed('post', COMPLETE).send({ decidedBy: 'someone-else' }).expect(200);
+
+      expect(response.body).toMatchObject({ id: TRIP, status: 'finished' });
+      expect(completion.completeManually).toHaveBeenCalledWith(TRIP, ACTOR);
+      expect(completion.approve).not.toHaveBeenCalled();
     });
 
     it('lists the attempts', async () => {

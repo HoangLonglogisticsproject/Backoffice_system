@@ -34,9 +34,10 @@ export const TRIP_STATUS_STYLES: Record<TripStatus, { label: TranslationKey; cla
     label: TRIP_STATUS_LABELS.pending,
     className: 'bg-gray-100 text-gray-700 ring-gray-500/20',
   },
+  // Retired: coloured as what it meant (done), worded as old data.
   confirmed: {
     label: TRIP_STATUS_LABELS.confirmed,
-    className: 'bg-sky-50 text-sky-700 ring-sky-600/20',
+    className: 'bg-green-50 text-green-700 ring-green-600/20',
   },
   executing: {
     label: TRIP_STATUS_LABELS.executing,

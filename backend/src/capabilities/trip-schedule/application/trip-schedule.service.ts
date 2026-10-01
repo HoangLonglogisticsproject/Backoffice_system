@@ -5,12 +5,13 @@ import type { DateRangePageQuery } from '../../../common/pagination/date-range-p
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { TripBoardOrder } from '../domain/trip-board';
 import { optionalPoint } from '../domain/trip-location';
-import type {
-  TripAssignmentFilter,
-  TripLifecycle,
-  TripSchedule,
-  TripScheduleWithRefs,
-  TripStatus,
+import {
+  isRetiredStatus,
+  type TripAssignmentFilter,
+  type TripLifecycle,
+  type TripSchedule,
+  type TripScheduleWithRefs,
+  type TripStatus,
 } from '../domain/trip-schedule';
 import {
   boardDayFor,
@@ -470,24 +471,24 @@ export class TripScheduleService {
   /**
    * Refuses a move the DISPATCH BOARD is not allowed to make.
    *
-   * Two rules, and they close the board off from `finished` in both directions:
+   * Three rules:
    *
    *   · nothing leaves `finished` — 0025's trigger says the same thing, but that
    *     one surfaces as a 500, so it is said here where it can be a 409
-   *   · ★ and nothing on the board ENTERS `finished` either
+   *   · ★ nothing ENTERS `finished` through a plain move either
+   *   · nothing moves to the retired `confirmed` (`isRetiredStatus`)
    *
-   * The second is the important one. Completing a trip freezes its money,
-   * stamps who closed it and writes the history, all in one transaction —
-   * `TripCompletionService.approve` is where that happens, and it reaches the
-   * status column through the repository rather than through here. A status
-   * route that could also write `finished` would be a second way to close a trip
-   * that skipped every one of those steps, and 0017 would then make the result
-   * permanent.
+   * The second is the important one. Closing a trip writes the status, who
+   * closed it and the history together — `closeTrip`, reached by approval and
+   * by the SuperAdmin's "Đã xác nhận" (`TripCompletionService.completeManually`,
+   * which the status route calls for `finished`). A plain move that could also
+   * write `finished` would be a way to close a trip that skipped the stamp and
+   * the lock, and 0017 would then make the result permanent.
    */
   private requireDispatchTransition(from: TripStatus, to: TripStatus): void {
     this.requireNotCompletionOnly(to);
-    if (canTransition(from, to)) return;
-    throw new ConflictError('A completed trip cannot be reopened.');
+    if (!canTransition(from, to)) throw new ConflictError('A completed trip cannot be reopened.');
+    if (isRetiredStatus(to)) throw retiredStatus();
   }
 
   private requireNotCompletionOnly(status: TripStatus): void {
@@ -736,7 +737,8 @@ export class TripScheduleService {
   }
 }
 
-const COMPLETION_ONLY = 'A trip is completed by approving its completion request, not by setting its status.';
+const COMPLETION_ONLY =
+  'A trip is completed by approving its completion request, or by "Đã xác nhận" on the board — not by editing it.';
 
 /**
  * How the create intent starts the trip, or the refusal — `initialLifecycle`
@@ -750,6 +752,7 @@ const startOf = (input: CreateTripInput): Extract<InitialLifecycle, { ok: true }
   });
   if (start.ok) return start;
   if (start.refusal === 'COMPLETION_ONLY') throw new ConflictError(COMPLETION_ONLY);
+  if (start.refusal === 'RETIRED_STATUS') throw retiredStatus();
   throw start.refusal === 'STATUS_SET_BY_ENTRY'
     ? new ValidationError('A trip recorded after it ran is finished; it takes no status.', {
         status: start.refusal,
@@ -758,6 +761,16 @@ const startOf = (input: CreateTripInput): Extract<InitialLifecycle, { ok: true }
         crew: start.refusal,
       });
 };
+
+/**
+ * `confirmed` is written by nobody any more: "Đã xác nhận" is `finished`, which
+ * the board reaches through the completion route. A 422, since the value itself
+ * is what is wrong — the same answer on create, on a patch and on a board move.
+ */
+const retiredStatus = (): ValidationError =>
+  new ValidationError('"confirmed" is retired: "Đã xác nhận" means the trip is done, which is "finished".', {
+    status: 'RETIRED_STATUS',
+  });
 
 /** What each calendar refusal says — the field it concerns rides in `details`. */
 const CALENDAR_REFUSALS: Record<CalendarRefusal['reason'], string> = {

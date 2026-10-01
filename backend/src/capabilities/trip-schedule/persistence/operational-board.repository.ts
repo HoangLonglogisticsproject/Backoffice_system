@@ -228,12 +228,17 @@ export class OperationalBoardRepository {
    * `rejected` is included because a turn sent back is still the company's
    * outstanding work; it waits on the driver rather than on the reviewer, and
    * dropping it off the screen is how it is forgotten.
+   *
+   * ★ ON AN OPEN TRIP ONLY. Once a trip is "Đã xác nhận" (`finished`) nothing
+   * on it can be decided or resubmitted any more — a request sent back before a
+   * manual completion or a legacy normalization is history, not a queue item.
    */
   async listUnresolvedCompletions(executor: DatabaseQuery = this.db): Promise<BoardRow[]> {
     return executor.query<BoardRow>(
       `${QUEUE_BOARD_SELECT}
         WHERE t.archived_at IS NULL
           AND completion.completion_state IN ('pending', 'rejected')
+          ${LIFECYCLE_PREDICATE.operational}
         ORDER BY t.scheduled_on ASC, t.id ASC, a.assigned_at ASC, a.id ASC`,
       [],
     );

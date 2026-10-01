@@ -42,6 +42,7 @@ import { NotificationService } from '../../src/capabilities/notification/applica
 import { NotificationStream } from '../../src/capabilities/notification/application/notification-stream';
 import { NotificationRepository } from '../../src/capabilities/notification/persistence/notification.repository';
 import { NotFoundError } from '@common/errors/domain.error';
+import { LegacyConfirmedNormalization } from '../../src/capabilities/trip-schedule/application/legacy-confirmed-normalization';
 
 /**
  * The operational lifecycle, against a REAL PostgreSQL.
@@ -2380,12 +2381,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('records both ends of every board move, with who and why', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'confirmed', operator, 'Đã có khách.');
+      await board.updateStatus(trip, 'executing', operator, 'Đã có khách.');
 
       const history = await board.statusHistory(trip);
       expect(history[0]).toMatchObject({
         from: 'pending',
-        to: 'confirmed',
+        to: 'executing',
         reason: 'Đã có khách.',
         changedBy: operator,
       });
@@ -2417,15 +2418,15 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ every status the trip ever held is reconstructible', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'confirmed', operator);
+      await board.updateStatus(trip, 'executing', operator);
       await board.updateStatus(trip, 'pending', operator);
-      await board.updateStatus(trip, 'confirmed', operator);
+      await board.updateStatus(trip, 'executing', operator);
 
       const history = await board.statusHistory(trip);
       expect(history.map((h) => h.to)).toEqual([
-        'confirmed',
+        'executing',
         'pending',
-        'confirmed',
+        'executing',
         'pending',
       ]);
     });
@@ -4338,4 +4339,342 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
     });
   });
+
+  // ============================ "Đã xác nhận" = finished — one closure, three doors ==
+
+  describe('★ "Đã xác nhận" is `finished` — the manual completion and the legacy normalization', () => {
+    let portal: DriverPortalService;
+    let normalization: LegacyConfirmedNormalization;
+    beforeEach(() => {
+      portal = new DriverPortalService(
+        new DriverTripReadModelRepository(database),
+        eventRows,
+        costs,
+        new CompletionRequestRepository(database),
+      );
+      normalization = new LegacyConfirmedNormalization(
+        database,
+        new TripScheduleRepository(database),
+        new TripStatusHistoryRepository(database),
+      );
+    });
+
+    type Row = { status: string; closed_at: Date | null; closed_by: string | null; day: string };
+    const rowOf = async (trip: string): Promise<Row & Record<string, unknown>> =>
+      ((await sql(
+        `SELECT status, closed_at, closed_by, customer_id, cargo_info, sell_price::text AS sell,
+                purchase_price::text AS purchase, pickup_at, delivery_at, scheduled_on::text AS day
+           FROM trip_schedules WHERE id = $1`,
+        [trip],
+      )) as (Row & Record<string, unknown>)[])[0]!;
+    const lastMove = async (trip: string) =>
+      (
+        await sql(
+          `SELECT from_status, to_status, reason, changed_by FROM trip_status_history
+            WHERE trip_id = $1 ORDER BY changed_at DESC, id DESC LIMIT 1`,
+          [trip],
+        )
+      )[0];
+    /** Which reads list the trip, each asked for the trip's own day. */
+    const seenIn = async (trip: string) => {
+      const { day } = await rowOf(trip);
+      const listed = async (lifecycle: 'operational' | 'history') =>
+        (
+          await board.list({
+            from: day,
+            to: day,
+            page: 1,
+            limit: 200,
+            assignment: 'all',
+            lifecycle,
+            sort: 'executionDate',
+            direction: 'desc',
+          })
+        ).items.some((listedTrip) => listedTrip.id === trip);
+      return {
+        lichXe: await listed('operational'),
+        history: await listed('history'),
+        operationalBoard: (await operations.list({ from: day, to: day, page: 1, limit: 200 })).some(
+          (row) => row.tripId === trip,
+        ),
+        reviewQueue: (await operations.listUnresolvedCompletions()).some((row) => row.tripId === trip),
+      };
+    };
+    const IN_HISTORY_ONLY = { lichXe: false, history: true, operationalBoard: false, reviewQueue: false };
+    const invented = async (trip: string): Promise<number> =>
+      Number(
+        (
+          (await sql(
+            `SELECT (SELECT count(*) FROM trip_execution_events WHERE trip_id = $1)
+                  + (SELECT count(*) FROM trip_completion_requests WHERE trip_id = $1)
+                  + (SELECT count(*) FROM notifications WHERE trip_id = $1) AS n`,
+            [trip],
+          )) as { n: string }[]
+        )[0]!.n,
+      );
+    const driverSees = async (assignment: string) => ({
+      liveWork: (await portal.listMyAssignments(driverA)).some((t) => t.assignment.id === assignment),
+      history: (await portal.listMyFinishedTrips(driverA, { limit: 50 })).trips.some(
+        (t) => t.assignment.id === assignment,
+      ),
+      detailClosed: (await portal.findMyAssignment(assignment, driverA)).closed,
+    });
+
+    it('A/B. ★ the SuperAdmin chooses "Đã xác nhận": finished, stamped, recorded — in ONE step, into History', async () => {
+      const { trip, assignment } = await runningTrip();
+      const before = (await rowOf(trip)).status;
+      const alreadyWritten = await invented(trip); // dispatch told the driver: one notification
+
+      const closed = await completion.completeManually(trip, reviewer);
+
+      expect(closed.status).toBe('finished');
+      const row = await rowOf(trip);
+      expect(row).toMatchObject({ status: 'finished', closed_by: reviewer });
+      expect(row.closed_at).toBeInstanceOf(Date);
+      expect(await lastMove(trip)).toEqual({
+        from_status: before,
+        to_status: 'finished',
+        reason: 'manual_completion',
+        changed_by: reviewer,
+      });
+      expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+      expect(await driverSees(assignment)).toEqual({ liveWork: false, history: true, detailClosed: true });
+      // ★ NO SECOND CONFIRMATION: nothing is pending, and nothing more is asked of anybody.
+      expect(await invented(trip)).toBe(alreadyWritten);
+      await expect(completion.completeManually(trip, reviewer)).rejects.toThrow(ConflictError);
+    });
+
+    it('refuses while a driver request waits — deciding it is the way, and that ends in the SAME finished', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+
+      await expect(completion.completeManually(trip, reviewer)).rejects.toThrow(ConflictError);
+      expect((await rowOf(trip)).status).not.toBe('finished');
+
+      await approve(trip); // F. the Driver-driven path: the same closure, its own reason
+      expect(await rowOf(trip)).toMatchObject({ status: 'finished', closed_by: reviewer });
+      expect(await lastMove(trip)).toMatchObject({ to_status: 'finished', reason: 'All assignments approved.' });
+      expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+    });
+
+    it('a request sent back before "Đã xác nhận" leaves the review queue with the trip', async () => {
+      const { trip, assignment } = await runningTrip();
+      await completion.submit(assignment, driverA, 'none');
+      await reject(trip, 'Thiếu chứng từ.');
+      expect((await seenIn(trip)).reviewQueue).toBe(true);
+
+      await completion.completeManually(trip, reviewer);
+
+      expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+    });
+
+    it('C. pending ↔ executing unchanged; the retired `confirmed` is written by nobody; a plain move never closes', async () => {
+      const trip = await newTrip();
+      await board.updateStatus(trip, 'executing', operator);
+      await board.updateStatus(trip, 'pending', operator);
+      expect((await rowOf(trip)).status).toBe('pending');
+
+      await expect(board.updateStatus(trip, 'confirmed', operator)).rejects.toThrow(ValidationError);
+      await expect(board.update(trip, { status: 'confirmed' }, operator)).rejects.toThrow(ValidationError);
+      await expect(
+        board.create({ scheduledOn: '2026-08-30', status: 'confirmed', createdBy: operator }),
+      ).rejects.toThrow(ValidationError);
+      await expect(board.updateStatus(trip, 'finished', operator)).rejects.toThrow(ConflictError);
+      expect((await rowOf(trip)).status).toBe('pending');
+    });
+
+    it('D/E. ★ legacy `confirmed`: the dry run writes nothing; apply closes the approved ids, truthfully, inventing nothing', async () => {
+      const crewed = await runningTrip();
+      const line = await declare(crewed.assignment); // an `editable` driver figure
+      const bare = await newTrip();
+      await sql(`UPDATE trip_schedules SET status = 'confirmed' WHERE id = ANY($1::uuid[])`, [[crewed.trip, bare]]);
+      const snapshot = { crewed: await rowOf(crewed.trip), bare: await rowOf(bare) };
+      const written = { [crewed.trip]: await invented(crewed.trip), [bare]: await invented(bare) };
+
+      const plan = await normalization.plan();
+      expect(plan).toMatchObject({
+        transition: 'confirmed → finished',
+        reason: 'legacy_status_normalization',
+        conflictPendingCompletion: [],
+        skippedArchived: [],
+      });
+      expect([...plan.eligible].sort()).toEqual([crewed.trip, bare].sort());
+      expect(plan.trips.find((t) => t.id === crewed.trip)).toMatchObject({
+        classification: 'ELIGIBLE',
+        activeTurns: 1,
+        editableDriverLines: 1,
+        closedAt: null,
+      });
+      expect((await rowOf(crewed.trip)).status).toBe('confirmed'); // the dry run wrote nothing
+
+      // ★ THE STAMP A ROW LACKS RECORDS THIS ACT: who ran it, when it ran.
+      const at = new Date('2026-09-30T02:00:00.000Z');
+      expect(await normalization.apply([crewed.trip, bare], reviewer, at)).toEqual([
+        { id: crewed.trip, outcome: 'NORMALIZED' },
+        { id: bare, outcome: 'NORMALIZED' },
+      ]);
+
+      for (const [trip, before] of [
+        [crewed.trip, snapshot.crewed],
+        [bare, snapshot.bare],
+      ] as const) {
+        expect(await rowOf(trip)).toEqual({ ...before, status: 'finished', closed_by: reviewer, closed_at: at });
+        expect(await lastMove(trip)).toEqual({
+          from_status: 'confirmed',
+          to_status: 'finished',
+          reason: 'legacy_status_normalization',
+          changed_by: reviewer,
+        });
+        expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+        expect(await invented(trip)).toBe(written[trip]); // no event, request or notification added
+      }
+      // The crew and the money exactly as they were — and no driver action left.
+      const [turn] = (await sql(`SELECT state FROM trip_driver_assignments WHERE id = $1`, [
+        crewed.assignment,
+      ])) as { state: string }[];
+      expect(turn!.state).toBe('active');
+      const [cost] = (await sql(`SELECT amount::text AS amount, state FROM trip_costs WHERE id = $1`, [
+        line.id,
+      ])) as { amount: string; state: string }[];
+      expect(cost).toEqual({ amount: '1500000.00', state: 'editable' });
+      // Not the driver's current work any more; their history, read-only.
+      expect(await driverSees(crewed.assignment)).toEqual({ liveWork: false, history: true, detailClosed: true });
+      await expect(money.editCost(crewed.assignment, line.id, { amount: '1.00' }, driverA)).rejects.toThrow(
+        ConflictError,
+      );
+      await expect(declare(crewed.assignment)).rejects.toThrow(ConflictError);
+
+      expect((await normalization.plan()).trips).toEqual([]);
+    });
+
+    it('keeps a closing stamp a legacy row already carries — never overwrites who closed it, or when', async () => {
+      const trip = await newTrip();
+      await sql(
+        `UPDATE trip_schedules SET status = 'confirmed', closed_at = '2026-09-01T03:00:00Z', closed_by = $2
+          WHERE id = $1`,
+        [trip, operator],
+      );
+
+      expect(await normalization.apply([trip], reviewer)).toEqual([{ id: trip, outcome: 'NORMALIZED' }]);
+
+      const row = await rowOf(trip);
+      expect(row).toMatchObject({ status: 'finished', closed_by: operator });
+      expect(row.closed_at!.toISOString()).toBe('2026-09-01T03:00:00.000Z');
+      expect(await lastMove(trip)).toMatchObject({ reason: 'legacy_status_normalization', changed_by: reviewer });
+    });
+
+    it('★ one batch: the eligible close, and every other id is reported and left EXACTLY as it was', async () => {
+      const waiting = await runningTrip();
+      await completion.submit(waiting.assignment, driverA, 'none'); // a driver request nobody has decided
+      const archived = await newTrip();
+      const eligible = await newTrip();
+      const moved = await newTrip();
+      await sql(`UPDATE trip_schedules SET status = 'confirmed' WHERE id = ANY($1::uuid[])`, [
+        [waiting.trip, archived, eligible, moved],
+      ]);
+      await archive(archived);
+      const finished = (await runningTrip()).trip;
+      await completion.completeManually(finished, reviewer);
+
+      const plan = await normalization.plan();
+      expect(plan.eligible).toEqual(expect.arrayContaining([eligible, moved]));
+      expect(plan.conflictPendingCompletion).toEqual([waiting.trip]);
+      expect(plan.skippedArchived).toEqual([archived]);
+
+      // Between the dry run and the apply, somebody moved one of the approved trips.
+      await sql(`UPDATE trip_schedules SET status = 'executing' WHERE id = $1`, [moved]);
+      const missing = '00000000-0000-4000-8000-00000000abcd';
+
+      expect(
+        await normalization.apply([waiting.trip, archived, eligible, moved, finished, missing], reviewer),
+      ).toEqual([
+        { id: waiting.trip, outcome: 'CONFLICT_PENDING_COMPLETION' },
+        { id: archived, outcome: 'SKIPPED_ARCHIVED' },
+        { id: eligible, outcome: 'NORMALIZED' },
+        { id: moved, outcome: 'SKIPPED_STATE_CHANGED' },
+        { id: finished, outcome: 'SKIPPED_ALREADY_FINISHED' },
+        { id: missing, outcome: 'SKIPPED_MISSING' },
+      ]);
+
+      expect((await rowOf(eligible)).status).toBe('finished');
+      expect((await rowOf(waiting.trip)).status).toBe('confirmed');
+      expect((await rowOf(moved)).status).toBe('executing');
+      // Archived stays archived AND confirmed — never unarchived, never in History.
+      const [kept] = (await sql(`SELECT status, archived_at IS NOT NULL AS archived FROM trip_schedules WHERE id = $1`, [
+        archived,
+      ])) as { status: string; archived: boolean }[];
+      expect(kept).toEqual({ status: 'confirmed', archived: true });
+      // The waiting request is neither decided nor cancelled.
+      const [request] = (await sql(`SELECT state FROM trip_completion_requests WHERE trip_id = $1`, [
+        waiting.trip,
+      ])) as { state: string }[];
+      expect(request!.state).toBe('pending');
+    });
+
+    /**
+     * ★ THE RACE THE LOCK EXISTS FOR, ON TWO REAL CONNECTIONS. A driver submits
+     * while the normalization runs: `submit` locks the trip FIRST, inserts its
+     * request, and only then commits; the normalization queues on that same row
+     * lock. When it gets the row it must see the request that was committed
+     * while it waited — under READ COMMITTED only a statement started AFTER the
+     * lock can, which is why the count is not part of the locking SELECT.
+     */
+    it('★ a driver request committed while normalization waits for the trip lock is seen: CONFLICT, nothing written', async () => {
+      const { trip, assignment } = await runningTrip();
+      await sql(`UPDATE trip_schedules SET status = 'confirmed' WHERE id = $1`, [trip]);
+      const movesBefore = await sql(`SELECT id FROM trip_status_history WHERE trip_id = $1`, [trip]);
+
+      // T1 - the real submission path, held open just before COMMIT: the trip
+      // row is locked and the pending request inserted, not yet committed.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holdingPid!: (pid: number) => void;
+      const holding = new Promise<number>((resolve) => {
+        holdingPid = resolve;
+      });
+      const lockForAssignment = costs.lockForAssignment.bind(costs);
+      const held = jest
+        .spyOn(costs, 'lockForAssignment')
+        .mockImplementationOnce(async (...args: Parameters<TripCostRepository['lockForAssignment']>) => {
+          const done = await lockForAssignment(...args);
+          const [me] = await args[3].query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+          holdingPid(me!.pid);
+          await gate;
+          return done;
+        });
+      const submitted = completion.submit(assignment, driverA, 'none');
+      const t1 = await holding;
+
+      // T2 - the normalization, which must queue on T1's lock of the trip row.
+      const normalized = normalization.apply([trip], reviewer);
+      let queued = false;
+      for (let attempt = 0; attempt < 100 && !queued; attempt += 1) {
+        const [blocked] = (await sql(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid))`,
+          [t1],
+        )) as { n: number }[];
+        queued = blocked!.n > 0;
+        if (!queued) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(queued).toBe(true);
+
+      release();
+      await submitted;
+      held.mockRestore();
+
+      expect(await normalized).toEqual([{ id: trip, outcome: 'CONFLICT_PENDING_COMPLETION' }]);
+      expect(await rowOf(trip)).toMatchObject({ status: 'confirmed', closed_at: null, closed_by: null });
+      expect(await sql(`SELECT id FROM trip_status_history WHERE trip_id = $1`, [trip])).toEqual(movesBefore);
+      expect(
+        await sql(`SELECT id FROM trip_status_history WHERE reason = 'legacy_status_normalization'`),
+      ).toEqual([]);
+      const [request] = (await sql(`SELECT state FROM trip_completion_requests WHERE trip_id = $1`, [trip])) as {
+        state: string;
+      }[];
+      expect(request!.state).toBe('pending');
+    });
+  });
+
 });

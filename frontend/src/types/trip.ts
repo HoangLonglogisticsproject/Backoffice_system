@@ -56,23 +56,31 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, TranslationKey> = {
 };
 
 /**
- * The statuses a dispatcher may CHOOSE. Everything above is what a trip may BE.
+ * The statuses a dispatcher may MOVE a trip between — on the board and in the
+ * form. Everything above is what a trip may BE.
  *
- * ★ `finished` IS MISSING ON PURPOSE, AND IT IS NOT A UI PREFERENCE. A trip is
- * finished by APPROVING ITS COMPLETION REQUEST — the server refuses `finished`
- * from the board and from trip creation alike, and 0025's trigger makes it
- * permanent once set. Offering it in a dropdown would offer a control whose
- * only possible outcome is a 409.
+ * ★ THREE CEO-FACING STATUSES (business owner, 2026-09-29): Chờ xử lý
+ * (`pending`), Đang thực hiện (`executing`), Đã xác nhận (`finished`) — and
+ * "Đã xác nhận" MEANS THE TRIP IS DONE. So:
  *
- * ⚠ AND THE OTHER THREE STAY UNORDERED DESPITE READING AS A SEQUENCE. The
- * server allows any move among them, which is what lets a dispatcher send a
- * trip back from `executing` to `pending` after a mis-click. Turning this
- * list's order into a permitted-transitions rule would invent a workflow the
- * business has not described.
+ *   · `confirmed` is retired: stored rows still show it ("Đã xác nhận (dữ
+ *     liệu cũ)" — what they meant, marked as old), but nothing offers it and
+ *     the server refuses it
+ *   · `finished` is not a board move but a completion — `completeTrip`, offered
+ *     only to whoever may complete trips (`BOARD_STATUS_OPTIONS`)
+ *
+ * ⚠ THE TWO STAY UNORDERED: the server allows either move, which is what lets
+ * a dispatcher send a trip back after a mis-click.
  */
-export const DISPATCH_SELECTABLE_STATUSES: readonly TripStatus[] = TRIP_STATUSES.filter(
-  (status) => status !== 'finished',
-);
+export const DISPATCH_SELECTABLE_STATUSES: readonly TripStatus[] = ['pending', 'executing'];
+
+/**
+ * The board dropdown's options: the two moves, and — for a SuperAdmin
+ * (`trip.complete.review`) — "Đã xác nhận", which completes the trip and sends
+ * it to Lịch sử chuyến. TEMPORARY, while the Driver flow is not the only way.
+ */
+export const boardStatusOptions = (mayComplete: boolean): readonly TripStatus[] =>
+  mayComplete ? [...DISPATCH_SELECTABLE_STATUSES, 'finished'] : DISPATCH_SELECTABLE_STATUSES;
 
 /**
  * ★ WHO IS DRIVING, AS A FILTER — `?assignment=` on `GET /trip-schedules`.

@@ -1295,7 +1295,7 @@ nhận thêm `lifecycle`:
 | `lifecycle` | Màn hình | Điều kiện | Sai → |
 |---|---|---|---|
 | `operational` (**mặc định**) | Lịch xe | `status <> 'finished'` — kể cả chuyến quá hạn chưa kết thúc | **422** `details.lifecycle` |
-| `history` | Lịch sử chuyến | `status = 'finished'` (chỉ đạt qua duyệt hoàn tất) | |
+| `history` | Lịch sử chuyến | `status = 'finished'` (qua `closeTrip`: duyệt hoàn tất, hoặc SuperAdmin chọn "Đã xác nhận" — §24) | |
 
 * ⚠ **Đổi mặc định**: chuyến `finished` **không còn** trả về khi không gửi `lifecycle`.
 * Không lọc theo ngày: một chuyến hôm qua chưa kết thúc vẫn ở Lịch xe; một chuyến
@@ -1357,3 +1357,27 @@ Chuyến nhập cũ sau đó sửa được như mọi chuyến `finished` (vd. 
 thái chuyến, như với mọi chuyến `finished`; chỉ khoản **tài xế khai** trên Driver
 Portal bị từ chối khi chuyến đã đóng. Crew thì chỉ ghi được lúc nhập (điều độ từ chối
 chuyến đã đóng).
+
+## 24. "Đã xác nhận" = chuyến đã xong (`finished`) (2026-09-29)
+
+Chủ doanh nghiệp chốt: ba trạng thái — **Chờ xử lý** (`pending`), **Đang thực hiện**
+(`executing`), **Đã xác nhận** (`finished`, tức chuyến đã XONG).
+
+| Giá trị | Nhãn | Ghi được? |
+|---|---|---|
+| `pending` | Chờ xử lý | có — tạo / PATCH / đổi trạng thái |
+| `executing` | Đang thực hiện | có |
+| `finished` | **Đã xác nhận** | chỉ qua đóng chuyến (dưới) — tạo / PATCH / `PATCH …/status` với `finished` → **409** |
+| `confirmed` | Đã xác nhận (dữ liệu cũ) | **không** — ngừng dùng; ghi nó ở bất kỳ route nào → **422** `details.status: 'RETIRED_STATUS'`. Dòng cũ vẫn đọc được tới khi production chuẩn hoá |
+
+| Method | Path | Ghi chú | Lỗi |
+|---|---|---|---|
+| `POST` | `/trip-schedules/:tripId/complete` | **"Đã xác nhận" trên dropdown Lịch xe** — SuperAdmin (`trip.complete.review`) tuyên bố chuyến đã xong, **một lần gọi**: `finished`, `closed_by`/`closed_at`, lịch sử `→ finished` lý do `manual_completion`, chuyến sang Lịch sử chuyến. Trả về chuyến. **Tạm thời**, tới khi luồng tài xế là đường duy nhất | **403** thiếu quyền · **409** đã đóng · **409** tài xế còn yêu cầu hoàn tất đang chờ (duyệt yêu cầu đó) |
+
+* Duyệt lượt cuối và "Đã xác nhận" kết thúc ở **cùng một** trạng thái; không có bước
+  xác nhận thứ hai, không có hoàn tác.
+* Chuyến `finished` **không còn** trong `GET /driver/assignments` (việc hiện tại của tài
+  xế) — nằm ở `GET /driver/history`, mở chi tiết chỉ xem (`closed: true`) — và không còn
+  trong `GET /trip-schedules/completion-review-queue`.
+* `PATCH /driver/assignments/:id/expenses/:costId` trên chuyến đã đóng → **409**, như
+  mọi thao tác ghi khác của tài xế.

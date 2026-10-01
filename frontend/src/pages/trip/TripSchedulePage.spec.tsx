@@ -11,6 +11,7 @@ import { ApiError } from '@/utils/errors';
 const fetchTripSchedules = vi.fn();
 const archiveTripSchedule = vi.fn();
 const updateTripStatus = vi.fn();
+const completeTrip = vi.fn();
 const updateTripSchedule = vi.fn();
 const fetchTripVehicles = vi.fn();
 const fetchTripCustomers = vi.fn();
@@ -39,6 +40,7 @@ vi.mock('@/api/tripSchedule', () => ({
   createTripSchedule: (...a: unknown[]) => createTripSchedule(...a),
   updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),
   updateTripStatus: (...a: unknown[]) => updateTripStatus(...a),
+  completeTrip: (...a: unknown[]) => completeTrip(...a),
 }));
 const fetchEligibleDrivers = vi.fn();
 const assignDriver = vi.fn();
@@ -197,7 +199,8 @@ describe('TripSchedulePage', () => {
       totalPages: 1,
     });
     archiveTripSchedule.mockReset().mockResolvedValue(trip());
-    updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'finished' }));
+    updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'executing' }));
+    completeTrip.mockReset().mockResolvedValue(trip({ status: 'finished' }));
     updateTripSchedule.mockReset().mockResolvedValue(trip());
     createTripSchedule.mockReset().mockResolvedValue(trip());
     fetchTripVehicles.mockReset().mockResolvedValue([]);
@@ -537,7 +540,7 @@ describe('TripSchedulePage', () => {
       });
       renderPage();
 
-      expect(await screen.findByText(/dữ liệu cũ/i)).toBeInTheDocument();
+      expect(await screen.findByText('Xe dự kiến (dữ liệu cũ)')).toBeInTheDocument();
     });
   });
 
@@ -582,7 +585,7 @@ describe('TripSchedulePage', () => {
 
     await screen.findByText('50H-49266');
     expect(screen.queryByText('confirmed')).toBeNull();
-    expect(screen.getByText('Đã xác nhận')).toBeTruthy();
+    expect(screen.getByText('Đã xác nhận (dữ liệu cũ)')).toBeTruthy();
   });
 
   it('shows the total — the number a cursor list cannot produce', async () => {
@@ -661,6 +664,32 @@ describe('TripSchedulePage', () => {
       ]);
       // One trip, N assignments — never one trip per lorry.
       expect(createTripSchedule).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * ★ ONE PAIR AT A TIME — THE CREW'S ORDER IS THE ORDER IT LANDS. Each
+     * dispatch stamps `assigned_at` with its own transaction's START, and the
+     * crew is read back `assigned_at, id`. Sent together, every transaction
+     * would begin before any of them held the trip lock, and the lorries would
+     * come back in network-arrival order — or by random id. Each would also
+     * hold a pooled connection while it queued on that one lock.
+     */
+    it('★ gửi cặp kế tiếp chỉ sau khi cặp trước đã được trả lời', async () => {
+      dispatcher();
+      await openForm();
+      await addRow('v1', 'd1');
+      await addRow('v2', 'd2');
+      let answer!: (value: unknown) => void;
+      assignDriver.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+      save();
+
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(assignDriver).toHaveBeenCalledTimes(1);
+
+      answer({ id: 'a1' });
+      await waitFor(() => expect(assignDriver).toHaveBeenCalledTimes(2));
+      expect(assignDriver.mock.calls[1]![1]).toEqual({ vehicleId: 'v2', driverUserId: 'd2' });
     });
 
     it('★ mỗi dòng phải có CẢ xe và tài xế — báo tại dòng, và không tạo gì cả', async () => {
@@ -911,16 +940,67 @@ describe('TripSchedulePage', () => {
      * in, `canTransition` on the way out, and a trigger in 0017 behind them. A
      * control whose only possible outcome is a refusal is not a control.
      */
-    it('★ never offers `finished` on the board — a trip is finished by approval', async () => {
+    /** The options a user may actually pick, as the dropdown lists them. */
+    const choices = (select: HTMLSelectElement) =>
+      [...select.options].filter((option) => !option.disabled).map((option) => option.textContent);
+
+    it('★ offers a dispatcher the two moves — never the retired `confirmed`, never the completion', async () => {
       useSession.mockReturnValue(session(write));
       renderPage();
 
       const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
-      const options = [...select.options].map((option) => option.value);
 
-      expect(options).not.toContain('finished');
-      // The three that ARE a dispatcher's to choose are all still there.
-      expect(options).toEqual(expect.arrayContaining(['pending', 'confirmed', 'executing']));
+      expect(choices(select)).toEqual(['Chờ xử lý', 'Đang thực hiện']);
+      // The legacy row still SAYS what it is — as a label, not a choice.
+      expect(select).toHaveDisplayValue('Đã xác nhận (dữ liệu cũ)');
+    });
+
+    it('★ never shows a legacy row the completion\'s words twice — old data and the action read apart', async () => {
+      useSession.mockReturnValue(session([...write, 'trip.complete.review']));
+      renderPage();
+
+      const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
+      const labels = [...select.options].map((option) => `${option.textContent}${option.disabled ? ' ⊘' : ''}`);
+
+      expect(labels).toEqual(['Đã xác nhận (dữ liệu cũ) ⊘', 'Chờ xử lý', 'Đang thực hiện', 'Đã xác nhận']);
+      expect(new Set(labels.map((label) => label.replace(' ⊘', ''))).size).toBe(labels.length);
+    });
+
+    it('★ offers "Đã xác nhận" to a SuperAdmin — and it COMPLETES the trip in one call, with no undo', async () => {
+      fetchTripSchedules.mockResolvedValue({ items: [trip({ status: 'pending' })], page: 1, limit: 20, total: 1, totalPages: 1 });
+      useSession.mockReturnValue(session([...write, 'trip.complete.review']));
+      renderPage();
+
+      const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
+      expect(choices(select)).toEqual(['Chờ xử lý', 'Đang thực hiện', 'Đã xác nhận']);
+
+      fireEvent.change(select, { target: { value: 'finished' } });
+
+      await waitFor(() => expect(completeTrip).toHaveBeenCalledWith('t1'));
+      expect(updateTripStatus).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
+          'Đã xác nhận chuyến — đã chuyển sang Lịch sử chuyến',
+        ),
+      );
+      // Nothing to confirm a second time, and no way back from done.
+      expect(screen.queryByRole('button', { name: 'Hoàn tác' })).toBeNull();
+      expect(completeTrip).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers no undo back to the retired `confirmed` after moving a legacy row', async () => {
+      useSession.mockReturnValue(session(write));
+      renderPage();
+
+      fireEvent.change(await screen.findByLabelText('Đổi trạng thái'), { target: { value: 'executing' } });
+
+      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'));
+      await waitFor(() =>
+        expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
+          'Đã cập nhật trạng thái chuyến',
+        ),
+      );
+      expect(screen.queryByRole('button', { name: 'Hoàn tác' })).toBeNull();
     });
 
     it('★ shows a finished trip as a badge, not a dropdown', async () => {
@@ -935,7 +1015,7 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       // The label the badge carries, and no control to change it.
-      expect(await screen.findByText('Hoàn thành')).toBeInTheDocument();
+      expect(await screen.findByText('Đã xác nhận')).toBeInTheDocument();
       expect(screen.queryByLabelText('Đổi trạng thái')).not.toBeInTheDocument();
     });
 
@@ -945,6 +1025,7 @@ describe('TripSchedulePage', () => {
      * way it decided the change — nothing here edits the cache and calls it done.
      */
     it('★ offers Hoàn tác on the receipt, and sends the trip back to where it was', async () => {
+      fetchTripSchedules.mockResolvedValue({ items: [trip({ status: 'pending' })], page: 1, limit: 20, total: 1, totalPages: 1 });
       useSession.mockReturnValue(session(write));
       renderPage();
 
@@ -960,14 +1041,14 @@ describe('TripSchedulePage', () => {
       // answers, and sonner mounts it a frame later still.
       await waitFor(() =>
         expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
-          'Đã xác nhận → Đang thực hiện',
+          'Chờ xử lý → Đang thực hiện',
         ),
       );
 
       fireEvent.click(await screen.findByRole('button', { name: 'Hoàn tác' }));
 
       await waitFor(() =>
-        expect(updateTripStatus).toHaveBeenLastCalledWith('t1', 'confirmed'),
+        expect(updateTripStatus).toHaveBeenLastCalledWith('t1', 'pending'),
       );
     });
 
@@ -996,7 +1077,7 @@ describe('TripSchedulePage', () => {
       await screen.findByText('50H-49266');
       expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull();
       // Still readable — the status is not hidden, only not editable.
-      expect(screen.getByText('Đã xác nhận')).toBeTruthy();
+      expect(screen.getByText('Đã xác nhận (dữ liệu cũ)')).toBeTruthy();
     });
   });
 

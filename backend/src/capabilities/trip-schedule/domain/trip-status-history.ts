@@ -1,5 +1,5 @@
 import type { UserSummary } from '../../../common/types/user-summary';
-import type { LegacyTripStatus, TripStatus } from './trip-schedule';
+import { isRetiredStatus, type LegacyTripStatus, type TripStatus } from './trip-schedule';
 import type { TripEntryMode } from './trip-timeline';
 
 /**
@@ -83,12 +83,29 @@ export const isCompletionOnlyStatus = (status: TripStatus): boolean => status ==
  */
 export const HISTORICAL_ENTRY_REASON = 'historical_entry';
 
+/** The history reason of a trip closed by approving its last open turn — the text it has always carried. */
+export const COMPLETION_APPROVED_REASON = 'All assignments approved.';
+
+/**
+ * ★ THE TEMPORARY MANUAL COMPLETION: a SuperAdmin choosing "Đã xác nhận" on the
+ * board while the Driver flow is not yet the only way. The same closure as
+ * approval (`closeTrip`); only this mark says which door it came through.
+ */
+export const MANUAL_COMPLETION_REASON = 'manual_completion';
+
+/**
+ * ★ A LEGACY `confirmed` ROW MOVED TO `finished` by the one-time normalization.
+ * Says exactly what happened: nobody approved it at this instant — the record
+ * was corrected to what the business says it always meant.
+ */
+export const LEGACY_NORMALIZATION_REASON = 'legacy_status_normalization';
+
 /** How a new trip starts its life, or why the request cannot start it. */
 export type InitialLifecycle =
   | { ok: true; status: TripStatus; closed: false; reason: null }
   /** Born closed — and then the reason the history and the crew carry. */
   | { ok: true; status: 'finished'; closed: true; reason: string }
-  | { ok: false; refusal: 'COMPLETION_ONLY' | 'STATUS_SET_BY_ENTRY' | 'CREW_AFTER_BOOKING' };
+  | { ok: false; refusal: 'COMPLETION_ONLY' | 'STATUS_SET_BY_ENTRY' | 'CREW_AFTER_BOOKING' | 'RETIRED_STATUS' };
 
 /**
  * ★ THE CLIENT SAYS WHY A TRIP IS ENTERED; THE SERVER DECIDES HOW IT STARTS.
@@ -115,6 +132,7 @@ export const initialLifecycle = (
   }
   const status = requested.status ?? 'pending';
   if (isCompletionOnlyStatus(status)) return { ok: false, refusal: 'COMPLETION_ONLY' };
+  if (isRetiredStatus(status)) return { ok: false, refusal: 'RETIRED_STATUS' };
   if (requested.crewSupplied) return { ok: false, refusal: 'CREW_AFTER_BOOKING' };
   return { ok: true, status, closed: false, reason: null };
 };

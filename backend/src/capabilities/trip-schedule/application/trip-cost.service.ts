@@ -296,7 +296,20 @@ export class TripCostService {
     if (patch.category !== undefined) requireCategory(patch.category);
     if (patch.amount !== undefined) requireAmount(patch.amount);
 
+    // Unlocked, and only for the trip id — the lock order is trip → cost, as
+    // `declareCost` takes it.
+    const named = await this.assignments.findActiveById(assignmentId);
+    if (!named) throw new NotFoundError('Assignment not found.');
+
     return this.db.transaction(async (tx) => {
+      // ★ A CLOSED TRIP TAKES NO CORRECTION. Approval freezes a turn's lines
+      // before it can close the trip, but "Đã xác nhận" and the legacy
+      // normalization close it around lines still `editable` — so the trip's
+      // state is asked here, as every other driver write asks it.
+      const trip = await this.trips.lockActive(named.tripId, tx);
+      if (!trip) throw new NotFoundError('Trip not found.');
+      if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
+
       const current = await this.costs.lockById(costId, tx);
       // Belonging to the assignment in the route is checked, not assumed: a
       // caller holding one assignment's id must not reach another turn's line

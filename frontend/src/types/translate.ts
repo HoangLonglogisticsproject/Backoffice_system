@@ -187,9 +187,10 @@ const PHRASES = {
   // COMPLETION — `DriverWorkflow.spec` holds that line.
   //
   // ⚠ NOT THE SAME LIST AS `driverHistory` ("Đã chạy xong", `/driver/history`),
-  // which asks the server for trips that really are `finished`. These two
-  // overlap and are not equal: a trip finished today is in both; a trip run
-  // last week and still unapproved is only here.
+  // which asks the server for trips that really are `finished`. They do not
+  // overlap: a finished trip is nobody's work any more, so the schedule does
+  // not list it (2026-09-29) — this tab is past days still OPEN, run and
+  // waiting on the office; "Đã chạy xong" holds the finished ones.
   driverViewToday: { vi: 'Hôm nay', en: 'Today' },
   driverViewUpcoming: { vi: 'Sắp tới', en: 'Upcoming' },
   driverViewPast: { vi: 'Chuyến đã chạy', en: 'Trips driven' },
@@ -1041,8 +1042,8 @@ const PHRASES = {
   colCargo: { vi: 'Hàng hoá', en: 'Cargo' },
   colPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
   colDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },
-  colPickupAt: { vi: 'Thời gian lấy hàng', en: 'Pickup time' },
-  colDeliveryAt: { vi: 'Thời gian giao hàng', en: 'Delivery time' },
+  // Lịch sử chuyến's date column: the planned pickup day, `scheduled_on`.
+  colPickupDate: { vi: 'Ngày lấy hàng', en: 'Pickup date' },
   colSellPrice: { vi: 'Giá cước bán', en: 'Selling price' },
   colPurchasePrice: { vi: 'Giá cước mua', en: 'Buying price' },
   colNote: { vi: 'Ghi chú', en: 'Note' },
@@ -1378,9 +1379,13 @@ const PHRASES = {
   // colours; "Book xe ngoài" is gone as a status because it named a ROUTE, not
   // a stage — whether a run is subcontracted lives on the vehicle instead.
   tripPending: { vi: 'Chờ xử lý', en: 'Pending' },
-  tripConfirmed: { vi: 'Đã xác nhận', en: 'Confirmed' },
+  // ★ "ĐÃ XÁC NHẬN" MEANS THE TRIP IS DONE (business owner, 2026-09-29) — the
+  // label of `finished`. The retired `confirmed` says what it meant AND that it
+  // is old data, so a legacy row never shows the completion's words twice. It
+  // exists only until the production normalization moves those rows.
+  tripConfirmed: { vi: 'Đã xác nhận (dữ liệu cũ)', en: 'Confirmed (legacy data)' },
   tripExecuting: { vi: 'Đang thực hiện', en: 'Executing' },
-  tripFinished: { vi: 'Hoàn thành', en: 'Finished' },
+  tripFinished: { vi: 'Đã xác nhận', en: 'Confirmed — done' },
   changeStatus: { vi: 'Đổi trạng thái', en: 'Change status' },
   statusChangeFailed: {
     vi: 'Không đổi được trạng thái.',
@@ -1500,6 +1505,10 @@ const PHRASES = {
     en: 'Password changed — please sign in again',
   },
   toastTripStatusUpdated: { vi: 'Đã cập nhật trạng thái chuyến', en: 'Trip status updated' },
+  toastTripConfirmed: {
+    vi: 'Đã xác nhận chuyến — đã chuyển sang Lịch sử chuyến',
+    en: 'Trip confirmed as done — moved to Trip history',
+  },
   toastDriverAssigned: { vi: 'Đã phân công tài xế', en: 'Driver assigned' },
   toastDriverReplaced: { vi: 'Đã đổi tài xế', en: 'Driver replaced' },
   toastAssignmentEnded: { vi: 'Đã kết thúc phân công', en: 'Assignment ended' },

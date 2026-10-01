@@ -5,7 +5,14 @@ describe('initialLifecycle — the client says why, the server decides how a tri
 
   it('★ opens a booking pending, or on another status the board may set', () => {
     expect(initialLifecycle('operational', none)).toEqual({ ok: true, status: 'pending', closed: false, reason: null });
-    expect(initialLifecycle('operational', { ...none, status: 'confirmed' })).toMatchObject({ status: 'confirmed' });
+    expect(initialLifecycle('operational', { ...none, status: 'executing' })).toMatchObject({ status: 'executing' });
+  });
+
+  it('★ never opens a booking on the retired `confirmed` — "Đã xác nhận" is `finished` now', () => {
+    expect(initialLifecycle('operational', { ...none, status: 'confirmed' })).toEqual({
+      ok: false,
+      refusal: 'RETIRED_STATUS',
+    });
   });
 
   it('★ never opens a booking finished — only approval reaches that', () => {

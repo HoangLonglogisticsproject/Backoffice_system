@@ -1332,7 +1332,7 @@ describe('correcting a declared expense', () => {
     ...over,
   });
 
-  const build = (current: Record<string, unknown>) => {
+  const build = (current: Record<string, unknown>, tripStatus = 'executing') => {
     const costs = {
       lockById: jest.fn().mockResolvedValue(current),
       editEditable: jest.fn().mockResolvedValue({ ...current, amount: '1550000.00' }),
@@ -1340,16 +1340,31 @@ describe('correcting a declared expense', () => {
     };
     const service = new TripCostService(
       database(),
-      { exists: jest.fn() } as never,
+      {
+        exists: jest.fn(),
+        lockActive: jest.fn().mockResolvedValue({ id: TRIP, status: tripStatus }),
+      } as never,
       costs as never,
       {} as never,
       {} as never,
-      {} as never,
+      { findActiveById: jest.fn().mockResolvedValue({ id: ASSIGNMENT, tripId: TRIP }) } as never,
       {} as never,
       {} as never,
     );
     return { service, costs };
   };
+
+  it('★ refuses any correction once the trip is closed — even of a line still editable', async () => {
+    // "Đã xác nhận" and the legacy normalization close a trip around lines
+    // approval would have frozen first; the trip's state is what refuses them.
+    const { service, costs } = build(line(), 'finished');
+
+    await expect(service.editCost(ASSIGNMENT, 'cost-1', { amount: '1550000.00' }, DRIVER)).rejects.toThrow(
+      ConflictError,
+    );
+    expect(costs.lockById).not.toHaveBeenCalled();
+    expect(costs.editEditable).not.toHaveBeenCalled();
+  });
 
   it('logs every field that moved, with the value before and after', async () => {
     const { service, costs } = build(line());

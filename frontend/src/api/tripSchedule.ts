@@ -262,6 +262,19 @@ export async function updateTripSchedule(
   return fromWire(data);
 }
 
+/**
+ * ★ "ĐÃ XÁC NHẬN" — the SuperAdmin declares the trip DONE. Not a board move:
+ * the server's canonical completion (`trip.complete.review`), in one call —
+ * `finished`, stamped, recorded, and moved to Lịch sử chuyến. Temporary, while
+ * the Driver flow is not yet the only way a trip finishes.
+ */
+export async function completeTrip(tripId: string): Promise<TripSchedule> {
+  const { data } = await httpClient.post<Wire<TripSchedule>>(
+    `/trip-schedules/${encodeURIComponent(tripId)}/complete`,
+  );
+  return fromWire(data);
+}
+
 /** Moves a row along the board. Its own endpoint, its own permission. */
 export async function updateTripStatus(
   tripId: string,

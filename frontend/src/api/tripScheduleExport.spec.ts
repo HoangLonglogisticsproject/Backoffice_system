@@ -82,6 +82,29 @@ describe('fetchAllTripSchedules', () => {
   });
 
   /**
+   * ★ ONE PAGE IN FLIGHT, NEVER A BURST. The pages after the first depend only
+   * on its `totalPages`, so they COULD go at once — but a 366-day range is
+   * dozens of pages, the API's pool is ten connections with a five-second
+   * acquire timeout, and the dispatch board and the drivers' phones share it.
+   * A burst would time out this export's pages, or everybody else's requests.
+   */
+  it('★ asks for the next page only once the previous one has arrived', async () => {
+    let release!: (value: unknown) => void;
+    get
+      .mockResolvedValueOnce(page([trip('a')], { total: 3, totalPages: 3 }))
+      .mockReturnValueOnce(new Promise((resolve) => { release = resolve; }))
+      .mockResolvedValueOnce(page([trip('c')], { page: 3, total: 3, totalPages: 3 }));
+
+    const walk = fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(get).toHaveBeenCalledTimes(2);
+
+    release(page([trip('b')], { page: 2, total: 3, totalPages: 3 }));
+    expect((await walk).map((row) => (row as { id: string }).id)).toEqual(['a', 'b', 'c']);
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+
+  /**
    * `totalPages` is `0` for an empty result — there is no "page 1 of 0" to
    * navigate to — so the loop must not ask for a second page over nothing.
    */

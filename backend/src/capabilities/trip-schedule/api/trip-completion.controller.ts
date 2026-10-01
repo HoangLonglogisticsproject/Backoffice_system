@@ -13,6 +13,7 @@ import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { TripCompletionService } from '../application/trip-completion.service';
 import type { CompletionRequest } from '../domain/trip-execution';
+import type { TripSchedule } from '../domain/trip-schedule';
 
 /**
  * The office side of completion: reading the attempts, and deciding one.
@@ -101,6 +102,31 @@ export class TripCompletionController {
     // The decider comes from the session, never the body. A body that named its
     // own approver is a body that can name somebody else's.
     return this.completion.approve(tripId, requestId, actor.id);
+  }
+
+  /**
+   * ★ "ĐÃ XÁC NHẬN" — THE SUPERADMIN DECLARES THE TRIP DONE.
+   *
+   * TEMPORARY, while the Driver flow is not yet the only way to finish a trip:
+   * the board's status control calls this for "Đã xác nhận". The same canonical
+   * closure as the approval above (`closeTrip`) — status `finished`, the closing
+   * stamp, one history row — in ONE step: there is no second confirmation
+   * after it, because this is the confirmation. The trip leaves Lịch xe for
+   * Lịch sử chuyến at once.
+   *
+   * `trip.complete.review`, the key approval asks: moving a trip along the
+   * board (`trip.write`) is not closing it. 409 if it is already closed, or if a
+   * driver's request is waiting — that request is the completion being asked for.
+   */
+  @Post('trip-schedules/:tripId/complete')
+  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.complete.review')
+  @HttpCode(HttpStatus.OK)
+  async complete(
+    @Param('tripId', UuidParam) tripId: string,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<TripSchedule> {
+    return this.completion.completeManually(tripId, actor.id);
   }
 
   /**
