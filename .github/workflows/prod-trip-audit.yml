@@ -7,7 +7,7 @@ name: Production Trip Audit
 #
 # No push, pull_request or schedule trigger, ever: a production credential is
 # only handed to a run somebody chose to start, from `main`, and that the
-# `production` environment's reviewers approved. See ops/prod-ops/README.md.
+# `production-ops` environment's reviewers approved. See ops/prod-ops/README.md.
 on:
   workflow_dispatch:
 
@@ -26,7 +26,7 @@ jobs:
     # any other ref stop before it even asks for approval.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: production
+    environment: production-ops
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

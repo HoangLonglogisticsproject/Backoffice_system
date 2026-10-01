@@ -7,7 +7,7 @@ PowerShell → `git show` → checksum → `scp` → `ssh` → `docker ps` → `
 → `psql` by hand again, and nothing on that path becomes a general root trampoline.
 
 ```
-GitHub Actions — workflow_dispatch only, from main, approved on the `production` environment
+GitHub Actions — workflow_dispatch only, from main, approved on the `production-ops` environment
   │  ssh bo-ops@vps          dedicated key · host key pinned · key forced to ONE command
   ▼
 sudo -n /usr/local/sbin/bo-prod-ops <operation>      sudoers: exact argument, sha256-pinned file
@@ -35,7 +35,7 @@ root wrapper ── verifies its own files · finds exactly ONE container per co
 
 | Who | Can | Cannot |
 |---|---|---|
-| A workflow run | open SSH to `bo-ops` with the production key, **after** the `production` environment approves a run from `main` | pick the host key, run a shell, forward ports, name a file, send SQL |
+| A workflow run | open SSH to `bo-ops` with the production key, **after** the `production-ops` environment approves a run from `main` | pick the host key, run a shell, forward ports, name a file, send SQL |
 | `bo-ops` (the key's account) | exactly `sudo -n bo-prod-ops trip-confirmed-audit` and `… trip-confirmed-normalize`, stdin passed through | log in with a password, get a shell or pty, run any other sudo command, pass a second argument |
 | `bo-prod-ops` (root) | resolve containers, run the pinned SQL read-only, run the trip capability's CLI with validated argv | run anything taken from its input; it has no `run-sql` or `exec` |
 | `deploy` | **unchanged**: `sudo bo-release <sha>` only | anything above — it gets no new sudo rule |
@@ -44,7 +44,7 @@ root wrapper ── verifies its own files · finds exactly ONE container per co
 **Why a separate `bo-ops` account instead of `deploy`.** The `deploy` key lives on
 the `staging` environment and is used automatically by `release` on every push
 to `main`. If `deploy` could `sudo bo-prod-ops`, anyone able to get a job holding
-that key would run production writes **without** the `production` approval. So
+that key would run production writes **without** the `production-ops` approval. So
 `deploy` keeps exactly its one rule, and the ops key reaches a different account
 whose only possible action is the forced command.
 
@@ -238,22 +238,37 @@ code, and the bootstrap must not start until every line holds.
 | Target | `main` (the default branch) |
 | Restrict deletions | **on** |
 | Block force pushes | **on** |
-| Require a pull request before merging | **on** — required approvals **1**, dismiss stale approvals when new commits are pushed, require approval of the most recent reviewable push. (With a single maintainer, approvals 0 still forces every change through a PR and the checks; the `production` reviewers then remain the second pair of eyes.) |
+| Require a pull request before merging | **on** — required approvals **1**, dismiss stale approvals when new commits are pushed, require approval of the most recent reviewable push. (With a single maintainer, approvals 0 still forces every change through a PR and the checks; the `production-ops` reviewers then remain the second pair of eyes.) |
 | Require status checks to pass | **on**, each with source **GitHub Actions** (SonarCloud: the SonarCloud app) so no other app can satisfy it: `detect · which half of the monorepo changed`, `backend · boundaries, types, build, tests`, `frontend · lint, types, build, unit tests`, `ai · boundaries, types, build, tests`, `integration · frontend ↔ real backend ↔ real PostgreSQL`, `ops · wrapper, audit SQL, installer, workflows`, `SonarCloud Code Analysis` |
 | Bypass list | **empty**. Nothing pushes to `main` directly — `release` deploys, it never pushes. Add a named admin or bot only by an explicit, recorded decision. |
 
 The check names are exact; they are what the jobs report. Not required, on
 purpose: `release · …` (runs only after a push to `main`), CodeRabbit (quota-limited),
-Vercel (preview deploys). `ops · …` runs on **every** pull request and finishes
-in seconds when nothing it guards changed — a required check must always report.
-Classic branch protection is equivalent if rulesets are not available: the same
-rules plus "Do not allow bypassing the above settings".
+Vercel (preview deploys). **Every required check reports on every pull request**:
+no workflow that produces one has a workflow-level `paths`/`paths-ignore`
+filter (a filtered workflow never starts, and a required check that never
+reports blocks the merge forever). `ci.yml` and `ops-checks.yml` decide inside
+the run instead; a job skipped by its own `if:` reports "skipped", which
+satisfies the rule. `test/workflows.py` enforces this for the six job checks;
+`SonarCloud Code Analysis` is reported by the SonarCloud app on every pull
+request. Classic branch protection is equivalent if rulesets are not available:
+the same rules plus "Do not allow bypassing the above settings".
 
-### Environment `production` (Settings → Environments)
+⚠ A pull request opened **before** a check existed has no run of it: requiring
+`ops · …` leaves such a PR "expected — waiting" until its next pull-request
+event. Push a commit (or merge `main` into it) to run the full set.
+
+### Environment `production-ops` (Settings → Environments → New environment)
+
+★ **A new environment of its own — never the existing `Production`.** That one
+was created by Vercel's GitHub integration, and GitHub matches environment names
+case-insensitively, so naming ours `production` would silently share Vercel's
+settings, reviewers and secrets. Leave `Production` and `Preview` untouched, and
+put no `PROD_OPS_*` secret in them.
 
 | Setting | Value |
 |---|---|
-| Required reviewers | named people (or a team), at least one; **Prevent self-review on** |
+| Required reviewers | named people (or a team), at least one; **Prevent self-review on** — so the person who starts a run cannot approve it: **a second trusted reviewer is required** |
 | Allow administrators to bypass configured protection rules | **off** |
 | Deployment branches and tags | **Selected branches and tags → branch `main` only**, no tag rules. This is the real gate; the workflows' own `if: github.ref == 'refs/heads/main'` only stops a run earlier. |
 | Environment secrets | exactly the four below — and **no** repository- or organization-level secret with these names |
@@ -272,6 +287,13 @@ commit, never persist its token, pass inputs through `env:` only, and never
 ## Bootstrap — one time, as root on the VPS
 
 Nothing below has been run. Each step fails differently; do not combine them.
+Three kinds of step, and only the last one touches the production database:
+
+| Steps | What they touch |
+|---|---|
+| 0–4 **install** | files, the `bo-ops` account, sudoers. No database access at all. |
+| 5 **negative tests** | sudo and sshd only — every one is refused **before** `bo-prod-ops` runs, so no query is sent anywhere |
+| 6 **first positive audit** | a **real, READ-ONLY query against the production database** — see step 6 |
 
 ```bash
 # 0. The host key GitHub will pin. Compare the fingerprint over a channel you trust.
@@ -306,18 +328,55 @@ ssh-keygen -t ed25519 -N '' -C bo-prod-ops@github-actions -f bo-prod-ops     # o
   bash /root/bo-prod-ops-src/ops/prod-ops/install.sh "$SHA" /root/bo-prod-ops.pub
 )
 
-# 5. Prove it - every "denied" line MUST be denied, every listing MUST match.
-sudo -u bo-ops sudo -n /usr/local/sbin/bo-prod-ops trip-confirmed-audit </dev/null  # runs
-sudo -u bo-ops sudo -n /usr/local/sbin/bo-prod-ops trip-confirmed-audit x           # denied
-sudo -u bo-ops sudo -n /bin/sh -c id                                                # denied
-sudo -u bo-ops docker ps                                                            # denied
-sudo -l -U bo-ops                    # exactly the two bo-prod-ops commands
+# 5a. NEGATIVE tests on the VPS - no database access. Every "denied" MUST be denied.
+sudo -u bo-ops sudo -n /usr/local/sbin/bo-prod-ops trip-confirmed-audit x            # denied
+sudo -u bo-ops sudo -n /usr/local/sbin/bo-prod-ops bogus                             # denied
+sudo -u bo-ops sudo -n -E /usr/local/sbin/bo-prod-ops trip-confirmed-audit           # denied
+sudo -u bo-ops sudo -n /bin/sh -c id                                                 # denied
+sudo -u bo-ops docker ps                                                             # denied (no socket access)
+sudo -l -U bo-ops                    # exactly the two sha256-pinned bo-prod-ops commands
 sudo -l -U deploy                    # still only bo-release
-getent group docker                  # neither deploy nor bo-ops
+getent group docker; getent group sudo   # bo-ops in neither, deploy not in docker
+cat /home/bo-ops/.ssh/authorized_keys    # exactly the line in "The ops key"
 stat -c '%U:%G %a %n' /home/bo-ops /home/bo-ops/.ssh /home/bo-ops/.ssh/authorized_keys  # root:root 755/755/644
 find /home/bo-ops ! -user root       # prints nothing
-#    and from your machine, with the private key: `ssh -i bo-prod-ops -p <port> bo-ops@<host>`
-#    must answer "PTY allocation request failed" and a sudo refusal, never a prompt.
+```
+
+```bash
+# 5b. NEGATIVE tests from your machine, with the new private key - no database
+#     access: each is refused by sshd, or by sudo before bo-prod-ops runs.
+#     KH holds the PROD_OPS_KNOWN_HOSTS line, so the host key is pinned here too.
+S=(ssh -i ./bo-prod-ops -p <port> -o IdentitiesOnly=yes -o UserKnownHostsFile=./KH -o StrictHostKeyChecking=yes -o BatchMode=yes)
+echo id | "${S[@]}" -tt bo-ops@<host>                # no shell, no pty: "PTY allocation request failed", sudo refusal, no uid=
+"${S[@]}" bo-ops@<host> id                           # no arbitrary command: sudo refusal
+"${S[@]}" bo-ops@<host> 'trip-confirmed-audit; id'   # one unknown argument: sudo refusal
+"${S[@]}" -W 127.0.0.1:22 bo-ops@<host>              # "stdio forwarding failed"
+"${S[@]}" -o ExitOnForwardFailure=yes -R 127.0.0.1:15433:127.0.0.1:1 bo-ops@<host> x   # "remote port forwarding failed"
+"${S[@]}" -N -L 127.0.0.1:15432:127.0.0.1:22 bo-ops@<host> &
+sleep 3; bash -c 'exec 3<>/dev/tcp/127.0.0.1/15432; head -c 7 <&3'; kill %1   # prints nothing: -L refused
+DISPLAY=:0 "${S[@]}" -Y bo-ops@<host> x             # "X11 forwarding request failed"
+sftp -i ./bo-prod-ops -P <port> -o IdentitiesOnly=yes -o UserKnownHostsFile=./KH -b - bo-ops@<host> <<< 'ls /'      # fails
+scp -i ./bo-prod-ops -P <port> -o IdentitiesOnly=yes -o UserKnownHostsFile=./KH bo-ops@<host>:/etc/hostname .       # fails
+scp -O -i ./bo-prod-ops -P <port> -o IdentitiesOnly=yes -o UserKnownHostsFile=./KH bo-ops@<host>:/etc/hostname .    # fails
+#     -A (agent forwarding) cannot be observed from the client - OpenSSH asks for
+#     it without waiting for an answer; `restrict` in the key line refuses it, and
+#     e2e.sh shows sshd logging "agent forwarding disabled" for this exact line.
+```
+
+```bash
+# 6. The FIRST POSITIVE CHECK - a REAL, READ-ONLY PRODUCTION DATABASE AUDIT.
+#    It is the same `trip-confirmed-audit` the workflow runs: the pinned SQL in a
+#    session opened read-only, one READ ONLY transaction ended by ROLLBACK. It
+#    writes nothing, but it DOES read production: it prints trip UUIDs, counts and
+#    dates (never names, contacts, prices or free text) and is logged in the
+#    journal. Run it once, deliberately - either here as root:
+sudo -u bo-ops sudo -n /usr/local/sbin/bo-prod-ops trip-confirmed-audit </dev/null
+#    or end to end from your machine (proves ssh + forced command + sudo + wrapper):
+printf 'github_run=0-0\ngithub_actor=bootstrap\n' | "${S[@]}" bo-ops@<host> trip-confirmed-audit
+#    Expect meta|… lines (container, database, transaction_read_only|on,
+#    backend_release) then count|… and ids|… lines, exit 0. Then delete the
+#    local private key: from now on it exists only as PROD_OPS_SSH_KEY.
+shred -u ./bo-prod-ops
 ```
 
 The generated sudo rule (the digest is the wrapper's sha256):
@@ -353,7 +412,8 @@ and delete the `PROD_OPS_*` secrets.
 
 ## Running it
 
-**Production Trip Audit** — Actions → run from `main` → approve. It prints the
+**Production Trip Audit** — Actions → run from `main` → a second person approves
+on `production-ops`. It is the same real, read-only production audit as step 6. It prints the
 counts, the id lists and `meta|backend_release|<sha>`. Conflicts are reported,
 not failures; an infrastructure problem fails the run. It never starts a
 normalization.

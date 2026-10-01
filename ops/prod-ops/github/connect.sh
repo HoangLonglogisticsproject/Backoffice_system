@@ -7,14 +7,14 @@
 # forced command (README.md), so what we send is the operation name and nothing
 # else; the account behind it has no shell to fall back to.
 #
-# Env (from the `production` environment): PROD_OPS_HOST, PROD_OPS_PORT,
+# Env (from the `production-ops` environment): PROD_OPS_HOST, PROD_OPS_PORT,
 # PROD_OPS_SSH_KEY, PROD_OPS_KNOWN_HOSTS. Writes PROD_OPS_SSH_CONFIG to $GITHUB_ENV.
 set -euo pipefail
 readonly OPS_USER=bo-ops
 
 die() { printf '::error::%s\n' "$*" >&2; exit 1; }
 for name in PROD_OPS_HOST PROD_OPS_SSH_KEY PROD_OPS_KNOWN_HOSTS; do
-  [[ -n "${!name:-}" ]] || die "$name is not set on the production environment"
+  [[ -n "${!name:-}" ]] || die "$name is not set on the production-ops environment"
 done
 port="${PROD_OPS_PORT:-22}"
 [[ "$port" =~ ^[0-9]{1,5}$ ]] || die "PROD_OPS_PORT is not a port number"
