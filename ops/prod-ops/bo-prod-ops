@@ -1,0 +1,164 @@
+#!/bin/bash
+# bo-prod-ops - the ONLY production data operations the ops account may run as root.
+# Installed by install.sh, never by a release; sudoers pins its sha256 and its one
+# argument. Parameters are key=value lines on stdin, never evaluated, put into SQL
+# or run. `trip-confirmed-audit` [github_run= github_actor=] · `trip-confirmed-normalize`
+# ids= by= expected_release= [github_run= github_actor=]. Exit 0 ok, 1 failed, 2 request,
+# 3 integrity, 4 target, 5 release, 6 preflight refused, 7 some ids unchanged. See README.md.
+set -euo pipefail -o noglob
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C
+
+readonly VERSION=1 SELF=/usr/local/sbin/bo-prod-ops LIB=/usr/local/lib/bo-prod-ops
+readonly AUDIT_SQL="$LIB/trip-confirmed-audit.sql" MAX_IDS=200
+readonly AUDIT_SQL_SHA256=844d98a02291905ee80432e88d75c292040f89309b8a1b3e3a7f4df8dee0770a
+readonly PROJECT=hoanglong-bo POSTGRES_IMAGE=postgres:17-alpine BACKEND_IMAGE=hoanglong-bo-backend
+readonly CLI=/app/dist/capabilities/trip-schedule/cli/normalize-legacy-confirmed.cli.js
+readonly UUID='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+readonly OUTCOME='NORMALIZED|CONFLICT_PENDING_COMPLETION|CONFLICT_CLOSED_PARTIAL|SKIPPED_ARCHIVED|SKIPPED_ALREADY_FINISHED|SKIPPED_MISSING|SKIPPED_STATE_CHANGED'
+OP=none RUN='' ACTOR='' IDS=()
+declare -A REQ=()
+
+out() { printf '%s|%s|%s\n' "$1" "$2" "$3"; }
+# Only validated values reach the journal. Best effort: stdout is the record too.
+journal() {
+  logger -t bo-prod-ops -p auth.notice -- "op=$OP run=${RUN:--} actor=${ACTOR:--} sudo_user=${SUDO_USER:--} $*" 2>/dev/null \
+    || out warn journal "logger unavailable - this output is the only record"
+}
+fail() { local code="$1"; shift; out error "$code" "$*"; journal "result=error code=$code $*"; exit "$code"; }
+
+read_request() {  # $1: the keys this operation accepts
+  local raw line key value
+  [[ -t 0 ]] && return 0
+  raw="$(head -c 16385)"
+  (( ${#raw} <= 16384 )) || fail 2 "request larger than 16 KiB"
+  while IFS= read -r line; do
+    [[ "$line" =~ ^([a-z_]{1,32})=(.*)$ ]] || fail 2 "malformed request line"
+    key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
+    [[ "$key" =~ ^($1)$ ]] || fail 2 "unknown request key: $key"
+    [[ -z "${REQ[$key]+set}" ]] || fail 2 "duplicate request key: $key"
+    REQ[$key]="$value"
+  done < <([[ -z "$raw" ]] || printf '%s\n' "$raw")
+  [[ "${REQ[github_run]:-}" =~ ^([0-9]{1,20}(-[0-9]{1,4})?)?$ ]] || fail 2 "github_run must be <run_id>-<attempt>"
+  [[ "${REQ[github_actor]:-}" =~ ^([A-Za-z0-9-]{1,39})?$ ]] || fail 2 "github_actor is not a GitHub login"
+  RUN="${REQ[github_run]:-}" ACTOR="${REQ[github_actor]:-}"
+}
+
+validate_normalize_request() {
+  local ids="${REQ[ids]:-}" by="${REQ[by]:-}"
+  [[ "$ids" =~ ^$UUID(,$UUID)*$ ]] || fail 2 "ids must be explicit lowercase trip UUIDs, comma-separated"
+  IFS=, read -r -a IDS <<< "$ids"
+  (( ${#IDS[@]} <= MAX_IDS )) || fail 2 "at most $MAX_IDS ids per run"
+  [[ -z "$(printf '%s\n' "${IDS[@]}" | sort | uniq -d)" ]] || fail 2 "an id is listed twice"
+  [[ "$by" =~ ^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63}){1,8}$ ]] || fail 2 "by must be the email of the person applying it"
+  [[ "${REQ[expected_release]:-}" =~ ^[0-9a-f]{40}$ ]] || fail 2 "expected_release must be a 40-hex commit sha"
+}
+
+# Everything run or read as root: root-owned, not group/world-writable, and the
+# SQL byte-identical to the reviewed one pinned above.
+require_integrity() {
+  (( EUID == 0 )) || fail 3 "must run as root, through sudo"
+  local path owner mode
+  for path in / /usr /usr/local /usr/local/sbin "$SELF" /usr/local/lib "$LIB" "$AUDIT_SQL"; do
+    read -r owner mode < <(stat -c '%u %a' "$path" 2>/dev/null || echo "missing 0")
+    [[ "$owner" == 0 && $(( 8#$mode & 8#022 )) == 0 ]] || fail 3 "$path is missing, not root-owned, or writable by others"
+  done
+  [[ "$(sha256sum < "$AUDIT_SQL")" == "$AUDIT_SQL_SHA256  -" ]] || fail 3 "audit SQL does not match the reviewed checksum"
+}
+
+# Exactly one RUNNING container carrying both compose labels, or stop. Order is
+# never trusted, nothing is matched by name. Sets <prefix>_ID, _NAME, _IMAGE.
+resolve() {
+  local service="$1" prefix="$2" found count name image project svc running
+  found="$(docker ps --no-trunc --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')" || fail 4 "docker ps failed"
+  count="$(grep -c . <<< "$found" || true)"
+  (( count == 1 )) || fail 4 "expected exactly one running $PROJECT/$service container, found $count"
+  IFS='|' read -r name image project svc running < <(docker inspect --format \
+    '{{.Name}}|{{.Config.Image}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Running}}' \
+    "$found" 2>/dev/null || true)
+  [[ "$project" == "$PROJECT" && "$svc" == "$service" && "$running" == true ]] || fail 4 "$service container changed under us"
+  printf -v "${prefix}_ID" '%s' "$found"
+  printf -v "${prefix}_NAME" '%s' "${name#/}"
+  printf -v "${prefix}_IMAGE" '%s' "$image"
+}
+
+release_of() {  # the backend's release.sha label - the one bo-release writes and reads
+  local sha; sha="$(docker inspect --format '{{index .Config.Labels "release.sha"}}' "$1" 2>/dev/null || true)"
+  if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then printf '%s' "$sha"; else printf unknown; fi
+}
+
+resolve_database() {
+  resolve postgres PG
+  [[ "$PG_IMAGE" == "$POSTGRES_IMAGE" ]] || fail 4 "postgres container runs $PG_IMAGE, expected $POSTGRES_IMAGE"
+  printf 'meta|%s|%s\n' tool "bo-prod-ops v$VERSION" wrapper_sha256 "$(sha256sum < "$SELF" | cut -d' ' -f1)" \
+    audit_sql_sha256 "$AUDIT_SQL_SHA256" installed_from "$(grep -xE '[0-9a-f]{40}' "$LIB/SOURCE" 2>/dev/null || echo unknown)" \
+    container "$PG_NAME" compose_project "$PROJECT" compose_service postgres
+}
+
+# The reviewed SQL, on stdin, in a session that is read-only before it starts.
+audit_sql() {
+  docker exec -i -e 'PGOPTIONS=-c default_transaction_read_only=on' "$PG_ID" \
+    sh -c 'exec psql -X -q -A -t -F "|" -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$AUDIT_SQL"
+}
+
+op_audit() {
+  read_request 'github_run|github_actor'
+  require_integrity
+  resolve_database
+  local backend release=unavailable result
+  backend="$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter label=com.docker.compose.service=backend || true)"
+  [[ "$(grep -c . <<< "$backend" || true)" == 1 ]] && release="$(release_of "$backend")"
+  out meta backend_release "$release"
+  result="$(audit_sql)" || fail 1 "the read-only audit query failed; nothing was written"
+  printf '%s\n' "$result"
+  journal "result=ok release=$release $(grep '^count|' <<< "$result" | cut -d'|' -f2,3 | tr '\n|' ' =')"
+}
+
+op_normalize() {
+  read_request 'github_run|github_actor|ids|by|expected_release'
+  validate_normalize_request
+  require_integrity
+  resolve_database
+  resolve backend BE
+  local release id outcome preflight raw pairs unchanged=0 refused=0
+  release="$(release_of "$BE_ID")"
+  out meta backend_release "$release"
+  [[ "$release" == "${REQ[expected_release]}" ]] || fail 5 "deployed release $release is not the approved ${REQ[expected_release]}"
+  [[ "$BE_IMAGE" == "$BACKEND_IMAGE:$release" ]] || fail 5 "backend image $BE_IMAGE does not carry the release it is labelled with"
+  docker exec "$BE_ID" test -f "$CLI" || fail 5 "the deployed release has no normalization CLI"
+  for id in "${IDS[@]}"; do journal "requested id=$id by=${REQ[by]} release=$release"; done
+
+  # Preflight: every supplied id must be ELIGIBLE right now, or nothing is written.
+  preflight="$(audit_sql)" || fail 1 "the preflight audit failed; nothing was written"
+  grep '^meta|database|' <<< "$preflight" || true
+  for id in "${IDS[@]}"; do
+    outcome="$(grep -E "^ids\|(ELIGIBLE|CONFLICT_PENDING_COMPLETION|CONFLICT_CLOSED_PARTIAL|SKIPPED_ARCHIVED)\|.*$id" <<< "$preflight" | cut -d'|' -f2 || true)"
+    out preflight "$id" "${outcome:-NOT_A_LEGACY_CONFIRMED_TRIP}"
+    [[ "$outcome" == ELIGIBLE ]] || refused=1
+  done
+  (( refused == 0 )) || fail 6 "not every id is ELIGIBLE now; nothing was written - re-audit and choose again"
+
+  # Apply: the trip capability's own CLI, argv only; it re-checks each id under its row lock.
+  raw="$(docker exec "$BE_ID" node "$CLI" --apply --by "${REQ[by]}" --ids "${REQ[ids]}")" \
+    || fail 1 "the normalization CLI failed - some ids MAY have been normalized; run the audit before retrying"
+  pairs="$(grep -oE '"(id|outcome)": ?"[^"]*"' <<< "$raw" | sed -E 's/^"[a-z]+": ?"(.*)"$/\1/' | paste -d' ' - - || true)"
+  [[ "$(grep -cxE "$UUID ($OUTCOME)" <<< "$pairs" || true)" == "${#IDS[@]}" ]] \
+    || fail 1 "cannot verify one outcome per id - some ids MAY have been normalized; run the audit"
+  for id in "${IDS[@]}"; do
+    outcome="$(grep -m1 "^$id " <<< "$pairs" | cut -d' ' -f2 || true)"
+    [[ -n "$outcome" ]] || fail 1 "no outcome reported for $id - run the audit"
+    out result "$id" "$outcome"
+    journal "result id=$id outcome=$outcome"
+    [[ "$outcome" == NORMALIZED ]] || unchanged=$((unchanged + 1))
+  done
+  (( unchanged == 0 )) || fail 7 "$unchanged of ${#IDS[@]} ids were left unchanged - see the result lines"
+  out 'done' normalized "${#IDS[@]}"
+  journal "result=ok normalized=${#IDS[@]}"
+}
+
+[[ $# -eq 1 ]] || fail 2 "usage: bo-prod-ops <operation>  (parameters as key=value lines on stdin)"
+case "$1" in
+  trip-confirmed-audit)     OP="$1"; op_audit ;;
+  trip-confirmed-normalize) OP="$1"; op_normalize ;;
+  *)                        fail 2 "unknown operation" ;;
+esac

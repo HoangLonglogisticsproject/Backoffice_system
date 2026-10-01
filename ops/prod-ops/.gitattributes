@@ -1,0 +1,3 @@
+# The wrapper pins the audit SQL's sha256 and sudoers pins the wrapper's: a
+# checkout that rewrote line endings would change both hashes and break both.
+* text eol=lf
