@@ -392,7 +392,7 @@ GitHub Actions
 
 Production **data** operations (audits, normalizations) never use this account:
 they run as a separate `bo-ops` account through the root-owned `bo-prod-ops`,
-approved on the `production` environment — see `ops/prod-ops/README.md`.
+approved on the `production-ops` environment — see `ops/prod-ops/README.md`.
 `deploy` gains no new privilege from them.
 
 ### Why the wrapper is split in two

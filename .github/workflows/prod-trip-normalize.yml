@@ -5,7 +5,7 @@ name: Normalize Legacy Confirmed Trips
 #      the backend_release it reported.
 #   2. They start THIS workflow with exactly those ids, their own app email and
 #      that release. Inputs are validated before any secret exists in the run.
-#   3. The `production` environment's reviewers approve the run.
+#   3. The `production-ops` environment's reviewers approve the run.
 #   4. On the VPS `bo-prod-ops trip-confirmed-normalize` refuses unless the
 #      deployed release is the approved one and every id is ELIGIBLE right now;
 #      then the trip capability's own CLI closes those ids, re-checking each
@@ -59,7 +59,7 @@ jobs:
     needs: validate
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: production
+    environment: production-ops
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

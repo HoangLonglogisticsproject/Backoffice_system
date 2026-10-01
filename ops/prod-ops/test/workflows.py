@@ -11,6 +11,20 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / '.github' / 'workflows'
 PROD = {'prod-trip-audit.yml': 'trip-confirmed-audit', 'prod-trip-normalize.yml': 'trip-confirmed-normalize'}
 PINNED = re.compile(r'^[\w.-]+/[\w.-]+@[0-9a-f]{40}$')
+# ★ ITS OWN ENVIRONMENT. GitHub matches environment names case-insensitively,
+# and Vercel's integration owns one called `Production`; `production` here would
+# silently share it - its settings, its reviewers, its secrets.
+OPS_ENVIRONMENT = 'production-ops'
+# The checks the `main` ruleset requires (README, "Rollout prerequisites"), less
+# `SonarCloud Code Analysis`, which an app reports rather than a job here.
+REQUIRED_CHECKS = {
+    'detect · which half of the monorepo changed',
+    'backend · boundaries, types, build, tests',
+    'frontend · lint, types, build, unit tests',
+    'ai · boundaries, types, build, tests',
+    'integration · frontend ↔ real backend ↔ real PostgreSQL',
+    'ops · wrapper, audit SQL, installer, workflows',
+}
 failures = []
 
 
@@ -42,8 +56,10 @@ for name, operation in PROD.items():
         job_text = yaml.safe_dump(job)
         holds_secrets = 'secrets.' in job_text
         rule("github.ref == 'refs/heads/main'" in str(job.get('if', '')), f'{job_id}: runs from main only')
-        rule(not holds_secrets or job.get('environment') == 'production',
-             f'{job_id}: secrets only inside the production environment')
+        rule(not holds_secrets or job.get('environment') == OPS_ENVIRONMENT,
+             f'{job_id}: secrets only inside the {OPS_ENVIRONMENT} environment')
+        rule(job.get('environment') in (None, OPS_ENVIRONMENT),
+             f'{job_id}: no environment but {OPS_ENVIRONMENT} (never Vercel\'s `Production`)')
         rule('permissions' not in job, f'{job_id}: does not widen permissions')
         for step in steps(job):
             if 'uses' in step:
@@ -84,14 +100,42 @@ rule('secrets.' not in (WORKFLOWS / 'ops-checks.yml').read_text(encoding='utf-8'
 rule(list(checks['jobs']) == ['ops'] and checks['jobs']['ops']['name'].startswith('ops · '),
      'one job, named as branch protection requires it')
 
+rule(OPS_ENVIRONMENT.lower() != 'production', 'the ops environment is not the name Vercel already owns')
+
 print('== every other workflow')
 for path in sorted(WORKFLOWS.glob('*.yml')):
     if path.name in PROD:
         continue
     text = path.read_text(encoding='utf-8')
-    rule('PROD_OPS_' not in text and 'environment: production' not in text,
+    envs = {str(job.get('environment', '')).lower() for job in load(path)['jobs'].values()}
+    rule('PROD_OPS_' not in text and OPS_ENVIRONMENT not in envs,
          f'{path.name}: no production-ops secret or environment')
     rule('bo-prod-ops' not in text or path.name == 'ops-checks.yml', f'{path.name}: does not call bo-prod-ops')
+
+
+def pull_request_filters(on):
+    """None when a workflow does not run on pull requests; else its filters."""
+    if isinstance(on, str):
+        return {} if on == 'pull_request' else None
+    if isinstance(on, list):
+        return {} if 'pull_request' in on else None
+    return (on.get('pull_request') or {}) if 'pull_request' in on else None
+
+
+print('== every required check reports on every pull request')
+reporting, filtered = set(), set()
+for path in sorted(WORKFLOWS.glob('*.yml')):
+    wf = load(path)
+    filters = pull_request_filters(wf['on'])
+    if filters is None:
+        continue
+    narrowed = bool(filters.get('paths') or filters.get('paths-ignore') or filters.get('branches-ignore')
+                    or (filters.get('branches') and 'main' not in filters['branches']))
+    names = {job.get('name', job_id) for job_id, job in wf['jobs'].items()}
+    (filtered if narrowed else reporting).update(names)
+for check in sorted(REQUIRED_CHECKS):
+    rule(check in reporting and check not in filtered,
+         f'reported on every pull request, never path-filtered: {check}')
 
 print(f"\nworkflows: {len(failures)} failed")
 sys.exit(1 if failures else 0)
