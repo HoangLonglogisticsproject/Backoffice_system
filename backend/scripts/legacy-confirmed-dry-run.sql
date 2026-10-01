@@ -1,7 +1,8 @@
 -- ============================================================================
 -- READ-ONLY PRODUCTION AUDIT: legacy `confirmed` trips, before `confirmed → finished`.
 --
--- Writes NOTHING: fail-fast, one READ ONLY transaction, ended by ROLLBACK.
+-- Writes NOTHING: fail-fast, one REPEATABLE READ, READ ONLY transaction ended by
+-- ROLLBACK - every section below reads the same snapshot.
 -- Needs no application deploy. Run it with psql -X (no ~/.psqlrc) against the
 -- ONE identified Backoffice database container — see the PR's procedure.
 --
@@ -22,7 +23,7 @@
 \set pending_request pending
 \set business_tz Asia/Ho_Chi_Minh
 
-BEGIN TRANSACTION READ ONLY;
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL statement_timeout = '60s';
 
 \echo '== A. Trips by status (archived apart)'

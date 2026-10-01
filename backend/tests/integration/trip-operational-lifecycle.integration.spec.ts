@@ -4610,6 +4610,71 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       ])) as { state: string }[];
       expect(request!.state).toBe('pending');
     });
+
+    /**
+     * ★ THE RACE THE LOCK EXISTS FOR, ON TWO REAL CONNECTIONS. A driver submits
+     * while the normalization runs: `submit` locks the trip FIRST, inserts its
+     * request, and only then commits; the normalization queues on that same row
+     * lock. When it gets the row it must see the request that was committed
+     * while it waited — under READ COMMITTED only a statement started AFTER the
+     * lock can, which is why the count is not part of the locking SELECT.
+     */
+    it('★ a driver request committed while normalization waits for the trip lock is seen: CONFLICT, nothing written', async () => {
+      const { trip, assignment } = await runningTrip();
+      await sql(`UPDATE trip_schedules SET status = 'confirmed' WHERE id = $1`, [trip]);
+      const movesBefore = await sql(`SELECT id FROM trip_status_history WHERE trip_id = $1`, [trip]);
+
+      // T1 - the real submission path, held open just before COMMIT: the trip
+      // row is locked and the pending request inserted, not yet committed.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holdingPid!: (pid: number) => void;
+      const holding = new Promise<number>((resolve) => {
+        holdingPid = resolve;
+      });
+      const lockForAssignment = costs.lockForAssignment.bind(costs);
+      const held = jest
+        .spyOn(costs, 'lockForAssignment')
+        .mockImplementationOnce(async (...args: Parameters<TripCostRepository['lockForAssignment']>) => {
+          const done = await lockForAssignment(...args);
+          const [me] = await args[3].query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+          holdingPid(me!.pid);
+          await gate;
+          return done;
+        });
+      const submitted = completion.submit(assignment, driverA, 'none');
+      const t1 = await holding;
+
+      // T2 - the normalization, which must queue on T1's lock of the trip row.
+      const normalized = normalization.apply([trip], reviewer);
+      let queued = false;
+      for (let attempt = 0; attempt < 100 && !queued; attempt += 1) {
+        const [blocked] = (await sql(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid))`,
+          [t1],
+        )) as { n: number }[];
+        queued = blocked!.n > 0;
+        if (!queued) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(queued).toBe(true);
+
+      release();
+      await submitted;
+      held.mockRestore();
+
+      expect(await normalized).toEqual([{ id: trip, outcome: 'CONFLICT_PENDING_COMPLETION' }]);
+      expect(await rowOf(trip)).toMatchObject({ status: 'confirmed', closed_at: null, closed_by: null });
+      expect(await sql(`SELECT id FROM trip_status_history WHERE trip_id = $1`, [trip])).toEqual(movesBefore);
+      expect(
+        await sql(`SELECT id FROM trip_status_history WHERE reason = 'legacy_status_normalization'`),
+      ).toEqual([]);
+      const [request] = (await sql(`SELECT state FROM trip_completion_requests WHERE trip_id = $1`, [trip])) as {
+        state: string;
+      }[];
+      expect(request!.state).toBe('pending');
+    });
   });
 
 });

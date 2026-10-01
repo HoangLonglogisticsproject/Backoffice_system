@@ -103,15 +103,8 @@ export class LegacyConfirmedNormalization {
   }
 
   private async normalizeOne(id: string, by: string, now: Date, tx: DatabaseQuery): Promise<LegacyOutcome> {
-    const [row] = await tx.query<{
-      status: string;
-      archived: boolean;
-      pending: number;
-      closed_at: Date | null;
-      closed_by: string | null;
-    }>(
-      `SELECT t.status, t.archived_at IS NOT NULL AS archived, t.closed_at, t.closed_by,
-              (SELECT count(*) FROM trip_completion_requests r WHERE r.trip_id = t.id AND r.state = 'pending')::int AS pending
+    const [row] = await tx.query<{ status: string; archived: boolean; closed_at: Date | null; closed_by: string | null }>(
+      `SELECT t.status, t.archived_at IS NOT NULL AS archived, t.closed_at, t.closed_by
          FROM trip_schedules t WHERE t.id = $1 FOR UPDATE`,
       [id],
     );
@@ -119,7 +112,16 @@ export class LegacyConfirmedNormalization {
     if (row.archived) return 'SKIPPED_ARCHIVED';
     if (row.status === 'finished') return 'SKIPPED_ALREADY_FINISHED';
     if (row.status !== 'confirmed') return 'SKIPPED_STATE_CHANGED';
-    if (row.pending > 0) return 'CONFLICT_PENDING_COMPLETION';
+
+    // ★ COUNTED AFTER THE LOCK, IN ITS OWN STATEMENT. Under READ COMMITTED each
+    // statement reads a fresh snapshot; a count inside the locking SELECT would
+    // use the one taken BEFORE it waited, and miss a request a driver committed
+    // while holding this trip's lock (submit locks the trip first).
+    const [waiting] = await tx.query<{ pending: number }>(
+      `SELECT count(*)::int AS pending FROM trip_completion_requests WHERE trip_id = $1 AND state = 'pending'`,
+      [id],
+    );
+    if (waiting && waiting.pending > 0) return 'CONFLICT_PENDING_COMPLETION';
     if (closedMetadataOf(row.closed_at, row.closed_by) === 'CLOSED_PARTIAL') return 'CONFLICT_CLOSED_PARTIAL';
 
     const trip = await this.trips.lockActive(id, tx);
