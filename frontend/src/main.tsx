@@ -2,8 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import App from './App.tsx'
+import { QueryDevtools } from './components/common/QueryDevtools'
 import { Toaster } from './components/ui/sonner'
 import { SessionProvider } from './contexts/SessionProvider'
 import { LanguageProvider } from './contexts/LanguageContext'
@@ -55,7 +55,8 @@ createRoot(rootElement).render(
       {/* Giữa trên: một tài xế cầm điện thoại một tay đọc được ngay giữa màn
           hình, và trên bảng điều độ nó không đè lên cột thao tác bên phải. */}
       <Toaster  position="top-center" closeButton />
-      <ReactQueryDevtools initialIsOpen={false} />
+      {/* Development only, and only when asked for — see the module. */}
+      <QueryDevtools />
     </QueryClientProvider>
   </StrictMode>,
 )

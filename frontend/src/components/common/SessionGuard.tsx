@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
+import { PageFallback } from '@/components/common/PageFallback';
 import { useSession } from '@/contexts/SessionProvider';
 import { homeOf, portalOf, type Portal } from '@/utils/portal';
 
@@ -27,7 +28,21 @@ export function SessionGuard({
 
   // "Not asked yet" is not "not signed in". Redirecting here would bounce a
   // signed-in user out of the app on every cold load.
-  if (loading || state === null) return null;
+  //
+  // ★ A PLACEHOLDER, NOT `null`. This branch covers the whole of a reload:
+  // nothing can be drawn until `/authorization/me` answers, because until then
+  // the app does not know WHICH shell this person belongs in. Returning `null`
+  // rendered that wait as a white page, which is what somebody pressing F5
+  // reported as the app hanging. Same wait, but visibly a wait.
+  if (loading || state === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <div className="mx-auto max-w-4xl">
+          <PageFallback />
+        </div>
+      </div>
+    );
+  }
 
   if (state.status === 'anonymous') {
     // `from` lets login return them where they were aiming.
