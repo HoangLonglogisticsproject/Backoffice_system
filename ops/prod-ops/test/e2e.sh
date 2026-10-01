@@ -93,7 +93,7 @@ check "it opens READ ONLY and ends with ROLLBACK, no other transaction control" 
   '[[ "$(grep -iwE "^[[:space:]]*(begin|start|commit|end|rollback|abort|savepoint|release)" <<< "$code" | tr "\n" " ")" == "BEGIN TRANSACTION READ ONLY; ROLLBACK; " ]]'
 
 echo "== install.sh: root-owned, pinned, idempotent"
-id -u bo-ops >/dev/null 2>&1 || useradd --system --create-home --shell /bin/sh bo-ops
+id -u bo-ops >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /home/bo-ops --shell /bin/sh bo-ops
 log="$(bash "$OPS/install.sh" "$RELEASE" 2>&1)" && ok "install.sh installs" || nok "install.sh failed" "$log"
 check "wrapper root:root 0755"      '[[ "$(stat -c "%U:%G %a" "$BIN")" == "root:root 755" ]]'
 check "audit SQL root:root 0644"    '[[ "$(stat -c "%U:%G %a" "$LIB/trip-confirmed-audit.sql")" == "root:root 644" ]]'
@@ -224,17 +224,34 @@ if [[ -x /usr/sbin/sshd ]] && command -v ssh >/dev/null; then
   ssh-keygen -q -t ed25519 -N '' -f "$ssh_dir/host"
   ssh-keygen -q -t ed25519 -N '' -f "$ssh_dir/impostor"
   usermod -p '*' bo-ops  # as the runbook: no password, but not '!'-locked
+  home=/home/bo-ops
+  install -d -o bo-ops -m 755 "$home"
+  install -o bo-ops -m 644 /dev/null "$home/.profile"  # what useradd --create-home would leave behind
   log="$(bash "$OPS/install.sh" "$RELEASE" "$ssh_dir/client.pub" 2>&1 || true)"
-  keys="$(awk -F: '$1 == "bo-ops" { print $6 }' /etc/passwd)/.ssh/authorized_keys"
+  check "install.sh refuses a home holding files that are not root's" \
+    'grep -q "not owned by root" <<< "$log" && [[ ! -e "$home/.ssh/authorized_keys" ]]' "$log"
+  rm -rf "$home"
+  log="$(bash "$OPS/install.sh" "$RELEASE" "$ssh_dir/client.pub" 2>&1 || true)"
   read -r forced <<'EOF'
 restrict,command="sudo -n /usr/local/sbin/bo-prod-ops \"$SSH_ORIGINAL_COMMAND\""
 EOF
-  check "install.sh writes the restricted, forced-command key, root-owned" \
-    '[[ "$(stat -c "%U:%G %a" "$keys")" == "root:root 644" && "$(cat "$keys")" == "$forced $(cat "$ssh_dir/client.pub")" ]]' "$log"
+  check "authorized_keys is exactly the restricted, forced-command line, root:root 0644" \
+    '[[ "$(stat -c "%U:%G %a" "$home/.ssh/authorized_keys")" == "root:root 644" && "$(cat "$home/.ssh/authorized_keys")" == "$forced $(cat "$ssh_dir/client.pub")" ]]' "$log"
+  check "every path sshd reads for bo-ops is root's: home and .ssh root:root 0755, nothing else inside" \
+    '[[ "$(stat -c "%U:%G %a" "$home" "$home/.ssh" | tr "\n" " ")" == "root:root 755 root:root 755 " && -z "$(find "$home" ! -user root)" && "$(find "$home" -mindepth 1 | sort | tr "\n" " ")" == "$home/.ssh $home/.ssh/authorized_keys " ]]'
+  # ★ A CONTROL ACCOUNT WITH THE SAME KEY AND NO RESTRICTION. This sshd allows
+  # every capability server-wide, so whatever the control key can do and bo-ops
+  # cannot is refused by the key's own options - not by a lenient test config.
+  readonly CONTROL=bo-e2e-control
+  id -u "$CONTROL" >/dev/null 2>&1 || useradd --create-home --shell /bin/sh "$CONTROL"
+  usermod -p '*' "$CONTROL"
+  install -d -o "$CONTROL" -m 700 "/home/$CONTROL/.ssh"
+  install -o "$CONTROL" -m 600 "$ssh_dir/client.pub" "/home/$CONTROL/.ssh/authorized_keys"
   install -d -m 755 /run/sshd
-  printf '%s\n' 'Port 2222' 'ListenAddress 127.0.0.1' "HostKey $ssh_dir/host" "PidFile $ssh_dir/sshd.pid" \
-    'AuthorizedKeysFile .ssh/authorized_keys' 'AllowUsers bo-ops' 'PasswordAuthentication no' \
-    'KbdInteractiveAuthentication no' 'StrictModes yes' > "$ssh_dir/sshd_config"
+  printf '%s\n' 'Port 2222' 'ListenAddress 127.0.0.1' "HostKey $ssh_dir/host" "PidFile $ssh_dir/sshd.pid" 'LogLevel DEBUG1' \
+    'AuthorizedKeysFile .ssh/authorized_keys' "AllowUsers bo-ops $CONTROL" 'PasswordAuthentication no' \
+    'KbdInteractiveAuthentication no' 'StrictModes yes' 'PermitTTY yes' 'AllowTcpForwarding yes' \
+    'AllowAgentForwarding yes' 'X11Forwarding yes' 'Subsystem sftp internal-sftp' > "$ssh_dir/sshd_config"
   /usr/sbin/sshd -f "$ssh_dir/sshd_config" -E "$ssh_dir/sshd.log"
   prepare() {  # prepare <host public key file>: runs connect.sh as a workflow would
     local host_key="$1"
@@ -242,19 +259,70 @@ EOF
       PROD_OPS_SSH_KEY="$(cat "$ssh_dir/client")" PROD_OPS_KNOWN_HOSTS="[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$host_key")" \
       bash "$OPS/github/connect.sh" >/dev/null
   }
-  over_ssh() { set +e; OUT="$(printf '%s' "${REQ:-}" | ssh -F "$ssh_dir/prod-ops-ssh/config" "$@" 2>&1)"; RC=$?; set -e; ALL+="$OUT"$'\n'; }
+  cfg="$ssh_dir/prod-ops-ssh/config"
+  over_ssh() { set +e; OUT="$(printf '%s' "${REQ:-}" | timeout 30 ssh -F "$cfg" "$@" 2>&1)"; RC=$?; set -e; ALL+="$OUT"$'\n'; }
+  as_control() { over_ssh -l "$CONTROL" "$@"; }
+  sshd_says() { local pattern="$1"; grep -c -- "$pattern" "$ssh_dir/sshd.log" || true; }
+  tunnel() {  # tunnel <user> <local port>: the first bytes a connection through `ssh -L` receives
+    local who="$1" port="$2" pid
+    ssh -F "$cfg" -l "$who" -o ClearAllForwardings=no -N -L "127.0.0.1:$port:127.0.0.1:2222" prod-ops 2>/dev/null &
+    pid=$!
+    for _ in $(seq 1 40); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.25; done
+    timeout 5 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"; head -c 7 <&3' _ "$port" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  }
   prepare "$ssh_dir/host.pub"
   for _ in $(seq 1 20); do REQ='' over_ssh prod-ops trip-confirmed-audit; [[ "$RC" == 255 ]] || break; sleep 0.5; done
   REQ=$'github_run=7-1\ngithub_actor=octocat\n' over_ssh prod-ops trip-confirmed-audit
   expect "the audit, over ssh, exactly as the workflow sends it" 0 "$AUDIT_RAN\|6$" "ids\|ELIGIBLE\|$A1,$A2,$A5$"
   REQ="$(normalize_req "$A1")" over_ssh prod-ops trip-confirmed-normalize
   expect "the normalization, over ssh, request on stdin" 0 "result\|$A1\|NORMALIZED$"
-  for hostile in 'trip-confirmed-audit; id' 'id' 'sh -c id' 'sudo -n /bin/sh' ''; do
+
+  echo "   escapes - refused for bo-ops, granted to the unrestricted control key on the same sshd"
+  REQ=$'id\nexit\n' over_ssh -o RequestTTY=force prod-ops
+  check "ssh bo-ops@host: no pty, no shell - typed commands never run" \
+    '[[ "$RC" != 0 ]] && grep -q "PTY allocation request failed" <<< "$OUT" && ! grep -q "uid=" <<< "$OUT"' "$OUT"
+  check "  sshd: a pty is not permitted for this key" '(( $(sshd_says "Allocating a pty not permitted") >= 1 ))'
+  REQ=$'id\nexit\n' as_control -o RequestTTY=force prod-ops
+  check "  control: the same request gets a pty and a shell" '! grep -q "PTY allocation request failed" <<< "$OUT" && grep -q "uid=" <<< "$OUT"' "$OUT"
+  for hostile in id 'trip-confirmed-audit; id' 'sh -c id' 'sudo -n /bin/sh' 'scp -t /tmp' ''; do
     REQ='' over_ssh prod-ops "$hostile"
-    check "the key runs nothing else: '${hostile:-<no command>}'" '[[ "$RC" != 0 ]] && ! grep -qE "uid=|count\|" <<< "$OUT"' "$OUT"
+    check "ssh bo-ops@host '${hostile:-<no command>}': nothing but the forced command runs" \
+      '[[ "$RC" != 0 ]] && ! grep -qE "uid=|count\|" <<< "$OUT"' "$OUT"
   done
-  REQ='' over_ssh -o ClearAllForwardings=no -o ExitOnForwardFailure=yes -N -R 127.0.0.1:15433:127.0.0.1:1 prod-ops
-  check "the key cannot forward ports" '[[ "$RC" != 0 ]]' "$OUT"
+  REQ='' as_control prod-ops id
+  check "  control: 'id' runs" 'grep -q "uid=" <<< "$OUT"' "$OUT"
+  refused_before="$(sshd_says "refused local port forward")"
+  got="$(tunnel bo-ops 15990)"
+  check "ssh -L: nothing reaches the far end through bo-ops" '[[ -z "$got" ]] && (( $(sshd_says "refused local port forward") > refused_before ))' "$got"
+  got="$(tunnel "$CONTROL" 15991)"
+  check "  control: the same tunnel reaches it" '[[ "$got" == SSH-2.0 ]]' "$got"
+  REQ='' over_ssh -o ClearAllForwardings=no -W 127.0.0.1:2222 prod-ops
+  check "ssh -W: stdio forwarding refused" '[[ "$RC" != 0 ]] && grep -q "stdio forwarding failed" <<< "$OUT" && ! grep -q "SSH-2.0" <<< "$OUT"' "$OUT"
+  REQ='' as_control -o ClearAllForwardings=no -W 127.0.0.1:2222 prod-ops
+  check "  control: -W reaches the far end" 'grep -q "SSH-2.0" <<< "$OUT"' "$OUT"
+  REQ='' over_ssh -o ClearAllForwardings=no -o ExitOnForwardFailure=yes -R 127.0.0.1:15433:127.0.0.1:1 prod-ops trip-confirmed-audit
+  check "ssh -R: remote forwarding refused" '[[ "$RC" != 0 ]] && grep -q "remote port forwarding failed" <<< "$OUT"' "$OUT"
+  REQ='' as_control -o ClearAllForwardings=no -o ExitOnForwardFailure=yes -R 127.0.0.1:15434:127.0.0.1:1 prod-ops true
+  check "  control: -R is granted" '[[ "$RC" == 0 ]]' "$OUT"
+  eval "$(ssh-agent -s)" >/dev/null
+  ssh-add -q "$ssh_dir/client"
+  agent_before="$(sshd_says "agent forwarding disabled")"
+  REQ='' over_ssh -o ForwardAgent=yes prod-ops trip-confirmed-audit
+  check "ssh -A: agent forwarding refused (the operation itself still runs)" \
+    '[[ "$RC" == 0 ]] && (( $(sshd_says "agent forwarding disabled") == agent_before + 1 ))' "$OUT"
+  REQ='' as_control -o ForwardAgent=yes prod-ops 'echo "agent=$SSH_AUTH_SOCK"'
+  check "  control: -A is granted" 'grep -q "agent=/" <<< "$OUT"' "$OUT"
+  ssh-agent -k >/dev/null
+  REQ='' DISPLAY=:0 over_ssh -o ForwardX11=yes -o ForwardX11Trusted=yes prod-ops trip-confirmed-audit
+  check "ssh -X: X11 forwarding refused" 'grep -q "X11 forwarding request failed" <<< "$OUT"' "$OUT"
+  REQ='' DISPLAY=:0 as_control -o ForwardX11=yes -o ForwardX11Trusted=yes prod-ops 'echo "display=$DISPLAY"'
+  check "  control: -X is granted" 'grep -q "display=localhost:" <<< "$OUT"' "$OUT"
+  set +e; OUT="$(printf 'ls /\n' | timeout 30 sftp -F "$cfg" -b - prod-ops 2>&1)"; RC=$?; set -e
+  check "sftp: no file access" '[[ "$RC" != 0 ]] && ! grep -q "/etc" <<< "$OUT"' "$OUT"
+  set +e; OUT="$(printf 'ls /\n' | timeout 30 sftp -F "$cfg" -o "User=$CONTROL" -b - prod-ops 2>&1)"; RC=$?; set -e
+  check "  control: sftp lists /" 'grep -q "/etc" <<< "$OUT"' "$OUT"
   prepare "$ssh_dir/impostor.pub"
   REQ='' over_ssh prod-ops trip-confirmed-audit
   expect "a host key other than the pinned one: no connection" 255 'Host key verification failed'

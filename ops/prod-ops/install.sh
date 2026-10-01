@@ -36,7 +36,12 @@ id -u "$OPS_USER" >/dev/null 2>&1 || die "the $OPS_USER account does not exist y
 visudo -c >/dev/null || die "sudo's configuration is already invalid (visudo -c above) - fix that first; nothing was installed"
 OPS_HOME="$(awk -F: -v u="$OPS_USER" '$1 == u { print $6 }' /etc/passwd)"
 readonly OPS_HOME
-[[ "$OPS_HOME" == /* && -d "$OPS_HOME" ]] || die "$OPS_USER has no home directory"
+[[ "$OPS_HOME" =~ ^/[A-Za-z0-9/._-]+$ && "$OPS_HOME" != / ]] || die "$OPS_USER has no usable home directory in /etc/passwd"
+# ★ THE HOME IS ROOT'S TOO. sshd reads the key from inside it, so every entry
+# in it must be root's, or bo-ops could swap the .ssh it is read from.
+if [[ -n "$PUBKEY" && -d "$OPS_HOME" && -n "$(find "$OPS_HOME" -mindepth 1 ! -user root -print -quit)" ]]; then
+  die "$OPS_HOME holds files not owned by root (skeleton dotfiles?) - remove them; nothing was installed"
+fi
 
 # Nothing we write into may be writable by anyone but root.
 for dir in / /usr /usr/local /usr/local/sbin /usr/local/lib /etc /etc/sudoers.d; do
@@ -99,7 +104,7 @@ place "$HERE/trip-confirmed-audit.sql" "$LIB/trip-confirmed-audit.sql" 644
 place "$work/SOURCE" "$LIB/SOURCE" 644
 place "$HERE/bo-prod-ops" "$BIN" 755
 if [[ -n "$PUBKEY" ]]; then
-  install -d -o root -g root -m 755 "$OPS_HOME/.ssh"
+  install -d -o root -g root -m 755 "$OPS_HOME" "$OPS_HOME/.ssh"
   place "$work/authorized_keys" "$OPS_HOME/.ssh/authorized_keys" 644
 fi
 place "$work/sudoers" "$SUDOERS" 440
@@ -108,5 +113,5 @@ visudo -c >/dev/null || die "sudo's configuration no longer parses - fix $SUDOER
 printf '\n%s\n' "bo-prod-ops installed from $SOURCE_COMMIT"
 sha256sum "$BIN" "$LIB/trip-confirmed-audit.sql" "$SUDOERS"
 stat -c '%U:%G %a  %n' "$BIN" "$LIB" "$LIB/trip-confirmed-audit.sql" "$LIB/SOURCE" "$SUDOERS"
-[[ ! -e "$OPS_HOME/.ssh/authorized_keys" ]] || stat -c '%U:%G %a  %n' "$OPS_HOME/.ssh" "$OPS_HOME/.ssh/authorized_keys"
+[[ ! -e "$OPS_HOME/.ssh/authorized_keys" ]] || stat -c '%U:%G %a  %n' "$OPS_HOME" "$OPS_HOME/.ssh" "$OPS_HOME/.ssh/authorized_keys"
 sudo -l -U "$OPS_USER"

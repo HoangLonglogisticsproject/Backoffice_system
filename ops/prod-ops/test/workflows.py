@@ -73,6 +73,17 @@ first_ssh = next(i for i, s in enumerate(steps(apply)) if 'ssh -F' in s.get('run
 rule(any('normalize-request.sh' in s.get('run', '') for s in steps(apply)[:first_ssh]),
      'the request is re-validated in the production job before the first ssh')
 
+print('== ops-checks.yml - must work as a REQUIRED check on main')
+checks = load(WORKFLOWS / 'ops-checks.yml')
+triggers = checks['on']
+rule('pull_request' in triggers and not (triggers['pull_request'] or {}).get('paths'),
+     'runs on every pull request (a paths filter would leave a required check unreported)')
+rule(checks.get('permissions') == {'contents': 'read'}, 'permissions are exactly contents: read')
+rule('secrets.' not in (WORKFLOWS / 'ops-checks.yml').read_text(encoding='utf-8')
+     and all('environment' not in job for job in checks['jobs'].values()), 'no secret and no environment')
+rule(list(checks['jobs']) == ['ops'] and checks['jobs']['ops']['name'].startswith('ops · '),
+     'one job, named as branch protection requires it')
+
 print('== every other workflow')
 for path in sorted(WORKFLOWS.glob('*.yml')):
     if path.name in PROD:

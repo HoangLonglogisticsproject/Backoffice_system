@@ -1,26 +1,23 @@
 name: Ops checks
 
 # The production-ops wrapper, its audit SQL, its installer and the two manual
-# workflows - tested on every change to them.
+# workflows - tested whenever any of them, or the migrations the audit reads,
+# change.
 #
 # ★ NO ENVIRONMENT, NO SECRET, NO SSH. This never touches production: it
 # installs the real wrapper on the throwaway runner and drives it against
 # throwaway containers (a real postgres:17-alpine with this repository's
-# migrations, a stand-in backend) through real sudo.
+# migrations, a stand-in backend) through real sudo and a real sshd.
+#
+# ★ A REQUIRED CHECK ON `main`, SO IT RUNS ON EVERY PULL REQUEST. A `paths:`
+# filter would leave the check unreported on unrelated pull requests, and a
+# required check that never reports blocks the merge forever (see `detect` in
+# ci.yml). Instead the job always starts, decides from the diff, and finishes
+# green in seconds when nothing it guards was touched.
 on:
   pull_request:
-    paths:
-      - 'ops/**'
-      - 'backend/migrations/**'
-      - '.github/workflows/prod-trip-*.yml'
-      - '.github/workflows/ops-checks.yml'
   push:
     branches: [main]
-    paths:
-      - 'ops/**'
-      - 'backend/migrations/**'
-      - '.github/workflows/prod-trip-*.yml'
-      - '.github/workflows/ops-checks.yml'
 
 permissions:
   contents: read
@@ -33,29 +30,54 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      # sshd for the transport test (ssh -> forced command -> sudo), PyYAML for
-      # the workflow rules. Both from the runner's own distribution.
+      # Pushes to main always run the whole suite; a pull request runs it when
+      # its diff touches what this guards.
+      - name: Does this change touch the ops surface?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ] \
+             || git diff --name-only "$BASE...$HEAD_SHA" | grep -qE '^(ops/|backend/migrations/|\.github/workflows/(prod-trip-|ops-checks))'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing under ops/, backend/migrations/ or the ops workflows changed - nothing to test."
+          fi
+
+      # sshd for the transport tests, xauth so the unrestricted control key can
+      # prove X11 forwarding works on that sshd, PyYAML for the workflow rules.
       - name: Test dependencies
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends openssh-server python3-yaml
+        if: steps.scope.outputs.run == 'true'
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends openssh-server xauth python3-yaml
 
       # The runner image ships /etc/sudoers.d/runner with a mode `visudo -c`
       # rejects, and install.sh rightly refuses to add a rule to a sudo
       # configuration that does not validate. Normalise the runner's own file.
       - name: Normalise the runner's sudoers
+        if: steps.scope.outputs.run == 'true'
         run: sudo chmod 0440 /etc/sudoers.d/runner && sudo visudo -c
 
       - name: shellcheck
+        if: steps.scope.outputs.run == 'true'
         run: shellcheck ops/prod-ops/bo-prod-ops ops/prod-ops/install.sh ops/prod-ops/github/*.sh ops/prod-ops/test/*.sh
 
       - name: Workflow rules
+        if: steps.scope.outputs.run == 'true'
         run: python3 ops/prod-ops/test/workflows.py
 
       - name: Runner-side scripts
+        if: steps.scope.outputs.run == 'true'
         run: bash ops/prod-ops/test/github.test.sh
 
       # Root because it installs the wrapper, a sudoers rule and the bo-ops
       # account - on this disposable VM, exactly as the bootstrap would on the VPS.
-      - name: End to end (real docker, postgres, sudo)
+      - name: End to end (real docker, postgres, sudo, sshd)
+        if: steps.scope.outputs.run == 'true'
         run: sudo bash ops/prod-ops/test/e2e.sh

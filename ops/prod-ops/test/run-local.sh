@@ -8,7 +8,7 @@ export MSYS_NO_PATHCONV=1
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && { pwd -W 2>/dev/null || pwd; })"
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$repo:/repo:ro" docker:28-cli sh -c '
   apk add --no-cache -q bash sudo coreutils grep sed util-linux-misc shadow diffutils \
-    openssh-keygen openssh-client openssh-server >/dev/null &&
+    openssh-keygen openssh-client openssh-server xauth >/dev/null &&
   install -d -m 755 /usr/local/sbin &&
   ln -sf /usr/local/bin/docker /usr/bin/docker &&
   bash /repo/ops/prod-ops/test/github.test.sh &&
