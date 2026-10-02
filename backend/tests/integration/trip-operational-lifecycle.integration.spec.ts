@@ -175,6 +175,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       users,
       notifications,
       requests,
+      history,
     );
     money = new TripCostService(
       database,
@@ -4576,6 +4577,118 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(await startedOnList()).toEqual([false]);
       await board.updateStatus(trip, 'pending', operator);
       expect((await rowOf(trip)).status).toBe('pending');
+    });
+
+    /**
+     * ★ THE DRIVER OWNS EXECUTION. A booking opens `pending`; the first live
+     * milestone a driver reports puts it `executing`, in the same transaction,
+     * with its own history row; completion stays the request → approval →
+     * `closeTrip` it always was. Nothing here touches the board's status route.
+     */
+    describe('F. the driver starts execution — pending → executing on the first live milestone', () => {
+      const moves = async (trip: string) =>
+        (await sql(
+          `SELECT from_status, to_status, reason, changed_by FROM trip_status_history
+            WHERE trip_id = $1 ORDER BY changed_at ASC, id ASC`,
+          [trip],
+        )) as { from_status: string | null; to_status: string; reason: string | null; changed_by: string }[];
+      const tap = (assignmentId: string, clientEventId: string, recordedBy = driverA) =>
+        execution.recordEvent({ assignmentId, type: 'ARRIVED_PICKUP', clientEventId, recordedBy });
+      const started = { from_status: 'pending', to_status: 'executing', reason: 'execution_started' };
+
+      it('F1. ★ a pending trip goes executing on the first driver event — recorded as the driver’s move, still on Lịch xe', async () => {
+        const { trip, assignment } = await runningTrip();
+        expect((await rowOf(trip)).status).toBe('pending');
+
+        await tap(assignment, 'f1-tap');
+
+        expect((await rowOf(trip)).status).toBe('executing');
+        expect(await moves(trip)).toEqual([
+          { from_status: null, to_status: 'pending', reason: null, changed_by: operator },
+          { ...started, changed_by: driverA },
+        ]);
+        expect((await seenIn(trip)).lichXe).toBe(true);
+      });
+
+      it('F2. ★ repeated events keep it executing — a retry, a second arrival, another lorry’s first report: one move, ever', async () => {
+        const { trip, assignment } = await runningTrip();
+        const second = await assignTo(trip, driverB);
+
+        const first = await tap(assignment, 'f2-tap');
+        // The same tap again: the row it repeats, and nothing else.
+        expect((await tap(assignment, 'f2-tap')).id).toBe(first.id);
+        // A driver who leaves and comes back reports an arrival twice.
+        await tap(assignment, 'f2-again');
+        // The other lorry's FIRST report is not the trip's.
+        await tap(second.id, 'f2-other', driverB);
+
+        expect((await rowOf(trip)).status).toBe('executing');
+        expect((await moves(trip)).filter((move) => move.reason === 'execution_started')).toEqual([
+          { ...started, changed_by: driverA },
+        ]);
+      });
+
+      it('F3. ★ withdrawing a milestone moves nothing — and the integrity guard still reads the record, not the status', async () => {
+        const { trip, assignment } = await runningTrip();
+        const first = await tap(assignment, 'f3-tap');
+        const again = await tap(assignment, 'f3-again');
+
+        // One of two withdrawn: still on the road, the way back still refused.
+        await execution.voidEvent(trip, first.id, { by: operator, reason: 'Ghi nhầm.' });
+        expect((await rowOf(trip)).status).toBe('executing');
+        await expect(board.updateStatus(trip, 'pending', operator)).rejects.toThrow(/already reported/);
+
+        // Every one withdrawn: a void is a correction of the record, not a
+        // lifecycle move — the status stays where the driver put it.
+        await execution.voidEvent(trip, again.id, { by: operator, reason: 'Ghi nhầm.' });
+        expect((await rowOf(trip)).status).toBe('executing');
+
+        // Voiding writes no status and no history of its own.
+        expect(await moves(trip)).toHaveLength(2);
+      });
+
+      it('F4. ★ a completion request needs no status move from anybody; approval closes it into History', async () => {
+        const { trip, assignment } = await runningTrip();
+        await tap(assignment, 'f4-tap');
+        await completion.submit(assignment, driverA, 'none');
+
+        // Under review, still operational — nobody touched the status.
+        expect((await rowOf(trip)).status).toBe('executing');
+        expect(await seenIn(trip)).toMatchObject({ lichXe: true, history: false, reviewQueue: true });
+
+        await approve(trip);
+
+        expect(await rowOf(trip)).toMatchObject({ status: 'finished', closed_by: reviewer });
+        expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+        expect((await moves(trip)).map((move) => [move.from_status, move.to_status, move.reason])).toEqual([
+          [null, 'pending', null],
+          ['pending', 'executing', 'execution_started'],
+          ['executing', 'finished', 'All assignments approved.'],
+        ]);
+      });
+
+      it('F5. a driver who closes out with NO milestone (lost signal) leaves it pending until approval closes it', async () => {
+        // `submit` asks for no milestone, by design — and a request is not an
+        // execution event, so it starts nothing.
+        const { trip, assignment } = await runningTrip();
+        await completion.submit(assignment, driverA, 'none');
+        expect((await rowOf(trip)).status).toBe('pending');
+
+        await approve(trip);
+
+        expect((await rowOf(trip)).status).toBe('finished');
+        expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+      });
+
+      it('F6. the retired `confirmed` is not put on the road — it meant done, and is the normalization’s to settle', async () => {
+        const { trip, assignment } = await runningTrip();
+        await sql(`UPDATE trip_schedules SET status = 'confirmed' WHERE id = $1`, [trip]);
+
+        await tap(assignment, 'f6-tap');
+
+        expect((await rowOf(trip)).status).toBe('confirmed');
+        expect((await moves(trip)).some((move) => move.reason === 'execution_started')).toBe(false);
+      });
     });
 
     it('D/E. ★ legacy `confirmed`: the dry run writes nothing; apply closes the approved ids, truthfully, inventing nothing', async () => {

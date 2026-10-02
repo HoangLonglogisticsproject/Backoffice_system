@@ -618,7 +618,12 @@ describe('expense accountability, as a read model', () => {
 
 describe('execution events', () => {
   const build = (over: Record<string, unknown> = {}) => {
-    const trips = { lockActive: jest.fn().mockResolvedValue(openTrip()), exists: jest.fn() };
+    const trips = {
+      lockActive: jest.fn().mockResolvedValue(openTrip()),
+      exists: jest.fn(),
+      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'executing' })),
+    };
+    const history = { record: jest.fn().mockResolvedValue(undefined) };
     const assignments = {
       findActiveById: jest.fn().mockResolvedValue(activeAssignment),
       lockActiveById: jest.fn().mockResolvedValue(activeAssignment),
@@ -647,9 +652,10 @@ describe('execution events', () => {
       users as never,
       notifications as never,
       requests as never,
+      history as never,
     );
 
-    return { service, trips, assignments, events, vehicles, users, notifications, requests };
+    return { service, trips, assignments, events, vehicles, users, notifications, requests, history };
   };
 
   const arriving = {
@@ -723,6 +729,47 @@ describe('execution events', () => {
     await service.recordEvent(arriving);
 
     expect(events.listByAssignment).toHaveBeenCalledWith(ASSIGNMENT, false, TX);
+  });
+
+  it('★ the first live milestone on a PENDING trip puts it on the road — status and history, in the same transaction', async () => {
+    // The driver starts execution; nothing in the office does.
+    const { service, trips, history } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'pending' }));
+
+    await service.recordEvent(arriving);
+
+    expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'executing', TX);
+    expect(history.record).toHaveBeenCalledWith(
+      { tripId: TRIP, from: 'pending', to: 'executing', reason: 'execution_started', changedBy: DRIVER },
+      TX,
+    );
+  });
+
+  it.each(['executing', 'confirmed'])('moves nothing on a trip already %s', async (status) => {
+    // Already on the road; or the retired `confirmed`, which meant done.
+    const { service, trips, history } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status }));
+
+    await service.recordEvent(arriving);
+
+    expect(trips.updateStatus).not.toHaveBeenCalled();
+    expect(history.record).not.toHaveBeenCalled();
+  });
+
+  it('★ moves nothing for a retry, or for a report it refuses', async () => {
+    const { service, trips, events, history } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'pending' }));
+
+    // A retry is answered with the row it repeats — no new event, no move.
+    events.findByClientEventId.mockResolvedValueOnce({ id: 'event-1', type: 'ARRIVED_PICKUP', driverAssignmentId: ASSIGNMENT });
+    await service.recordEvent(arriving);
+    // A report out of order is refused before anything is written.
+    await expect(
+      service.recordEvent({ ...arriving, type: 'ARRIVED_DELIVERY', clientEventId: 'tap-9' }),
+    ).rejects.toThrow(ConflictError);
+
+    expect(trips.updateStatus).not.toHaveBeenCalled();
+    expect(history.record).not.toHaveBeenCalled();
   });
 
   it('answers a retry with the event it already wrote', async () => {
@@ -1058,6 +1105,7 @@ describe('dispatch assignment', () => {
       users as never,
       notifications as never,
       requests as never,
+      { record: jest.fn() } as never,
     );
     return { service, trips, assignments, events, vehicles, users, notifications, requests };
   };
@@ -1616,6 +1664,7 @@ describe('★ assignment eligibility and what the driver is told', () => {
       users as never,
       notifications as never,
       requests as never,
+      { record: jest.fn() } as never,
     );
     return { service, trips, assignments, users, notifications };
   };
@@ -1753,6 +1802,7 @@ describe('★ confirming a delivery is geofenced against the DELIVERY point', ()
       drivers() as never,
       told() as never,
       { listByAssignment: jest.fn().mockResolvedValue([]) } as never,
+      { record: jest.fn() } as never,
     );
     return { service, events };
   };

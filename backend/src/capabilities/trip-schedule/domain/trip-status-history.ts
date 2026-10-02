@@ -87,6 +87,13 @@ export const HISTORICAL_ENTRY_REASON = 'historical_entry';
 export const COMPLETION_APPROVED_REASON = 'All assignments approved.';
 
 /**
+ * ★ THE DRIVER PUT THE TRIP ON THE ROAD: `pending → executing`, written by the
+ * first live milestone a driver reports on any of the trip's turns — never by
+ * the office. `changed_by` is that driver. System-written, so a fixed token.
+ */
+export const EXECUTION_STARTED_REASON = 'execution_started';
+
+/**
  * ★ THE TEMPORARY MANUAL COMPLETION: a SuperAdmin choosing "Đã xác nhận" on the
  * board while the Driver flow is not yet the only way. The same closure as
  * approval (`closeTrip`); only this mark says which door it came through.

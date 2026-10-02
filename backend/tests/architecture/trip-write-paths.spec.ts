@@ -167,19 +167,32 @@ describe('trip_status_history — no bypass', () => {
   });
 
   it('is recorded by every service that moves a status, and only inside a transaction', async () => {
-    // Two files write the status; both must record. `record` takes its executor
-    // with NO DEFAULT, so a caller without a transaction in hand cannot call it
-    // at all — the type checker holds that half. Closing records through the
-    // canonical closure, in the same call that writes `finished`.
+    // Three files write the status; all must record. `record` takes its
+    // executor with NO DEFAULT, so a caller without a transaction in hand
+    // cannot call it at all — the type checker holds that half. Closing records
+    // through the canonical closure, in the same call that writes `finished`;
+    // the driver's first milestone records `pending → executing` beside the event.
     const schedule = code(await read('application', 'trip-schedule.service.ts'));
     const closure = code(await read('application', 'trip-closure.ts'));
+    const execution = code(await read('application', 'trip-execution.service.ts'));
 
     expect(schedule).toContain('this.history.record(');
     expect(closure).toContain('repositories.history.record(');
+    expect(execution).toContain('this.history.record(');
 
     const historyRepository = code(await read('persistence', 'trip-status-history.repository.ts'));
     expect(historyRepository).toContain('executor: DatabaseQuery,');
     expect(historyRepository).not.toMatch(/record\([\s\S]{0,300}executor: DatabaseQuery = this\.db/);
+  });
+
+  it('★ lets the driver path move a trip ONE way only: pending → executing', async () => {
+    // Execution is started by the driver's first milestone and by nothing in the
+    // office; this service must never send a trip back, close it, or write any
+    // other status.
+    const execution = code(await read('application', 'trip-execution.service.ts'));
+    const moves = execution.match(/this\.trips\.updateStatus\([^)]*\)/g) ?? [];
+
+    expect(moves).toEqual(["this.trips.updateStatus(trip.id, 'executing', tx)"]);
   });
 
   it('offers no way to change or remove a recorded transition', async () => {
