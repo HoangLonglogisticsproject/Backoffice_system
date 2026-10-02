@@ -1,6 +1,7 @@
 import type { UserSummary } from '../../../common/types/user-summary';
 import type { LocationEvidence } from './trip-location';
 import type { TripStatus, TripVehicleRef } from './trip-schedule';
+import { HISTORICAL_ENTRY_REASON } from './trip-status-history';
 
 /**
  * The operational half of a trip: who drove it, what happened, and how it ended.
@@ -277,6 +278,67 @@ export const accountabilityOf = (requests: readonly CompletionRequest[]): Expens
 
   return latest.expenseDeclaration === 'expenses' ? 'DECLARED_WITH_EXPENSE' : 'DECLARED_NO_EXPENSE';
 };
+
+// ---------------------------------------------- a driver's own money ----
+
+/**
+ * ★ WHICH RULE A DRIVER'S OWN MONEY ON A TURN FALLS UNDER — decided here, once,
+ * and read by the expense guard, by `TripCostService` under its trip lock, and
+ * by the driver read model's `expensesOpen`.
+ *
+ *   operational   an ACTIVE turn on a trip not yet finished: the run's own
+ *                 money, frozen later by its completion request
+ *   historical    a turn RECORDED after the run ("Nhập chuyến cũ"): ended with
+ *                 the entry's mark, on its finished trip — the one finished
+ *                 turn whose driver may still add what it cost, because the
+ *                 office backfills the run before anybody knows the figures
+ *   null          anything else — a turn replaced or removed, an active turn on
+ *                 a trip closed by approval or by hand, ANY turn on an archived
+ *                 trip: a record, and its money is not the driver's to move
+ *
+ * ★ MONEY ONLY. Nothing here reopens a lifecycle: reporting and completion
+ * keep `ActiveAssignmentGuard` and refuse a finished trip, so a recorded run
+ * takes no milestone and no request whatever this answers.
+ */
+export type DriverExpenseScope = 'operational' | 'historical';
+
+/** A turn written by "Nhập chuyến cũ" — ended, and marked as the entry's own. */
+export const isRecordedTurn = (turn: Pick<DriverAssignment, 'state' | 'endReason'>): boolean =>
+  turn.state === 'ended' && turn.endReason === HISTORICAL_ENTRY_REASON;
+
+/**
+ * May this turn carry its driver's money at all, before its trip's state is
+ * asked? What the expense GUARD checks — the trip's lifecycle is the service's
+ * to judge under its lock, which is also what lets a phone's retry of a figure
+ * it declared moments before approval still be answered with that figure.
+ */
+export const carriesDriverMoney = (turn: Pick<DriverAssignment, 'state' | 'endReason'>): boolean =>
+  turn.state === 'active' || isRecordedTurn(turn);
+
+export const driverExpenseScope = (
+  turn: Pick<DriverAssignment, 'state' | 'endReason'>,
+  trip: { status: TripStatus; archived: boolean },
+): DriverExpenseScope | null => {
+  if (trip.archived || !carriesDriverMoney(turn)) return null;
+  if (turn.state === 'active') return trip.status === 'finished' ? null : 'operational';
+  return trip.status === 'finished' ? 'historical' : null;
+};
+
+/**
+ * ★ `expensesOpen` — may the driver declare or correct a figure on this turn
+ * NOW? The scope, a lorry to attribute the money to, and no completion
+ * request holding it (`pending` freezes it, `approved` makes it final). The
+ * same conditions `declareCost` refuses on; the handset reads the answer and
+ * decides nothing itself.
+ */
+export const driverExpensesOpen = (
+  scope: DriverExpenseScope | null,
+  hasVehicle: boolean,
+  requests: readonly Pick<CompletionRequest, 'state'>[],
+): boolean =>
+  scope !== null &&
+  hasVehicle &&
+  !requests.some((request) => request.state === 'pending' || request.state === 'approved');
 
 /** A driver asking for a trip to be closed. One row per attempt. */
 export interface CompletionRequest {

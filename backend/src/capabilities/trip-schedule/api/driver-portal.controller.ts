@@ -26,6 +26,7 @@ import {
 } from '../domain/trip-execution';
 import { isRecordableAmount, TRIP_COST_CATEGORIES } from '../domain/trip-cost';
 import { ActiveAssignmentGuard } from './active-assignment.guard';
+import { ExpenseAssignmentGuard } from './expense-assignment.guard';
 import { ReadableAssignmentGuard } from './readable-assignment.guard';
 
 /**
@@ -248,8 +249,9 @@ export class DriverPortalController {
    *
    * ★ `ReadableAssignmentGuard`, NOT `ActiveAssignmentGuard`: the only route
    * here that READS one turn. It opens every card either list shows — live
-   * work, and a turn on a finished trip (`closed: true`, drawn read-only). The
-   * four routes below act, and keep the active-only guard.
+   * work, and a turn on a finished trip (`closed: true`). The routes below
+   * act: reporting and completion keep the active-only guard, the two money
+   * routes `ExpenseAssignmentGuard` (`expensesOpen` says which apply).
    */
   @Get('assignments/:assignmentId')
   @UseGuards(AuthGuard, DriverOnlyGuard, ReadableAssignmentGuard)
@@ -291,8 +293,17 @@ export class DriverPortalController {
 
   // --------------------------------------------------------------- expense ----
 
+  /**
+   * Declares a figure on one assignment.
+   *
+   * ★ `ExpenseAssignmentGuard`, NOT THE ACTIVE-ONLY ONE: the two money routes
+   * also admit a turn recorded after the run, whose driver backfills what it
+   * cost. Which of a driver's turns may take money, and when, is
+   * `driverExpenseScope` — the guard, the service and the read model's
+   * `expensesOpen` all ask it. Reporting and completion stay active-only.
+   */
   @Post('assignments/:assignmentId/expenses')
-  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ExpenseAssignmentGuard)
   async declareExpense(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @Body(new ZodValidationPipe(declareExpenseSchema)) body: DeclareExpenseBody,
@@ -310,7 +321,7 @@ export class DriverPortalController {
    * here by the service.
    */
   @Patch('assignments/:assignmentId/expenses/:costId')
-  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ExpenseAssignmentGuard)
   async editExpense(
     @Param('assignmentId', UuidParam) assignmentId: string,
     @Param('costId', UuidParam) costId: string,

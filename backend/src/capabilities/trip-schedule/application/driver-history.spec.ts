@@ -94,7 +94,9 @@ describe('which trips a driver’s history contains', () => {
     // naming its own. Two lists would drift, and the one nobody is looking at
     // is where a commercial column would appear.
     expect(await historyQuery()).toContain('${DRIVER_TRIP_COLUMNS}');
-    expect(sql).not.toContain('a.end_reason');
+    // `end_reason` is Operations' free text: it may be COMPARED (whether a turn
+    // was recorded after the run), never SELECTED as a value.
+    expect(sql).not.toMatch(/a\.end_reason(?!\s*=)/);
     expect(sql).not.toContain('t.status,');
   });
 
