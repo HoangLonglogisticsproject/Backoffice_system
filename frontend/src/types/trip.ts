@@ -67,20 +67,14 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, TranslationKey> = {
  *     liệu cũ)" — what they meant, marked as old), but nothing offers it and
  *     the server refuses it
  *   · `finished` is not a board move but a completion — `completeTrip`, offered
- *     only to whoever may complete trips (`BOARD_STATUS_OPTIONS`)
+ *     only to whoever may complete trips (Lịch xe's "Đánh dấu Đã xác nhận")
  *
- * ⚠ THE TWO STAY UNORDERED: the server allows either move, which is what lets
- * a dispatcher send a trip back after a mis-click.
+ * ⚠ THE TWO STAY UNORDERED — with one server rule: a trip goes back to
+ * `pending` only while no driver has reported on it or asked to close it (409
+ * after). On Lịch xe the two moves are named actions ("Bắt đầu thực hiện" /
+ * "Đưa về Chờ xử lý"); this list is the trip form's.
  */
 export const DISPATCH_SELECTABLE_STATUSES: readonly TripStatus[] = ['pending', 'executing'];
-
-/**
- * The board dropdown's options: the two moves, and — for a SuperAdmin
- * (`trip.complete.review`) — "Đã xác nhận", which completes the trip and sends
- * it to Lịch sử chuyến. TEMPORARY, while the Driver flow is not the only way.
- */
-export const boardStatusOptions = (mayComplete: boolean): readonly TripStatus[] =>
-  mayComplete ? [...DISPATCH_SELECTABLE_STATUSES, 'finished'] : DISPATCH_SELECTABLE_STATUSES;
 
 /**
  * ★ WHO IS DRIVING, AS A FILTER — `?assignment=` on `GET /trip-schedules`.

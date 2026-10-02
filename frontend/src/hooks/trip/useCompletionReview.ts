@@ -30,7 +30,7 @@ import { tripKeys } from './keys';
  *
  * So both mutations do exactly one thing on success: invalidate and refetch.
  */
-const reviewKeys = {
+export const reviewKeys = {
   board: (range: { from: string; to: string }) =>
     [...tripKeys.all, 'operational-board', range] as const,
   /** Outstanding reviews. No range in the key, because there is none in the query. */

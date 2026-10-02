@@ -1386,7 +1386,33 @@ const PHRASES = {
   tripConfirmed: { vi: 'Đã xác nhận (dữ liệu cũ)', en: 'Confirmed (legacy data)' },
   tripExecuting: { vi: 'Đang thực hiện', en: 'Executing' },
   tripFinished: { vi: 'Đã xác nhận', en: 'Confirmed — done' },
-  changeStatus: { vi: 'Đổi trạng thái', en: 'Change status' },
+  // ★ LỊCH XE'S DOMAIN ACTIONS — verbs, never "đổi trạng thái". Two of them
+  // are the board move named (`pending` ↔ `executing`); completion is its own
+  // write, and the label says what it does in the business's words.
+  bookingAssign: { vi: 'Phân công xe & tài xế', en: 'Assign vehicle & driver' },
+  bookingReassign: { vi: 'Đổi phân công', en: 'Change assignment' },
+  bookingStart: { vi: 'Bắt đầu thực hiện', en: 'Start trip' },
+  bookingReturnToPending: { vi: 'Đưa về Chờ xử lý', en: 'Back to pending' },
+  bookingComplete: { vi: 'Đánh dấu Đã xác nhận', en: 'Mark as confirmed — done' },
+  completeTripBody: {
+    vi: 'Chuyến sẽ được đóng và chuyển sang Lịch sử chuyến. Thao tác này không thể hoàn tác.',
+    en: 'The trip will be closed and moved to Trip history. This cannot be undone.',
+  },
+  // ★ READINGS OF THE LIST ROW, NOT STATUSES. "Quá giờ dự kiến" is the booked
+  // hour against the clock — deliberately not the operational board's
+  // PICKUP_DELAYED, which judges a driver's arrival.
+  bookingDueSoon: { vi: 'Sắp đến giờ', en: 'Due soon' },
+  bookingPastPlanned: { vi: 'Quá giờ dự kiến', en: 'Past planned time' },
+  bookingDriverStarted: { vi: 'Tài xế đã bắt đầu', en: 'Driver has started' },
+  bookingListLabel: { vi: 'Danh sách chuyến', en: 'Trips' },
+  bookingDetailTitle: { vi: 'Chi tiết chuyến', en: 'Trip details' },
+  bookingSelectHint: { vi: 'Chọn một chuyến để xem chi tiết.', en: 'Select a trip to see its details.' },
+  bookingSectionRoute: { vi: 'Lộ trình', en: 'Route' },
+  bookingSectionCustomer: { vi: 'Khách hàng & hàng hoá', en: 'Customer & cargo' },
+  bookingSectionCrew: { vi: 'Xe & tài xế', en: 'Vehicles & drivers' },
+  bookingSectionPricing: { vi: 'Giá cước & chi phí', en: 'Prices & costs' },
+  bookingSectionMeta: { vi: 'Thông tin bản ghi', en: 'Record' },
+  colUpdatedAt: { vi: 'Cập nhật lần cuối', en: 'Last updated' },
   statusChangeFailed: {
     vi: 'Không đổi được trạng thái.',
     en: 'Could not change the status.',

@@ -51,7 +51,6 @@ export const unassignedCountRequest = ({
  * ★ THE ONE ROW IS DROPPED BEFORE ANYTHING IS STORED. For a `cost.read` caller
  * it carries a cost figure, and the badge's key is not one the cost purge in
  * `useTripCost` looks at. It stays an `OffsetPage` rather than becoming a bare
- * number because the optimistic status move (`useTripMutations`) patches every
- * entry under `tripKeys.schedules()` as a page.
+ * number so every entry under `tripKeys.schedules()` keeps one shape.
  */
 export const withoutRows = <T>(page: OffsetPage<T>): OffsetPage<T> => ({ ...page, items: [] });
