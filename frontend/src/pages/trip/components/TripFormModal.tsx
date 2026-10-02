@@ -13,13 +13,13 @@ import {
   updateTripSchedule,
   type UpdateTripInput,
 } from '@/api/tripSchedule';
+import { cn } from '@/utils/cn';
 import { isApiError } from '@/utils/errors';
 import { formatPlate } from '@/utils/format';
 import { timelineErrors } from '@/utils/tripTimeline';
 import { useTripLocations } from '@/hooks/trip';
 import { useEligibleDrivers } from '@/hooks/trip/useTripAssignment';
 import {
-  DISPATCH_SELECTABLE_STATUSES,
   type TripCustomer,
   type TripEntryMode,
   type TripLocation,
@@ -352,6 +352,10 @@ const endFields = (
  * from such a caller rather than ignoring it, so `'' → null` would turn every
  * save they make into a 403. For a viewer who holds it, `''` clears the
  * figure, because a price typed by mistake has to be removable.
+ *
+ * ★ AND NO STATUS. The form is not where a trip moves: a booking opens at the
+ * server's `pending`, and Lịch xe moves it with named actions on their own
+ * route. An absent key leaves the stored status exactly as it is.
  */
 const tripPayload = (
   form: FormState,
@@ -366,7 +370,6 @@ const tripPayload = (
   ...timesPayload(form, trip),
   ...(mayPrice ? { sellPrice: blank(form.sellPrice), purchasePrice: blank(form.purchasePrice) } : {}),
   note: blank(form.note),
-  status: form.status,
 });
 
 /** An existing row is patched; a new one is booked — the create intent said out loud. */
@@ -695,7 +698,13 @@ export function TripFormModal({
         });
         tripId = trip.id;
       } else {
-        tripId = await persistTrip(trip, createdTripId, tripPayload(form, trip, mayEditPrices, refreshed));
+        tripId = await persistTrip(trip, createdTripId, {
+          ...tripPayload(form, trip, mayEditPrices, refreshed),
+          // ★ LỊCH SỬ CHUYẾN'S CORRECTION IS LEFT EXACTLY AS IT WAS: it shows
+          // its frozen `finished` and re-sends it, which the server takes as
+          // no move. Lịch xe sends none — see `tripPayload`.
+          ...(mode === 'historical' ? { status: form.status } : {}),
+        });
         // A NEW trip's id is remembered so a retry corrects it rather than
         // booking it again; on a retry this stores the same id it already holds.
         if (trip === null) setCreatedTripId(tripId);
@@ -725,14 +734,11 @@ export function TripFormModal({
   const formId = 'trip-form';
 
   /**
-   * ★ `finished` IS TERMINAL, AND IT IS ALSO UNREACHABLE FROM HERE (BD-01).
-   *
-   * Two rules, not one. A finished trip's status is frozen because the server
-   * refuses every move away from it. And `finished` is absent from the options
-   * on EVERY trip — new or existing — because a trip is finished by approving
-   * its completion request, never by editing a field: `requireNotCompletionOnly`
-   * refuses it on create and on update alike, and 0025's trigger makes the
-   * state permanent once it is reached.
+   * ★ THE FORM EDITS NO STATUS, ON ANY TRIP. A booking opens at the server's
+   * `pending` and moves by Lịch xe's named actions; `finished` is reached by
+   * completion alone (BD-01) and is terminal. So the only status this form
+   * ever shows is a FROZEN `finished` — on a finished trip, or one recorded
+   * after it ran — and on a booking it shows none.
    *
    * Every other field of a finished trip stays editable. Whether a closed trip
    * should be read-only in full is a separate decision nobody has taken, and
@@ -775,37 +781,26 @@ export function TripFormModal({
         {priceOnly && <p className="text-xs text-gray-500">{t('priceOnlyEdit')}</p>}
         {!editing && mode === 'historical' && <p className="text-xs text-gray-500">{t('importTripHint')}</p>}
         <fieldset disabled={priceOnly} className="min-w-0 space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <label htmlFor="trip-status" className="text-sm font-medium text-gray-700">
-              {t('fieldStatus')}
-            </label>
-            <select
-              id="trip-status"
-              value={statusLocked ? 'finished' : form.status}
-              onChange={(event) => set('status', event.target.value as TripStatus)}
-              disabled={statusLocked}
-              className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {/* The current value must still render, or a frozen `finished`
-                  field would show the first option instead of the truth. */}
-              {statusLocked && (
+        <div className={cn('grid gap-4', statusLocked && 'sm:grid-cols-2')}>
+          {/* ★ A FROZEN DISPLAY, NEVER AN EDITOR — and only where it is frozen:
+              a trip recorded after it ran, or a finished one corrected from
+              Lịch sử chuyến. A booking on Lịch xe shows no status field at all;
+              it moves by named actions, and its status is on the panel. */}
+          {statusLocked && (
+            <div className="space-y-2">
+              <label htmlFor="trip-status" className="text-sm font-medium text-gray-700">
+                {t('fieldStatus')}
+              </label>
+              <select
+                id="trip-status"
+                value="finished"
+                disabled
+                className="h-9 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              >
                 <option value="finished">{t(TRIP_STATUS_STYLES.finished.label)}</option>
-              )}
-              {/* A retired `confirmed` row: shown as it is, never offered — the
-                  form re-sends it unchanged, which the server accepts as no move. */}
-              {!statusLocked && !DISPATCH_SELECTABLE_STATUSES.includes(form.status) && (
-                <option value={form.status} disabled>
-                  {t(TRIP_STATUS_STYLES[form.status].label)}
-                </option>
-              )}
-              {DISPATCH_SELECTABLE_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {t(TRIP_STATUS_STYLES[status].label)}
-                </option>
-              ))}
-            </select>
-          </div>
+              </select>
+            </div>
+          )}
 
           {/* ★ STILL NO LORRY FIELD ON THE TRIP (ADR-0004) — the crew is typed
               in "Phương tiện điều độ" below, one row per PAIR. */}

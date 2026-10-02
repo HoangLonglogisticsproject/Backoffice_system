@@ -2151,6 +2151,68 @@ describe('TripSchedulePage', () => {
     });
   });
 
+  /**
+   * ★ THE FORM EDITS NO STATUS ON LỊCH XE. A booking opens at the server's
+   * `pending`; a correction leaves the stored status exactly where it is; the
+   * only way a trip moves is a named action on the panel. So there is no field
+   * to show and no key to send — on create and on edit alike.
+   */
+  describe('★ the operational form carries no status', () => {
+    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
+    const save = () => fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+
+    it('★ create: no status field, and the body names none — the server opens it at pending', async () => {
+      useSession.mockReturnValue(session(write));
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+      await screen.findByLabelText('Ngày lấy hàng *');
+
+      expect(screen.queryByLabelText('Trạng thái')).toBeNull();
+      expect(screen.getByRole('dialog', { name: 'Tạo chuyến mới' }).querySelector('select#trip-status')).toBeNull();
+
+      fillTimes();
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      expect(body).toMatchObject({ entryMode: 'operational' });
+      expect(body).not.toHaveProperty('status');
+    });
+
+    it.each(['pending', 'executing', 'confirmed'])(
+      '★ edit (%s): no status field, and the patch leaves the status alone',
+      async (status) => {
+        useSession.mockReturnValue(session(write));
+        fetchTripSchedules.mockResolvedValue({ items: [trip({ status })], page: 1, limit: 20, total: 1, totalPages: 1 });
+        renderPage();
+        await editBooking();
+        await screen.findByLabelText('Khách hàng');
+
+        expect(screen.queryByLabelText('Trạng thái')).toBeNull();
+        save();
+
+        await waitFor(() => expect(updateTripSchedule).toHaveBeenCalledTimes(1));
+        const [id, patch] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+        expect(id).toBe('t1');
+        expect(patch).not.toHaveProperty('status');
+        expect(updateTripStatus).not.toHaveBeenCalled();
+      },
+    );
+
+    it('★ leaves Lịch xe with no status editor anywhere — list, panel or form', async () => {
+      useSession.mockReturnValue(session([...write, 'dispatch.write', 'trip.complete.review', 'trip.price.write']));
+      renderPage();
+      await editBooking();
+      await screen.findByLabelText('Khách hàng');
+
+      const editors = [...document.querySelectorAll('select')].filter((select) =>
+        [...select.options].some((option) => ['pending', 'executing', 'finished', 'confirmed'].includes(option.value)),
+      );
+      expect(editors).toHaveLength(0);
+    });
+  });
+
   describe('★ the form’s timeline — Lịch xe books work still to run', () => {
     const openCreate = async () => {
       renderPage();
