@@ -4483,6 +4483,101 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect((await rowOf(trip)).status).toBe('pending');
     });
 
+    it('C2. ★ once a driver has reported, the trip cannot go back to pending — on either route; a voided report does not count', async () => {
+      const { trip, assignment } = await runningTrip();
+      await board.updateStatus(trip, 'executing', operator);
+      const tap = await execution.recordEvent({
+        assignmentId: assignment,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'rollback-guard',
+        recordedBy: driverA,
+      });
+
+      await expect(board.updateStatus(trip, 'pending', operator)).rejects.toThrow(ConflictError);
+      await expect(board.update(trip, { status: 'pending' }, operator)).rejects.toThrow(ConflictError);
+      expect((await rowOf(trip)).status).toBe('executing');
+
+      await execution.voidEvent(trip, tap.id, { by: operator, reason: 'Ghi nhầm.' });
+      await board.updateStatus(trip, 'pending', operator);
+      expect((await rowOf(trip)).status).toBe('pending');
+    });
+
+    it('C3. ★ a completion request with NO milestone behind it still holds the trip — and a rejected one does not', async () => {
+      // `submit` asks for no milestone, so this is a state the driver can reach.
+      const { trip, assignment } = await runningTrip();
+      await board.updateStatus(trip, 'executing', operator);
+      await completion.submit(assignment, driverA, 'none');
+      expect(await execution.listEvents(trip)).toHaveLength(0);
+
+      await expect(board.updateStatus(trip, 'pending', operator)).rejects.toThrow(/asked for this trip to be closed/);
+      await expect(board.update(trip, { status: 'pending' }, operator)).rejects.toThrow(ConflictError);
+      expect((await rowOf(trip)).status).toBe('executing');
+
+      // Sent back for correction, the request no longer says the run is closing.
+      await reject(trip, 'Thiếu chứng từ.');
+      await board.updateStatus(trip, 'pending', operator);
+      expect((await rowOf(trip)).status).toBe('pending');
+    });
+
+    it('C4. ★ a request submitted and then stripped of every milestone still holds; so does an approved turn', async () => {
+      const { trip, assignment } = await runningTrip();
+      const second = await assignTo(trip, driverB);
+      await board.updateStatus(trip, 'executing', operator);
+      const tap = await execution.recordEvent({
+        assignmentId: assignment,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'c4-tap',
+        recordedBy: driverA,
+      });
+      await completion.submit(assignment, driverA, 'none');
+      // Withdrawing a milestone looks at no request: the trip now has a
+      // standing request and no live event at all.
+      await execution.voidEvent(trip, tap.id, { by: operator, reason: 'Ghi nhầm.' });
+      expect(await execution.listEvents(trip)).toHaveLength(0);
+      await expect(board.updateStatus(trip, 'pending', operator)).rejects.toThrow(/asked for this trip to be closed/);
+
+      // Approved, the first turn is final — the second lorry keeps the trip open.
+      await approve(trip);
+      expect((await rowOf(trip)).status).toBe('executing');
+      expect(second.state).toBe('active');
+      await expect(board.updateStatus(trip, 'pending', operator)).rejects.toThrow(/asked for this trip to be closed/);
+    });
+
+    it('C5. ★ the board row\'s `started` is exactly the live-milestone half of the rule — it clears when the last one is withdrawn', async () => {
+      // What Lịch xe reads to decide whether to OFFER "Đưa về Chờ xử lý".
+      const { trip, assignment } = await runningTrip();
+      await board.updateStatus(trip, 'executing', operator);
+      const startedOnList = async () => {
+        const { day } = await rowOf(trip);
+        const page = await board.list({
+          from: day,
+          to: day,
+          page: 1,
+          limit: 200,
+          assignment: 'all',
+          lifecycle: 'operational',
+          sort: 'executionDate',
+          direction: 'desc',
+        });
+        return page.items.find((row) => row.id === trip)!.assignments.map((turn) => turn.started);
+      };
+
+      expect(await startedOnList()).toEqual([false]);
+      const tap = await execution.recordEvent({
+        assignmentId: assignment,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'c5-tap',
+        recordedBy: driverA,
+      });
+      expect(await startedOnList()).toEqual([true]);
+      await expect(board.updateStatus(trip, 'pending', operator)).rejects.toThrow(/already reported/);
+
+      await execution.voidEvent(trip, tap.id, { by: operator, reason: 'Ghi nhầm.' });
+      expect(await startedOnList()).toEqual([false]);
+      await board.updateStatus(trip, 'pending', operator);
+      expect((await rowOf(trip)).status).toBe('pending');
+    });
+
     it('D/E. ★ legacy `confirmed`: the dry run writes nothing; apply closes the approved ids, truthfully, inventing nothing', async () => {
       const crewed = await runningTrip();
       const line = await declare(crewed.assignment); // an `editable` driver figure

@@ -405,7 +405,7 @@ export class TripScheduleService {
       // asserting it away.
       const nextStatus = merged.status ?? current.status;
       if (nextStatus !== current.status) {
-        this.requireDispatchTransition(current.status, nextStatus);
+        await this.requireDispatchTransition(current, nextStatus, tx);
       }
 
       const updated = await this.trips.replace(id, values, tx);
@@ -451,7 +451,7 @@ export class TripScheduleService {
       // the `trip_status_history_actually_changed` CHECK would refuse anyway.
       if (current.status === status) return current;
 
-      this.requireDispatchTransition(current.status, status);
+      await this.requireDispatchTransition(current, status, tx);
 
       const updated = await this.trips.updateStatus(id, status, tx);
       if (!updated) throw new Error('Locked trip disappeared during status change.');
@@ -471,12 +471,13 @@ export class TripScheduleService {
   /**
    * Refuses a move the DISPATCH BOARD is not allowed to make.
    *
-   * Three rules:
+   * Four rules:
    *
    *   · nothing leaves `finished` — 0025's trigger says the same thing, but that
    *     one surfaces as a 500, so it is said here where it can be a 409
    *   · ★ nothing ENTERS `finished` through a plain move either
    *   · nothing moves to the retired `confirmed` (`isRetiredStatus`)
+   *   · ★ nothing goes BACK to `pending` once a driver has reported
    *
    * The second is the important one. Closing a trip writes the status, who
    * closed it and the history together — `closeTrip`, reached by approval and
@@ -484,11 +485,40 @@ export class TripScheduleService {
    * which the status route calls for `finished`). A plain move that could also
    * write `finished` would be a way to close a trip that skipped the stamp and
    * the lock, and 0017 would then make the result permanent.
+   *
+   * ★ THE FOURTH KEEPS THE STATUS FROM CONTRADICTING THE RECORD. `pending` says
+   * nothing has happened on the road; two things say otherwise, and neither
+   * implies the other:
+   *
+   *   · a live milestone — a voided one does not count, so a trip whose only
+   *     report was withdrawn may go back again
+   *   · a completion request still standing (`pending` or `approved`) — one
+   *     can be submitted with no milestone at all, and survives every
+   *     milestone being withdrawn after it; a REJECTED one does not count
+   *
+   * Before either, sending a trip back stays a mis-click's way out. Both are
+   * read under the caller's lock on the trip row, which a milestone and a
+   * completion request both take before they write.
    */
-  private requireDispatchTransition(from: TripStatus, to: TripStatus): void {
+  private async requireDispatchTransition(
+    current: TripSchedule,
+    to: TripStatus,
+    tx: DatabaseQuery,
+  ): Promise<void> {
     this.requireNotCompletionOnly(to);
-    if (!canTransition(from, to)) throw new ConflictError('A completed trip cannot be reopened.');
+    if (!canTransition(current.status, to)) throw new ConflictError('A completed trip cannot be reopened.');
     if (isRetiredStatus(to)) throw retiredStatus();
+    if (to !== 'pending') return;
+    if (await this.trips.hasLiveExecution(current.id, tx)) {
+      throw new ConflictError(
+        'A driver has already reported on this trip, so it cannot go back to pending.',
+      );
+    }
+    if (await this.trips.hasOpenCompletion(current.id, tx)) {
+      throw new ConflictError(
+        'A driver has asked for this trip to be closed, so it cannot go back to pending.',
+      );
+    }
   }
 
   private requireNotCompletionOnly(status: TripStatus): void {

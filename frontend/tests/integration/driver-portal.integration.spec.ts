@@ -539,4 +539,107 @@ describe('driver portal (D1) against the real API', () => {
       expect(keysOf(item)).toEqual(sorted(DRIVER_TRIP_KEYS));
     });
   });
+
+  /**
+   * ★ LỊCH XE'S LIFECYCLE WRITES, WITH THE BODIES THE BACKOFFICE SENDS.
+   *
+   * The operational form names no status; "Bắt đầu thực hiện" and "Đưa về Chờ
+   * xử lý" are `PATCH …/status`; the way back is the server's to refuse — after
+   * a driver's report, or while a completion request stands with none behind
+   * it. Each case books a trip of its own, so none depends on another's state.
+   */
+  describe('Lịch xe lifecycle writes against the real API', () => {
+    const booking = async (): Promise<string> => {
+      const created = await boss.post('/trip-schedules', {
+        scheduledOn: today,
+        pickupAddress: `Lifecycle pickup ${unique}`,
+        deliveryAddress: `Lifecycle delivery ${unique}`,
+        sellPrice: SELL_PRICE,
+        entryMode: 'operational',
+      });
+      expect(created.status).toBe(201);
+      return created.data.id as string;
+    };
+    const crew = async (trip: string, driverUserId: string): Promise<string> => {
+      lorries += 1;
+      const vehicle = await boss.post('/trip-vehicles', { plate: `LC-${unique}-${lorries}` });
+      expect(vehicle.status).toBe(201);
+      const assigned = await boss.post(`/trip-schedules/${trip}/driver-assignments`, {
+        vehicleId: vehicle.data.id,
+        driverUserId,
+      });
+      expect(assigned.status).toBe(201);
+      return assigned.data.id as string;
+    };
+    const move = (trip: string, status: 'pending' | 'executing') =>
+      boss.patch(`/trip-schedules/${trip}/status`, { status });
+    /** The trip as Lịch xe's list returns it — the row the panel reads. */
+    const listed = async (trip: string) => {
+      const page = await boss.get('/trip-schedules', {
+        params: { from: today, to: today, lifecycle: 'operational', page: 1, limit: 200 },
+      });
+      expect(page.status).toBe(200);
+      return page.data.items.find((row: { id: string }) => row.id === trip);
+    };
+
+    it('★ a booking created with no status opens at pending; a correction with none leaves the status alone', async () => {
+      const trip = await booking();
+      expect((await boss.get(`/trip-schedules/${trip}`)).data.status).toBe('pending');
+
+      expect((await move(trip, 'executing')).status).toBe(200);
+      const corrected = await boss.patch(`/trip-schedules/${trip}`, { note: `Đổi giờ ${unique}` });
+      expect(corrected.status).toBe(200);
+      expect(corrected.data.status).toBe('executing');
+    });
+
+    it('★ "Đưa về Chờ xử lý" is allowed while nothing has been reported — a mis-click\'s way out', async () => {
+      const trip = await booking();
+      await crew(trip, driverAId);
+      expect((await move(trip, 'executing')).status).toBe(200);
+
+      const back = await move(trip, 'pending');
+      expect(back.status).toBe(200);
+      expect(back.data.status).toBe('pending');
+    });
+
+    it('★ refused once a driver has reported — and the list row says `started`, which is what hides the button', async () => {
+      const trip = await booking();
+      const turn = await crew(trip, driverAId);
+      expect((await move(trip, 'executing')).status).toBe(200);
+      expect((await listed(trip)).assignments[0].started).toBe(false);
+
+      const reported = await driverA.post(`/driver/assignments/${turn}/execution-events`, {
+        type: 'ARRIVED_PICKUP',
+        deviceReportedAt: new Date().toISOString(),
+        clientEventId: `${turn}:ARRIVED_PICKUP`,
+      });
+      expect(reported.status).toBe(201);
+      expect((await listed(trip)).assignments[0].started).toBe(true);
+
+      const back = await move(trip, 'pending');
+      expect(back.status).toBe(409);
+      expect(toApiError(back.status, back.data).message).toMatch(/already reported/);
+      expect((await boss.get(`/trip-schedules/${trip}`)).data.status).toBe('executing');
+    });
+
+    it('★ refused while a completion request stands with NO milestone behind it — the row cannot show that, the server can', async () => {
+      const trip = await booking();
+      const turn = await crew(trip, driverAId);
+      expect((await move(trip, 'executing')).status).toBe(200);
+
+      const asked = await driverA.post(`/driver/assignments/${turn}/completion-requests`, {
+        expenseDeclaration: 'none',
+      });
+      expect(asked.status).toBe(201);
+      // Nothing reported: the list row's `started` stays false…
+      expect((await listed(trip)).assignments[0].started).toBe(false);
+
+      // …and the server still refuses, in its own words.
+      const back = await move(trip, 'pending');
+      expect(back.status).toBe(409);
+      expect(toApiError(back.status, back.data).message).toMatch(/asked for this trip to be closed/);
+      const patched = await boss.patch(`/trip-schedules/${trip}`, { status: 'pending' });
+      expect(patched.status).toBe(409);
+    });
+  });
 });

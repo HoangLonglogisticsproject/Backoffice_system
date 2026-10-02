@@ -404,6 +404,9 @@ describe('the one write path to DONE', () => {
       updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'finished' })),
       markClosed: jest.fn(),
       exists: jest.fn().mockResolvedValue(true),
+      // No driver has reported on, or asked to close, these trips unless a case says so.
+      hasLiveExecution: jest.fn().mockResolvedValue(false),
+      hasOpenCompletion: jest.fn().mockResolvedValue(false),
     };
     const history = { record: jest.fn().mockResolvedValue(undefined) };
     const customers = { findById: jest.fn().mockResolvedValue({ id: 'customer-1', status: 'active' }) };
@@ -478,6 +481,46 @@ describe('the one write path to DONE', () => {
       }),
       TX,
     );
+  });
+
+  it('★ refuses to send a trip back to pending once a driver has reported, asking under the lock', async () => {
+    // `pending` says nothing has happened on the road; a live milestone says
+    // otherwise. Before the first report the move stays a mis-click's way out.
+    const { service, trips } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'executing' }));
+    trips.hasLiveExecution.mockResolvedValue(true);
+
+    await expect(service.updateStatus(TRIP, 'pending', BOSS)).rejects.toThrow(ConflictError);
+    await expect(service.update(TRIP, { status: 'pending' }, BOSS)).rejects.toThrow(ConflictError);
+    expect(trips.hasLiveExecution).toHaveBeenCalledWith(TRIP, TX);
+    expect(trips.updateStatus).not.toHaveBeenCalled();
+    expect(trips.replace).not.toHaveBeenCalled();
+  });
+
+  it('★ refuses it too while a completion request stands — with no live milestone behind it', async () => {
+    // A request needs no milestone, and outlives every milestone being
+    // withdrawn: the event check alone would let this trip go back.
+    const { service, trips } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'executing' }));
+    trips.hasOpenCompletion.mockResolvedValue(true);
+
+    await expect(service.updateStatus(TRIP, 'pending', BOSS)).rejects.toThrow(/asked for this trip to be closed/);
+    await expect(service.update(TRIP, { status: 'pending' }, BOSS)).rejects.toThrow(ConflictError);
+    expect(trips.hasOpenCompletion).toHaveBeenCalledWith(TRIP, TX);
+    expect(trips.updateStatus).not.toHaveBeenCalled();
+    expect(trips.replace).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing of the record for a move forward — only going back is guarded', async () => {
+    const { service, trips } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'pending' }));
+    trips.updateStatus.mockResolvedValue(openTrip({ status: 'executing' }));
+
+    await service.updateStatus(TRIP, 'executing', BOSS);
+
+    expect(trips.hasLiveExecution).not.toHaveBeenCalled();
+    expect(trips.hasOpenCompletion).not.toHaveBeenCalled();
+    expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'executing', TX);
   });
 
   it('never stamps closed_at from a board move, because it can never reach DONE', async () => {
