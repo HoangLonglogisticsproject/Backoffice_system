@@ -118,6 +118,8 @@ const trip = (over: Record<string, unknown> = {}) => ({
   accountability: 'NOT_DECLARED',
   completion: null,
   closed: false,
+  // The server's answer for live work with nothing holding its money.
+  expensesOpen: true,
   ...over,
 });
 
@@ -749,6 +751,8 @@ describe('expenses', () => {
         expenses: [cost({ state: 'immutable' })],
         accountability: 'APPROVED_IMMUTABLE',
         completion: { id: 'r1', attemptNo: 1, state: 'approved', decisionReason: null },
+        // As the server answers it: money held — this screen only reads that.
+        expensesOpen: false,
       }),
     );
     renderDetail();
@@ -758,7 +762,7 @@ describe('expenses', () => {
   });
 
   it('★ refuses to offer expenses before a lorry is assigned', async () => {
-    fetchMyAssignment.mockResolvedValue(trip({ vehicle: null }));
+    fetchMyAssignment.mockResolvedValue(trip({ vehicle: null, expensesOpen: false }));
     renderDetail();
 
     expect(await screen.findByText(/chưa có xe/i)).toBeInTheDocument();
@@ -1735,7 +1739,7 @@ describe('★ a closed trip — opened from "Đã chạy xong", read-only', () =
   it('draws the record and no action: no step to report, no figure, no completion', async () => {
     // Replaced before the end, or recorded after the run: nothing reported,
     // nothing sent — exactly the turn that used to answer "not found".
-    fetchMyAssignment.mockResolvedValue(trip({ closed: true }));
+    fetchMyAssignment.mockResolvedValue(trip({ closed: true, expensesOpen: false }));
     renderDetail();
 
     expect(await screen.findByText('Chuyến đã chạy xong')).toBeInTheDocument();
@@ -1752,10 +1756,21 @@ describe('★ a closed trip — opened from "Đã chạy xong", read-only', () =
   });
 
   it('offers no correction of a figure the server still calls editable', async () => {
-    fetchMyAssignment.mockResolvedValue(trip({ closed: true, expenses: [cost()] }));
+    fetchMyAssignment.mockResolvedValue(trip({ closed: true, expensesOpen: false, expenses: [cost()] }));
     renderDetail();
 
     expect((await screen.findAllByText('1,500,000')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Sửa' })).not.toBeInTheDocument();
+  });
+
+  it('★ a run recorded after the fact: its figures open when the server says so — and nothing else does', async () => {
+    fetchMyAssignment.mockResolvedValue(trip({ closed: true, expensesOpen: true, expenses: [cost()] }));
+    renderDetail();
+
+    expect(await screen.findByRole('button', { name: /thêm khoản chi/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sửa' })).toBeInTheDocument();
+    expect(screen.queryByText('Đã đóng')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /tôi đã đến điểm lấy hàng/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /gửi hoàn tất chuyến/i })).not.toBeInTheDocument();
   });
 });

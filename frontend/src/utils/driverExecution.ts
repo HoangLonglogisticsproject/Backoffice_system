@@ -243,21 +243,20 @@ export const isEditable = (line: TripCost): boolean =>
   line.state === 'editable' && line.voidedAt === null;
 
 /**
- * Whether new figures may be declared at all.
+ * Whether new figures may be declared at all — `expensesOpen`, the server's
+ * answer, and nothing else.
  *
- * Two conditions the server also applies: the trip must have a lorry (a figure
- * declared before one is assigned has nothing to attribute itself to), and the
- * money must not be frozen by a completion under review.
+ * ★ NOT RE-DERIVED HERE. Which turns take money (live work, and a run recorded
+ * after the fact) and what freezes it (a lorry missing, a completion under
+ * review or approved, an archived trip) is decided once, on the server
+ * (`driverExpenseScope`), and enforced there by the expense guard and the
+ * service. A second copy here would be a second rule to drift.
  */
-export const canDeclareExpense = (trip: DriverTripDetail): boolean =>
-  !trip.closed &&
-  trip.vehicle !== null &&
-  trip.completion?.state !== 'pending' &&
-  trip.accountability !== 'APPROVED_IMMUTABLE';
+export const canDeclareExpense = (trip: DriverTripDetail): boolean => trip.expensesOpen;
 
-/** A figure the driver may correct on THIS screen: editable, on a trip still open. */
+/** A figure the driver may correct on THIS screen: money open, and the line itself still editable. */
 export const canCorrectExpense = (trip: DriverTripDetail, line: TripCost): boolean =>
-  !trip.closed && isEditable(line);
+  trip.expensesOpen && isEditable(line);
 
 /** Lines that still count. A withdrawn figure is not one. */
 export const liveExpenses = (expenses: readonly TripCost[]): TripCost[] =>

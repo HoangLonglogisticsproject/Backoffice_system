@@ -88,7 +88,8 @@ const lockedReasonKey = (trip: DriverTripDetail): TranslationKey => {
  */
 const expenseState = (trip: DriverTripDetail): { label: TranslationKey; tone: StatusTone } => {
   if (trip.accountability === 'APPROVED_IMMUTABLE') return { label: 'driverExpenseApproved', tone: 'green' };
-  if (trip.closed) return { label: 'driverExpenseClosed', tone: 'gray' };
+  // A run recorded after the fact is closed AND open for its figures.
+  if (trip.closed && !trip.expensesOpen) return { label: 'driverExpenseClosed', tone: 'gray' };
   if (trip.completion?.state === 'pending') return { label: 'driverExpenseSent', tone: 'amber' };
   if (trip.accountability === 'REJECTED_NEEDS_CORRECTION') return { label: 'driverExpenseSentBack', tone: 'gray' };
   return { label: 'driverExpenseOpen', tone: 'gray' };
