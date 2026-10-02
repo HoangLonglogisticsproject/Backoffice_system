@@ -1365,14 +1365,19 @@ Chủ doanh nghiệp chốt: ba trạng thái — **Chờ xử lý** (`pending`)
 
 | Giá trị | Nhãn | Ghi được? |
 |---|---|---|
-| `pending` | Chờ xử lý | có — tạo / PATCH / đổi trạng thái |
-| `executing` | Đang thực hiện | có |
-| `finished` | **Đã xác nhận** | chỉ qua đóng chuyến (dưới) — tạo / PATCH / `PATCH …/status` với `finished` → **409** |
+| `pending` | Chờ xử lý | chỉ do server — booking mới luôn mở `pending` (gửi `pending` khi tạo là no-op) |
+| `executing` | Đang thực hiện | chỉ do server — **mốc thực hiện đầu tiên của tài xế** (lịch sử lý do `execution_started`) |
+| `finished` | **Đã xác nhận** | chỉ qua đóng chuyến (dưới) — tạo / PATCH với `finished` → **409** |
 | `confirmed` | Đã xác nhận (dữ liệu cũ) | **không** — ngừng dùng; ghi nó ở bất kỳ route nào → **422** `details.status: 'RETIRED_STATUS'`. Dòng cũ vẫn đọc được tới khi production chuẩn hoá |
 
 | Method | Path | Ghi chú | Lỗi |
 |---|---|---|---|
-| `POST` | `/trip-schedules/:tripId/complete` | **"Đã xác nhận" trên dropdown Lịch xe** — SuperAdmin (`trip.complete.review`) tuyên bố chuyến đã xong, **một lần gọi**: `finished`, `closed_by`/`closed_at`, lịch sử `→ finished` lý do `manual_completion`, chuyến sang Lịch sử chuyến. Trả về chuyến. **Tạm thời**, tới khi luồng tài xế là đường duy nhất | **403** thiếu quyền · **409** đã đóng · **409** tài xế còn yêu cầu hoàn tất đang chờ (duyệt yêu cầu đó) |
+| `POST` | `/trip-schedules/:tripId/complete` | **Break-glass, không màn hình nào gọi** — SuperAdmin (`trip.complete.review`) đóng một chuyến mà tài xế sẽ không bao giờ gửi yêu cầu, **một lần gọi**: `finished`, `closed_by`/`closed_at`, lịch sử `→ finished` lý do `manual_completion`. Trả về chuyến. **Ngoại lệ, tạm thời** — không phải vòng đời | **403** thiếu quyền · **409** đã đóng · **409** tài xế còn yêu cầu hoàn tất đang chờ (duyệt yêu cầu đó) |
+| ~~`PATCH`~~ | ~~`/trip-schedules/:tripId/status`~~ | **Đã gỡ (2026-10-02)** — văn phòng không đổi vòng đời → **404** | |
+
+* `POST /trip-schedules` với `status` ≠ `pending` (booking) → **422** `details.status: 'STATUS_SET_BY_SERVER'`.
+  `PATCH /trip-schedules/:id` với `status` khác trạng thái hiện tại → **422** `STATUS_SET_BY_SERVER`
+  (`finished` → 409; mở lại chuyến đã xong → 409); bằng trạng thái hiện tại → no-op.
 
 * Duyệt lượt cuối và "Đã xác nhận" kết thúc ở **cùng một** trạng thái; không có bước
   xác nhận thứ hai, không có hoàn tác.

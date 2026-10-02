@@ -395,18 +395,14 @@ describe('completion', () => {
   });
 });
 
-describe('the one write path to DONE', () => {
+describe('the one write path to DONE — and no office path through the lifecycle', () => {
   const build = () => {
     const trips = {
       lockActive: jest.fn().mockResolvedValue(openTrip()),
       create: jest.fn().mockResolvedValue(openTrip()),
       replace: jest.fn().mockResolvedValue(openTrip()),
-      updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'finished' })),
       markClosed: jest.fn(),
       exists: jest.fn().mockResolvedValue(true),
-      // No driver has reported on, or asked to close, these trips unless a case says so.
-      hasLiveExecution: jest.fn().mockResolvedValue(false),
-      hasOpenCompletion: jest.fn().mockResolvedValue(false),
     };
     const history = { record: jest.fn().mockResolvedValue(undefined) };
     const customers = { findById: jest.fn().mockResolvedValue({ id: 'customer-1', status: 'active' }) };
@@ -424,21 +420,12 @@ describe('the one write path to DONE', () => {
 
     return { service, trips, history };
   };
-
-  it('refuses to move a trip to DONE from the status route', async () => {
-    // ★ Completing a trip freezes its money, stamps who closed it and writes
-    // the history — all in one transaction, in the completion service. A status
-    // route that could also write `done` would skip every one of those, and
-    // 0017's trigger would then make the result permanent.
-    const { service, trips } = build();
-
-    await expect(service.updateStatus(TRIP, 'finished', BOSS)).rejects.toThrow(ConflictError);
-    expect(trips.updateStatus).not.toHaveBeenCalled();
-  });
+  const SET_BY_SERVER = { details: { status: 'STATUS_SET_BY_SERVER' } };
 
   it('refuses to move a trip to DONE from the general patch route', async () => {
-    // `status` is a field of the patch body, which makes this the easier of the
-    // two routes to forget.
+    // `status` is a field of the patch body, which makes this the easy route to
+    // forget. Completing a trip freezes its money, stamps who closed it and
+    // writes the history — all in one transaction, in the completion service.
     const { service, trips } = build();
 
     await expect(service.update(TRIP, { status: 'finished' }, BOSS)).rejects.toThrow(ConflictError);
@@ -460,85 +447,48 @@ describe('the one write path to DONE', () => {
     const { service, trips } = build();
     trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
 
-    await expect(service.updateStatus(TRIP, 'confirmed', BOSS)).rejects.toThrow(
-      ConflictError,
-    );
-  });
-
-  it('allows every ordinary board move, and records each one', async () => {
-    const { service, trips, history } = build();
-    trips.updateStatus.mockResolvedValue(openTrip({ status: 'pending' }));
-
-    await service.updateStatus(TRIP, 'pending', BOSS, 'Khách đổi giờ.');
-
-    expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'pending', TX);
-    expect(history.record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: 'confirmed',
-        to: 'pending',
-        reason: 'Khách đổi giờ.',
-        changedBy: BOSS,
-      }),
-      TX,
-    );
-  });
-
-  it('★ refuses to send a trip back to pending once a driver has reported, asking under the lock', async () => {
-    // `pending` says nothing has happened on the road; a live milestone says
-    // otherwise. Before the first report the move stays a mis-click's way out.
-    const { service, trips } = build();
-    trips.lockActive.mockResolvedValue(openTrip({ status: 'executing' }));
-    trips.hasLiveExecution.mockResolvedValue(true);
-
-    await expect(service.updateStatus(TRIP, 'pending', BOSS)).rejects.toThrow(ConflictError);
-    await expect(service.update(TRIP, { status: 'pending' }, BOSS)).rejects.toThrow(ConflictError);
-    expect(trips.hasLiveExecution).toHaveBeenCalledWith(TRIP, TX);
-    expect(trips.updateStatus).not.toHaveBeenCalled();
+    await expect(service.update(TRIP, { status: 'executing' }, BOSS)).rejects.toThrow(ConflictError);
     expect(trips.replace).not.toHaveBeenCalled();
   });
 
-  it('★ refuses it too while a completion request stands — with no live milestone behind it', async () => {
-    // A request needs no milestone, and outlives every milestone being
-    // withdrawn: the event check alone would let this trip go back.
-    const { service, trips } = build();
-    trips.lockActive.mockResolvedValue(openTrip({ status: 'executing' }));
-    trips.hasOpenCompletion.mockResolvedValue(true);
-
-    await expect(service.updateStatus(TRIP, 'pending', BOSS)).rejects.toThrow(/asked for this trip to be closed/);
-    await expect(service.update(TRIP, { status: 'pending' }, BOSS)).rejects.toThrow(ConflictError);
-    expect(trips.hasOpenCompletion).toHaveBeenCalledWith(TRIP, TX);
-    expect(trips.updateStatus).not.toHaveBeenCalled();
-    expect(trips.replace).not.toHaveBeenCalled();
-  });
-
-  it('asks nothing of the record for a move forward — only going back is guarded', async () => {
-    const { service, trips } = build();
-    trips.lockActive.mockResolvedValue(openTrip({ status: 'pending' }));
-    trips.updateStatus.mockResolvedValue(openTrip({ status: 'executing' }));
-
-    await service.updateStatus(TRIP, 'executing', BOSS);
-
-    expect(trips.hasLiveExecution).not.toHaveBeenCalled();
-    expect(trips.hasOpenCompletion).not.toHaveBeenCalled();
-    expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'executing', TX);
-  });
-
-  it('never stamps closed_at from a board move, because it can never reach DONE', async () => {
-    const { service, trips } = build();
-    trips.updateStatus.mockResolvedValue(openTrip({ status: 'confirmed' }));
-
-    await service.updateStatus(TRIP, 'confirmed', BOSS);
-
-    expect(trips.markClosed).not.toHaveBeenCalled();
-  });
-
-  it('writes no history when the status is set to what it already is', async () => {
+  it.each([
+    ['pending', 'executing'],
+    ['executing', 'pending'],
+  ] as const)('★ an edit cannot move %s → %s — the lifecycle is the server’s, and nothing is written', async (from, to) => {
     const { service, trips, history } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: from }));
 
-    await service.updateStatus(TRIP, 'confirmed', BOSS);
-
-    expect(trips.updateStatus).not.toHaveBeenCalled();
+    await expect(service.update(TRIP, { status: to }, BOSS)).rejects.toMatchObject(SET_BY_SERVER);
+    await expect(service.update(TRIP, { status: to }, BOSS)).rejects.toThrow(ValidationError);
+    expect(trips.replace).not.toHaveBeenCalled();
     expect(history.record).not.toHaveBeenCalled();
+  });
+
+  it('★ an edit naming the status the trip already holds is a no-op — saved, nothing moved', async () => {
+    // Lịch sử chuyến's correction re-sends its frozen `finished`; a client from
+    // before this rule re-sends what it read.
+    const { service, trips, history } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'executing' }));
+    trips.replace.mockResolvedValue(openTrip({ status: 'executing', note: 'Đổi giờ' }));
+
+    await service.update(TRIP, { status: 'executing', note: 'Đổi giờ' }, BOSS);
+
+    expect(trips.replace).toHaveBeenCalledWith(TRIP, expect.objectContaining({ status: 'executing' }), TX);
+    expect(history.record).not.toHaveBeenCalled();
+  });
+
+  it('★ a booking cannot choose its lifecycle: `executing` is refused, `pending` is the no-op it always was', async () => {
+    const { service, trips } = build();
+
+    await expect(
+      service.create({ scheduledOn: '2026-08-30', status: 'executing', createdBy: BOSS }),
+    ).rejects.toMatchObject(SET_BY_SERVER);
+    expect(trips.create).not.toHaveBeenCalled();
+
+    await service.create({ scheduledOn: '2026-08-30', status: 'pending', createdBy: BOSS });
+    await service.create({ scheduledOn: '2026-08-30', createdBy: BOSS });
+    expect(trips.create).toHaveBeenNthCalledWith(1, expect.objectContaining({ status: 'pending' }), TX);
+    expect(trips.create).toHaveBeenNthCalledWith(2, expect.objectContaining({ status: 'pending' }), TX);
   });
 
   it('records the opening status when a trip is created', async () => {

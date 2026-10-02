@@ -94,9 +94,11 @@ export const COMPLETION_APPROVED_REASON = 'All assignments approved.';
 export const EXECUTION_STARTED_REASON = 'execution_started';
 
 /**
- * ★ THE TEMPORARY MANUAL COMPLETION: a SuperAdmin choosing "Đã xác nhận" on the
- * board while the Driver flow is not yet the only way. The same closure as
- * approval (`closeTrip`); only this mark says which door it came through.
+ * ★ THE BREAK-GLASS MANUAL COMPLETION — exceptional and temporary, NOT the
+ * lifecycle. `POST /trip-schedules/:id/complete` (`trip.complete.review`)
+ * closes a trip whose driver will never ask: no portal access, a hired
+ * carrier, a lost phone. No screen offers it. The same closure as approval
+ * (`closeTrip`); only this mark says which door it came through.
  */
 export const MANUAL_COMPLETION_REASON = 'manual_completion';
 
@@ -112,15 +114,19 @@ export type InitialLifecycle =
   | { ok: true; status: TripStatus; closed: false; reason: null }
   /** Born closed — and then the reason the history and the crew carry. */
   | { ok: true; status: 'finished'; closed: true; reason: string }
-  | { ok: false; refusal: 'COMPLETION_ONLY' | 'STATUS_SET_BY_ENTRY' | 'CREW_AFTER_BOOKING' | 'RETIRED_STATUS' };
+  | {
+      ok: false;
+      refusal: 'COMPLETION_ONLY' | 'STATUS_SET_BY_ENTRY' | 'STATUS_SET_BY_SERVER' | 'CREW_AFTER_BOOKING' | 'RETIRED_STATUS';
+    };
 
 /**
  * ★ THE CLIENT SAYS WHY A TRIP IS ENTERED; THE SERVER DECIDES HOW IT STARTS.
  *
- *   operational   a booking: `pending`, or another status the board may set —
- *                 never `finished`, which only approval reaches. Its crew is
- *                 dispatched afterwards, through the dispatch routes, which
- *                 tell the driver — so none is taken with the booking.
+ *   operational   a booking: ALWAYS `pending`. The driver's first milestone
+ *                 starts it and approval closes it, so the caller names no
+ *                 lifecycle — `pending` itself is accepted as a no-op. Its
+ *                 crew is dispatched afterwards, through the dispatch routes,
+ *                 which tell the driver — so none is taken with the booking.
  *   historical    a run that already happened and ended: `finished`, closed,
  *                 its one history row marked `historical_entry`. The status
  *                 is not the caller's to name; its crew rides with it, since
@@ -140,6 +146,7 @@ export const initialLifecycle = (
   const status = requested.status ?? 'pending';
   if (isCompletionOnlyStatus(status)) return { ok: false, refusal: 'COMPLETION_ONLY' };
   if (isRetiredStatus(status)) return { ok: false, refusal: 'RETIRED_STATUS' };
+  if (status !== 'pending') return { ok: false, refusal: 'STATUS_SET_BY_SERVER' };
   if (requested.crewSupplied) return { ok: false, refusal: 'CREW_AFTER_BOOKING' };
   return { ok: true, status, closed: false, reason: null };
 };

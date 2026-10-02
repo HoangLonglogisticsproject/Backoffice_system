@@ -566,22 +566,6 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
       expect(updated.customerId).toBe(customer.id);
     });
 
-    it('keeps the retired reference through an edit that moves the status', async () => {
-      const customer = await catalogue.createCustomer({ name: 'VIỄN ĐẠT', createdBy: author });
-      const trip = await trips.create({
-        scheduledOn: '2026-08-04',
-        customerId: customer.id,
-        createdBy: author,
-      });
-
-      await catalogue.archiveCustomer(customer.id);
-
-      const updated = await trips.update(trip.id, { status: 'executing' }, author);
-
-      expect(updated.status).toBe('executing');
-      expect(updated.customerId).toBe(customer.id);
-    });
-
     it('re-sending the SAME retired id explicitly is still not a change', async () => {
       // The form sends every field on every save, so the retired id arrives in
       // the body rather than being absent. That has to read as "unchanged", not
@@ -668,91 +652,97 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
   });
 
   /**
-   * ★ BD-01 — `done` IS TERMINAL, AND NOTHING ELSE IS CONSTRAINED.
+   * ★ BD-01 — `done` IS TERMINAL, AND THE OFFICE DRIVES NO LIFECYCLE.
    *
-   * The one transition rule the business has settled. The other four statuses
-   * come from the workbook's colour legend and are NOT a pipeline: two of them
-   * leave the line entirely (`external_booking` is a route, `needs_confirmation`
-   * an exception reachable from anywhere), so moves between them stay free.
-   * These cases pin both halves — the rule that exists, and the freedom that
-   * deliberately still exists around it.
+   * The server owns the status: a booking opens `pending`, the driver's first
+   * milestone starts it (`TripExecutionService`), approval closes it
+   * (`closeTrip`). So no office path writes a status at all — `PATCH …/status`
+   * is gone, and an edit may name only the status the trip already holds.
+   * These cases pin that, and the older refusals that still speak first.
    */
-  describe('★ BD-01 — `done` is terminal, and the board cannot reach it', () => {
-    const OTHERS = [
-      'pending',
-      'executing',
-      'pending',
-      'executing',
-    ] as const;
-
-    const tripWith = async (status: TripStatus) =>
-      trips.create({ scheduledOn: '2026-08-04', status, createdBy: author });
-
+  describe('★ BD-01 — `done` is terminal, and the office drives no lifecycle', () => {
     /**
-     * A finished trip, seeded directly.
+     * A trip already in a given state, seeded directly.
      *
-     * ★ WHY SQL AND NOT THE SERVICE. `done` is reached by APPROVING A
-     * COMPLETION REQUEST and by nothing else — the service refuses to write it
-     * from here, which is the rule three of the cases below exist to prove. The
-     * state is real and reachable in production; this spec simply has no
-     * completion service wired, so the row is put into it directly. The trigger
-     * guards LEAVING `done`, not entering it, so this is exactly what an
-     * approval leaves behind.
+     * ★ WHY SQL AND NOT THE SERVICE. No office call can put a trip into
+     * `executing` or `finished` — the driver and approval do — and this spec
+     * wires neither. The trigger guards LEAVING `done`, not entering it, so this
+     * is exactly the row those paths leave behind.
      */
-    const doneTrip = async () => {
-      const trip = await tripWith('executing');
-      await pool.query("UPDATE trip_schedules SET status = 'finished' WHERE id = $1", [trip.id]);
+    const tripWith = async (status: TripStatus) => {
+      const trip = await trips.create({ scheduledOn: '2026-08-04', createdBy: author });
+      if (status !== 'pending') {
+        await pool.query('UPDATE trip_schedules SET status = $2 WHERE id = $1', [trip.id, status]);
+      }
       return trip;
     };
+    const doneTrip = () => tripWith('finished');
+    const statusOf = async (id: string) => (await trips.findById(id))?.status;
+    const SET_BY_SERVER = { details: { status: 'STATUS_SET_BY_SERVER' } };
 
-    describe('★ reaching done — refused, whichever door is used', () => {
-      it('refuses it through the status endpoint', async () => {
-        const trip = await tripWith('executing');
+    describe('★ the office cannot move the lifecycle — on create or on edit', () => {
+      it('★ a booking cannot open on the road; `pending` is the no-op it always was', async () => {
+        await expect(
+          trips.create({ scheduledOn: '2026-08-04', status: 'executing', createdBy: author }),
+        ).rejects.toMatchObject(SET_BY_SERVER);
 
-        await expect(trips.updateStatus(trip.id, 'finished', author)).rejects.toBeInstanceOf(
-          ConflictError,
-        );
-
-        expect((await trips.findById(trip.id))?.status).toBe('executing');
+        const booked = await trips.create({ scheduledOn: '2026-08-04', status: 'pending', createdBy: author });
+        expect(booked.status).toBe('pending');
       });
 
-      it('refuses it through the FULL PATCH too — the rule is not bypassable', async () => {
+      it.each([
+        ['pending', 'executing'],
+        ['executing', 'pending'],
+      ] as const)('★ refuses an edit %s → %s, and writes nothing', async (from, to) => {
+        const trip = await tripWith(from);
+
+        await expect(
+          trips.update(trip.id, { status: to, note: 'sau' }, author),
+        ).rejects.toMatchObject(SET_BY_SERVER);
+
+        const after = await trips.findById(trip.id);
+        expect(after?.status).toBe(from);
+        expect(after?.note).toBeNull();
+      });
+
+      it('★ accepts an edit naming the status the trip already holds — and moves nothing', async () => {
+        const trip = await tripWith('executing');
+
+        const updated = await trips.update(trip.id, { status: 'executing', note: 'Đổi giờ' }, author);
+
+        expect(updated).toMatchObject({ status: 'executing', note: 'Đổi giờ' });
+        expect(await trips.statusHistory(trip.id)).toHaveLength(1);
+      });
+    });
+
+    describe('★ reaching done — refused to every office caller', () => {
+      it('refuses it through the PATCH — completion is not an edit', async () => {
         const trip = await tripWith('executing');
 
         await expect(trips.update(trip.id, { status: 'finished' }, author)).rejects.toBeInstanceOf(
           ConflictError,
         );
 
-        expect((await trips.findById(trip.id))?.status).toBe('executing');
+        expect(await statusOf(trip.id)).toBe('executing');
       });
 
       it('★ refuses a trip BORN done — a trip cannot be created closed', async () => {
         // No completion request, no approver, no frozen figures, and — because
         // the trigger makes `done` permanent — no way back.
-        await expect(tripWith('finished')).rejects.toBeInstanceOf(ConflictError);
+        await expect(
+          trips.create({ scheduledOn: '2026-08-04', status: 'finished', createdBy: author }),
+        ).rejects.toBeInstanceOf(ConflictError);
       });
     });
 
-    describe('★ leaving done — refused, whichever door is used', () => {
-      it.each(OTHERS)('refuses done → %s through the status endpoint', async (to) => {
+    describe('★ leaving done — refused', () => {
+      it.each(['pending', 'executing'] as const)('refuses done → %s through the PATCH', async (to) => {
         const trip = await doneTrip();
 
-        await expect(trips.updateStatus(trip.id, to, author)).rejects.toBeInstanceOf(ConflictError);
+        await expect(trips.update(trip.id, { status: to }, author)).rejects.toBeInstanceOf(ConflictError);
 
         // Refused means unchanged, not partially applied.
-        expect((await trips.findById(trip.id))?.status).toBe('finished');
-      });
-
-      it('refuses it through the FULL PATCH too', async () => {
-        // Guarding only `updateStatus` would leave the edit form as an open
-        // second door onto the same column.
-        const trip = await doneTrip();
-
-        await expect(trips.update(trip.id, { status: 'executing' }, author)).rejects.toBeInstanceOf(
-          ConflictError,
-        );
-
-        expect((await trips.findById(trip.id))?.status).toBe('finished');
+        expect(await statusOf(trip.id)).toBe('finished');
       });
 
       it('★ rolls the WHOLE edit back, not just the status', async () => {
@@ -773,37 +763,22 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
     });
 
     describe('what the rule does NOT forbid', () => {
-      it('★ still edits every OTHER field of a finished trip', async () => {
+      it('★ still edits every OTHER field of a finished trip — Lịch sử chuyến re-sends its frozen status', async () => {
         // Only the STATUS is frozen. Whether a finished trip should be
         // otherwise read-only is a separate decision nobody has taken, so
-        // correcting a delivery address on it stays legal.
+        // correcting a delivery address on it stays legal — and History's form
+        // sends `status: 'finished'` back unchanged on every save.
         const trip = await doneTrip();
 
         const updated = await trips.update(
           trip.id,
-          { note: 'giao lúc 18h', deliveryAddress: 'TCS' },
+          { note: 'giao lúc 18h', deliveryAddress: 'TCS', status: 'finished' },
           author,
         );
 
         expect(updated.note).toBe('giao lúc 18h');
         expect(updated.deliveryAddress).toBe('TCS');
         expect(updated.status).toBe('finished');
-      });
-
-      it('★ leaves the open statuses freely interchangeable (the retired `confirmed` is written by nobody)', async () => {
-        // Deliberately NOT a pipeline. Walking them in an order the legend does
-        // not describe must succeed, or somebody has invented a workflow.
-        const trip = await tripWith('pending');
-
-        for (const next of [
-          'executing',
-          'pending',
-          'pending',
-          'executing',
-        ] as const) {
-          const moved = await trips.updateStatus(trip.id, next, author);
-          expect(moved.status).toBe(next);
-        }
       });
     });
 
@@ -812,53 +787,16 @@ describeIntegration('Trip schedule against real PostgreSQL', () => {
         const trip = await tripWith('executing');
         await trips.archive(trip.id, author);
 
-        await expect(
-          trips.updateStatus(trip.id, 'pending', author),
-        ).rejects.toBeInstanceOf(NotFoundError);
+        await expect(trips.update(trip.id, { status: 'pending' }, author)).rejects.toBeInstanceOf(
+          NotFoundError,
+        );
       });
 
       it('answers 404 for a trip that never existed', async () => {
         await expect(
-          trips.updateStatus('00000000-0000-4000-8000-000000000000', 'pending', author),
+          trips.update('00000000-0000-4000-8000-000000000000', { status: 'pending' }, author),
         ).rejects.toBeInstanceOf(NotFoundError);
       });
-    });
-
-    /**
-     * ★ THE RACE THE LOCK EXISTS FOR.
-     *
-     * `updateStatus` used to be one unconditional UPDATE. A rule that depends
-     * on where the row already IS turns it into read-then-write, and without
-     * `FOR UPDATE` two callers could both read a stale status and both write.
-     */
-    it('★ serialises two concurrent moves away from a finished trip — both refused', async () => {
-      const trip = await doneTrip();
-
-      const results = await Promise.allSettled([
-        trips.updateStatus(trip.id, 'executing', author),
-        trips.updateStatus(trip.id, 'executing', author),
-      ]);
-
-      // ★ NEITHER MAY WIN. Whichever order the lock granted, both read a row
-      // that was already `done` and both are refused — there is no interleaving
-      // in which one of them sees a non-terminal status.
-      expect(results.every((r) => r.status === 'rejected')).toBe(true);
-      expect((await trips.findById(trip.id))?.status).toBe('finished');
-    });
-
-    it('★ serialises two concurrent LEGAL moves, losing neither', async () => {
-      const trip = await tripWith('pending');
-
-      const results = await Promise.allSettled([
-        trips.updateStatus(trip.id, 'executing', author),
-        trips.updateStatus(trip.id, 'executing', author),
-      ]);
-
-      expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
-      // The row holds whichever landed second; both were legal in either order.
-      expect(['executing', 'executing']).toContain(
-        (await trips.findById(trip.id))?.status,
-      );
     });
   });
 

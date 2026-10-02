@@ -460,43 +460,6 @@ export class TripScheduleRepository {
     return rows.length > 0;
   }
 
-  /**
-   * Has a driver reported anything on this trip — one live (non-voided)
-   * milestone, on any of its lorries?
-   *
-   * The trip-wide reading of an assignment's `started` (ADR-0004). Read under
-   * the caller's lock on the trip row, so a milestone cannot land between this
-   * answer and the move it decides.
-   */
-  async hasLiveExecution(id: string, executor: DatabaseQuery): Promise<boolean> {
-    const rows = await executor.query<{ one: number }>(
-      `SELECT 1 AS one FROM trip_execution_events
-        WHERE trip_id = $1 AND voided_at IS NULL
-        LIMIT 1`,
-      [id],
-    );
-    return rows.length > 0;
-  }
-
-  /**
-   * Has a driver asked for any turn of this trip to be closed, and not been
-   * sent back — a completion request `pending` or `approved`?
-   *
-   * ★ NOT IMPLIED BY `hasLiveExecution`. A request needs no milestone behind it
-   * (`TripCompletionService.submit` asks for none), and withdrawing a milestone
-   * looks at no request — so a trip can hold one with no live event at all.
-   * Read under the caller's lock on the trip row, which `submit` takes too.
-   */
-  async hasOpenCompletion(id: string, executor: DatabaseQuery): Promise<boolean> {
-    const rows = await executor.query<{ one: number }>(
-      `SELECT 1 AS one FROM trip_completion_requests
-        WHERE trip_id = $1 AND state IN ('pending', 'approved')
-        LIMIT 1`,
-      [id],
-    );
-    return rows.length > 0;
-  }
-
   async findById(
     id: string,
     executor: DatabaseQuery = this.db,

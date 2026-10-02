@@ -395,68 +395,20 @@ export class TripScheduleService {
       // does not freeze every trip that ever named them — see `resolve`.
       const values = await this.resolve(merged, current.status, tx, current, resnapshot);
 
-      // ★ THE PATCH ROUTE CAN MOVE THE STATUS TOO, AND IT IS THE EASIER PATH
-      // TO FORGET. `status` is a field of the create schema, so a general edit
-      // carrying one is a board move wearing different clothes — and if only
-      // the dedicated route recorded history, this one would be a silent way
-      // around it.
-      // `merged.status` is built as `patch.status ?? current.status` above, so
-      // it is always set — the fallback restates that for the type rather than
-      // asserting it away.
-      const nextStatus = merged.status ?? current.status;
-      if (nextStatus !== current.status) {
-        await this.requireDispatchTransition(current, nextStatus, tx);
-      }
+      // ★ AN EDIT NEVER MOVES THE LIFECYCLE. `status` is a field of the create
+      // schema, so the PATCH body may carry one — but the status is the
+      // server's: a booking opens `pending`, the driver's first milestone
+      // starts it, approval closes it. A body naming the status the trip
+      // already holds is a no-op (Lịch sử chuyến's correction re-sends its
+      // frozen `finished`; a client from before this rule re-sends what it
+      // read); any other value is refused before anything is written.
+      requireUnchangedStatus(current.status, patch.status);
 
       const updated = await this.trips.replace(id, values, tx);
       // The row was locked two statements ago, so this cannot be a concurrent
       // archive — it is a programming error, and pretending otherwise would
       // hide it behind a plausible 404.
       if (!updated) throw new Error('Locked trip disappeared during update.');
-
-      if (updated.status !== current.status) {
-        await this.recordMove(current, updated.status, null, changedBy, tx);
-      }
-
-      return updated;
-    });
-  }
-
-  /**
-   * Moves a row along the board.
-   *
-   * ★ A TRANSACTION NOW, WHERE IT USED TO BE ONE STATEMENT. The status and the
-   * history entry have to be written together or not at all: a move that was
-   * applied but not recorded is exactly the hole this method used to have, and
-   * it is unrecoverable — nothing left behind says the move happened.
-   *
-   * ★ AND THE ROW IS LOCKED FIRST, so `from` in the history is the status the
-   * move actually started from. Reading it outside the lock lets a concurrent
-   * move slip in between, and the history then records a transition that never
-   * occurred.
-   */
-  async updateStatus(
-    id: string,
-    status: TripStatus,
-    changedBy: string,
-    reason: string | null = null,
-  ): Promise<TripSchedule> {
-    return this.db.transaction(async (tx) => {
-      const current = await this.trips.lockActive(id, tx);
-      if (!current) throw new NotFoundError('Trip not found.');
-
-      // Setting the status it already holds is not a move. Answering with the
-      // row rather than an error keeps a retried request harmless, and writing
-      // no history keeps the log free of entries where nothing changed — which
-      // the `trip_status_history_actually_changed` CHECK would refuse anyway.
-      if (current.status === status) return current;
-
-      await this.requireDispatchTransition(current, status, tx);
-
-      const updated = await this.trips.updateStatus(id, status, tx);
-      if (!updated) throw new Error('Locked trip disappeared during status change.');
-
-      await this.recordMove(current, status, reason, changedBy, tx);
 
       return updated;
     });
@@ -466,87 +418,6 @@ export class TripScheduleService {
   async statusHistory(id: string): Promise<TripStatusChange[]> {
     if (!(await this.trips.exists(id))) throw new NotFoundError('Trip not found.');
     return this.history.listByTrip(id);
-  }
-
-  /**
-   * Refuses a move the DISPATCH BOARD is not allowed to make.
-   *
-   * Four rules:
-   *
-   *   · nothing leaves `finished` — 0025's trigger says the same thing, but that
-   *     one surfaces as a 500, so it is said here where it can be a 409
-   *   · ★ nothing ENTERS `finished` through a plain move either
-   *   · nothing moves to the retired `confirmed` (`isRetiredStatus`)
-   *   · ★ nothing goes BACK to `pending` once a driver has reported
-   *
-   * The second is the important one. Closing a trip writes the status, who
-   * closed it and the history together — `closeTrip`, reached by approval and
-   * by the SuperAdmin's "Đã xác nhận" (`TripCompletionService.completeManually`,
-   * which the status route calls for `finished`). A plain move that could also
-   * write `finished` would be a way to close a trip that skipped the stamp and
-   * the lock, and 0017 would then make the result permanent.
-   *
-   * ★ THE FOURTH KEEPS THE STATUS FROM CONTRADICTING THE RECORD. `pending` says
-   * nothing has happened on the road; two things say otherwise, and neither
-   * implies the other:
-   *
-   *   · a live milestone — a voided one does not count, so a trip whose only
-   *     report was withdrawn may go back again
-   *   · a completion request still standing (`pending` or `approved`) — one
-   *     can be submitted with no milestone at all, and survives every
-   *     milestone being withdrawn after it; a REJECTED one does not count
-   *
-   * Before either, sending a trip back stays a mis-click's way out. Both are
-   * read under the caller's lock on the trip row, which a milestone and a
-   * completion request both take before they write.
-   */
-  private async requireDispatchTransition(
-    current: TripSchedule,
-    to: TripStatus,
-    tx: DatabaseQuery,
-  ): Promise<void> {
-    this.requireNotCompletionOnly(to);
-    if (!canTransition(current.status, to)) throw new ConflictError('A completed trip cannot be reopened.');
-    if (isRetiredStatus(to)) throw retiredStatus();
-    if (to !== 'pending') return;
-    if (await this.trips.hasLiveExecution(current.id, tx)) {
-      throw new ConflictError(
-        'A driver has already reported on this trip, so it cannot go back to pending.',
-      );
-    }
-    if (await this.trips.hasOpenCompletion(current.id, tx)) {
-      throw new ConflictError(
-        'A driver has asked for this trip to be closed, so it cannot go back to pending.',
-      );
-    }
-  }
-
-  private requireNotCompletionOnly(status: TripStatus): void {
-    if (!isCompletionOnlyStatus(status)) return;
-    throw new ConflictError(COMPLETION_ONLY);
-  }
-
-  /**
-   * Writes the history row for a board move.
-   *
-   * ★ NO `closed_at` BRANCH HERE, AND THAT IS THE POINT. This method can never
-   * see a move to `finished`, because `requireDispatchTransition` refuses one
-   * before any write happens. Closing a trip — status, stamp and history
-   * together — belongs to `TripCompletionService.approve` and nowhere else, so
-   * a second implementation of it here would be a second answer waiting to
-   * drift from the first.
-   */
-  private async recordMove(
-    current: TripSchedule,
-    to: TripStatus,
-    reason: string | null,
-    changedBy: string,
-    tx: DatabaseQuery,
-  ): Promise<void> {
-    await this.history.record(
-      { tripId: current.id, from: current.status, to, reason, changedBy },
-      tx,
-    );
   }
 
   /**
@@ -767,8 +638,31 @@ export class TripScheduleService {
   }
 }
 
-const COMPLETION_ONLY =
-  'A trip is completed by approving its completion request, or by "Đã xác nhận" on the board — not by editing it.';
+const COMPLETION_ONLY = 'A trip is completed by approving its completion request — not by editing it.';
+
+/**
+ * The one sentence for an office caller naming a lifecycle the server owns —
+ * on create and on edit alike. A 422: the value is what is wrong.
+ */
+const statusSetByServer = (): ValidationError =>
+  new ValidationError(
+    "A trip's status is set by the server: a booking opens pending, the driver's first milestone starts it, and approving its completion closes it.",
+    { status: 'STATUS_SET_BY_SERVER' },
+  );
+
+/**
+ * ★ WHAT AN EDIT MAY SAY ABOUT THE STATUS: nothing, or what it already is.
+ * The older refusals keep their own sentences — reaching `finished` is
+ * completion's (409), leaving it is never allowed (409), and `confirmed` is
+ * retired (422) — and every other change is the server's to make.
+ */
+const requireUnchangedStatus = (current: TripStatus, requested: TripStatus | undefined): void => {
+  if (requested === undefined || requested === current) return;
+  if (isRetiredStatus(requested)) throw retiredStatus();
+  if (isCompletionOnlyStatus(requested)) throw new ConflictError(COMPLETION_ONLY);
+  if (!canTransition(current, requested)) throw new ConflictError('A completed trip cannot be reopened.');
+  throw statusSetByServer();
+};
 
 /**
  * How the create intent starts the trip, or the refusal — `initialLifecycle`
@@ -783,6 +677,7 @@ const startOf = (input: CreateTripInput): Extract<InitialLifecycle, { ok: true }
   if (start.ok) return start;
   if (start.refusal === 'COMPLETION_ONLY') throw new ConflictError(COMPLETION_ONLY);
   if (start.refusal === 'RETIRED_STATUS') throw retiredStatus();
+  if (start.refusal === 'STATUS_SET_BY_SERVER') throw statusSetByServer();
   throw start.refusal === 'STATUS_SET_BY_ENTRY'
     ? new ValidationError('A trip recorded after it ran is finished; it takes no status.', {
         status: start.refusal,

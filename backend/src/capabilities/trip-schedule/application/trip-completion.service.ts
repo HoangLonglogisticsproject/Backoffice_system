@@ -282,9 +282,9 @@ export class TripCompletionService {
   /**
    * ★ THE SUPERADMIN DECLARES THE TRIP DONE — "Đã xác nhận" on the board.
    *
-   * TEMPORARY, until the Driver flow is the only way: the same closure as the
-   * approval of a last turn (`closeTrip`), in ONE step. Nothing asks for a
-   * second confirmation afterwards, because this is the confirmation.
+   * BREAK-GLASS, TEMPORARY, AND NOT THE LIFECYCLE: only for a trip whose driver
+   * will never ask, and offered by no screen. The same closure as the approval
+   * of a last turn (`closeTrip`), in ONE step.
    *
    * ★ REFUSED WHILE A DRIVER'S REQUEST WAITS. That request IS the completion
    * being asked for — deciding it is the way; closing around it would leave a

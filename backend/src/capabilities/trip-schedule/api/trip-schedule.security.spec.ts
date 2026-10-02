@@ -61,7 +61,6 @@ describe('trip-schedule HTTP security', () => {
     findById: jest.Mock;
     create: jest.Mock;
     update: jest.Mock;
-    updateStatus: jest.Mock;
     archive: jest.Mock;
     statusHistory: jest.Mock;
   }
@@ -147,7 +146,6 @@ describe('trip-schedule HTTP security', () => {
       findById: jest.fn().mockResolvedValue(storedTrip),
       create: jest.fn().mockResolvedValue(storedTrip),
       update: jest.fn().mockResolvedValue(storedTrip),
-      updateStatus: jest.fn().mockResolvedValue({ ...storedTrip, status: 'finished' }),
       archive: jest.fn().mockResolvedValue(storedTrip),
       statusHistory: jest.fn().mockResolvedValue([]),
     };
@@ -241,7 +239,6 @@ describe('trip-schedule HTTP security', () => {
   const WRITES = [
     ['post', '/trip-schedules'],
     ['patch', `/trip-schedules/${TRIP}`],
-    ['patch', `/trip-schedules/${TRIP}/status`],
     ['post', `/trip-schedules/${TRIP}/archive`],
     ['post', '/trip-vehicles'],
     ['patch', `/trip-vehicles/${VEHICLE}`],
@@ -353,8 +350,7 @@ describe('trip-schedule HTTP security', () => {
 
     it.each([
       ['patch', `/trip-schedules/${TRIP}`],
-      ['patch', `/trip-schedules/${TRIP}/status`],
-      ['post', `/trip-schedules/${TRIP}/archive`],
+        ['post', `/trip-schedules/${TRIP}/archive`],
       ['patch', `/trip-vehicles/${VEHICLE}`],
       ['post', `/trip-vehicles/${VEHICLE}/archive`],
       ['patch', `/trip-customers/${CUSTOMER}`],
@@ -408,8 +404,7 @@ describe('trip-schedule HTTP security', () => {
 
     it.each([
       ['patch', `/trip-schedules/${TRIP}`],
-      ['patch', `/trip-schedules/${TRIP}/status`],
-      ['post', `/trip-schedules/${TRIP}/archive`],
+        ['post', `/trip-schedules/${TRIP}/archive`],
       ['patch', `/trip-vehicles/${VEHICLE}`],
       ['post', `/trip-vehicles/${VEHICLE}/archive`],
       ['patch', `/trip-customers/${CUSTOMER}`],
@@ -446,14 +441,12 @@ describe('trip-schedule HTTP security', () => {
       expect(operations.list).not.toHaveBeenCalled();
     });
 
-    it('★ neither corrects, restatuses nor archives a row — `trip.write` is a head WITHIN a booking function', async () => {
+    it('★ neither corrects nor archives a row — `trip.write` is a head WITHIN a booking function', async () => {
       const corrected = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
-      const restatused = await authed('patch', `/trip-schedules/${TRIP}/status`).send({ status: 'confirmed' });
       const archived = await authed('post', `/trip-schedules/${TRIP}/archive`);
 
-      expect([corrected.status, restatused.status, archived.status]).toEqual([403, 403, 403]);
+      expect([corrected.status, archived.status]).toEqual([403, 403]);
       expect(trips.update).not.toHaveBeenCalled();
-      expect(trips.updateStatus).not.toHaveBeenCalled();
       expect(trips.archive).not.toHaveBeenCalled();
     });
 
@@ -476,25 +469,20 @@ describe('trip-schedule HTTP security', () => {
       context = caller();
     });
 
-    it('★ corrects, restatuses and archives a row — the shift senior', async () => {
+    it('★ corrects and archives a row — the shift senior', async () => {
       // The route names no department because a trip belongs to none, so what
       // is being asked here is seniority WITHIN a booking function, not a
       // relation to a target. See PERMISSION_REQUIREMENT for `withinFunction`.
       const corrected = await authed('patch', `/trip-schedules/${TRIP}`).send({ note: 'x' });
-      const restatused = await authed('patch', `/trip-schedules/${TRIP}/status`).send({
-        status: 'confirmed',
-      });
       const archived = await authed('post', `/trip-schedules/${TRIP}/archive`);
 
       expect(corrected.status).toBe(200);
-      expect(restatused.status).toBe(200);
       expect(archived.status).toBe(200);
 
-      // ★ ALL THREE REACHED THE SERVICE. "Does the work" is the claim; three
-      // 200s from a controller that never called anything would satisfy the
-      // status check and say nothing about the tier.
+      // ★ BOTH REACHED THE SERVICE. "Does the work" is the claim; two 200s
+      // from a controller that never called anything would satisfy the status
+      // check and say nothing about the tier.
       expect(trips.update).toHaveBeenCalled();
-      expect(trips.updateStatus).toHaveBeenCalled();
       expect(trips.archive).toHaveBeenCalled();
     });
 
@@ -536,12 +524,11 @@ describe('trip-schedule HTTP security', () => {
       );
     });
 
-    it('moves a row along the board', async () => {
-      await authed('patch', `/trip-schedules/${TRIP}/status`).send({ status: 'finished' }).expect(200);
-      // ★ THE ACTOR IS NOT OPTIONAL HERE. A board move with no author is the
-      // gap `trip_status_history` exists to close, so the route passes the
-      // session user and never a value from the body.
-      expect(trips.updateStatus).toHaveBeenCalledWith(TRIP, 'finished', ACTOR, null);
+    it('★ finds no status route at all — even `trip.write` cannot move the lifecycle', async () => {
+      // The driver's first milestone starts a trip and approval closes it;
+      // the board's old `PATCH …/status` is gone rather than guarded.
+      await authed('patch', `/trip-schedules/${TRIP}/status`).send({ status: 'executing' }).expect(404);
+      expect(trips.update).not.toHaveBeenCalled();
     });
 
     it('archives rather than deletes, and gets the archived row back', async () => {
@@ -615,8 +602,8 @@ describe('trip-schedule HTTP security', () => {
       expect(trips.create).not.toHaveBeenCalled();
     });
 
-    it('refuses a status outside the five the board has', async () => {
-      const response = await authed('patch', `/trip-schedules/${TRIP}/status`).send({
+    it('refuses a status outside the ones a trip has', async () => {
+      const response = await authed('patch', `/trip-schedules/${TRIP}`).send({
         status: 'in_progress',
       });
 

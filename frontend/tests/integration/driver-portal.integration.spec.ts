@@ -541,14 +541,16 @@ describe('driver portal (D1) against the real API', () => {
   });
 
   /**
-   * ★ LỊCH XE'S LIFECYCLE WRITES, WITH THE BODIES THE BACKOFFICE SENDS.
+   * ★ LỊCH XE'S LIFECYCLE, AGAINST THE REAL API: THE DRIVER STARTS IT, APPROVAL
+   * CLOSES IT, AND THE OFFICE WRITES NO STATUS.
    *
-   * The operational form names no status; "Bắt đầu thực hiện" and "Đưa về Chờ
-   * xử lý" are `PATCH …/status`; the way back is the server's to refuse — after
-   * a driver's report, or while a completion request stands with none behind
-   * it. Each case books a trip of its own, so none depends on another's state.
+   * A booking opens `pending` with no status in its body; the first live
+   * milestone a driver reports moves it `executing` on the server; a driver's
+   * completion request, once approved, closes it into Lịch sử chuyến. The one
+   * office-side status write left is the integrity guard refusing the way back.
+   * Each case books a trip of its own, so none depends on another's state.
    */
-  describe('Lịch xe lifecycle writes against the real API', () => {
+  describe('Lịch xe lifecycle against the real API', () => {
     const booking = async (): Promise<string> => {
       const created = await boss.post('/trip-schedules', {
         scheduledOn: today,
@@ -571,75 +573,115 @@ describe('driver portal (D1) against the real API', () => {
       expect(assigned.status).toBe(201);
       return assigned.data.id as string;
     };
-    const move = (trip: string, status: 'pending' | 'executing') =>
-      boss.patch(`/trip-schedules/${trip}/status`, { status });
-    /** The trip as Lịch xe's list returns it — the row the panel reads. */
-    const listed = async (trip: string) => {
+    const statusOf = async (trip: string) => (await boss.get(`/trip-schedules/${trip}`)).data.status as string;
+    /** The trip as one of the two lists returns it — `undefined` when it is not on that list. */
+    const listed = async (trip: string, lifecycle: 'operational' | 'history' = 'operational') => {
       const page = await boss.get('/trip-schedules', {
-        params: { from: today, to: today, lifecycle: 'operational', page: 1, limit: 200 },
+        params: { from: today, to: today, lifecycle, page: 1, limit: 200 },
       });
       expect(page.status).toBe(200);
       return page.data.items.find((row: { id: string }) => row.id === trip);
     };
-
-    it('★ a booking created with no status opens at pending; a correction with none leaves the status alone', async () => {
-      const trip = await booking();
-      expect((await boss.get(`/trip-schedules/${trip}`)).data.status).toBe('pending');
-
-      expect((await move(trip, 'executing')).status).toBe(200);
-      const corrected = await boss.patch(`/trip-schedules/${trip}`, { note: `Đổi giờ ${unique}` });
-      expect(corrected.status).toBe(200);
-      expect(corrected.data.status).toBe('executing');
-    });
-
-    it('★ "Đưa về Chờ xử lý" is allowed while nothing has been reported — a mis-click\'s way out', async () => {
-      const trip = await booking();
-      await crew(trip, driverAId);
-      expect((await move(trip, 'executing')).status).toBe(200);
-
-      const back = await move(trip, 'pending');
-      expect(back.status).toBe(200);
-      expect(back.data.status).toBe('pending');
-    });
-
-    it('★ refused once a driver has reported — and the list row says `started`, which is what hides the button', async () => {
-      const trip = await booking();
-      const turn = await crew(trip, driverAId);
-      expect((await move(trip, 'executing')).status).toBe(200);
-      expect((await listed(trip)).assignments[0].started).toBe(false);
-
-      const reported = await driverA.post(`/driver/assignments/${turn}/execution-events`, {
+    const arrive = (turn: string) =>
+      driverA.post(`/driver/assignments/${turn}/execution-events`, {
         type: 'ARRIVED_PICKUP',
         deviceReportedAt: new Date().toISOString(),
         clientEventId: `${turn}:ARRIVED_PICKUP`,
       });
-      expect(reported.status).toBe(201);
-      expect((await listed(trip)).assignments[0].started).toBe(true);
 
-      const back = await move(trip, 'pending');
-      expect(back.status).toBe(409);
-      expect(toApiError(back.status, back.data).message).toMatch(/already reported/);
-      expect((await boss.get(`/trip-schedules/${trip}`)).data.status).toBe('executing');
+    it('★ a booking created with no status opens at pending; a correction with none leaves it there', async () => {
+      const trip = await booking();
+      expect(await statusOf(trip)).toBe('pending');
+
+      const corrected = await boss.patch(`/trip-schedules/${trip}`, { note: `Đổi giờ ${unique}` });
+      expect(corrected.status).toBe(200);
+      expect(corrected.data.status).toBe('pending');
     });
 
-    it('★ refused while a completion request stands with NO milestone behind it — the row cannot show that, the server can', async () => {
+    it('★ the driver\'s first milestone puts the trip on the road — no office write — and a retry changes nothing', async () => {
       const trip = await booking();
       const turn = await crew(trip, driverAId);
-      expect((await move(trip, 'executing')).status).toBe(200);
+      expect((await listed(trip)).assignments[0].started).toBe(false);
+
+      const first = await arrive(turn);
+      expect(first.status).toBe(201);
+      expect(await statusOf(trip)).toBe('executing');
+      expect((await listed(trip)).assignments[0].started).toBe(true);
+
+      // The handset retries the same tap: the same event, the same status.
+      const retry = await arrive(turn);
+      expect(retry.data.id).toBe(first.data.id);
+      expect(await statusOf(trip)).toBe('executing');
+
+      // The board's status history names the driver as the one who started it.
+      const history = await boss.get(`/trip-schedules/${trip}/status-history`);
+      expect(history.status).toBe(200);
+      expect(history.data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ from: 'pending', to: 'executing', reason: 'execution_started' }),
+        ]),
+      );
+    });
+
+    it('★ even a SuperAdmin cannot drive the lifecycle — no status route, no status edit, no status on a booking', async () => {
+      const setByServer = (response: { status: number; data: unknown }) => {
+        expect(response.status).toBe(422);
+        expect(toApiError(response.status, response.data).details).toMatchObject({ status: 'STATUS_SET_BY_SERVER' });
+      };
+
+      // A booking cannot open on the road.
+      setByServer(
+        await boss.post('/trip-schedules', {
+          scheduledOn: today,
+          sellPrice: SELL_PRICE,
+          entryMode: 'operational',
+          status: 'executing',
+        }),
+      );
+
+      const trip = await booking();
+      // The board's old status route is gone.
+      expect((await boss.patch(`/trip-schedules/${trip}/status`, { status: 'executing' })).status).toBe(404);
+      // pending → executing is the driver's…
+      setByServer(await boss.patch(`/trip-schedules/${trip}`, { status: 'executing' }));
+      expect(await statusOf(trip)).toBe('pending');
+
+      // …and once it is on the road, executing → pending is nobody's.
+      expect((await arrive(await crew(trip, driverAId))).status).toBe(201);
+      setByServer(await boss.patch(`/trip-schedules/${trip}`, { status: 'pending' }));
+      expect(await statusOf(trip)).toBe('executing');
+    });
+
+    it('★ completion is the driver\'s request and the SuperAdmin\'s approval — then the trip is History\'s', async () => {
+      const trip = await booking();
+      const turn = await crew(trip, driverAId);
+      expect((await arrive(turn)).status).toBe(201);
 
       const asked = await driverA.post(`/driver/assignments/${turn}/completion-requests`, {
         expenseDeclaration: 'none',
       });
       expect(asked.status).toBe(201);
-      // Nothing reported: the list row's `started` stays false…
-      expect((await listed(trip)).assignments[0].started).toBe(false);
+      // Under review, still operational — nobody moved the status.
+      expect(await statusOf(trip)).toBe('executing');
+      expect(await listed(trip)).toBeDefined();
 
-      // …and the server still refuses, in its own words.
-      const back = await move(trip, 'pending');
-      expect(back.status).toBe(409);
-      expect(toApiError(back.status, back.data).message).toMatch(/asked for this trip to be closed/);
-      const patched = await boss.patch(`/trip-schedules/${trip}`, { status: 'pending' });
-      expect(patched.status).toBe(409);
+      const approved = await boss.post(
+        `/trip-schedules/${trip}/completion-requests/${asked.data.id}/approve`,
+        {},
+      );
+      expect(approved.status).toBe(200);
+      expect(await statusOf(trip)).toBe('finished');
+      expect(await listed(trip)).toBeUndefined();
+      expect(await listed(trip, 'history')).toBeDefined();
+
+      // Lịch sử chuyến's correction re-sends its frozen `finished` — a no-op
+      // the server accepts, so History keeps working exactly as it did.
+      const corrected = await boss.patch(`/trip-schedules/${trip}`, {
+        note: `Đã đối soát ${unique}`,
+        status: 'finished',
+      });
+      expect(corrected.status).toBe(200);
+      expect(corrected.data).toMatchObject({ status: 'finished', note: `Đã đối soát ${unique}` });
     });
   });
 });
