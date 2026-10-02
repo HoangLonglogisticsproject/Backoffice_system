@@ -168,9 +168,22 @@ export interface DriverTripDetail extends DriverTrip {
    *
    * A boolean, not the dispatch status (which stays out of this file): it is
    * what "Đã chạy xong" already tells the driver about every row it lists, and
-   * the one fact the handset needs to draw no action. PRESENTATION ONLY — no
-   * write path reads it. An ended turn is refused by `ActiveAssignmentGuard`,
-   * and an active turn on a closed trip by each service's closed-trip check.
+   * the one fact the handset needs to draw no milestone and no completion.
+   * PRESENTATION ONLY — no write path reads it. Reporting and completion refuse
+   * an ended turn (`ActiveAssignmentGuard`) and a closed trip (each service);
+   * whether money may still be written is `expensesOpen`, not this.
    */
   closed: boolean;
+
+  /**
+   * ★ MAY THIS DRIVER DECLARE OR CORRECT A FIGURE ON THIS TURN NOW — the
+   * server's answer, so the handset decides nothing about money itself.
+   *
+   * True on live work whose money is not held by a completion request, and on
+   * a turn RECORDED after the run ("Nhập chuyến cũ") on a trip not archived —
+   * the one closed turn whose driver backfills what it cost. False on every
+   * other closed turn. `driverExpensesOpen` over `driverExpenseScope`: the same
+   * rule the expense guard and `TripCostService` enforce.
+   */
+  expensesOpen: boolean;
 }

@@ -106,8 +106,18 @@ const DRIVER_TRIP_KEYS = [
   'driverInstructions',
   'assignment',
 ];
-// `closed`: the trip is finished — the detail of a "Đã chạy xong" card, drawn read-only.
-const DETAIL_KEYS = [...DRIVER_TRIP_KEYS, 'events', 'expenses', 'accountability', 'completion', 'closed'];
+// `closed`: the trip is finished — the detail of a "Đã chạy xong" card, with no
+// milestone and no completion. `expensesOpen`: whether money may be written —
+// the server's answer, which the screen reads and never re-derives.
+const DETAIL_KEYS = [
+  ...DRIVER_TRIP_KEYS,
+  'events',
+  'expenses',
+  'accountability',
+  'completion',
+  'closed',
+  'expensesOpen',
+];
 const EVENT_KEYS = [
   'id',
   'tripId',
@@ -165,6 +175,10 @@ const COMPLETION_KEYS = [
 
 const keysOf = (value: object) => Object.keys(value).sort();
 const sorted = (keys: string[]) => [...keys].sort();
+
+/** `YYYY-MM-DD` plus `days`, on the calendar — no time of day is involved. */
+const shiftDay = (day: string, days: number): string =>
+  new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 
 /** `Date.toJSON` — the ONLY stamp shape the portal's string comparisons are safe on. */
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -371,6 +385,7 @@ describe('driver portal (D1) against the real API', () => {
         accountability: 'NOT_DECLARED',
         completion: null,
         closed: false,
+        expensesOpen: true,
       });
       expect(assignmentStatusOf(detail)).toBe('assigned');
       expect(JSON.stringify(detail)).not.toContain('4500000');
@@ -682,6 +697,156 @@ describe('driver portal (D1) against the real API', () => {
       });
       expect(corrected.status).toBe(200);
       expect(corrected.data).toMatchObject({ status: 'finished', note: `Đã đối soát ${unique}` });
+
+      // ★ A NORMAL finished trip stays read-only for the driver's money.
+      expect((await detailOf(turn)).expensesOpen).toBe(false);
+      const late = await driverA.post(`/driver/assignments/${turn}/expenses`, {
+        category: 'toll',
+        amount: '50000.00',
+      });
+      expect(late.status).toBe(409);
+    });
+
+    it('★ a booking is dated today or later — yesterday 422 PAST_DAY, today and tomorrow 201', async () => {
+      const book = (scheduledOn: string) =>
+        boss.post('/trip-schedules', { scheduledOn, sellPrice: SELL_PRICE, entryMode: 'operational' });
+
+      const yesterday = await book(shiftDay(today, -1));
+      expect(yesterday.status).toBe(422);
+      expect(toApiError(yesterday.status, yesterday.data).details).toMatchObject({ scheduledOn: 'PAST_DAY' });
+      expect((await book(today)).status).toBe(201);
+      expect((await book(shiftDay(today, 1))).status).toBe(201);
+    });
+  });
+
+  /**
+   * ★ A RUN RECORDED AFTER THE FACT ("Nhập chuyến cũ"): ITS DRIVER BACKFILLS
+   * WHAT IT COST, AND NOTHING ELSE.
+   *
+   * The office records the run with its crew; the run's driver finds it in
+   * "Đã chạy xong", opens it closed, and declares and corrects the money. The
+   * line is the one ledger every cost screen reads. Once the trip is archived
+   * the same assignment id reaches nothing — not the money, not the history.
+   * The cases run in order: each builds on the line the one before wrote.
+   */
+  describe('★ a recorded run — the driver backfills its money', () => {
+    const ranOn = shiftDay(today, -3);
+    let recordedTrip: string;
+    let recordedTurn: string;
+    let lineId: string;
+
+    const historyIds = async () => {
+      const page = await driverA.get('/driver/history', { params: { limit: 50 } });
+      expect(page.status).toBe(200);
+      return page.data.trips.map((row: { assignment: { id: string } }) => row.assignment.id) as string[];
+    };
+    const historyRow = async (path: '/trip-schedules' | '/trip-schedules/export') => {
+      const page = await boss.get(path, {
+        params: { from: ranOn, to: ranOn, lifecycle: 'history', page: 1, limit: 200 },
+      });
+      expect(page.status).toBe(200);
+      return page.data.items.find((row: { id: string }) => row.id === recordedTrip);
+    };
+
+    beforeAll(async () => {
+      lorries += 1;
+      const vehicle = await boss.post('/trip-vehicles', { plate: `HR-${unique}-${lorries}` });
+      expect(vehicle.status).toBe(201);
+      const recorded = await boss.post('/trip-schedules', {
+        scheduledOn: ranOn,
+        pickupAddress: `Recorded pickup ${unique}`,
+        deliveryAddress: `Recorded delivery ${unique}`,
+        sellPrice: SELL_PRICE,
+        entryMode: 'historical',
+        crew: [{ vehicleId: vehicle.data.id, driverUserId: driverAId }],
+      });
+      expect(recorded.status).toBe(201);
+      expect(recorded.data.status).toBe('finished');
+      recordedTrip = recorded.data.id;
+
+      const turns = await boss.get(`/trip-schedules/${recordedTrip}/driver-assignments`);
+      expect(turns.status).toBe(200);
+      recordedTurn = turns.data.find((turn: { driverUserId: string }) => turn.driverUserId === driverAId).id;
+    });
+
+    it('★ is in the driver’s history, opens closed with its money open — and not to driver B', async () => {
+      expect(await historyIds()).toContain(recordedTurn);
+
+      const detail = await detailOf(recordedTurn);
+      expect(keysOf(detail)).toEqual(sorted(DETAIL_KEYS));
+      expect(detail).toMatchObject({ tripId: recordedTrip, closed: true, expensesOpen: true, expenses: [] });
+      expect(JSON.stringify(detail)).not.toContain('4500000');
+
+      expect((await driverB.get(`/driver/assignments/${recordedTurn}`)).status).toBe(403);
+    });
+
+    it('★ declares and corrects a figure, read back on the detail, the cost dialog, the History list and the export', async () => {
+      const declared = await driverA.post(`/driver/assignments/${recordedTurn}/expenses`, {
+        category: 'toll',
+        amount: '250000.00',
+        clientRequestId: `${recordedTurn}:toll`,
+      });
+      expect(declared.status).toBe(201);
+      expect(keysOf(declared.data)).toEqual(sorted(COST_KEYS));
+      lineId = declared.data.id;
+
+      const corrected = await driverA.patch(`/driver/assignments/${recordedTurn}/expenses/${lineId}`, {
+        amount: '275000.00',
+      });
+      expect(corrected.status).toBe(200);
+      expect(corrected.data.amount).toBe('275000.00');
+
+      const detail = await detailOf(recordedTurn);
+      expect(detail.expensesOpen).toBe(true);
+      expect(detail.expenses.map((line) => [line.id, line.amount, line.source])).toEqual([
+        [lineId, '275000.00', 'driver_portal'],
+      ]);
+
+      // The office reads the same ledger, live — nothing re-snapshots it.
+      const costs = await boss.get(`/trip-schedules/${recordedTrip}/costs`);
+      expect(costs.status).toBe(200);
+      expect(costs.data.total).toBe('275000.00');
+      const summary = { total: '275000.00', itemCount: 1 };
+      expect((await historyRow('/trip-schedules')).costSummary).toMatchObject(summary);
+      expect((await historyRow('/trip-schedules/export')).costSummary).toMatchObject(summary);
+
+      // Driver B cannot write to A's run.
+      const other = await driverB.post(`/driver/assignments/${recordedTurn}/expenses`, {
+        category: 'toll',
+        amount: '1.00',
+      });
+      expect(other.status).toBe(403);
+    });
+
+    it('★ takes no milestone and no completion — money only', async () => {
+      const event = await driverA.post(`/driver/assignments/${recordedTurn}/execution-events`, {
+        type: 'ARRIVED_PICKUP',
+        deviceReportedAt: new Date().toISOString(),
+        clientEventId: `${recordedTurn}:ARRIVED_PICKUP`,
+      });
+      expect(event.status).toBe(403);
+      const completion = await driverA.post(`/driver/assignments/${recordedTurn}/completion-requests`, {
+        expenseDeclaration: 'none',
+      });
+      expect(completion.status).toBe(403);
+      expect((await boss.get(`/trip-schedules/${recordedTrip}`)).data.status).toBe('finished');
+    });
+
+    it('★ once archived, the same assignment id reaches nothing — no money, no history, no detail', async () => {
+      expect((await boss.post(`/trip-schedules/${recordedTrip}/archive`, {})).status).toBe(200);
+
+      const declare = await driverA.post(`/driver/assignments/${recordedTurn}/expenses`, {
+        category: 'toll',
+        amount: '1.00',
+      });
+      expect(declare.status).toBe(403);
+      const edit = await driverA.patch(`/driver/assignments/${recordedTurn}/expenses/${lineId}`, {
+        amount: '1.00',
+      });
+      expect(edit.status).toBe(403);
+
+      expect(await historyIds()).not.toContain(recordedTurn);
+      expect((await driverA.get(`/driver/assignments/${recordedTurn}`)).status).toBe(403);
     });
   });
 });

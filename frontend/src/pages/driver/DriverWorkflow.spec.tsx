@@ -105,6 +105,8 @@ const trip = (over: Record<string, unknown> = {}) => ({
   accountability: 'NOT_DECLARED',
   completion: null,
   closed: false,
+  // The server's answer for live work with nothing holding its money.
+  expensesOpen: true,
   ...over,
 });
 
@@ -612,6 +614,8 @@ describe('★ the trip detail reads the workflow', () => {
         expenses: [cost({ state: 'locked' }), cost({ id: 'c2', category: 'toll', amount: '130000.00', state: 'locked' })],
         accountability: 'DECLARED_WITH_EXPENSE',
         completion: completion('pending'),
+        // As the server answers it: money held — this screen only reads that.
+        expensesOpen: false,
       }),
     );
     renderAt('/driver/assignments/a1');
@@ -668,6 +672,8 @@ describe('★ the trip detail reads the workflow', () => {
         expenses: [cost({ state: 'immutable' })],
         accountability: 'APPROVED_IMMUTABLE',
         completion: completion('approved', { decidedBy: 'b1', decidedAt: AT }),
+        // As the server answers it: money held — this screen only reads that.
+        expensesOpen: false,
       }),
     );
     renderAt('/driver/assignments/a1');

@@ -1,6 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { DriverTrip } from '../domain/driver-read-model';
+import { driverExpenseScope, type DriverExpenseScope } from '../domain/trip-execution';
+import type { TripStatus } from '../domain/trip-schedule';
+import { HISTORICAL_ENTRY_REASON } from '../domain/trip-status-history';
 import type { Coordinates } from '../domain/trip-location';
 import { LIFECYCLE_PREDICATE } from './trip-schedule.repository';
 
@@ -86,8 +89,10 @@ const FROM_ASSIGNMENT = `
  * `end_reason` — how a turn ended grants nothing.
  *
  * Acting is a different question with a different answer, and nothing here
- * widens it: every write route keeps `ActiveAssignmentGuard`, and every write
- * service refuses a closed trip under its own lock.
+ * widens it: reporting and completion keep `ActiveAssignmentGuard` and refuse a
+ * closed trip under their own lock; the two money routes ask
+ * `driverExpenseScope` (see `findForDriver`), which opens exactly one closed
+ * turn — the one recorded after the run.
  */
 const READABLE_BY_ITS_DRIVER = `(a.state = 'active' OR t.status = 'finished')`;
 
@@ -234,7 +239,13 @@ export class DriverTripReadModelRepository {
 
   /**
    * One assignment, if it is this driver's and they may read it
-   * (`READABLE_BY_ITS_DRIVER`), with whether its trip is closed.
+   * (`READABLE_BY_ITS_DRIVER`), with whether its trip is closed and which money
+   * rule its turn falls under (`driverExpenseScope`).
+   *
+   * ★ THE END REASON IS COMPARED, NEVER SELECTED. `end_reason` is free text
+   * written by Operations and stays away from a driver; the one fact the scope
+   * needs is whether the turn was recorded after the run, so only that
+   * boolean leaves the database here.
    *
    * Returns `null` for an assignment that exists but belongs to somebody else,
    * which the service turns into the same 404 a missing one gets: telling a
@@ -246,10 +257,20 @@ export class DriverTripReadModelRepository {
     assignmentId: string,
     driverUserId: string,
     executor: DatabaseQuery = this.db,
-  ): Promise<(DriverTrip & { closed: boolean }) | null> {
-    const rows = await executor.query<DriverTripRow & { closed: boolean }>(
+  ): Promise<(DriverTrip & { closed: boolean; expenseScope: DriverExpenseScope | null }) | null> {
+    const rows = await executor.query<
+      DriverTripRow & {
+        closed: boolean;
+        trip_status: TripStatus;
+        turn_state: 'active' | 'ended';
+        recorded_turn: boolean;
+      }
+    >(
       `SELECT ${DRIVER_TRIP_COLUMNS},
-              t.status = 'finished' AS closed
+              t.status = 'finished' AS closed,
+              t.status AS trip_status,
+              a.state AS turn_state,
+              (a.state = 'ended' AND a.end_reason = '${HISTORICAL_ENTRY_REASON}') AS recorded_turn
        ${FROM_ASSIGNMENT}
         WHERE a.id = $1
           AND a.driver_user_id = $2
@@ -259,6 +280,15 @@ export class DriverTripReadModelRepository {
       [assignmentId, driverUserId],
     );
     const row = rows[0];
-    return row ? { ...toDriverTrip(row), closed: row.closed } : null;
+    if (!row) return null;
+    return {
+      ...toDriverTrip(row),
+      closed: row.closed,
+      // Never archived here — the WHERE above skips archived trips.
+      expenseScope: driverExpenseScope(
+        { state: row.turn_state, endReason: row.recorded_turn ? HISTORICAL_ENTRY_REASON : null },
+        { status: row.trip_status, archived: false },
+      ),
+    };
   }
 }

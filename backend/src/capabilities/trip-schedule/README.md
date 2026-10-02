@@ -181,8 +181,8 @@ history `null → finished` lý do `historical_entry`, và crew
 (`application/trip-entry-crew.ts`) là assignment ghi-rồi-kết-thúc với cùng lý do — kiểm
 bằng đúng luật điều độ (`application/dispatch-eligibility.ts`). Không completion request,
 không execution event, không notification. Chi phí vào sau qua đường backoffice của sổ
-chi phí (`cost.create`), đường vốn không đọc trạng thái chuyến; khoản tài xế khai thì
-không.
+chi phí (`cost.create`), đường vốn không đọc trạng thái chuyến — **và** qua chính tài xế
+trong crew (mục dưới).
 
 Đây là đường duy nhất **sinh ra** `finished` (`createFinished`); mọi đường **chuyển**
 một chuyến sang `finished` đều qua `closeTrip` — mục dưới
@@ -191,6 +191,23 @@ một chuyến sang `finished` đều qua `closeTrip` — mục dưới
 ⚠ Crew của board là assignment `active` — **và** trên chuyến `finished`, các lượt
 `ended` mang dấu `historical_entry` (`IS_CREW` trong repository). Lượt bị điều độ gỡ
 tay không bao giờ mang dấu đó.
+
+## Chi phí tài xế — một luật, `driverExpenseScope` (2026-10-02)
+
+Tài xế ghi chi phí (`POST`/`PATCH /driver/assignments/:id/expenses…`) khi lượt là của
+mình, chuyến **chưa archive**, và: (A) lượt `active`, chuyến chưa `finished` —
+`operational`; hoặc (B) chuyến `finished`, lượt `ended` với `historical_entry` —
+`historical`. Luật nằm ở `domain/trip-execution.ts` và được hỏi ở ba chỗ:
+
+| Chỗ | Hỏi gì |
+|---|---|
+| `api/expense-assignment.guard.ts` | lượt của mình, mang được tiền (`carriesDriverMoney`), chuyến còn (archive → 403) |
+| `TripCostService.declareCost` / `editCost` | khoá chuyến (`lockActive`, archive → 404) → khoá lượt ở mọi trạng thái (`lockById`) → `driverExpenseScope`; rồi các luật cũ: xe, thuê ngoài không nhiên liệu/cầu đường, yêu cầu chờ/đã duyệt |
+| `findMyAssignment` | `expensesOpen` = scope + có xe + không yêu cầu chờ/đã duyệt — frontend chỉ đọc |
+
+Mốc thực hiện và yêu cầu hoàn tất **không đổi**: vẫn `ActiveAssignmentGuard`, lượt nhập cũ
+bị 403. Không route tài xế huỷ chi phí. Chuyến `finished` bình thường vẫn 409. Read model
+không chọn `end_reason` (chữ tự do) — chỉ so sánh nó với `historical_entry`.
 
 ## "Đã xác nhận" = `finished` — một closure, ba cửa (2026-09-29)
 
@@ -227,7 +244,8 @@ khác đi → 422 `STATUS_SET_BY_SERVER` (`finished` → 409, mở lại chuyế
 mọi mốc đã bị huỷ. Tạo booking có yêu cầu hoàn tất mà không có mốc nào (mất sóng) vẫn
 `pending` cho tới khi được duyệt.
 Chuyến `finished` không còn là việc của ai: danh sách việc của tài xế và hàng chờ duyệt
-loại nó; mọi thao tác ghi của tài xế từ chối chuyến đã đóng (kể cả sửa chi phí, `editCost`).
+loại nó; mọi thao tác ghi của tài xế từ chối chuyến đã đóng (kể cả sửa chi phí, `editCost`)
+— trừ chi phí của lượt "Nhập chuyến cũ" (mục "Chi phí tài xế" ở trên).
 
 **Chuẩn hoá `confirmed` cũ** — không phải migration (migration chạy mỗi lần deploy):
 `npm run trips:normalize-confirmed` mặc định là dry run trong transaction READ ONLY, phân
@@ -356,6 +374,7 @@ application/trip-execution.service.ts   assign / replace / end theo assignment; 
 application/trip-completion.service.ts  approve / reject theo request; completeManually ("Đã xác nhận")
 application/trip-closure.ts          closeTrip — đường duy nhất chuyển một chuyến sang finished
 api/active-assignment.guard.ts          tài xế chỉ vào assignment của mình, theo :assignmentId
+api/expense-assignment.guard.ts         route chi phí: lượt mang tiền của mình, chuyến chưa archive
 api/trip-schedule.security.spec.ts   61 case: ai được gì, trên từng route
 domain/trip-board.ts                 thứ tự board, TripCostSummary, canSeeTripCosts
 application/trip-board.service.ts    trang board + tổng chi phí cho người có cost.read

@@ -337,7 +337,7 @@ describe("★ the driver read model — what cannot leave", () => {
 });
 
 describe('★ driver write routes — resource scope', () => {
-  it('guards every route that names an assignment — to ACT on an active turn, to READ one of its own', async () => {
+  it('guards every route that names an assignment — to ACT on an active turn, to READ one of its own, to write MONEY on its own', async () => {
     const controller = await read('api', 'driver-portal.controller.ts');
     const routes = [...controller.matchAll(/@(Get|Post|Patch)\('([^']*)'\)/g)];
     const guards = [...controller.matchAll(/@UseGuards\(([^)]*)\)/g)].map((m) => m[1]);
@@ -347,6 +347,7 @@ describe('★ driver write routes — resource scope', () => {
     const guardOf = (on: string): string => {
       if (on.includes('ActiveAssignmentGuard')) return 'active';
       if (on.includes('ReadableAssignmentGuard')) return 'readable';
+      if (on.includes('ExpenseAssignmentGuard')) return 'expense';
       return 'none';
     };
     const expectedFor = (method: string, path: string): string => {
@@ -354,7 +355,10 @@ describe('★ driver write routes — resource scope', () => {
       if (!path.includes(':assignmentId')) return 'none';
       // ★ Only the one read of a turn may take the wider guard: reading a
       // finished turn never widens what may be ACTED on.
-      return method === 'Get' ? 'readable' : 'active';
+      if (method === 'Get') return 'readable';
+      // ★ The money routes — and only they — also admit a turn recorded after
+      // the run (`driverExpenseScope`). Reporting and completion stay active-only.
+      return path.includes('/expenses') ? 'expense' : 'active';
     };
 
     routes.forEach((match, index) => {

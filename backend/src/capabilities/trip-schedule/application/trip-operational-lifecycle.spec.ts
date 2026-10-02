@@ -1202,9 +1202,10 @@ describe('a driver’s declared expense', () => {
       listEdits: jest.fn(),
       ...over,
     };
+    // ANY state: the money routes read a turn recorded after the run too.
     const assignments = {
-      findActiveById: jest.fn().mockResolvedValue(activeAssignment),
-      lockActiveById: jest.fn().mockResolvedValue(activeAssignment),
+      findById: jest.fn().mockResolvedValue(activeAssignment),
+      lockById: jest.fn().mockResolvedValue(activeAssignment),
     };
     const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
     // No completion request on the turn yet — the ordinary, declarable state.
@@ -1266,7 +1267,7 @@ describe('a driver’s declared expense', () => {
 
   it('refuses a pre-multi-vehicle assignment with no lorry — there is nothing to spend on', async () => {
     const { service, assignments } = build();
-    assignments.lockActiveById.mockResolvedValue({ ...activeAssignment, vehicleId: null, vehicle: null });
+    assignments.lockById.mockResolvedValue({ ...activeAssignment, vehicleId: null, vehicle: null });
 
     await expect(service.declareCost(declaring)).rejects.toThrow(ConflictError);
   });
@@ -1278,11 +1279,50 @@ describe('a driver’s declared expense', () => {
     );
   });
 
-  it('refuses an assignment that has ended', async () => {
+  it('refuses an assignment that does not exist', async () => {
     const { service, assignments } = build();
-    assignments.findActiveById.mockResolvedValue(null);
+    assignments.findById.mockResolvedValue(null);
 
     await expect(service.declareCost(declaring)).rejects.toThrow(NotFoundError);
+  });
+
+  it('refuses a turn that was replaced or removed — it carries no money any more', async () => {
+    const { service, assignments, costs } = build();
+    assignments.lockById.mockResolvedValue({ ...activeAssignment, state: 'ended', endReason: 'xe hỏng' });
+
+    // As reporting and completion answer it: as a turn that does not exist.
+    await expect(service.declareCost(declaring)).rejects.toThrow(NotFoundError);
+    expect(costs.declare).not.toHaveBeenCalled();
+  });
+
+  it('★ keeps a normal finished trip read-only: an active turn on a closed trip takes no new line', async () => {
+    const { service, trips, costs } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
+
+    await expect(service.declareCost(declaring)).rejects.toThrow('That trip is closed.');
+    expect(costs.declare).not.toHaveBeenCalled();
+  });
+
+  it('★ lets the driver of a turn RECORDED after the run add what it cost — the one closed turn that takes money', async () => {
+    const { service, trips, assignments, costs } = build();
+    trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
+    assignments.lockById.mockResolvedValue({ ...activeAssignment, state: 'ended', endReason: 'historical_entry' });
+
+    await service.declareCost(declaring);
+
+    expect(costs.declare).toHaveBeenCalledWith(
+      expect.objectContaining({ tripId: TRIP, driverAssignmentId: ASSIGNMENT, createdBy: DRIVER }),
+      TX,
+    );
+  });
+
+  it('★ refuses an archived trip, recorded turn or not — `lockActive` finds no row', async () => {
+    const { service, trips, assignments, costs } = build();
+    trips.lockActive.mockResolvedValue(null);
+    assignments.lockById.mockResolvedValue({ ...activeAssignment, state: 'ended', endReason: 'historical_entry' });
+
+    await expect(service.declareCost(declaring)).rejects.toThrow(NotFoundError);
+    expect(costs.declare).not.toHaveBeenCalled();
   });
 
   /**
@@ -1373,7 +1413,11 @@ describe('correcting a declared expense', () => {
     ...over,
   });
 
-  const build = (current: Record<string, unknown>, tripStatus = 'executing') => {
+  const build = (
+    current: Record<string, unknown>,
+    tripStatus: string | null = 'executing',
+    turn: Record<string, unknown> = activeAssignment,
+  ) => {
     const costs = {
       lockById: jest.fn().mockResolvedValue(current),
       editEditable: jest.fn().mockResolvedValue({ ...current, amount: '1550000.00' }),
@@ -1383,17 +1427,40 @@ describe('correcting a declared expense', () => {
       database(),
       {
         exists: jest.fn(),
-        lockActive: jest.fn().mockResolvedValue({ id: TRIP, status: tripStatus }),
+        // `null` is what `lockActive` answers for an archived trip.
+        lockActive: jest.fn().mockResolvedValue(tripStatus === null ? null : { id: TRIP, status: tripStatus }),
       } as never,
       costs as never,
       {} as never,
       {} as never,
-      { findActiveById: jest.fn().mockResolvedValue({ id: ASSIGNMENT, tripId: TRIP }) } as never,
+      {
+        findById: jest.fn().mockResolvedValue({ id: ASSIGNMENT, tripId: TRIP }),
+        lockById: jest.fn().mockResolvedValue(turn),
+      } as never,
       {} as never,
       {} as never,
     );
     return { service, costs };
   };
+
+  it('★ lets the driver correct a line on a turn RECORDED after the run', async () => {
+    const recorded = { ...activeAssignment, state: 'ended', endReason: 'historical_entry' };
+    const { service, costs } = build(line(), 'finished', recorded);
+
+    await service.editCost(ASSIGNMENT, 'cost-1', { amount: '1550000.00' }, DRIVER);
+
+    expect(costs.editEditable).toHaveBeenCalled();
+  });
+
+  it('★ refuses a correction once the recorded trip is archived', async () => {
+    const recorded = { ...activeAssignment, state: 'ended', endReason: 'historical_entry' };
+    const { service, costs } = build(line(), null, recorded);
+
+    await expect(service.editCost(ASSIGNMENT, 'cost-1', { amount: '1550000.00' }, DRIVER)).rejects.toThrow(
+      NotFoundError,
+    );
+    expect(costs.editEditable).not.toHaveBeenCalled();
+  });
 
   it('★ refuses any correction once the trip is closed — even of a line still editable', async () => {
     // "Đã xác nhận" and the legacy normalization close a trip around lines

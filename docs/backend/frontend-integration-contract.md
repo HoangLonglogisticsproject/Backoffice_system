@@ -1201,8 +1201,9 @@ project-owned); mục này chỉ ghi **những gì đổi** so với trước. N
 | `GET` | `/trip-schedules/operational-board` | **ASSIGNMENT-GRAIN (ADR-0004 §2.3)**: một phần tử = một dispatch assignment ACTIVE; trip 3 xe = 3 phần tử cùng `tripId`. Trip chưa có ai → một phần tử `assignmentId: null`. Không bao giờ gộp về trip — muốn một dòng/trip dùng `GET /trip-schedules`. Mỗi phần tử: `assignmentId`, `completionRequestId`, `tripId`, `scheduledOn`, `customer`, `vehicle`, `driver`, `scheduledPickupAt/DeliveryAt`, 4 mốc thực tế, `stage`, 2 delay, `expenseDeclaration`, `accountability`, `completionAttempts`, `completionRejectionReason`. Key React theo `assignmentId ?? tripId` | 403 · 422 range |
 | `GET` | `/trip-schedules/completion-review-queue` | cùng hình dạng phần tử; một phần tử cho mỗi request còn chờ (`pending` / `rejected`) — tức theo assignment | 403 |
 | `GET` | `/driver/assignments` | thay `/driver/trips` — mọi lượt của tài xế đang đăng nhập, mỗi lượt có `assignment.id`, `vehicle`. Chỉ tài khoản `driver`; 403 `PASSWORD_CHANGE_REQUIRED` khi còn mật khẩu tạm (như mọi route driver) | 401 · 403 |
-| `GET` | `/driver/assignments/:assignmentId` | thay `/driver/trips/:tripId`. **Đọc** được: lượt ACTIVE của mình, và mọi lượt của mình trên chuyến `finished` — kể cả lượt đã ended (bị thay trước khi xong, hay "Nhập chuyến cũ"), tức đúng những thẻ `/driver/history` liệt kê. Chi tiết mang `closed: true` khi chuyến đã finished → màn hình chỉ xem, không vẽ thao tác nào | **403** không phải của mình / không tồn tại / ended trên chuyến chưa finished · 404 |
-| `POST` | `/driver/assignments/:assignmentId/execution-events` · `…/expenses` · `PATCH …/expenses/:costId` · `POST …/completion-requests` | thay các route `/driver/trips/:tripId/...`. **Thao tác** chỉ trên lượt ACTIVE — đọc được KHÔNG có nghĩa là thao tác được | **403** không phải của mình / đã ended (kể cả khi GET đọc được) · **409** chuyến đã finished |
+| `GET` | `/driver/assignments/:assignmentId` | thay `/driver/trips/:tripId`. **Đọc** được: lượt ACTIVE của mình, và mọi lượt của mình trên chuyến `finished` — kể cả lượt đã ended (bị thay trước khi xong, hay "Nhập chuyến cũ"), tức đúng những thẻ `/driver/history` liệt kê. Chi tiết mang `closed: true` khi chuyến đã finished → không vẽ mốc, không vẽ hoàn tất; và `expensesOpen` — **câu trả lời của server** cho "được khai/sửa chi phí lúc này không" (mục 25) | **403** không phải của mình / không tồn tại / ended trên chuyến chưa finished / chuyến đã archive · 404 |
+| `POST` | `/driver/assignments/:assignmentId/execution-events` · `…/completion-requests` | thay các route `/driver/trips/:tripId/...`. **Thao tác** chỉ trên lượt ACTIVE — đọc được KHÔNG có nghĩa là thao tác được | **403** không phải của mình / đã ended (kể cả khi GET đọc được) · **409** chuyến đã finished |
+| `POST` · `PATCH` | `/driver/assignments/:assignmentId/expenses` · `…/expenses/:costId` | lượt ACTIVE trên chuyến chưa finished, **hoặc** lượt "Nhập chuyến cũ" của mình trên chuyến finished (mục 25). Không có route tài xế huỷ chi phí — backoffice huỷ | **403** không phải của mình / lượt bị thay / chuyến đã archive · **404** chuyến bị archive giữa chừng · **409** chuyến finished bình thường, hoặc đang chờ/đã duyệt hoàn tất |
 
 Ba điều frontend **không được** giả định:
 
@@ -1385,4 +1386,28 @@ Chủ doanh nghiệp chốt: ba trạng thái — **Chờ xử lý** (`pending`)
   xế) — nằm ở `GET /driver/history`, mở chi tiết chỉ xem (`closed: true`) — và không còn
   trong `GET /trip-schedules/completion-review-queue`.
 * `PATCH /driver/assignments/:id/expenses/:costId` trên chuyến đã đóng → **409**, như
-  mọi thao tác ghi khác của tài xế.
+  mọi thao tác ghi khác của tài xế — **trừ** lượt "Nhập chuyến cũ" (mục 25).
+
+## 25. Chi phí tài xế cho chuyến nhập cũ (2026-10-02)
+
+Tài xế có tên trong crew của "Nhập chuyến cũ" khai bổ sung chi phí của chuyến đó: thẻ
+nằm ở `GET /driver/history`, mở chi tiết `closed: true` **và** `expensesOpen: true`.
+
+* **Luật một chỗ, ở server** (`driverExpenseScope`, `domain/trip-execution.ts`): ghi
+  chi phí được khi lượt là của mình, chuyến **chưa archive**, và một trong hai:
+  (A) lượt `active` trên chuyến chưa `finished`; (B) chuyến `finished`, lượt `ended`
+  với `end_reason = historical_entry`. Thêm: chuyến có xe, không có yêu cầu hoàn tất
+  đang chờ hay đã duyệt.
+* **`expensesOpen` — frontend chỉ đọc.** `true` → cho khai/sửa; `false` → chỉ xem.
+  Không suy ra từ `closed`, không tự đoán `historical_entry`.
+* **Chỉ chi phí.** Lượt nhập cũ vẫn bị từ chối mốc thực hiện và yêu cầu hoàn tất (403);
+  không đổi trạng thái, không sửa chuyến/xe/lượt.
+* **Archive đóng hẳn.** Chuyến đã archive: khai/sửa → 403 (guard) / 404 (service, dưới
+  khoá); biến mất khỏi `/driver/history`; chi tiết → 403. Biết `assignmentId` cũ cũng không
+  vào được.
+* **Không có route tài xế huỷ chi phí.** Backoffice huỷ (`POST /trip-schedules/:id/costs/:costId/void`).
+* Chi phí là dòng `trip_costs` như mọi dòng khác (`source: driver_portal`): hiện ở chi
+  tiết tài xế, `GET /trip-schedules/:id/costs`, `costSummary` của Lịch sử chuyến và file
+  xuất — tổng tính trực tiếp, không snapshot.
+* Chuyến `finished` bình thường (duyệt hoàn tất / break-glass) vẫn **chỉ xem**:
+  `expensesOpen: false`, khai → 409.

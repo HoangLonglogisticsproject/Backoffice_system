@@ -227,6 +227,26 @@ export class DriverAssignmentRepository {
   }
 
   /**
+   * One assignment in ANY state — what the driver's MONEY routes ask, because a
+   * turn recorded after the run ("Nhập chuyến cũ") is ended from birth and its
+   * driver may still add what it cost (`driverExpenseScope`). Never what an
+   * execution or completion route asks: those act on active turns only.
+   */
+  async findById(id: string, executor: DatabaseQuery = this.db): Promise<DriverAssignment | null> {
+    const rows = await executor.query<AssignmentRow>(`${ASSIGNMENT_SELECT} WHERE a.id = $1`, [id]);
+    return rows[0] ? toAssignment(rows[0]) : null;
+  }
+
+  /** `findById`, locked for the rest of the caller's transaction — taken after the trip's lock. */
+  async lockById(id: string, executor: DatabaseQuery): Promise<DriverAssignment | null> {
+    const rows = await executor.query<AssignmentRow>(
+      `${ASSIGNMENT_SELECT} WHERE a.id = $1 FOR UPDATE OF a`,
+      [id],
+    );
+    return rows[0] ? toAssignment(rows[0]) : null;
+  }
+
+  /**
    * One assignment, locked for the rest of the transaction, if it is active.
    *
    * ★ `FOR UPDATE` ON THE ASSIGNMENT ROW, NOT ONLY ON THE TRIP. Recording an

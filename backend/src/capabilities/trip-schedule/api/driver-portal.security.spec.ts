@@ -20,7 +20,9 @@ import { TripCostService } from '../application/trip-cost.service';
 import { TripExecutionService } from '../application/trip-execution.service';
 import { DriverTripReadModelRepository } from '../persistence/driver-read-model.repository';
 import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
+import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
 import { ActiveAssignmentGuard } from './active-assignment.guard';
+import { ExpenseAssignmentGuard } from './expense-assignment.guard';
 import { ReadableAssignmentGuard } from './readable-assignment.guard';
 import { DriverPortalController } from './driver-portal.controller';
 
@@ -77,6 +79,17 @@ describe('driver-portal HTTP security', () => {
   const ASSIGNMENT_B_FINISHED = 'bfbfbfbf-bfbf-4fbf-8fbf-bfbfbfbfbfbf';
   /** Never existed. */
   const ASSIGNMENT_MISSING = '77777777-7777-4777-8777-777777777777';
+  /**
+   * ★ A turn driver A was RECORDED with after the run ("Nhập chuyến cũ") —
+   * ended from birth, marked `historical_entry`, on its finished trip. Readable,
+   * and the one closed turn whose driver may still add what it cost.
+   */
+  const ASSIGNMENT_RECORDED = 'cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd';
+  /** The same kind of turn, on a trip that has since been ARCHIVED. */
+  const ASSIGNMENT_RECORDED_ARCHIVED = 'cacacaca-caca-4cac-8cac-cacacacacaca';
+  /** Driver B's turn, recorded after the run on the same kind of trip. */
+  const ASSIGNMENT_B_RECORDED = 'cbcbcbcb-cbcb-4cbc-8cbc-cbcbcbcbcbcb';
+  const TRIP_ARCHIVED = '56565656-5656-4565-8565-565656565656';
 
   const COST = '88888888-8888-8888-8888-888888888888';
 
@@ -92,7 +105,8 @@ describe('driver-portal HTTP security', () => {
   let execution: { recordEvent: jest.Mock };
   let money: { declareCost: jest.Mock; editCost: jest.Mock };
   let completion: { submit: jest.Mock };
-  let assignments: { findActiveById: jest.Mock };
+  let assignments: { findActiveById: jest.Mock; findById: jest.Mock };
+  let trips: { findById: jest.Mock };
   let readModel: { findForDriver: jest.Mock };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
@@ -122,14 +136,34 @@ describe('driver-portal HTTP security', () => {
     completion = { submit: jest.fn().mockResolvedValue({ id: 'request-1', attemptNo: 1 }) };
 
     // The real assignment table, faked at its edge: A and B each hold an ACTIVE
-    // turn on the same trip; the ended turn and the missing id answer `null`,
-    // exactly as `findActiveById` (which filters `state = 'active'`) does.
+    // turn on the same trip; a turn REPLACED before the end is ended with
+    // Operations' own words; a turn RECORDED after the run is ended with the
+    // entry's mark. `findActiveById` answers active turns only (its SQL filters
+    // `state = 'active'`); `findById` — what the money guard asks — any state.
+    const turns: Record<string, { driverUserId: string; state: 'active' | 'ended'; endReason: string | null; tripId: string }> = {
+      [ASSIGNMENT_A]: { driverUserId: DRIVER_A, state: 'active', endReason: null, tripId: TRIP },
+      [ASSIGNMENT_B]: { driverUserId: DRIVER_B, state: 'active', endReason: null, tripId: TRIP },
+      [ASSIGNMENT_ENDED]: { driverUserId: DRIVER_A, state: 'ended', endReason: 'đổi xe', tripId: TRIP },
+      [ASSIGNMENT_FINISHED]: { driverUserId: DRIVER_A, state: 'ended', endReason: 'đổi xe', tripId: TRIP },
+      [ASSIGNMENT_B_FINISHED]: { driverUserId: DRIVER_B, state: 'ended', endReason: 'đổi xe', tripId: TRIP },
+      [ASSIGNMENT_RECORDED]: { driverUserId: DRIVER_A, state: 'ended', endReason: 'historical_entry', tripId: TRIP },
+      [ASSIGNMENT_B_RECORDED]: { driverUserId: DRIVER_B, state: 'ended', endReason: 'historical_entry', tripId: TRIP },
+      [ASSIGNMENT_RECORDED_ARCHIVED]: {
+        driverUserId: DRIVER_A,
+        state: 'ended',
+        endReason: 'historical_entry',
+        tripId: TRIP_ARCHIVED,
+      },
+    };
     assignments = {
-      findActiveById: jest.fn().mockImplementation(async (id: string) => {
-        if (id === ASSIGNMENT_A) return { id, tripId: TRIP, driverUserId: DRIVER_A, state: 'active' };
-        if (id === ASSIGNMENT_B) return { id, tripId: TRIP, driverUserId: DRIVER_B, state: 'active' };
-        return null;
-      }),
+      findActiveById: jest.fn().mockImplementation(async (id: string) =>
+        turns[id]?.state === 'active' ? { id, ...turns[id] } : null,
+      ),
+      findById: jest.fn().mockImplementation(async (id: string) => (turns[id] ? { id, ...turns[id] } : null)),
+    };
+    // Archive-aware, as the repository's `findById` is: an archived trip reads as none.
+    trips = {
+      findById: jest.fn().mockImplementation(async (id: string) => (id === TRIP_ARCHIVED ? null : { id })),
     };
 
     // The read side, faked at the same edge: `findForDriver` answers a turn only
@@ -141,6 +175,7 @@ describe('driver-portal HTTP security', () => {
       [ASSIGNMENT_B]: { driver: DRIVER_B, closed: false },
       [ASSIGNMENT_FINISHED]: { driver: DRIVER_A, closed: true },
       [ASSIGNMENT_B_FINISHED]: { driver: DRIVER_B, closed: true },
+      [ASSIGNMENT_RECORDED]: { driver: DRIVER_A, closed: true },
     };
     readModel = {
       findForDriver: jest.fn().mockImplementation(async (id: string, driver: string) => {
@@ -158,12 +193,14 @@ describe('driver-portal HTTP security', () => {
         DriverOnlyGuard,
         ProvisionedAccountGuard,
         ActiveAssignmentGuard,
+        ExpenseAssignmentGuard,
         ReadableAssignmentGuard,
         { provide: DriverPortalService, useValue: portal },
         { provide: TripExecutionService, useValue: execution },
         { provide: TripCostService, useValue: money },
         { provide: TripCompletionService, useValue: completion },
         { provide: DriverAssignmentRepository, useValue: assignments },
+        { provide: TripScheduleRepository, useValue: trips },
         { provide: DriverTripReadModelRepository, useValue: readModel },
         { provide: AppConfig, useValue: { isProduction: true } },
         {
@@ -340,6 +377,72 @@ describe('driver-portal HTTP security', () => {
   });
 
   // ------------------------------------------------------- no global bypass --
+
+  /**
+   * ★ THE MONEY ROUTES ADMIT ONE CLOSED TURN: the one RECORDED after the run.
+   * The driver backfills what it cost; nothing else about the run reopens.
+   */
+  describe('★ the caller’s own turn RECORDED after the run — money only', () => {
+    const expenseRoutes = (assignment: string): Route[] => [
+      ['post', `/driver/assignments/${assignment}/expenses`],
+      ['patch', `/driver/assignments/${assignment}/expenses/${COST}`],
+    ];
+
+    it('declares an expense on it, against the session user and the route’s assignment', async () => {
+      await authed('post', `/driver/assignments/${ASSIGNMENT_RECORDED}/expenses`)
+        .send({ category: 'toll', amount: '120000.00' })
+        .expect(201);
+
+      expect(money.declareCost).toHaveBeenCalledWith(
+        expect.objectContaining({ assignmentId: ASSIGNMENT_RECORDED, declaredBy: DRIVER_A }),
+      );
+    });
+
+    it('corrects an expense on it', async () => {
+      await authed('patch', `/driver/assignments/${ASSIGNMENT_RECORDED}/expenses/${COST}`)
+        .send({ amount: '130000.00' })
+        .expect(200);
+
+      expect(money.editCost).toHaveBeenCalledWith(ASSIGNMENT_RECORDED, COST, { amount: '130000.00' }, DRIVER_A);
+    });
+
+    it.each<Route>([
+      ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/execution-events`],
+      ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/completion-requests`],
+    ])('★ refuses %s %s — reporting and completion stay active-only', async (method, path) => {
+      const response = await authed(method, path).send(anyBody);
+
+      expect(response.status).toBe(403);
+      noWriteHappened();
+    });
+
+    it.each<Route>(expenseRoutes(ASSIGNMENT_RECORDED_ARCHIVED))(
+      '★ refuses %s %s once its trip is archived — an old id reaches nothing',
+      async (method, path) => {
+        const response = await authed(method, path).send(anyBody);
+
+        expect(response.status).toBe(403);
+        noWriteHappened();
+      },
+    );
+
+    it.each<Route>(expenseRoutes(ASSIGNMENT_FINISHED))(
+      'refuses %s %s on a turn REPLACED before the end — it carries no money',
+      async (method, path) => {
+        const response = await authed(method, path).send(anyBody);
+
+        expect(response.status).toBe(403);
+        noWriteHappened();
+      },
+    );
+
+    it.each<Route>(expenseRoutes(ASSIGNMENT_B_RECORDED))("★ refuses %s %s — driver B's recorded turn, to driver A, as for a missing id", async (method, path) => {
+      const response = await authed(method, path).send(anyBody);
+
+      expect(response.status).toBe(403);
+      noWriteHappened();
+    });
+  });
 
   describe('★ a global administrator', () => {
     beforeEach(() => {

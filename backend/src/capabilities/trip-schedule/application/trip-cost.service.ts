@@ -19,7 +19,15 @@ import {
   TripCostRepository,
   TripCostTotalsRepository,
 } from '../persistence/trip-cost.repository';
-import type { TripCostEdit, VehicleOwnership } from '../domain/trip-execution';
+import {
+  carriesDriverMoney,
+  driverExpenseScope,
+  type DriverAssignment,
+  type DriverExpenseScope,
+  type TripCostEdit,
+  type VehicleOwnership,
+} from '../domain/trip-execution';
+import type { TripSchedule } from '../domain/trip-schedule';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
 import {
   CompletionRequestRepository,
@@ -167,8 +175,10 @@ export class TripCostService {
     requireAmount(input.amount);
 
     // Unlocked, and only for the trip id: everything that decides is re-read
-    // under the locks below, in the order trip → assignment → cost.
-    const named = await this.assignments.findActiveById(input.assignmentId);
+    // under the locks below, in the order trip → assignment → cost. ANY state:
+    // a turn recorded after the run is ended from birth, and whether its money
+    // is still open is the scope's to say, under the lock.
+    const named = await this.assignments.findById(input.assignmentId);
     if (!named) throw new NotFoundError('Assignment not found.');
     const tripId = named.tripId;
 
@@ -198,10 +208,9 @@ export class TripCostService {
         if (already) return already;
       }
 
-      if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
-
-      const assignment = await this.assignments.lockActiveById(input.assignmentId, tx);
-      if (!assignment) throw new ConflictError('That assignment is no longer active.');
+      const assignment = await this.assignments.lockById(input.assignmentId, tx);
+      if (!assignment) throw new NotFoundError('Assignment not found.');
+      requireExpenseScope(assignment, trip);
 
       // ★ NO LORRY, NO EXPENSE — contract §4.1a, the operational ordering. An
       // assignment written since 0027 always names one; this is the pre-0027
@@ -296,19 +305,22 @@ export class TripCostService {
     if (patch.category !== undefined) requireCategory(patch.category);
     if (patch.amount !== undefined) requireAmount(patch.amount);
 
-    // Unlocked, and only for the trip id — the lock order is trip → cost, as
-    // `declareCost` takes it.
-    const named = await this.assignments.findActiveById(assignmentId);
+    // Unlocked, and only for the trip id — the lock order is trip →
+    // assignment → cost, as `declareCost` takes it. Any state, as there.
+    const named = await this.assignments.findById(assignmentId);
     if (!named) throw new NotFoundError('Assignment not found.');
 
     return this.db.transaction(async (tx) => {
-      // ★ A CLOSED TRIP TAKES NO CORRECTION. Approval freezes a turn's lines
-      // before it can close the trip, but "Đã xác nhận" and the legacy
-      // normalization close it around lines still `editable` — so the trip's
-      // state is asked here, as every other driver write asks it.
+      // ★ A CLOSED TRIP TAKES NO CORRECTION — unless it is a run recorded
+      // after the fact, whose driver backfills its figures. Approval freezes
+      // a turn's lines before it can close the trip, but the break-glass
+      // completion and the legacy normalization close it around lines still
+      // `editable` — so the scope is asked here, as `declareCost` asks it.
       const trip = await this.trips.lockActive(named.tripId, tx);
       if (!trip) throw new NotFoundError('Trip not found.');
-      if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
+      const assignment = await this.assignments.lockById(assignmentId, tx);
+      if (!assignment) throw new NotFoundError('Assignment not found.');
+      requireExpenseScope(assignment, trip);
 
       const current = await this.costs.lockById(costId, tx);
       // Belonging to the assignment in the route is checked, not assumed: a
@@ -504,6 +516,21 @@ export class TripCostService {
     return vehicle?.ownership ?? null;
   }
 }
+
+/**
+ * The centralized expense scope (`driverExpenseScope`), said as the refusals a
+ * driver has always been given. A turn that carries no money — replaced or
+ * removed — answers as one that does not exist, exactly as reporting and
+ * completion answer it; an active turn on a closed trip is "closed".
+ * `lockActive` skips archived rows, so a trip in hand here is never archived —
+ * an archived one never got this far.
+ */
+const requireExpenseScope = (assignment: DriverAssignment, trip: TripSchedule): DriverExpenseScope => {
+  if (!carriesDriverMoney(assignment)) throw new NotFoundError('Assignment not found.');
+  const scope = driverExpenseScope(assignment, { status: trip.status, archived: false });
+  if (scope) return scope;
+  throw new ConflictError('That trip is closed.');
+};
 
 /**
  * Refuses an amount `NUMERIC(14,2)` cannot hold exactly, or one that is not

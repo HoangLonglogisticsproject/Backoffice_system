@@ -189,8 +189,17 @@ export interface DriverTripDetail extends DriverTrip {
   completion: CompletionRequest | null;
   /**
    * ★ THE TRIP IS FINISHED — this turn is a record, opened from "Đã chạy xong"
-   * or a past card. The screen draws no action for it (`driverExecution`); the
-   * server refuses every write on it regardless.
+   * or a past card. The screen draws no milestone and no completion for it
+   * (`driverExecution`); the server refuses those regardless. Whether money may
+   * still be written is `expensesOpen`, not this.
    */
   closed: boolean;
+  /**
+   * ★ MAY THE DRIVER DECLARE OR CORRECT A FIGURE ON THIS TURN NOW — THE
+   * SERVER'S ANSWER, read as it is. True on live work whose money no
+   * completion request is holding, and on a run recorded after the fact
+   * ("Nhập chuyến cũ"), whose driver backfills what it cost. The handset
+   * decides nothing about money itself.
+   */
+  expensesOpen: boolean;
 }

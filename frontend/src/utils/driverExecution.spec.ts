@@ -123,6 +123,8 @@ const trip = (over: Partial<DriverTripDetail> = {}): DriverTripDetail => ({
   accountability: 'NOT_DECLARED',
   completion: null,
   closed: false,
+  // The server's answer for live work with nothing holding its money.
+  expensesOpen: true,
   ...over,
 });
 
@@ -391,21 +393,34 @@ describe('when a figure may be corrected', () => {
   });
 });
 
-describe('when new figures may be declared', () => {
-  it('allows it on an open trip with a lorry', () => {
-    expect(canDeclareExpense(trip())).toBe(true);
+/**
+ * ★ THE HANDSET READS `expensesOpen` AND DECIDES NOTHING ABOUT MONEY ITSELF.
+ * Which turns take money and what freezes it (no lorry, a request under
+ * review, approval, an archived trip) is the server's `driverExpenseScope`,
+ * pinned in the backend's own spec — these cases pin only that the screen
+ * follows the answer, whatever else the detail says.
+ */
+describe('when new figures may be declared — the server says', () => {
+  it('allows it when the server says money is open', () => {
+    expect(canDeclareExpense(trip({ expensesOpen: true }))).toBe(true);
   });
 
-  it('★ refuses before a lorry is assigned', () => {
-    expect(canDeclareExpense(trip({ vehicle: null }))).toBe(false);
+  it('refuses it when the server says it is not — a lorry missing, a review pending, an approval', () => {
+    expect(canDeclareExpense(trip({ expensesOpen: false }))).toBe(false);
+    expect(canDeclareExpense(trip({ expensesOpen: false, vehicle: null }))).toBe(false);
+    expect(canDeclareExpense(trip({ expensesOpen: false, completion: request({ state: 'pending' }) }))).toBe(false);
   });
 
-  it('refuses while a completion is under review', () => {
-    expect(canDeclareExpense(trip({ completion: request({ state: 'pending' }) }))).toBe(false);
+  it('★ does not second-guess it from `closed` — a run recorded after the fact is closed AND open for its figures', () => {
+    expect(canDeclareExpense(trip({ closed: true, expensesOpen: true }))).toBe(true);
+    expect(canDeclareExpense(trip({ closed: false, expensesOpen: false }))).toBe(false);
   });
 
-  it('refuses once the trip is approved', () => {
-    expect(canDeclareExpense(trip({ accountability: 'APPROVED_IMMUTABLE' }))).toBe(false);
+  it('corrects only an editable line, and only while money is open', () => {
+    const line = cost();
+    expect(canCorrectExpense(trip({ expensesOpen: true }), line)).toBe(true);
+    expect(canCorrectExpense(trip({ expensesOpen: false }), line)).toBe(false);
+    expect(canCorrectExpense(trip({ expensesOpen: true }), cost({ state: 'locked' }))).toBe(false);
   });
 });
 
@@ -449,6 +464,8 @@ describe('the completion stage', () => {
       events: reported,
       accountability: 'APPROVED_IMMUTABLE',
       completion: request({ state: 'approved' }),
+      // As the server answers an approved turn.
+      expensesOpen: false,
     });
 
     expect(completionStage(done)).toBe('approved');
@@ -545,7 +562,8 @@ describe('★ a closed trip — a record the driver reads, never acts on', () =>
   it('offers no new figure, no correction and no completion — even where an open trip would', () => {
     const line = cost();
     const open = trip({ events: ALL, expenses: [line] });
-    const closed = { ...open, closed: true };
+    // As the server answers a normally finished turn.
+    const closed = { ...open, closed: true, expensesOpen: false };
 
     expect([canDeclareExpense(open), canCorrectExpense(open, line), canSubmitCompletion(open)]).toEqual([true, true, true]);
     expect([canDeclareExpense(closed), canCorrectExpense(closed, line), canSubmitCompletion(closed)]).toEqual([
@@ -553,6 +571,18 @@ describe('★ a closed trip — a record the driver reads, never acts on', () =>
       false,
       false,
     ]);
+  });
+
+  it('★ a run recorded after the fact: its figures open, and still no completion', () => {
+    const line = cost();
+    const recorded = trip({ closed: true, expensesOpen: true, expenses: [line] });
+
+    expect([canDeclareExpense(recorded), canCorrectExpense(recorded, line), canSubmitCompletion(recorded)]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(currentStage(recorded)).toBeNull();
   });
 
   it('says "closed" — unless this turn was approved itself, which outranks it', () => {

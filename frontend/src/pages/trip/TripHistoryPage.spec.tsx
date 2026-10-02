@@ -6,7 +6,7 @@ import { LanguageProvider } from '@/contexts/LanguageContext';
 import { translate, type TranslationKey } from '@/types/translate';
 import type { TripBoardRow } from '@/types/tripBoard';
 import { toTripSheetRows } from '@/utils/export/tripScheduleSheet';
-import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
+import { formatCalendarDay, formatDateTime, todayAsCalendarDay } from '@/utils/format/datetime';
 
 const fetchTripSchedules = vi.fn();
 const fetchAllTripSchedules = vi.fn();
@@ -237,6 +237,9 @@ describe('TripHistoryPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Nhập chuyến cũ' }));
     fireEvent.change(await screen.findByLabelText('Ngày lấy hàng *'), { target: { value: '2099-09-23' } });
 
+    // ★ The picker ends on today — and reaches back as far as the run did.
+    expect(screen.getByLabelText('Ngày lấy hàng *')).toHaveAttribute('max', todayAsCalendarDay());
+    expect(screen.getByLabelText('Ngày lấy hàng *')).not.toHaveAttribute('min');
     expect(screen.getByText('Chuyến cũ phải có ngày lấy hàng không muộn hơn hôm nay.')).toBeInTheDocument();
     fireEvent.submit(screen.getByLabelText('Ngày lấy hàng *').closest('form')!);
     await act(async () => {});

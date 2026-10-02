@@ -21,6 +21,8 @@ export function TripTimeField({
   error = null,
   hint,
   required = false,
+  min,
+  max,
 }: Readonly<{
   id: string;
   label: string;
@@ -31,6 +33,9 @@ export function TripTimeField({
   error?: string | null;
   hint?: string;
   required?: boolean;
+  /** The picker's own bounds — a narrower calendar, never the rule (that is `error`, and the server's). */
+  min?: string;
+  max?: string;
 }>) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -53,6 +58,8 @@ export function TripTimeField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}
+        min={min}
+        max={max}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
       />

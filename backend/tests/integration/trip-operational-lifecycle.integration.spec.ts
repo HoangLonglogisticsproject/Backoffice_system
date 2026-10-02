@@ -36,6 +36,7 @@ import { DriverPortalService } from '../../src/capabilities/trip-schedule/applic
 import { DriverTripReadModelRepository } from '../../src/capabilities/trip-schedule/persistence/driver-read-model.repository';
 import { businessToday } from '@common/pagination/date-range-page-query.dto';
 import { OperationalBoardRepository } from '../../src/capabilities/trip-schedule/persistence/operational-board.repository';
+import { TripBoardCostRepository } from '../../src/capabilities/trip-schedule/persistence/trip-board-cost.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
 import { NotificationService } from '../../src/capabilities/notification/application/notification.service';
@@ -4234,7 +4235,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   // ============================ the driver's own record: read, never act ==
 
-  describe('★ Driver Portal: a turn "Đã chạy xong" lists, its detail opens — read-only', () => {
+  describe('★ Driver Portal: a turn "Đã chạy xong" lists, its detail opens — no milestone, no request', () => {
     let portal: DriverPortalService;
     beforeEach(() => {
       portal = new DriverPortalService(
@@ -4249,15 +4250,28 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const historyOf = async (driver: string): Promise<string[]> =>
       (await portal.listMyFinishedTrips(driver, { limit: 50 })).trips.map((trip) => trip.assignment.id);
 
-    /** Every driver write, attempted on one turn — each must be refused. */
-    const everyWrite = (assignment: string, driver: string) => [
+    /** The lifecycle writes a driver has — reporting and asking to close. */
+    const lifecycleWrites = (assignment: string, driver: string) => [
       () =>
         execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: `w-${assignment}`, recordedBy: driver }),
-      () => money.declareCost({ assignmentId: assignment, category: 'fuel', amount: '100000.00', declaredBy: driver }),
       () => completion.submit(assignment, driver, 'none'),
     ];
+    const declare = (assignment: string, driver: string, amount = '100000.00') =>
+      money.declareCost({ assignmentId: assignment, category: 'toll', amount, declaredBy: driver });
+    const recordedRun = async (driverUserId: string) => {
+      const recorded = await board.create({
+        scheduledOn: '2026-08-20',
+        entryMode: 'historical',
+        crew: [{ vehicleId: await newVehicle(plate()), driverUserId }],
+        createdBy: operator,
+      });
+      const [turn] = (await sql(`SELECT id FROM trip_driver_assignments WHERE trip_id = $1`, [recorded.id])) as {
+        id: string;
+      }[];
+      return { trip: recorded.id, turn: turn!.id };
+    };
 
-    it('★ a recorded run: not live work, IN the history, opens read-only, and takes no action', async () => {
+    it('★ a recorded run: not live work, IN the history, opens closed, and takes no milestone or request — its money stays open', async () => {
       const live = await runningTrip(); // the control: an active turn IS the driver's work
       const recorded = await board.create({
         scheduledOn: '2026-08-20',
@@ -4274,9 +4288,16 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(await historyOf(driverA)).toEqual([turn!.id]);
 
       const detail = await portal.findMyAssignment(turn!.id, driverA);
-      expect(detail).toMatchObject({ tripId: recorded.id, closed: true, events: [], expenses: [], completion: null });
+      expect(detail).toMatchObject({
+        tripId: recorded.id,
+        closed: true,
+        expensesOpen: true,
+        events: [],
+        expenses: [],
+        completion: null,
+      });
 
-      for (const write of everyWrite(turn!.id, driverA)) await expect(write()).rejects.toThrow(NotFoundError);
+      for (const write of lifecycleWrites(turn!.id, driverA)) await expect(write()).rejects.toThrow(NotFoundError);
       const invented = (await sql(
         `SELECT (SELECT count(*) FROM trip_execution_events WHERE trip_id = $1)
               + (SELECT count(*) FROM trip_completion_requests WHERE trip_id = $1)
@@ -4287,6 +4308,49 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
       const rows = await operations.list({ from: '2026-08-01', to: '2026-08-31', page: 1, limit: 50 });
       expect(rows.some((row) => row.assignmentId === turn!.id)).toBe(false);
+    });
+
+    it('★ the recorded run’s driver backfills its money — declared, corrected, and read wherever cost is read', async () => {
+      const { trip, turn } = await recordedRun(driverA);
+
+      const line = await declare(turn, driverA, '250000.00');
+      expect(line).toMatchObject({ tripId: trip, driverAssignmentId: turn, state: 'editable', createdBy: driverA });
+      const corrected = await money.editCost(turn, line.id, { amount: '275000.00' }, driverA);
+      expect(corrected.amount).toBe('275000.00');
+
+      // The driver's own detail, still open for more.
+      const detail = await portal.findMyAssignment(turn, driverA);
+      expect(detail.expensesOpen).toBe(true);
+      expect(detail.expenses.map((cost) => [cost.id, cost.amount])).toEqual([[line.id, '275000.00']]);
+
+      // The office's cost dialog and the board's (and the export's) cost
+      // summary — one canonical ledger, read live, nothing to re-snapshot.
+      expect((await money.listCosts(trip)).total).toBe('275000.00');
+      const summary = (await new TripBoardCostRepository(database).forTrips([trip])).get(trip);
+      expect(summary).toMatchObject({ total: '275000.00', itemCount: 1 });
+
+      // Money only: nothing about the run moved.
+      expect(await sql(`SELECT status FROM trip_schedules WHERE id = $1`, [trip])).toEqual([{ status: 'finished' }]);
+      for (const write of lifecycleWrites(turn, driverA)) await expect(write()).rejects.toThrow(NotFoundError);
+      // And only its own driver's money.
+      await expect(declare(turn, driverB)).rejects.toThrow(ForbiddenError);
+    });
+
+    it('★ once the recorded run is archived, it takes no money and leaves the driver’s history', async () => {
+      const { trip, turn } = await recordedRun(driverA);
+      const line = await declare(turn, driverA);
+      expect(await historyOf(driverA)).toEqual([turn]);
+
+      await board.archive(trip, operator);
+
+      await expect(declare(turn, driverA)).rejects.toThrow(NotFoundError);
+      await expect(money.editCost(turn, line.id, { amount: '120000.00' }, driverA)).rejects.toThrow(NotFoundError);
+      expect(await historyOf(driverA)).toEqual([]);
+      await expect(portal.findMyAssignment(turn, driverA)).rejects.toThrow(NotFoundError);
+      // The line written before the archive is still the record.
+      expect((await sql(`SELECT amount::text AS amount FROM trip_costs WHERE id = $1`, [line.id]))[0]).toEqual({
+        amount: '100000.00',
+      });
     });
 
     it('★ a driver replaced before the end: once the trip finishes, their turn is history and opens', async () => {
@@ -4300,8 +4364,14 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       await approve(trip);
 
       expect(await historyOf(driverA)).toEqual([assignment]);
-      expect(await portal.findMyAssignment(assignment, driverA)).toMatchObject({ tripId: trip, closed: true });
-      for (const write of everyWrite(assignment, driverA)) await expect(write()).rejects.toThrow(NotFoundError);
+      expect(await portal.findMyAssignment(assignment, driverA)).toMatchObject({
+        tripId: trip,
+        closed: true,
+        expensesOpen: false,
+      });
+      for (const write of lifecycleWrites(assignment, driverA)) await expect(write()).rejects.toThrow(NotFoundError);
+      // A replaced turn carries no money — it answers as if it did not exist.
+      await expect(declare(assignment, driverA)).rejects.toThrow(NotFoundError);
     });
 
     it('a normally completed turn opens closed, and every write on it is refused by the service', async () => {
@@ -4310,10 +4380,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       await approve(trip);
 
       expect(await historyOf(driverA)).toEqual([assignment]);
-      expect(await portal.findMyAssignment(assignment, driverA)).toMatchObject({ closed: true });
-      // Still `active` (approval never ends a turn), so the guard would pass —
+      expect(await portal.findMyAssignment(assignment, driverA)).toMatchObject({ closed: true, expensesOpen: false });
+      // Still `active` (approval never ends a turn), so the guards would pass —
       // the services' own closed-trip checks are what refuse it.
-      for (const write of everyWrite(assignment, driverA)) await expect(write()).rejects.toThrow(ConflictError);
+      for (const write of lifecycleWrites(assignment, driverA)) await expect(write()).rejects.toThrow(ConflictError);
+      // ★ A NORMAL finished trip stays read-only for money too.
+      await expect(declare(assignment, driverA)).rejects.toThrow('That trip is closed.');
     });
 
     it('★ never opens another driver’s finished turn, nor an unknown id — and live work is unchanged', async () => {
