@@ -706,6 +706,17 @@ describe('driver portal (D1) against the real API', () => {
       });
       expect(late.status).toBe(409);
     });
+
+    it('★ a booking is dated today or later — yesterday 422 PAST_DAY, today and tomorrow 201', async () => {
+      const book = (scheduledOn: string) =>
+        boss.post('/trip-schedules', { scheduledOn, sellPrice: SELL_PRICE, entryMode: 'operational' });
+
+      const yesterday = await book(shiftDay(today, -1));
+      expect(yesterday.status).toBe(422);
+      expect(toApiError(yesterday.status, yesterday.data).details).toMatchObject({ scheduledOn: 'PAST_DAY' });
+      expect((await book(today)).status).toBe(201);
+      expect((await book(shiftDay(today, 1))).status).toBe(201);
+    });
   });
 
   /**

@@ -19,6 +19,7 @@ import { formatPlate } from '@/utils/format';
 import { timelineErrors } from '@/utils/tripTimeline';
 import { useTripLocations } from '@/hooks/trip';
 import { useEligibleDrivers } from '@/hooks/trip/useTripAssignment';
+import { useBusinessToday } from '@/hooks/useBusinessToday';
 import {
   type TripCustomer,
   type TripEntryMode,
@@ -518,6 +519,8 @@ export function TripFormModal({
   const editing = trip !== null;
   /** Recording a past run: born finished, crew in the same request. */
   const historicalEntry = !editing && mode === 'historical';
+  /** The picker's bound on a NEW trip: a booking from today on, a recorded run up to today. */
+  const today = useBusinessToday();
 
   /**
    * ★ CHECKED AS IT IS TYPED, per field. The calendar policy is the entry
@@ -899,6 +902,8 @@ export function TripFormModal({
                 value={form.scheduledOn}
                 onChange={(value) => set('scheduledOn', value)}
                 error={timeline.scheduledOn && t(timeline.scheduledOn)}
+                min={!editing && mode === 'operational' ? today : undefined}
+                max={historicalEntry ? today : undefined}
                 required
               />
               <TripTimeField

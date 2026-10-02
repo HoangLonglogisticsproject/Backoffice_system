@@ -7,7 +7,7 @@ import { updateTripLocationById } from '@/api/tripCatalogue';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiError } from '@/utils/errors';
-import { currentMonthRange } from '@/utils/format/datetime';
+import { currentMonthRange, todayAsCalendarDay } from '@/utils/format/datetime';
 
 const fetchTripSchedules = vi.fn();
 const archiveTripSchedule = vi.fn();
@@ -2122,6 +2122,9 @@ describe('TripSchedulePage', () => {
       expect(screen.getByRole('heading', { name: 'Tạo chuyến mới' })).toBeInTheDocument();
       expect(screen.getByLabelText('Ngày lấy hàng *')).toHaveAttribute('type', 'date');
       expect(screen.getByLabelText('Ngày lấy hàng *')).toBeRequired();
+      // ★ The picker opens on today and nothing earlier — a booking is work still to run.
+      expect(screen.getByLabelText('Ngày lấy hàng *')).toHaveAttribute('min', todayAsCalendarDay());
+      expect(screen.getByLabelText('Ngày lấy hàng *')).not.toHaveAttribute('max');
       expect(screen.getByLabelText('Giờ lấy hàng')).toHaveAttribute('type', 'time');
       expect(screen.getByLabelText('Giờ lấy hàng')).not.toBeRequired();
       expect(delivery()).toHaveAttribute('type', 'datetime-local');
@@ -2225,6 +2228,7 @@ describe('TripSchedulePage', () => {
 
       // The fixture ran in August 2026 — long past — and it is still correctable.
       expect(screen.queryByText(/Nhập chuyến cũ/)).toBeNull();
+      expect(screen.getByLabelText('Ngày lấy hàng *')).not.toHaveAttribute('min');
 
       // The fixture picks up at 08:30 on 04/08; 07:00 the same day is before it.
       fireEvent.change(delivery(), { target: { value: '2026-08-04T07:00' } });
