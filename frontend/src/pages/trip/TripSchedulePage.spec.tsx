@@ -1169,6 +1169,28 @@ describe('TripSchedulePage', () => {
       expect(screen.queryByRole('button', { name: 'Hoàn tác' })).toBeNull();
     });
 
+    it('★ a move in flight belongs to its own booking — selecting another shows that one untouched', async () => {
+      updateTripStatus.mockReturnValue(new Promise(() => {}));
+      useSession.mockReturnValue(session(write));
+      boardOf(trip({ status: 'pending' }), trip({ id: 't2', status: 'pending', customer: { id: 'c2', name: 'KHÁCH B' } }));
+      renderPage();
+
+      const first = await openBooking('WWL');
+      fireEvent.click(first.getByRole('button', { name: 'Bắt đầu thực hiện' }));
+      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'));
+      expect(first.getByRole('button', { name: 'Đang lưu…' })).toBeDisabled();
+
+      // The list is still clickable beside the panel; the other trip has no write in flight.
+      const second = await openBooking('KHÁCH B');
+      expect(second.queryByRole('button', { name: 'Đang lưu…' })).toBeNull();
+      expect(second.getByRole('button', { name: 'Bắt đầu thực hiện' })).toBeEnabled();
+      expect(second.getByRole('button', { name: 'Sửa' })).toBeEnabled();
+
+      // Back on the first, its wait is still its own.
+      const again = await openBooking('WWL');
+      expect(again.getByRole('button', { name: 'Đang lưu…' })).toBeDisabled();
+    });
+
     it('★ "Đưa về Chờ xử lý" sends an executing trip back while no driver has reported', async () => {
       useSession.mockReturnValue(session(write));
       boardOf(trip({ status: 'executing' }));
