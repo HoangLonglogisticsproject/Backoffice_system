@@ -11,8 +11,6 @@ import { currentMonthRange } from '@/utils/format/datetime';
 
 const fetchTripSchedules = vi.fn();
 const archiveTripSchedule = vi.fn();
-const updateTripStatus = vi.fn();
-const completeTrip = vi.fn();
 const updateTripSchedule = vi.fn();
 const fetchTripVehicles = vi.fn();
 const fetchTripCustomers = vi.fn();
@@ -40,8 +38,6 @@ vi.mock('@/api/tripSchedule', () => ({
   archiveTripSchedule: (...a: unknown[]) => archiveTripSchedule(...a),
   createTripSchedule: (...a: unknown[]) => createTripSchedule(...a),
   updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),
-  updateTripStatus: (...a: unknown[]) => updateTripStatus(...a),
-  completeTrip: (...a: unknown[]) => completeTrip(...a),
 }));
 const fetchEligibleDrivers = vi.fn();
 const assignDriver = vi.fn();
@@ -177,10 +173,9 @@ const renderPage = () => {
       <MemoryRouter initialEntries={['/dispatch/trip-schedule']}>
         <LanguageProvider>
           <TripSchedulePage />
-          {/* The status control has no error line of its own: a refusal is
-              announced by `useUpdateTripStatus` as a toast, the way it is in the
-              real app (`main.tsx`). Mounted here so the test still asserts what
-              a dispatcher actually reads. */}
+          {/* Mounted as in the real app (`main.tsx`): some outcomes — a
+              dispatch change, a save — are announced as toasts, and the tests
+              assert what a dispatcher actually reads. */}
           <Toaster />
         </LanguageProvider>
       </MemoryRouter>
@@ -238,8 +233,6 @@ describe('TripSchedulePage', () => {
       totalPages: 1,
     });
     archiveTripSchedule.mockReset().mockResolvedValue(trip());
-    updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'executing' }));
-    completeTrip.mockReset().mockResolvedValue(trip({ status: 'finished' }));
     updateTripSchedule.mockReset().mockResolvedValue(trip());
     createTripSchedule.mockReset().mockResolvedValue(trip());
     fetchTripVehicles.mockReset().mockResolvedValue([]);
@@ -1117,182 +1110,60 @@ describe('TripSchedulePage', () => {
   });
 
   /**
-   * ★ STATUS IS INFORMATION; WHAT MOVES A TRIP IS A NAMED ACTION.
-   *
-   * No status picker anywhere: "Bắt đầu thực hiện" and "Đưa về Chờ xử lý" are
-   * the board move named, through its own endpoint; "Đánh dấu Đã xác nhận" is
-   * the canonical completion, the SuperAdmin's alone and confirmed first. And
-   * every one of them waits for the server — nothing changes on screen until
-   * the write has been accepted and the board re-read.
+   * ★ THE LIFECYCLE IS NOT THE OFFICE'S. The driver starts the run — the first
+   * live milestone moves it `pending → executing` on the server — and asks to
+   * close it; the SuperAdmin's approval closes it into Lịch sử chuyến. So the
+   * status here is a read-only projection, and no action starts, rewinds or
+   * completes a trip — for anybody, the SuperAdmin included.
    */
-  describe('the trip lifecycle — named actions, server-confirmed', () => {
-    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
+  describe('the trip lifecycle — read-only, driven by the driver and approval', () => {
+    const everything = [
+      'trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write',
+      'dispatch.write', 'trip.complete.review', 'trip.price.read', 'trip.price.write', 'cost.read',
+    ];
     const boardOf = (...rows: unknown[]) =>
       fetchTripSchedules.mockResolvedValue({ items: rows, page: 1, limit: 20, total: rows.length, totalPages: 1 });
-    const toaster = () => document.querySelector('[data-sonner-toaster]')?.textContent ?? '';
-
-    it('★ offers no status picker anywhere — not to a trip.write holder, not to the SuperAdmin', async () => {
-      useSession.mockReturnValue(session([...write, 'dispatch.write', 'trip.complete.review']));
-      boardOf(trip({ status: 'pending' }));
-      renderPage();
-
-      const panel = await openBooking();
-      expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull();
+    const LIFECYCLE = ['Bắt đầu thực hiện', 'Đưa về Chờ xử lý', 'Đánh dấu Đã xác nhận', 'Đổi trạng thái'];
+    const noLifecycleControl = (panel: ReturnType<typeof within>) => {
+      for (const name of LIFECYCLE) expect(panel.queryByRole('button', { name })).toBeNull();
       expect(panel.queryAllByRole('combobox')).toHaveLength(0);
-      // The status is still said — as a label, in the business's words.
-      expect(panel.getByText('Chờ xử lý')).toBeInTheDocument();
-    });
+    };
 
-    it('★ "Bắt đầu thực hiện" moves a pending trip through the status endpoint — and shows nothing until the server answers', async () => {
-      let settle: (value: unknown) => void = () => {};
-      updateTripStatus.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
-      useSession.mockReturnValue(session(write));
-      boardOf(trip({ status: 'pending' }));
+    it('★ a pending booking: the status is said, and the office may crew, correct, cost or archive it — nothing more', async () => {
+      useSession.mockReturnValue(session(everything));
+      boardOf(trip({ status: 'pending', assignments: [] }));
       renderPage();
 
       const panel = await openBooking();
-      fireEvent.click(panel.getByRole('button', { name: 'Bắt đầu thực hiện' }));
-
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'));
-      // Waiting, visibly — and the badge has NOT moved on the strength of a click.
-      expect(panel.getByRole('button', { name: 'Đang lưu…' })).toBeDisabled();
       expect(panel.getByText('Chờ xử lý')).toBeInTheDocument();
-      expect(panel.queryByText('Đang thực hiện')).toBeNull();
-
-      boardOf(trip({ status: 'executing' }));
-      settle(trip({ status: 'executing' }));
-
-      // Only now, from the re-read board.
-      expect(await panel.findByText('Đang thực hiện')).toBeInTheDocument();
-      await waitFor(() => expect(toaster()).toContain('Chờ xử lý → Đang thực hiện'));
-      // No undo: the way back is the opposite action, decided by the server.
-      expect(screen.queryByRole('button', { name: 'Hoàn tác' })).toBeNull();
+      noLifecycleControl(panel);
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual([
+        'Phân công xe & tài xế',
+        'Sửa',
+        'Chi phí chuyến',
+        'Lưu trữ',
+      ]);
     });
 
-    it('★ a move in flight belongs to its own booking — selecting another shows that one untouched', async () => {
-      updateTripStatus.mockReturnValue(new Promise(() => {}));
-      useSession.mockReturnValue(session(write));
-      boardOf(trip({ status: 'pending' }), trip({ id: 't2', status: 'pending', customer: { id: 'c2', name: 'KHÁCH B' } }));
-      renderPage();
-
-      const first = await openBooking('WWL');
-      fireEvent.click(first.getByRole('button', { name: 'Bắt đầu thực hiện' }));
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'));
-      expect(first.getByRole('button', { name: 'Đang lưu…' })).toBeDisabled();
-
-      // The list is still clickable beside the panel; the other trip has no write in flight.
-      const second = await openBooking('KHÁCH B');
-      expect(second.queryByRole('button', { name: 'Đang lưu…' })).toBeNull();
-      expect(second.getByRole('button', { name: 'Bắt đầu thực hiện' })).toBeEnabled();
-      expect(second.getByRole('button', { name: 'Sửa' })).toBeEnabled();
-
-      // Back on the first, its wait is still its own.
-      const again = await openBooking('WWL');
-      expect(again.getByRole('button', { name: 'Đang lưu…' })).toBeDisabled();
-    });
-
-    it('★ "Đưa về Chờ xử lý" sends an executing trip back while no driver has reported', async () => {
-      useSession.mockReturnValue(session(write));
-      boardOf(trip({ status: 'executing' }));
-      renderPage();
-
-      const panel = await openBooking();
-      expect(panel.queryByRole('button', { name: 'Bắt đầu thực hiện' })).toBeNull();
-      fireEvent.click(panel.getByRole('button', { name: 'Đưa về Chờ xử lý' }));
-
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'pending'));
-    });
-
-    it('★ offers no way back once a driver has reported — the server refuses it, so it is not drawn', async () => {
-      useSession.mockReturnValue(session(write));
+    it('★ an executing booking reads as the driver put it — on the road, the driver started — with no control over it', async () => {
+      useSession.mockReturnValue(session(everything));
       boardOf(trip({ status: 'executing', assignments: [turn({ started: true })] }));
       renderPage();
 
       const panel = await openBooking();
+      expect(panel.getByText('Đang thực hiện')).toBeInTheDocument();
       expect(panel.getByText('Tài xế đã bắt đầu')).toBeInTheDocument();
-      expect(panel.queryByRole('button', { name: 'Đưa về Chờ xử lý' })).toBeNull();
+      noLifecycleControl(panel);
+      expect(panel.getByRole('button', { name: 'Đổi phân công' })).toBeInTheDocument();
     });
 
-    /**
-     * ★ THE ONE REFUSAL THE ROW CANNOT PREDICT. A standing completion request
-     * is not on the list row — it may stand with no live milestone — so the
-     * button is offered and the server, which decides, says why not.
-     */
-    it("★ a refused move leaves the trip exactly as it was, and says why in the server's words", async () => {
-      updateTripStatus.mockRejectedValue(
-        new ApiError(409, 'CONFLICT', 'A driver has asked for this trip to be closed, so it cannot go back to pending.'),
-      );
-      useSession.mockReturnValue(session(write));
-      boardOf(trip({ status: 'executing' }));
-      renderPage();
-
-      const panel = await openBooking();
-      fireEvent.click(panel.getByRole('button', { name: 'Đưa về Chờ xử lý' }));
-
-      expect(await screen.findByText(/asked for this trip to be closed/)).toBeInTheDocument();
-      expect(panel.getByText('Đang thực hiện')).toBeInTheDocument();
-      expect(panel.getByRole('button', { name: 'Đưa về Chờ xử lý' })).toBeEnabled();
-    });
-
-    it('★ completion is trip.complete.review alone — trip.write and dispatch never imply it', async () => {
-      useSession.mockReturnValue(session([...write, 'dispatch.write', 'trip.price.write', 'cost.read']));
-      boardOf(trip({ status: 'pending' }));
-      renderPage();
-
-      const panel = await openBooking();
-      expect(panel.queryByRole('button', { name: 'Đánh dấu Đã xác nhận' })).toBeNull();
-    });
-
-    it('★ the SuperAdmin completes a trip only after confirming — one canonical call, then it leaves Lịch xe', async () => {
-      useSession.mockReturnValue(session([...write, 'trip.complete.review']));
-      boardOf(trip({ status: 'executing' }));
-      renderPage();
-
-      const panel = await openBooking();
-      fireEvent.click(panel.getByRole('button', { name: 'Đánh dấu Đã xác nhận' }));
-
-      // A confirmation that names the trip and says there is no way back.
-      const dialog = within(await screen.findByRole('dialog', { name: 'Đánh dấu Đã xác nhận' }));
-      expect(dialog.getByText(/không thể hoàn tác/i)).toBeInTheDocument();
-      expect(completeTrip).not.toHaveBeenCalled();
-
-      // The re-read Lịch xe no longer holds it: it is Lịch sử chuyến's now.
-      boardOf();
-      fireEvent.click(dialog.getByRole('button', { name: 'Đánh dấu Đã xác nhận' }));
-
-      await waitFor(() => expect(completeTrip).toHaveBeenCalledWith('t1'));
-      expect(completeTrip).toHaveBeenCalledTimes(1);
-      expect(updateTripStatus).not.toHaveBeenCalled();
-      await waitFor(() => expect(toaster()).toContain('Đã xác nhận chuyến — đã chuyển sang Lịch sử chuyến'));
-      // The booking is gone from the list, and the panel no longer describes it.
-      expect(await screen.findByText('Chọn một chuyến để xem chi tiết.')).toBeInTheDocument();
-      expect(screen.queryByRole('dialog')).toBeNull();
-    });
-
-    it("★ a refused completion stays in its dialog, in the server's words, and the trip stays put", async () => {
-      completeTrip.mockRejectedValue(new ApiError(409, 'CONFLICT', 'A completion request is waiting on this trip.'));
-      useSession.mockReturnValue(session([...write, 'trip.complete.review']));
-      boardOf(trip({ status: 'executing' }));
-      renderPage();
-
-      const panel = await openBooking();
-      fireEvent.click(panel.getByRole('button', { name: 'Đánh dấu Đã xác nhận' }));
-      const dialog = within(await screen.findByRole('dialog', { name: 'Đánh dấu Đã xác nhận' }));
-      fireEvent.click(dialog.getByRole('button', { name: 'Đánh dấu Đã xác nhận' }));
-
-      expect(await dialog.findByRole('alert')).toHaveTextContent('A completion request is waiting on this trip.');
-      expect(panel.getByText('Đang thực hiện')).toBeInTheDocument();
-    });
-
-    it("★ a legacy `confirmed` row reads as old data, takes no board move, and is the SuperAdmin's to complete", async () => {
-      useSession.mockReturnValue(session([...write, 'trip.complete.review']));
+    it('★ a legacy `confirmed` row reads as old data and is closed by nobody from here', async () => {
+      useSession.mockReturnValue(session(everything));
       renderPage();
 
       const panel = await openBooking();
       expect(panel.getByText('Đã xác nhận (dữ liệu cũ)')).toBeInTheDocument();
-      expect(panel.queryByRole('button', { name: 'Bắt đầu thực hiện' })).toBeNull();
-      expect(panel.queryByRole('button', { name: 'Đưa về Chờ xử lý' })).toBeNull();
-      expect(panel.getByRole('button', { name: 'Đánh dấu Đã xác nhận' })).toBeInTheDocument();
+      noLifecycleControl(panel);
     });
 
     it('offers a reader without trip.write the label and no action', async () => {
@@ -1306,7 +1177,7 @@ describe('TripSchedulePage', () => {
     });
 
     it('★ offers nothing on a row that is momentarily finished in the cache, however senior the viewer', async () => {
-      useSession.mockReturnValue(session([...write, 'dispatch.write', 'trip.complete.review', 'cost.read']));
+      useSession.mockReturnValue(session(everything));
       boardOf(trip({ status: 'finished' }));
       renderPage();
 
@@ -2218,7 +2089,6 @@ describe('TripSchedulePage', () => {
         const [id, patch] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
         expect(id).toBe('t1');
         expect(patch).not.toHaveProperty('status');
-        expect(updateTripStatus).not.toHaveBeenCalled();
       },
     );
 

@@ -49,7 +49,15 @@ describe('urgencyOf — the planned hour against the clock, from the list row al
   });
 });
 
-describe('bookingActions — domain verbs, never a status picker', () => {
+describe('bookingActions — the office crews and corrects; it never drives the run', () => {
+  const everything = holding(
+    'trip.write',
+    'dispatch.write',
+    'trip.complete.review',
+    'trip.price.write',
+    'cost.read',
+  );
+
   it('offers a plain reader nothing to do', () => {
     expect(bookingActions(booking(), holding('trip.read'))).toEqual([]);
   });
@@ -60,27 +68,17 @@ describe('bookingActions — domain verbs, never a status picker', () => {
     expect(bookingActions(booking({ assignments: [turn()] }), dispatch)).toEqual(['reassign']);
   });
 
-  it('★ trip.write starts a pending trip and sends an executing one back — the board move, named', () => {
-    const write = holding('trip.write');
-    expect(bookingActions(booking(), write)).toEqual(['start', 'edit', 'archive']);
-    expect(bookingActions(booking({ status: 'executing' }), write)).toEqual(['returnToPending', 'edit', 'archive']);
-  });
-
-  it('★ never offers the way back once a driver has reported — the server refuses it (409), so it is not drawn', () => {
-    const reported = booking({ status: 'executing', assignments: [turn(true)] });
-    expect(bookingActions(reported, holding('trip.write'))).toEqual(['edit', 'archive']);
-  });
-
-  it('★ offers no move to a legacy `confirmed` row — it meant done; only completion fits', () => {
-    expect(bookingActions(booking({ status: 'confirmed' }), holding('trip.write'))).toEqual(['edit', 'archive']);
-    expect(bookingActions(booking({ status: 'confirmed' }), holding('trip.complete.review'))).toEqual(['complete']);
-  });
-
-  it('★ completion is trip.complete.review alone — trip.write and dispatch never imply it', () => {
-    const everythingElse = holding('trip.write', 'dispatch.write', 'trip.price.write', 'cost.read');
-    expect(bookingActions(booking(), everythingElse)).not.toContain('complete');
-    expect(bookingActions(booking(), holding('trip.complete.review'))).toEqual(['complete']);
-  });
+  it.each(['pending', 'executing', 'confirmed'] as const)(
+    '★ offers no lifecycle verb on a %s trip, however senior the viewer — the driver starts it, approval closes it',
+    (status) => {
+      expect(bookingActions(booking({ status, assignments: [turn(status === 'executing')] }), everything)).toEqual([
+        'reassign',
+        'edit',
+        'costs',
+        'archive',
+      ]);
+    },
+  );
 
   it('prices alone open the form; cost.read alone opens the costs', () => {
     expect(bookingActions(booking(), holding('trip.price.write'))).toEqual(['edit']);
@@ -88,7 +86,6 @@ describe('bookingActions — domain verbs, never a status picker', () => {
   });
 
   it('★ a finished row is offered nothing, however senior the viewer', () => {
-    const all = holding('trip.write', 'dispatch.write', 'trip.complete.review', 'cost.read', 'trip.price.write');
-    expect(bookingActions(booking({ status: 'finished' }), all)).toEqual([]);
+    expect(bookingActions(booking({ status: 'finished' }), everything)).toEqual([]);
   });
 });

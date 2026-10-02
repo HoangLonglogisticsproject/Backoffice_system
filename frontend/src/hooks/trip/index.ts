@@ -7,5 +7,4 @@ export {
   type CatalogueList,
   type TripCatalogue,
 } from './useTripCatalogue';
-export { useCompleteTrip, useUpdateTripStatus, type UpdateStatusVariables } from './useTripMutations';
 export { useTripCost, type TripCostView } from './useTripCost';

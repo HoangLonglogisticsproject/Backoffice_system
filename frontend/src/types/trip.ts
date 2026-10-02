@@ -42,11 +42,11 @@ export const TRIP_STATUSES: readonly TripStatus[] = [
 /**
  * What each status is CALLED, once — the legend, as translation keys.
  *
- * ★ HERE RATHER THAN BESIDE THE COLOURS, because two things now need the name
- * without needing the palette: the badge that renders it and the mutation that
- * says "Chờ xe → Đang giao" in its receipt. `TRIP_STATUS_STYLES` reads this map
- * instead of restating it — the labels drifting into a second copy is a mistake
- * this file has already made once, in the trip form.
+ * ★ HERE RATHER THAN BESIDE THE COLOURS, because two things need the name
+ * without needing the palette: the badge that renders it and the Excel export.
+ * `TRIP_STATUS_STYLES` reads this map instead of restating it — the labels
+ * drifting into a second copy is a mistake this file has already made once, in
+ * the trip form.
  */
 export const TRIP_STATUS_LABELS: Record<TripStatus, TranslationKey> = {
   pending: 'tripPending',

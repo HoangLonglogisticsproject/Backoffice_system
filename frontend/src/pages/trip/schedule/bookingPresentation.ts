@@ -83,61 +83,33 @@ export const urgencyOf = (trip: TripScheduleWithRefs, now: number): Urgency => {
 };
 
 /**
- * What may be done to a booking, as domain verbs — never "change status".
+ * What the OFFICE may do to a booking — crew it, correct it, cost it, archive
+ * it. Never "change status", and never drive the run.
  *
  *   assign / reassign   dispatch.write             the dispatch panel (0..N pairs)
- *   start               trip.write, pending        PATCH …/status → executing
- *   returnToPending     trip.write, executing,     PATCH …/status → pending
- *                       no driver report yet
  *   edit                trip.write | price.write   the trip form
  *   costs               cost.read                  the cost dialog
- *   complete            trip.complete.review       POST …/complete (TEMPORARY)
  *   archive             trip.write                 POST …/archive
  *
- * ★ `start` AND `returnToPending` ARE THE BOARD MOVE, NAMED. Nothing on the
- * server moves a trip to `executing` — driver milestones leave the status
- * alone — so dropping the dropdown without these would leave no way onto the
- * road at all. Same route, same `trip.write`; only the generic picker is gone.
- *
- * ★ AND GOING BACK FOLLOWS THE SERVER'S RULE, IT DOES NOT MAKE ONE. The status
- * route refuses `pending` (409) while the trip has a live milestone OR a
- * completion request standing (`pending`/`approved`). The first half is
- * exactly `started` — a live event on an active turn, cleared when the last
- * one is withdrawn, and no other turn can hold one — so the button is hidden
- * only where the server would certainly refuse. The second half is not on the
- * list row; there the button stays, and the server's own sentence explains
- * the refusal. Nothing allowed is ever hidden.
- *
- * ★ `complete` IS NOT A MOVE. It is the canonical completion, the SuperAdmin's
- * key only (`trip.complete.review` is global-tier, no function grants it), and
- * it is offered on every open row — the legacy `confirmed` ones included,
- * which is exactly what they are waiting for.
+ * ★ THE LIFECYCLE IS NOT THE OFFICE'S. The driver starts execution — the
+ * first live milestone moves the trip `pending → executing` on the server —
+ * and asks to close it; the SuperAdmin's approval closes it into Lịch sử
+ * chuyến. So no action here starts, rewinds or completes a trip: the status is
+ * a read-only projection of what the server recorded.
  *
  * ★ A FINISHED TRIP IS OFFERED NOTHING HERE. The server never lists one on
  * Lịch xe; a row that is momentarily `finished` in the cache is one that is
  * about to leave, and every write would be refused with a 409.
  *
- * In the order the detail panel shows them: the next step first, the
- * irreversible ones last.
+ * In the order the detail panel shows them: the crew first, archive last.
  */
-export type BookingAction =
-  | 'assign'
-  | 'reassign'
-  | 'start'
-  | 'returnToPending'
-  | 'edit'
-  | 'costs'
-  | 'complete'
-  | 'archive';
+export type BookingAction = 'assign' | 'reassign' | 'edit' | 'costs' | 'archive';
 
 export const ACTION_LABELS: Record<BookingAction, TranslationKey> = {
   assign: 'bookingAssign',
   reassign: 'bookingReassign',
-  start: 'bookingStart',
-  returnToPending: 'bookingReturnToPending',
   edit: 'edit',
   costs: 'tripCost',
-  complete: 'bookingComplete',
   archive: 'archive',
 };
 
@@ -146,11 +118,8 @@ export const bookingActions = (trip: TripScheduleWithRefs, can: Can): BookingAct
   const offered: [BookingAction, boolean][] = [
     ['assign', can('dispatch.write') && trip.assignments.length === 0],
     ['reassign', can('dispatch.write') && trip.assignments.length > 0],
-    ['start', can('trip.write') && trip.status === 'pending'],
-    ['returnToPending', can('trip.write') && trip.status === 'executing' && !hasDriverProgress(trip)],
     ['edit', can('trip.write') || can('trip.price.write')],
     ['costs', can('cost.read')],
-    ['complete', can('trip.complete.review')],
     ['archive', can('trip.write')],
   ];
   return offered.filter(([, allowed]) => allowed).map(([action]) => action);

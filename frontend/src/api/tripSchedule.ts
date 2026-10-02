@@ -77,7 +77,13 @@ export interface CreateTripInput {
   sellPrice?: string | null;
   purchasePrice?: string | null;
   note?: string | null;
-  /** A board status to open a BOOKING on — never with a historical entry. */
+  /**
+   * ★ NOT A CONTROL. The lifecycle is the server's: a booking opens `pending`,
+   * the driver's first milestone starts it, approval closes it. The server
+   * accepts this key only as the status the trip already holds (Lịch sử
+   * chuyến's correction re-sends its frozen `finished`) and answers 422
+   * `STATUS_SET_BY_SERVER` to anything else. Lịch xe never sends it.
+   */
   status?: TripStatus;
   /**
    * ★ WHY THE TRIP IS ENTERED — the create intent, never a status. "Thêm
@@ -258,31 +264,6 @@ export async function updateTripSchedule(
   const { data } = await httpClient.patch<Wire<TripSchedule>>(
     `/trip-schedules/${encodeURIComponent(tripId)}`,
     input,
-  );
-  return fromWire(data);
-}
-
-/**
- * ★ "ĐÃ XÁC NHẬN" — the SuperAdmin declares the trip DONE. Not a board move:
- * the server's canonical completion (`trip.complete.review`), in one call —
- * `finished`, stamped, recorded, and moved to Lịch sử chuyến. Temporary, while
- * the Driver flow is not yet the only way a trip finishes.
- */
-export async function completeTrip(tripId: string): Promise<TripSchedule> {
-  const { data } = await httpClient.post<Wire<TripSchedule>>(
-    `/trip-schedules/${encodeURIComponent(tripId)}/complete`,
-  );
-  return fromWire(data);
-}
-
-/** Moves a row along the board. Its own endpoint, its own permission. */
-export async function updateTripStatus(
-  tripId: string,
-  status: TripStatus,
-): Promise<TripSchedule> {
-  const { data } = await httpClient.patch<Wire<TripSchedule>>(
-    `/trip-schedules/${encodeURIComponent(tripId)}/status`,
-    { status },
   );
   return fromWire(data);
 }
