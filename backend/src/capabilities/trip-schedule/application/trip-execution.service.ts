@@ -32,6 +32,8 @@ import {
   ExecutionEventRepository,
 } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
+import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
+import { EXECUTION_STARTED_REASON } from '../domain/trip-status-history';
 import type { UserSummary } from '../../../common/types/user-summary';
 import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { NotificationService } from '../../notification/application/notification.service';
@@ -67,6 +69,7 @@ export class TripExecutionService {
     private readonly users: UserRepository,
     private readonly notifications: NotificationService,
     private readonly requests: CompletionRequestRepository,
+    private readonly history: TripStatusHistoryRepository,
   ) {}
 
   // ------------------------------------------------------------ assignment ----
@@ -523,7 +526,7 @@ export class TripExecutionService {
         distanceM = verdict.distanceM;
       }
 
-      return this.events.record(
+      const event = await this.events.record(
         {
           tripId,
           driverAssignmentId: assignment.id,
@@ -546,7 +549,38 @@ export class TripExecutionService {
         },
         tx,
       );
+
+      // ★ THE FIRST LIVE MILESTONE PUTS THE TRIP ON THE ROAD — `pending →
+      // executing`, in this transaction, with its history row. The DRIVER
+      // starts execution; the office never does (no board action exists for
+      // it). Reached only by a NEW, ACCEPTED event: a retry was answered above
+      // with the row it repeats, and a refused report threw before this line.
+      // Idempotent by construction — `trip` was read under `FOR UPDATE`, so a
+      // second first-event (another lorry, the same instant) queues on the lock
+      // and finds `executing`. Withdrawing a milestone moves nothing back.
+      //
+      // Only from `pending`: the retired `confirmed` meant "done" and is the
+      // normalization's to settle, not the road's.
+      if (trip.status === 'pending') await this.startExecution(trip, input.recordedBy, tx);
+
+      return event;
     });
+  }
+
+  /** `pending → executing`, recorded as the driver's doing. Inside the caller's transaction, under its lock. */
+  private async startExecution(trip: TripSchedule, driverUserId: string, tx: DatabaseQuery): Promise<void> {
+    const started = await this.trips.updateStatus(trip.id, 'executing', tx);
+    if (!started) throw new Error('Locked trip disappeared while starting execution.');
+    await this.history.record(
+      {
+        tripId: trip.id,
+        from: trip.status,
+        to: 'executing',
+        reason: EXECUTION_STARTED_REASON,
+        changedBy: driverUserId,
+      },
+      tx,
+    );
   }
 
   async listEvents(tripId: string, includeVoided = false): Promise<ExecutionEvent[]> {

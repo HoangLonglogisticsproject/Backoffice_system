@@ -7,11 +7,10 @@ import { updateTripLocationById } from '@/api/tripCatalogue';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiError } from '@/utils/errors';
+import { currentMonthRange } from '@/utils/format/datetime';
 
 const fetchTripSchedules = vi.fn();
 const archiveTripSchedule = vi.fn();
-const updateTripStatus = vi.fn();
-const completeTrip = vi.fn();
 const updateTripSchedule = vi.fn();
 const fetchTripVehicles = vi.fn();
 const fetchTripCustomers = vi.fn();
@@ -39,8 +38,6 @@ vi.mock('@/api/tripSchedule', () => ({
   archiveTripSchedule: (...a: unknown[]) => archiveTripSchedule(...a),
   createTripSchedule: (...a: unknown[]) => createTripSchedule(...a),
   updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),
-  updateTripStatus: (...a: unknown[]) => updateTripStatus(...a),
-  completeTrip: (...a: unknown[]) => completeTrip(...a),
 }));
 const fetchEligibleDrivers = vi.fn();
 const assignDriver = vi.fn();
@@ -138,6 +135,26 @@ const trip = (over: Record<string, unknown> = {}) => ({
 });
 
 /**
+ * The viewport, as the page reads it: wide is the side-by-side workspace,
+ * narrow puts the detail in a dialog. The shared setup answers `false` to
+ * every query, so without this the suite would only ever see the narrow one.
+ */
+const viewport = (wide: boolean) =>
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query: string) =>
+      ({
+        matches: wide && query === '(min-width: 1280px)',
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  );
+
+/**
  * A FRESH CACHE PER TEST, and retries off.
  *
  * The trip hooks are TanStack queries now, so a client shared between tests
@@ -156,10 +173,9 @@ const renderPage = () => {
       <MemoryRouter initialEntries={['/dispatch/trip-schedule']}>
         <LanguageProvider>
           <TripSchedulePage />
-          {/* The status control has no error line of its own: a refusal is
-              announced by `useUpdateTripStatus` as a toast, the way it is in the
-              real app (`main.tsx`). Mounted here so the test still asserts what
-              a dispatcher actually reads. */}
+          {/* Mounted as in the real app (`main.tsx`): some outcomes — a
+              dispatch change, a save — are announced as toasts, and the tests
+              assert what a dispatcher actually reads. */}
           <Toaster />
         </LanguageProvider>
       </MemoryRouter>
@@ -182,6 +198,24 @@ const fillTimes = (day = '2099-09-01', hour = '08:30', delivery = '2099-09-01T17
 const hcm = (day: string, hour: string): string => new Date(`${day}T${hour}:00+07:00`).toISOString();
 
 /**
+ * Selects a booking — the row's own button — and returns the detail panel.
+ *
+ * ★ EVERYTHING BEYOND THE SCAN LINE LIVES THERE NOW: edit, archive, costs,
+ * prices, the record. The list row carries the facts dispatch scans for and
+ * the crew button, nothing else.
+ */
+const openBooking = async (text = 'WWL') => {
+  const [inList] = await screen.findAllByText(text);
+  fireEvent.click(inList!.closest('button')!);
+  return within(await screen.findByRole('complementary', { name: 'Chi tiết chuyến' }));
+};
+/** The form on the selected booking — the panel's "Sửa". */
+const editBooking = async (text?: string) => {
+  const panel = await openBooking(text);
+  fireEvent.click(panel.getByRole('button', { name: 'Sửa' }));
+};
+
+/**
  * What the dispatch board OFFERS, and what it says.
  *
  * ⚠ NONE OF THIS IS AUTHORIZATION. The server re-decides every request, and a
@@ -199,8 +233,6 @@ describe('TripSchedulePage', () => {
       totalPages: 1,
     });
     archiveTripSchedule.mockReset().mockResolvedValue(trip());
-    updateTripStatus.mockReset().mockResolvedValue(trip({ status: 'executing' }));
-    completeTrip.mockReset().mockResolvedValue(trip({ status: 'finished' }));
     updateTripSchedule.mockReset().mockResolvedValue(trip());
     createTripSchedule.mockReset().mockResolvedValue(trip());
     fetchTripVehicles.mockReset().mockResolvedValue([]);
@@ -217,6 +249,7 @@ describe('TripSchedulePage', () => {
     fetchDriverAssignments.mockReset().mockResolvedValue([]);
     fetchTripCosts.mockReset().mockResolvedValue({ items: [], total: '0.00' });
     useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create']));
+    viewport(true);
   });
 
   /**
@@ -277,11 +310,11 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       expect(await screen.findByText(/chưa phân công/i)).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /^phân công$/i })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /^điều độ$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^phân công xe & tài xế$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^đổi phân công$/i })).not.toBeInTheDocument();
     });
 
-    it('★ one row per lorry, each with ITS driver and its own state — the trip spanned once', async () => {
+    it('★ one booking per trip, each lorry with ITS driver — and one crew control for the trip', async () => {
       write();
       board(
         turn(),
@@ -290,21 +323,17 @@ describe('TripSchedulePage', () => {
       );
       renderPage();
 
-      const rowOf = async (plate: string) => within((await screen.findByText(plate)).closest('tr')!);
-      // The pairing is what the row is for: which driver is in WHICH lorry.
-      expect((await rowOf('50H-49266')).getByText('Tài Xế A')).toBeInTheDocument();
-      expect((await rowOf('51D-65233')).getByText('Tài Xế A')).toBeInTheDocument();
-      expect((await rowOf('51D-00003')).getByText('Tài Xế B')).toBeInTheDocument();
-      // The same driver on two lorries is two rows, never one folded name.
-      expect(screen.getAllByText('Tài Xế A')).toHaveLength(2);
-      // Each pair carries its own state; the tab of the same name is outside the table.
-      const table = screen.getByText('WWL').closest('table')!;
-      expect(within(table).getAllByText('Đã phân công')).toHaveLength(3);
-      // The trip's own facts are spanned down its three rows, not repeated —
-      // and its one dispatch control fires once.
-      expect(screen.getByText('WWL').closest('td')).toHaveAttribute('rowspan', '3');
+      // The pairing is what the crew line is for: which driver is in WHICH lorry.
+      const pairOf = async (plate: string) => (await screen.findByText(plate)).parentElement!;
+      expect(await pairOf('50H-49266')).toHaveTextContent('Tài Xế A');
+      expect(await pairOf('51D-65233')).toHaveTextContent('Tài Xế A');
+      expect(await pairOf('51D-00003')).toHaveTextContent('Tài Xế B');
+      // ★ ONE ITEM PER TRIP — the dispatch list's grain (ADR-0004 §2.3), the
+      // pairs folded into it — so one booking still reads as one booking.
+      const list = screen.getByRole('list', { name: 'Danh sách chuyến' });
+      expect(within(list).getAllByRole('listitem')).toHaveLength(1);
       expect(screen.getAllByText('WWL')).toHaveLength(1);
-      expect(screen.getAllByRole('button', { name: /^điều độ$/i })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /^đổi phân công$/i })).toHaveLength(1);
     });
 
     it('★ adds a lorry WITH its driver, sending the pair and nothing else', async () => {
@@ -313,7 +342,7 @@ describe('TripSchedulePage', () => {
       board();
       renderPage();
 
-      const panel = await openPanel(/^phân công$/i);
+      const panel = await openPanel(/^phân công xe & tài xế$/i);
       const submit = await addForm(panel);
       // ★ NOTHING TO SEND UNTIL BOTH ARE CHOSEN — there is no lorry-only assignment.
       fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
@@ -339,7 +368,7 @@ describe('TripSchedulePage', () => {
       board();
       renderPage();
 
-      const panel = await openPanel(/^phân công$/i);
+      const panel = await openPanel(/^phân công xe & tài xế$/i);
       expect(panel.queryByText('50H-49266')).toBeNull();
       const submit = await addForm(panel);
       // The board the re-read will return: the pair is on it now.
@@ -367,7 +396,7 @@ describe('TripSchedulePage', () => {
       board();
       renderPage();
 
-      const panel = await openPanel(/^phân công$/i);
+      const panel = await openPanel(/^phân công xe & tài xế$/i);
       const submit = await addForm(panel);
       // What the "chờ phân công" read returns once the trip has a crew: nothing.
       fetchTripSchedules.mockResolvedValue({
@@ -395,7 +424,7 @@ describe('TripSchedulePage', () => {
       board(turn());
       renderPage();
 
-      const panel = await openPanel(/^điều độ$/i);
+      const panel = await openPanel(/^đổi phân công$/i);
       await waitFor(() => expect(fetchDriverAssignments).toHaveBeenCalledWith('t1'));
       expect(panel.queryByText(/lịch sử điều độ/i)).toBeNull();
       expect(panel.queryByRole('alert')).toBeNull();
@@ -407,7 +436,7 @@ describe('TripSchedulePage', () => {
       fetchDriverAssignments.mockRejectedValue(new ApiError(0, undefined, 'down'));
       renderPage();
 
-      const panel = await openPanel(/^điều độ$/i);
+      const panel = await openPanel(/^đổi phân công$/i);
       expect(await panel.findByRole('alert')).toHaveTextContent(/không tải được lịch sử/i);
       // No history SECTION — the alert sentence itself names the history, so ask for the heading.
       expect(panel.queryByRole('heading', { name: /lịch sử điều độ/i })).toBeNull();
@@ -434,7 +463,7 @@ describe('TripSchedulePage', () => {
       ]);
       renderPage();
 
-      const panel = await openPanel(/^điều độ$/i);
+      const panel = await openPanel(/^đổi phân công$/i);
       expect(await panel.findByText(/lịch sử điều độ/i)).toBeInTheDocument();
       expect(panel.getByText(/51D-00009/)).toBeInTheDocument();
       expect(panel.getByText(/xe hỏng/)).toBeInTheDocument();
@@ -447,7 +476,7 @@ describe('TripSchedulePage', () => {
       board(turn());
       renderPage();
 
-      const panel = await openPanel(/^điều độ$/i);
+      const panel = await openPanel(/^đổi phân công$/i);
       const submit = await addForm(panel);
       expect(panel.queryByRole('option', { name: '50H-49266' })).toBeNull();
       fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v2' } });
@@ -465,7 +494,7 @@ describe('TripSchedulePage', () => {
       board(turn());
       renderPage();
 
-      const panel = await openPanel(/^điều độ$/i);
+      const panel = await openPanel(/^đổi phân công$/i);
       fireEvent.click(panel.getByRole('button', { name: /đổi tài xế/i }));
       await panel.findByRole('option', { name: 'Tài Xế B' });
       expect(panel.queryByRole('option', { name: 'Tài Xế A' })).not.toBeInTheDocument();
@@ -484,7 +513,7 @@ describe('TripSchedulePage', () => {
       board(turn());
       renderPage();
 
-      const panel = await openPanel(/^điều độ$/i);
+      const panel = await openPanel(/^đổi phân công$/i);
       fireEvent.click(panel.getByRole('button', { name: /^gỡ$/i }));
       fireEvent.change(panel.getByLabelText(/lý do/i), { target: { value: 'xe hỏng' } });
       fireEvent.click(last(panel.getAllByRole('button', { name: /^gỡ$/i })));
@@ -497,7 +526,7 @@ describe('TripSchedulePage', () => {
       board(turn({ started: true }), turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' } }));
       renderPage();
 
-      const panel = await openPanel(/^điều độ$/i);
+      const panel = await openPanel(/^đổi phân công$/i);
       expect(panel.getByText(/đang thực hiện/i)).toBeInTheDocument();
       // One control pair, for the second turn only.
       expect(panel.getAllByRole('button', { name: /đổi tài xế/i })).toHaveLength(1);
@@ -511,7 +540,7 @@ describe('TripSchedulePage', () => {
       assignDriver.mockRejectedValue(new ApiError(409, 'CONFLICT', 'That lorry is already on this trip.'));
       renderPage();
 
-      const panel = await openPanel(/^phân công$/i);
+      const panel = await openPanel(/^phân công xe & tài xế$/i);
       const submit = await addForm(panel);
       fireEvent.change(panel.getByLabelText('Xe'), { target: { value: 'v1' } });
       fireEvent.change(panel.getByLabelText(/chọn tài xế/i), { target: { value: 'd2' } });
@@ -530,7 +559,7 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       expect(await screen.findByText('Tài Xế A')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /^điều độ$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^đổi phân công$/i })).not.toBeInTheDocument();
     });
 
     it('names a legacy planned lorry as such — a trip booked before dispatch became a pair', async () => {
@@ -572,12 +601,14 @@ describe('TripSchedulePage', () => {
     expect(screen.queryByText(/2026-08-03/)).toBeNull();
   });
 
-  it('shows the row, its vehicle, its customer and who entered it', async () => {
+  it('shows the booking, its vehicle and customer — and who entered it, in the detail', async () => {
     renderPage();
 
     expect(await screen.findByText('50H-49266')).toBeTruthy();
     expect(screen.getByText('WWL')).toBeTruthy();
-    expect(screen.getByText('Điều Độ')).toBeTruthy();
+    // The record's author is not scanned down a list; the panel carries it.
+    expect(screen.queryByText('Điều Độ')).toBeNull();
+    expect((await openBooking()).getByText('Điều Độ')).toBeTruthy();
   });
 
   it('translates the status rather than printing the raw enum', async () => {
@@ -591,6 +622,184 @@ describe('TripSchedulePage', () => {
   it('shows the total — the number a cursor list cannot produce', async () => {
     renderPage();
     expect(await screen.findByText(/Tổng số dòng: 1/)).toBeTruthy();
+  });
+
+  /**
+   * ★ THE WORKSPACE: A LIST TO SCAN, AND THE SELECTED BOOKING BESIDE IT.
+   * Selecting is what opens the detail — the right trip's, kept by id across
+   * every re-read — and on a narrow screen the same detail is a dialog.
+   */
+  describe('the workspace — list, selection, detail', () => {
+    const two = () =>
+      fetchTripSchedules.mockResolvedValue({
+        items: [
+          trip(),
+          trip({
+            id: 't2',
+            customer: { id: 'c2', name: 'KHÁCH B' },
+            pickupAddress: 'CẢNG CÁT LÁI',
+            deliveryAddress: 'KCN SÓNG THẦN',
+            createdByUser: { id: 'u8', displayName: 'Người Nhập B' },
+            assignments: [],
+          }),
+        ],
+        page: 1, limit: 20, total: 2, totalPages: 1,
+      });
+    const detail = () => within(screen.getByRole('complementary', { name: 'Chi tiết chuyến' }));
+
+    it('opens with nothing selected, and says what the panel is for', async () => {
+      renderPage();
+      await screen.findByText('WWL');
+      expect(detail().getByText('Chọn một chuyến để xem chi tiết.')).toBeInTheDocument();
+    });
+
+    it('★ selecting a booking shows THAT booking — and selecting another replaces it', async () => {
+      two();
+      renderPage();
+
+      const second = await openBooking('KHÁCH B');
+      expect(second.getByRole('heading', { name: 'KHÁCH B' })).toBeInTheDocument();
+      expect(second.getByText('CẢNG CÁT LÁI')).toBeInTheDocument();
+      expect(second.getByText('Người Nhập B')).toBeInTheDocument();
+      expect(second.queryByText('Điều Độ')).toBeNull();
+
+      const first = await openBooking('WWL');
+      expect(first.getByRole('heading', { name: 'WWL' })).toBeInTheDocument();
+      expect(first.getByText('BÃI XE MIỀN NAM')).toBeInTheDocument();
+      expect(first.queryByText('Người Nhập B')).toBeNull();
+    });
+
+    it('★ marks the selected row for assistive technology, and only that one', async () => {
+      two();
+      renderPage();
+      await openBooking('KHÁCH B');
+
+      const list = screen.getByRole('list', { name: 'Danh sách chuyến' });
+      const current = within(list)
+        .getAllByRole('button')
+        .filter((button) => button.getAttribute('aria-current') === 'true');
+      expect(current).toHaveLength(1);
+      expect(current[0]).toHaveTextContent('KHÁCH B');
+    });
+
+    it('★ keeps the selection by id across a re-read, showing the re-read facts', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+      renderPage();
+      const panel = await openBooking();
+      expect(panel.getByText('Đã xác nhận (dữ liệu cũ)')).toBeInTheDocument();
+
+      // A save elsewhere re-reads the board; the same trip comes back changed.
+      fetchTripSchedules.mockResolvedValue({
+        items: [trip({ status: 'executing', note: 'Đổi giờ' })],
+        page: 1, limit: 20, total: 1, totalPages: 1,
+      });
+      fireEvent.click(panel.getByRole('button', { name: 'Lưu trữ' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.click(last(dialog.getAllByRole('button', { name: /lưu trữ/i })));
+
+      expect(await detail().findByText('Đổi giờ')).toBeInTheDocument();
+      expect(detail().getByText('Đang thực hiện')).toBeInTheDocument();
+    });
+
+    it('★ the crew button sits beside the row, never inside its selecting button', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
+      two();
+      renderPage();
+
+      const assign = await screen.findByRole('button', { name: 'Phân công xe & tài xế' });
+      expect(assign.parentElement?.closest('button')).toBeNull();
+      // And it opens the dispatch panel, not the detail.
+      fireEvent.click(assign);
+      expect((await screen.findAllByLabelText('Phương tiện điều độ')).length).toBeGreaterThan(0);
+      expect(detail().getByText('Chọn một chuyến để xem chi tiết.')).toBeInTheDocument();
+    });
+
+    it('★ on a narrow screen the detail is a dialog: no side column, and Escape closes it', async () => {
+      viewport(false);
+      renderPage();
+
+      const [row] = await screen.findAllByText('WWL');
+      expect(screen.queryByRole('complementary')).toBeNull();
+      fireEvent.click(row!.closest('button')!);
+
+      const dialog = await screen.findByRole('dialog', { name: 'Chi tiết chuyến' });
+      expect(within(dialog).getByText('Điều Độ')).toBeInTheDocument();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
+    describe('★ the planned hour against the clock — read from the row alone', () => {
+      const at = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+      const HOUR = 60 * 60 * 1000;
+
+      it('says "Sắp đến giờ" inside the window, "Quá giờ dự kiến" once it has passed', async () => {
+        fetchTripSchedules.mockResolvedValue({
+          items: [
+            trip({ id: 'soon', customer: { id: 'c1', name: 'SẮP' }, pickupAt: at(HOUR), deliveryAt: at(3 * HOUR) }),
+            trip({ id: 'past', customer: { id: 'c2', name: 'TRỄ' }, pickupAt: at(-HOUR), deliveryAt: at(HOUR) }),
+          ],
+          page: 1, limit: 20, total: 2, totalPages: 1,
+        });
+        renderPage();
+
+        const rowOf = async (name: string) => (await screen.findByText(name)).closest('li')!;
+        expect(await rowOf('SẮP')).toHaveTextContent('Sắp đến giờ');
+        expect(await rowOf('TRỄ')).toHaveTextContent('Quá giờ dự kiến');
+      });
+
+      it('★ goes quiet once a driver has started — and never fetches an execution event to know it', async () => {
+        fetchTripSchedules.mockResolvedValue({
+          items: [trip({ pickupAt: at(-HOUR), deliveryAt: at(HOUR), assignments: [turn({ started: true })] })],
+          page: 1, limit: 20, total: 1, totalPages: 1,
+        });
+        renderPage();
+
+        await screen.findByText('WWL');
+        expect(screen.queryByText('Quá giờ dự kiến')).toBeNull();
+        // The list is one read: the page, plus the tab's count. Nothing per row.
+        expect(fetchDriverAssignments).not.toHaveBeenCalled();
+        expect(listCalls()).toHaveLength(1);
+      });
+    });
+  });
+
+  /**
+   * ★ THE QUERY CONTRACT IS LỊCH XE'S, UNCHANGED BY THE REDESIGN. The same
+   * parameters, the same defaults, the same page walk: the date range on the
+   * pickup day, the whole board, the operational projection, the run day
+   * newest first, twenty to a page. Pinned as one exact object, so a key
+   * added, dropped or defaulted differently fails here.
+   */
+  describe('★ the query contract', () => {
+    it('asks for exactly what Lịch xe always asked for', async () => {
+      renderPage();
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(0));
+
+      const { from, to } = currentMonthRange();
+      expect(listCalls()[0]![0]).toEqual({
+        from,
+        to,
+        assignment: 'all',
+        lifecycle: 'operational',
+        sort: 'executionDate',
+        direction: 'desc',
+        page: 1,
+        limit: 20,
+      });
+    });
+
+    it('walks to page 2 with every other parameter as it was', async () => {
+      fetchTripSchedules.mockResolvedValue({ items: [trip()], page: 1, limit: 20, total: 45, totalPages: 3 });
+      renderPage();
+      await screen.findByText('WWL');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Sau' }));
+
+      await waitFor(() => expect(listCalls().some(([request]) => (request as { page: number }).page === 2)).toBe(true));
+      const [request] = listCalls().find(([r]) => (r as { page: number }).page === 2) as [Record<string, unknown>];
+      expect(request).toMatchObject({ assignment: 'all', lifecycle: 'operational', sort: 'executionDate', direction: 'desc', limit: 20 });
+    });
   });
 
   /**
@@ -778,7 +987,7 @@ describe('TripSchedulePage', () => {
 
       await waitFor(() => expect(assignDriver).toHaveBeenCalled());
       expect(await screen.findByText('51D-65233')).toBeInTheDocument();
-      expect(within(screen.getByText('51D-65233').closest('tr')!).getByText('Tài Xế B')).toBeInTheDocument();
+      expect(screen.getByText('51D-65233').parentElement).toHaveTextContent('Tài Xế B');
     });
 
     it('không mời điều độ một người chỉ có trip.create', async () => {
@@ -875,18 +1084,20 @@ describe('TripSchedulePage', () => {
     it('★ offers no edit or archive control without trip.write', async () => {
       renderPage();
 
-      await screen.findByText('50H-49266');
-      expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+      const panel = await openBooking();
+      expect(panel.queryByRole('button', { name: 'Sửa' })).toBeNull();
+      expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
     });
 
-    it('offers both to a caller holding trip.write', async () => {
+    it('offers both to a caller holding trip.write — in the detail, not on the row', async () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
       renderPage();
 
       await screen.findByText('50H-49266');
-      expect(screen.getByRole('button', { name: 'Sửa' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Lưu trữ' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
+      const panel = await openBooking();
+      expect(panel.getByRole('button', { name: 'Sửa' })).toBeTruthy();
+      expect(panel.getByRole('button', { name: 'Lưu trữ' })).toBeTruthy();
     });
 
     it('hides the add button from a caller without trip.create', async () => {
@@ -898,186 +1109,81 @@ describe('TripSchedulePage', () => {
     });
   });
 
-  describe('moving a trip along the board', () => {
-    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
+  /**
+   * ★ THE LIFECYCLE IS NOT THE OFFICE'S. The driver starts the run — the first
+   * live milestone moves it `pending → executing` on the server — and asks to
+   * close it; the SuperAdmin's approval closes it into Lịch sử chuyến. So the
+   * status here is a read-only projection, and no action starts, rewinds or
+   * completes a trip — for anybody, the SuperAdmin included.
+   */
+  describe('the trip lifecycle — read-only, driven by the driver and approval', () => {
+    const everything = [
+      'trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write',
+      'dispatch.write', 'trip.complete.review', 'trip.price.read', 'trip.price.write', 'cost.read',
+    ];
+    const boardOf = (...rows: unknown[]) =>
+      fetchTripSchedules.mockResolvedValue({ items: rows, page: 1, limit: 20, total: rows.length, totalPages: 1 });
+    const LIFECYCLE = ['Bắt đầu thực hiện', 'Đưa về Chờ xử lý', 'Đánh dấu Đã xác nhận', 'Đổi trạng thái'];
+    const noLifecycleControl = (panel: ReturnType<typeof within>) => {
+      for (const name of LIFECYCLE) expect(panel.queryByRole('button', { name })).toBeNull();
+      expect(panel.queryAllByRole('combobox')).toHaveLength(0);
+    };
 
-    it('★ changes the status from the row, through the status endpoint', async () => {
-      // Not through the edit form and not through the full PATCH: that would
-      // send every field back, overwriting whatever a colleague changed while
-      // the form sat open. The dedicated endpoint sends one value.
-      useSession.mockReturnValue(session(write));
+    it('★ a pending booking: the status is said, and the office may crew, correct, cost or archive it — nothing more', async () => {
+      useSession.mockReturnValue(session(everything));
+      boardOf(trip({ status: 'pending', assignments: [] }));
       renderPage();
 
-      const select = await screen.findByLabelText('Đổi trạng thái');
-      // ★ NOT `done`. The board cannot set it — a trip is finished by approving
-      // its completion request — so a case that moved a row to `done` was
-      // asserting an interaction the server answers with 409.
-      fireEvent.change(select, { target: { value: 'executing' } });
-
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'));
+      const panel = await openBooking();
+      expect(panel.getByText('Chờ xử lý')).toBeInTheDocument();
+      noLifecycleControl(panel);
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual([
+        'Phân công xe & tài xế',
+        'Sửa',
+        'Chi phí chuyến',
+        'Lưu trữ',
+      ]);
     });
 
-    it('shows the new status immediately, before the server answers', async () => {
-      // A click that waits for a round trip before showing anything is a click
-      // people make twice.
-      let settle: (value: unknown) => void = () => {};
-      updateTripStatus.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
-
-      useSession.mockReturnValue(session(write));
+    it('★ an executing booking reads as the driver put it — on the road, the driver started — with no control over it', async () => {
+      useSession.mockReturnValue(session(everything));
+      boardOf(trip({ status: 'executing', assignments: [turn({ started: true })] }));
       renderPage();
 
-      const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'executing' } });
-
-      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('executing'));
-      settle(trip({ status: 'executing' }));
+      const panel = await openBooking();
+      expect(panel.getByText('Đang thực hiện')).toBeInTheDocument();
+      expect(panel.getByText('Tài xế đã bắt đầu')).toBeInTheDocument();
+      noLifecycleControl(panel);
+      expect(panel.getByRole('button', { name: 'Đổi phân công' })).toBeInTheDocument();
     });
 
-    /**
-     * ★ THE TWO THINGS BD-01 EXISTS TO STOP OFFERING.
-     *
-     * The server refuses both with 409 — `requireNotCompletionOnly` on the way
-     * in, `canTransition` on the way out, and a trigger in 0017 behind them. A
-     * control whose only possible outcome is a refusal is not a control.
-     */
-    /** The options a user may actually pick, as the dropdown lists them. */
-    const choices = (select: HTMLSelectElement) =>
-      [...select.options].filter((option) => !option.disabled).map((option) => option.textContent);
-
-    it('★ offers a dispatcher the two moves — never the retired `confirmed`, never the completion', async () => {
-      useSession.mockReturnValue(session(write));
+    it('★ a legacy `confirmed` row reads as old data and is closed by nobody from here', async () => {
+      useSession.mockReturnValue(session(everything));
       renderPage();
 
-      const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
-
-      expect(choices(select)).toEqual(['Chờ xử lý', 'Đang thực hiện']);
-      // The legacy row still SAYS what it is — as a label, not a choice.
-      expect(select).toHaveDisplayValue('Đã xác nhận (dữ liệu cũ)');
+      const panel = await openBooking();
+      expect(panel.getByText('Đã xác nhận (dữ liệu cũ)')).toBeInTheDocument();
+      noLifecycleControl(panel);
     });
 
-    it('★ never shows a legacy row the completion\'s words twice — old data and the action read apart', async () => {
-      useSession.mockReturnValue(session([...write, 'trip.complete.review']));
-      renderPage();
-
-      const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
-      const labels = [...select.options].map((option) => `${option.textContent}${option.disabled ? ' ⊘' : ''}`);
-
-      expect(labels).toEqual(['Đã xác nhận (dữ liệu cũ) ⊘', 'Chờ xử lý', 'Đang thực hiện', 'Đã xác nhận']);
-      expect(new Set(labels.map((label) => label.replace(' ⊘', ''))).size).toBe(labels.length);
-    });
-
-    it('★ offers "Đã xác nhận" to a SuperAdmin — and it COMPLETES the trip in one call, with no undo', async () => {
-      fetchTripSchedules.mockResolvedValue({ items: [trip({ status: 'pending' })], page: 1, limit: 20, total: 1, totalPages: 1 });
-      useSession.mockReturnValue(session([...write, 'trip.complete.review']));
-      renderPage();
-
-      const select = (await screen.findByLabelText('Đổi trạng thái')) as HTMLSelectElement;
-      expect(choices(select)).toEqual(['Chờ xử lý', 'Đang thực hiện', 'Đã xác nhận']);
-
-      fireEvent.change(select, { target: { value: 'finished' } });
-
-      await waitFor(() => expect(completeTrip).toHaveBeenCalledWith('t1'));
-      expect(updateTripStatus).not.toHaveBeenCalled();
-      await waitFor(() =>
-        expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
-          'Đã xác nhận chuyến — đã chuyển sang Lịch sử chuyến',
-        ),
-      );
-      // Nothing to confirm a second time, and no way back from done.
-      expect(screen.queryByRole('button', { name: 'Hoàn tác' })).toBeNull();
-      expect(completeTrip).toHaveBeenCalledTimes(1);
-    });
-
-    it('offers no undo back to the retired `confirmed` after moving a legacy row', async () => {
-      useSession.mockReturnValue(session(write));
-      renderPage();
-
-      fireEvent.change(await screen.findByLabelText('Đổi trạng thái'), { target: { value: 'executing' } });
-
-      await waitFor(() => expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'));
-      await waitFor(() =>
-        expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
-          'Đã cập nhật trạng thái chuyến',
-        ),
-      );
-      expect(screen.queryByRole('button', { name: 'Hoàn tác' })).toBeNull();
-    });
-
-    it('★ shows a finished trip as a badge, not a dropdown', async () => {
-      fetchTripSchedules.mockResolvedValue({
-        items: [trip({ status: 'finished' })],
-        page: 1,
-        limit: 20,
-        total: 1,
-        totalPages: 1,
-      });
-      useSession.mockReturnValue(session(write));
-      renderPage();
-
-      // The label the badge carries, and no control to change it.
-      expect(await screen.findByText('Đã xác nhận')).toBeInTheDocument();
-      expect(screen.queryByLabelText('Đổi trạng thái')).not.toBeInTheDocument();
-    });
-
-    /**
-     * ★ THE UNDO IS A WRITE, NOT A REWIND. The button sends a fresh PATCH back to
-     * the status the row held before the click, so the server decides it the same
-     * way it decided the change — nothing here edits the cache and calls it done.
-     */
-    it('★ offers Hoàn tác on the receipt, and sends the trip back to where it was', async () => {
-      fetchTripSchedules.mockResolvedValue({ items: [trip({ status: 'pending' })], page: 1, limit: 20, total: 1, totalPages: 1 });
-      useSession.mockReturnValue(session(write));
-      renderPage();
-
-      const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'executing' } });
-
-      await waitFor(() =>
-        expect(updateTripStatus).toHaveBeenCalledWith('t1', 'executing'),
-      );
-
-      // The move itself, on the toast: which way this row went. Waited for
-      // rather than found immediately — the receipt is raised after the server
-      // answers, and sonner mounts it a frame later still.
-      await waitFor(() =>
-        expect(document.querySelector('[data-sonner-toaster]')?.textContent).toContain(
-          'Chờ xử lý → Đang thực hiện',
-        ),
-      );
-
-      fireEvent.click(await screen.findByRole('button', { name: 'Hoàn tác' }));
-
-      await waitFor(() =>
-        expect(updateTripStatus).toHaveBeenLastCalledWith('t1', 'pending'),
-      );
-    });
-
-    it('★ puts the old status back when the server refuses, and says why', async () => {
-      const { ApiError } = await import('@/utils/errors');
-      updateTripStatus.mockRejectedValue(
-        new ApiError(409, 'TRIP_ARCHIVED', 'This trip has been archived.'),
-      );
-
-      useSession.mockReturnValue(session(write));
-      renderPage();
-
-      const select = await screen.findByLabelText('Đổi trạng thái');
-      fireEvent.change(select, { target: { value: 'executing' } });
-
-      expect(await screen.findByText('This trip has been archived.')).toBeTruthy();
-      // The optimistic guess is gone, not left on screen as if it had worked —
-      // back to the status the row actually holds.
-      await waitFor(() => expect((select as HTMLSelectElement).value).toBe('confirmed'));
-    });
-
-    it('offers a reader without trip.write a label, not a control', async () => {
+    it('offers a reader without trip.write the label and no action', async () => {
       useSession.mockReturnValue(session(['trip.read']));
+      boardOf(trip({ status: 'pending' }));
       renderPage();
 
-      await screen.findByText('50H-49266');
-      expect(screen.queryByLabelText('Đổi trạng thái')).toBeNull();
-      // Still readable — the status is not hidden, only not editable.
-      expect(screen.getByText('Đã xác nhận (dữ liệu cũ)')).toBeTruthy();
+      const panel = await openBooking();
+      expect(panel.getByText('Chờ xử lý')).toBeInTheDocument();
+      expect(panel.queryAllByRole('button')).toHaveLength(0);
+    });
+
+    it('★ offers nothing on a row that is momentarily finished in the cache, however senior the viewer', async () => {
+      useSession.mockReturnValue(session(everything));
+      boardOf(trip({ status: 'finished' }));
+      renderPage();
+
+      const panel = await openBooking();
+      expect(panel.getByText('Đã xác nhận')).toBeInTheDocument();
+      expect(panel.queryAllByRole('button')).toHaveLength(0);
     });
   });
 
@@ -1456,7 +1562,7 @@ describe('TripSchedulePage', () => {
       );
       renderPage();
       await screen.findByText('WWL');
-      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await editBooking();
       await screen.findByLabelText('Khách hàng');
       await waitFor(() => expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('la'));
 
@@ -1496,7 +1602,7 @@ describe('TripSchedulePage', () => {
         );
         renderPage();
         await screen.findByText('WWL');
-        fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+        await editBooking();
         await screen.findByLabelText('Khách hàng');
         await waitFor(() => expect(fetchTripLocations).toHaveBeenCalledWith('c1', false));
       };
@@ -1712,7 +1818,7 @@ describe('TripSchedulePage', () => {
       // the OPTION below still shows the stored spelling. That is the split on
       // purpose: the table formats for reading, the editor shows the record.
       await screen.findByText('51D-65233');
-      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await editBooking('VIỄN ĐẠT');
       await screen.findByLabelText('Khách hàng');
     };
 
@@ -1777,7 +1883,7 @@ describe('TripSchedulePage', () => {
       renderPage();
       // Formatted in the table; the option below keeps the stored spelling.
       await screen.findByText('51D-65233');
-      fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+      await editBooking('VIỄN ĐẠT');
       await screen.findByLabelText('Khách hàng');
 
       // Selectable, so nothing is lost — but not labelled with a status the
@@ -1800,43 +1906,40 @@ describe('TripSchedulePage', () => {
     it('offers the cost control to a caller holding cost.read', async () => {
       useSession.mockReturnValue(session(['trip.read', 'cost.read']));
       renderPage();
-      await screen.findByText('50H-49266');
 
-      expect(screen.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
+      const panel = await openBooking();
+      expect(panel.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
     });
 
     it('★ offers it to NOBODY without cost.read, however senior they are', async () => {
       // `trip.write` corrects the board; it does not reveal the cost base.
       useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
       renderPage();
-      await screen.findByText('50H-49266');
 
-      expect(screen.queryByRole('button', { name: 'Chi phí chuyến' })).toBeNull();
-      // The column is still there — `trip.write` earns it on its own.
-      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
+      const panel = await openBooking();
+      expect(panel.queryByRole('button', { name: 'Chi phí chuyến' })).toBeNull();
+      // The panel still offers what `trip.write` earns on its own.
+      expect(panel.getByRole('button', { name: 'Sửa' })).toBeTruthy();
     });
 
-    it('★ hides the actions column entirely from a caller with neither permission', async () => {
+    it('★ offers a caller with neither permission no action at all', async () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.create']));
       renderPage();
-      await screen.findByText('50H-49266');
 
-      expect(screen.queryByRole('columnheader', { name: 'Thao tác' })).toBeNull();
+      const panel = await openBooking();
+      expect(panel.queryAllByRole('button')).toHaveLength(0);
     });
 
-    it('★ shows the actions column for cost.read ALONE, without trip.write', async () => {
+    it('★ offers cost.read ALONE its control, without trip.write', async () => {
       // An accountant may hold cost.read and no right to correct the board.
-      // Gating the column on trip.write alone would hide their only control.
       useSession.mockReturnValue(session(['trip.read', 'cost.read']));
       renderPage();
-      await screen.findByText('50H-49266');
 
-      // The column itself must appear, not just the button inside it.
-      expect(screen.getByRole('columnheader', { name: 'Thao tác' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
+      const panel = await openBooking();
+      expect(panel.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
       // …and still no edit or archive, which are a different permission.
-      expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+      expect(panel.queryByRole('button', { name: 'Sửa' })).toBeNull();
+      expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
     });
 
     it('★ renders no cost figure without cost.read — not even one the payload carried', async () => {
@@ -1848,13 +1951,13 @@ describe('TripSchedulePage', () => {
         page: 1, limit: 20, total: 1, totalPages: 1,
       });
       renderPage();
-      await screen.findByText('50H-49266');
 
-      expect(screen.queryByRole('columnheader', { name: 'Chi phí chuyến' })).toBeNull();
+      const panel = await openBooking();
+      expect(panel.queryByText('Chi phí chuyến')).toBeNull();
       expect(document.body.textContent).not.toMatch(/6,250,000/);
     });
 
-    it("★ shows each trip's server total in its own column, and opens the dialog from it", async () => {
+    it("★ shows the trip's server total in the detail, says what it counts, and opens the dialog from it", async () => {
       useSession.mockReturnValue(session(['trip.read', 'cost.read']));
       fetchTripSchedules.mockResolvedValue({
         items: [trip({ costSummary: { total: '6250000.50', itemCount: 3 } })],
@@ -1862,12 +1965,15 @@ describe('TripSchedulePage', () => {
       });
       renderPage();
 
-      const cell = await screen.findByRole('button', { name: 'Chi phí chuyến: 6,250,000.50' });
+      // Money is not scanned down the list.
+      await screen.findByText('WWL');
+      expect(document.body.textContent).not.toMatch(/6,250,000/);
+
+      const panel = await openBooking();
+      const cell = panel.getByRole('button', { name: 'Chi phí chuyến: 6,250,000.50' });
       expect(cell).toHaveTextContent('3 khoản');
-      // Said once, on the header — that the total may include unapproved lines.
-      // The header's own name stays the plain label.
-      const header = screen.getByRole('columnheader', { name: 'Chi phí chuyến' });
-      expect(within(header).getByTitle(
+      // Said once, on the label — that the total may include unapproved lines.
+      expect(panel.getByTitle(
         'Tổng các khoản chi phí đã ghi nhận cho chuyến; có thể bao gồm khoản chưa duyệt.',
       )).toBeTruthy();
 
@@ -1935,6 +2041,67 @@ describe('TripSchedulePage', () => {
       );
       expect(badgeCalls.length).toBeGreaterThan(0);
       expect(badgeCalls.every(([request]) => orderOf(request).sort === undefined)).toBe(true);
+    });
+  });
+
+  /**
+   * ★ THE FORM EDITS NO STATUS ON LỊCH XE. A booking opens at the server's
+   * `pending`; a correction leaves the stored status exactly where it is; the
+   * only way a trip moves is a named action on the panel. So there is no field
+   * to show and no key to send — on create and on edit alike.
+   */
+  describe('★ the operational form carries no status', () => {
+    const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
+    const save = () => fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+
+    it('★ create: no status field, and the body names none — the server opens it at pending', async () => {
+      useSession.mockReturnValue(session(write));
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
+      await screen.findByLabelText('Ngày lấy hàng *');
+
+      expect(screen.queryByLabelText('Trạng thái')).toBeNull();
+      expect(screen.getByRole('dialog', { name: 'Tạo chuyến mới' }).querySelector('select#trip-status')).toBeNull();
+
+      fillTimes();
+      save();
+
+      await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+      const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
+      expect(body).toMatchObject({ entryMode: 'operational' });
+      expect(body).not.toHaveProperty('status');
+    });
+
+    it.each(['pending', 'executing', 'confirmed'])(
+      '★ edit (%s): no status field, and the patch leaves the status alone',
+      async (status) => {
+        useSession.mockReturnValue(session(write));
+        fetchTripSchedules.mockResolvedValue({ items: [trip({ status })], page: 1, limit: 20, total: 1, totalPages: 1 });
+        renderPage();
+        await editBooking();
+        await screen.findByLabelText('Khách hàng');
+
+        expect(screen.queryByLabelText('Trạng thái')).toBeNull();
+        save();
+
+        await waitFor(() => expect(updateTripSchedule).toHaveBeenCalledTimes(1));
+        const [id, patch] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
+        expect(id).toBe('t1');
+        expect(patch).not.toHaveProperty('status');
+      },
+    );
+
+    it('★ leaves Lịch xe with no status editor anywhere — list, panel or form', async () => {
+      useSession.mockReturnValue(session([...write, 'dispatch.write', 'trip.complete.review', 'trip.price.write']));
+      renderPage();
+      await editBooking();
+      await screen.findByLabelText('Khách hàng');
+
+      const editors = [...document.querySelectorAll('select')].filter((select) =>
+        [...select.options].some((option) => ['pending', 'executing', 'finished', 'confirmed'].includes(option.value)),
+      );
+      expect(editors).toHaveLength(0);
     });
   });
 
@@ -2040,7 +2207,7 @@ describe('TripSchedulePage', () => {
         totalPages: 1,
       });
       renderPage();
-      fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+      await editBooking();
       fireEvent.change(await screen.findByLabelText('Ghi chú'), { target: { value: 'đã đối chiếu' } });
       save();
 
@@ -2053,7 +2220,7 @@ describe('TripSchedulePage', () => {
     it('★ refuses an edit that turns a valid trip backwards, and corrects an overdue one freely', async () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.write']));
       renderPage();
-      fireEvent.click(await screen.findByRole('button', { name: 'Sửa' }));
+      await editBooking();
       await screen.findByLabelText('Thời gian giao hàng');
 
       // The fixture ran in August 2026 — long past — and it is still correctable.
@@ -2278,12 +2445,12 @@ describe('TripSchedulePage', () => {
       });
     };
 
-    it('shows both figures grouped, and an unpriced trip as unset rather than as zero', async () => {
+    it('shows both figures grouped in the detail, and an unpriced trip as unset rather than as zero', async () => {
       useSession.mockReturnValue(session(write));
       fetchTripSchedules.mockResolvedValue({
         items: [
           trip({ sellPrice: '4500000.00', purchasePrice: '3000000.00' }),
-          trip({ id: 't2', sellPrice: null, purchasePrice: null }),
+          trip({ id: 't2', customer: { id: 'c2', name: 'KHÁCH B' }, sellPrice: null, purchasePrice: null }),
         ],
         page: 1,
         limit: 20,
@@ -2292,31 +2459,38 @@ describe('TripSchedulePage', () => {
       });
       renderPage();
 
+      // Money is not scanned down the list; the detail carries it.
+      await screen.findByText('WWL');
+      expect(screen.queryByText('4,500,000')).toBeNull();
+
       // `formatMoney` drops a fraction of zeroes — VND has no subunit in daily use.
-      expect(await screen.findByText('4,500,000')).toBeInTheDocument();
-      expect(screen.getByText('3,000,000')).toBeInTheDocument();
-      // The unpriced row says nothing rather than saying nought.
-      expect(screen.queryByText('0')).toBeNull();
+      const priced = await openBooking('WWL');
+      expect(priced.getByText('4,500,000')).toBeInTheDocument();
+      expect(priced.getByText('3,000,000')).toBeInTheDocument();
+      // The unpriced trip says nothing rather than saying nought.
+      const unpriced = await openBooking('KHÁCH B');
+      expect(unpriced.getAllByText('Chưa chọn').length).toBeGreaterThanOrEqual(2);
+      expect(unpriced.queryByText('0')).toBeNull();
     });
 
     /**
-     * ★ THE COLUMNS ARE ABSENT FOR A DISPATCHER, NOT EMPTY.
+     * ★ THE FIGURES ARE ABSENT FOR A DISPATCHER, NOT EMPTY.
      *
      * The server sends `null` for both to a caller without `trip.price.read`,
-     * whatever the trip holds. A drawn column would show an em dash on every
-     * row and read as "nothing on this board is priced" — a claim about the
-     * data rather than about the reader.
+     * whatever the trip holds. A drawn row would show "unset" on every trip
+     * and read as "nothing is priced" — a claim about the data rather than
+     * about the reader.
      */
-    it('★ shows no price column at all to somebody who may not see prices', async () => {
+    it('★ shows no price at all to somebody who may not see prices', async () => {
       useSession.mockReturnValue(session(dispatcher));
       // The server would have blanked these; the fixture keeps them to prove
       // the gate is the permission and not the absence of data.
       pricedBoard();
       renderPage();
-      await screen.findByText('WWL');
 
-      expect(screen.queryByText('Giá cước bán')).toBeNull();
-      expect(screen.queryByText('Giá cước mua')).toBeNull();
+      const panel = await openBooking();
+      expect(panel.queryByText('Giá cước bán')).toBeNull();
+      expect(panel.queryByText('Giá cước mua')).toBeNull();
       expect(screen.queryByText('4,500,000')).toBeNull();
       expect(screen.queryByText('3,000,000')).toBeNull();
     });
@@ -2362,13 +2536,14 @@ describe('TripSchedulePage', () => {
      * price from them.
      */
     describe('★ a reader who may see the prices and not set them', () => {
-      it('draws both columns on the board', async () => {
+      it('shows both figures in the detail', async () => {
         useSession.mockReturnValue(session(reader));
         pricedBoard();
         renderPage();
 
-        expect(await screen.findByText('4,500,000')).toBeInTheDocument();
-        expect(screen.getByText('3,000,000')).toBeInTheDocument();
+        const panel = await openBooking();
+        expect(panel.getByText('4,500,000')).toBeInTheDocument();
+        expect(panel.getByText('3,000,000')).toBeInTheDocument();
       });
 
       it('★ draws both fields disabled, the selling price not required, and says why', async () => {
@@ -2376,7 +2551,7 @@ describe('TripSchedulePage', () => {
         pricedBoard();
         renderPage();
         await screen.findByText('WWL');
-        fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+        await editBooking();
 
         const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
         const buy = screen.getByLabelText('Giá cước mua (VND)') as HTMLInputElement;
@@ -2393,7 +2568,7 @@ describe('TripSchedulePage', () => {
         pricedBoard();
         renderPage();
         await screen.findByText('WWL');
-        fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+        await editBooking();
         await screen.findByLabelText('Giá cước bán (VND) *');
 
         fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
@@ -2418,11 +2593,11 @@ describe('TripSchedulePage', () => {
         useSession.mockReturnValue(session(dispatchMember));
         pricedBoard();
         renderPage();
-        await screen.findByText('WWL');
 
-        expect(screen.getAllByRole('button', { name: 'Sửa' }).length).toBeGreaterThan(0);
+        const panel = await openBooking();
+        expect(panel.getByRole('button', { name: 'Sửa' })).toBeInTheDocument();
         // And no archive: that is `trip.write`.
-        expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+        expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
       });
 
       it('★ disables every non-price field, keeps the prices open, and sends only the two keys', async () => {
@@ -2430,7 +2605,7 @@ describe('TripSchedulePage', () => {
         pricedBoard();
         renderPage();
         await screen.findByText('WWL');
-        fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+        await editBooking();
 
         const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
         const cargo = screen.getByLabelText('Thông tin hàng') as HTMLInputElement;
@@ -2503,7 +2678,7 @@ describe('TripSchedulePage', () => {
       pricedBoard();
       renderPage();
       await screen.findByText('WWL');
-      fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+      await editBooking();
 
       const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
       expect(sell.required).toBe(false);
@@ -2514,7 +2689,7 @@ describe('TripSchedulePage', () => {
       pricedBoard();
       renderPage();
       await screen.findByText('WWL');
-      fireEvent.click(last(screen.getAllByRole('button', { name: 'Sửa' })));
+      await editBooking();
 
       const sell = (await screen.findByLabelText('Giá cước bán (VND) *')) as HTMLInputElement;
       // The stored figure is what the form opens on, decimals and all — a
@@ -2613,7 +2788,7 @@ describe('★ an existing trip and its snapshot', () => {
     fetchTripLocations.mockImplementation(async (customerId: string) => (customerId === 'c1' ? masters : []));
     renderPage();
     await screen.findByText('WWL');
-    fireEvent.click(screen.getByRole('button', { name: 'Sửa' }));
+    await editBooking();
     await screen.findByLabelText('Khách hàng');
     await waitFor(() => expect((screen.getByLabelText('Điểm lấy hàng') as HTMLSelectElement).value).toBe('la'));
     await waitFor(() => expect(fetchTripLocations).toHaveBeenCalledWith('c1', false));
@@ -2656,6 +2831,7 @@ describe('★ an existing trip and its snapshot', () => {
     fetchEligibleDrivers.mockReset().mockResolvedValue([]);
     useSession.mockReset();
     vi.mocked(updateTripLocationById).mockReset();
+    viewport(true);
   });
 
   it('★ reads readiness from the trip’s own snapshot, not from the master row, at both ends', async () => {

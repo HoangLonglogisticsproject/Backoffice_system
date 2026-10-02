@@ -3,9 +3,14 @@ import { HISTORICAL_ENTRY_REASON, initialLifecycle } from './trip-status-history
 describe('initialLifecycle — the client says why, the server decides how a trip starts', () => {
   const none = { crewSupplied: false };
 
-  it('★ opens a booking pending, or on another status the board may set', () => {
+  it('★ opens every booking pending — `pending` itself is a no-op, any other lifecycle is the server’s', () => {
     expect(initialLifecycle('operational', none)).toEqual({ ok: true, status: 'pending', closed: false, reason: null });
-    expect(initialLifecycle('operational', { ...none, status: 'executing' })).toMatchObject({ status: 'executing' });
+    expect(initialLifecycle('operational', { ...none, status: 'pending' })).toMatchObject({ ok: true, status: 'pending' });
+    // The driver's first milestone starts a trip; a booking cannot open on the road.
+    expect(initialLifecycle('operational', { ...none, status: 'executing' })).toEqual({
+      ok: false,
+      refusal: 'STATUS_SET_BY_SERVER',
+    });
   });
 
   it('★ never opens a booking on the retired `confirmed` — "Đã xác nhận" is `finished` now', () => {

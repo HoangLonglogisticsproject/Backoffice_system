@@ -421,14 +421,8 @@ type EndAssignmentBody = z.infer<typeof endAssignmentSchema>;
 
 type IncludeVoidedQuery = z.infer<typeof includeVoidedSchema>;
 
-const updateStatusSchema = z.object({
-  status: tripStatus,
-  reason: z.string().trim().min(1).max(500).nullable().optional(),
-});
-
 type CreateTripBody = z.infer<typeof createTripSchema>;
 type UpdateTripBody = z.infer<typeof updateTripSchema>;
-type UpdateStatusBody = z.infer<typeof updateStatusSchema>;
 
 @Controller()
 export class TripScheduleController {
@@ -616,31 +610,11 @@ export class TripScheduleController {
   ): Promise<TripSchedule> {
     requirePatchAuthority(body, request);
 
-    // The actor is passed because this route can move the status too — `status`
-    // is a field of the patch — and every board move is recorded with whoever
-    // made it.
+    // ★ IT CANNOT MOVE THE STATUS: a `status` in the body is accepted only as
+    // the value the trip already holds (`requireUnchangedStatus`). There is no
+    // other office route that writes one — the lifecycle is the server's.
     const trip = await this.trips.update(tripId, body, actor.id);
     return redactPrices(trip, this.mayPrice(request));
-  }
-
-  /**
-   * Moving a row along the board — its own route, not a field on the PATCH.
-   *
-   * Two reasons, and neither is tidiness. It is the write dispatch performs
-   * many times a day, so it is worth being cheap and unambiguous; and it is the
-   * one edit that is plausibly NOT administration. Keeping it separate means
-   * relaxing it later — letting whoever is on shift mark a trip delivered — is
-   * a change to one decorator rather than a redesign of the edit path.
-   */
-  @Patch('trip-schedules/:tripId/status')
-  @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.write')
-  async updateStatus(
-    @Param('tripId', UuidParam) tripId: string,
-    @Body(new ZodValidationPipe(updateStatusSchema)) body: UpdateStatusBody,
-    @CurrentUser() actor: SessionUser,
-  ): Promise<TripSchedule> {
-    return this.trips.updateStatus(tripId, body.status, actor.id, body.reason ?? null);
   }
 
   /**

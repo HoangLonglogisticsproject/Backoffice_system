@@ -1386,11 +1386,25 @@ const PHRASES = {
   tripConfirmed: { vi: 'Đã xác nhận (dữ liệu cũ)', en: 'Confirmed (legacy data)' },
   tripExecuting: { vi: 'Đang thực hiện', en: 'Executing' },
   tripFinished: { vi: 'Đã xác nhận', en: 'Confirmed — done' },
-  changeStatus: { vi: 'Đổi trạng thái', en: 'Change status' },
-  statusChangeFailed: {
-    vi: 'Không đổi được trạng thái.',
-    en: 'Could not change the status.',
-  },
+  // ★ LỊCH XE'S DOMAIN ACTIONS — verbs, never "đổi trạng thái". The office
+  // crews a trip; the DRIVER starts it (first milestone) and asks to close it.
+  bookingAssign: { vi: 'Phân công xe & tài xế', en: 'Assign vehicle & driver' },
+  bookingReassign: { vi: 'Đổi phân công', en: 'Change assignment' },
+  // ★ READINGS OF THE LIST ROW, NOT STATUSES. "Quá giờ dự kiến" is the booked
+  // hour against the clock — deliberately not the operational board's
+  // PICKUP_DELAYED, which judges a driver's arrival.
+  bookingDueSoon: { vi: 'Sắp đến giờ', en: 'Due soon' },
+  bookingPastPlanned: { vi: 'Quá giờ dự kiến', en: 'Past planned time' },
+  bookingDriverStarted: { vi: 'Tài xế đã bắt đầu', en: 'Driver has started' },
+  bookingListLabel: { vi: 'Danh sách chuyến', en: 'Trips' },
+  bookingDetailTitle: { vi: 'Chi tiết chuyến', en: 'Trip details' },
+  bookingSelectHint: { vi: 'Chọn một chuyến để xem chi tiết.', en: 'Select a trip to see its details.' },
+  bookingSectionRoute: { vi: 'Lộ trình', en: 'Route' },
+  bookingSectionCustomer: { vi: 'Khách hàng & hàng hoá', en: 'Customer & cargo' },
+  bookingSectionCrew: { vi: 'Xe & tài xế', en: 'Vehicles & drivers' },
+  bookingSectionPricing: { vi: 'Giá cước & chi phí', en: 'Prices & costs' },
+  bookingSectionMeta: { vi: 'Thông tin bản ghi', en: 'Record' },
+  colUpdatedAt: { vi: 'Cập nhật lần cuối', en: 'Last updated' },
 
   // Catalogue — vehicles and customers, the two tabs of one screen
   vehicles: { vi: 'Xe', en: 'Vehicles' },
@@ -1505,10 +1519,6 @@ const PHRASES = {
     en: 'Password changed — please sign in again',
   },
   toastTripStatusUpdated: { vi: 'Đã cập nhật trạng thái chuyến', en: 'Trip status updated' },
-  toastTripConfirmed: {
-    vi: 'Đã xác nhận chuyến — đã chuyển sang Lịch sử chuyến',
-    en: 'Trip confirmed as done — moved to Trip history',
-  },
   toastDriverAssigned: { vi: 'Đã phân công tài xế', en: 'Driver assigned' },
   toastDriverReplaced: { vi: 'Đã đổi tài xế', en: 'Driver replaced' },
   toastAssignmentEnded: { vi: 'Đã kết thúc phân công', en: 'Assignment ended' },

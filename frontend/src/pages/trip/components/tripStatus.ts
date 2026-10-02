@@ -24,10 +24,9 @@ import type { TranslationKey } from '@/types/translate';
  * `types/trip`, because the mutation that announces a change needs the name
  * without needing the palette. This module owns the COLOURS.
  *
- * In its own module rather than beside the badge because three things need it
- * now — the badge, the inline status control, and the trip form's dropdown —
- * and the version that lived in the form had already drifted into a second
- * copy of the labels.
+ * In its own module rather than beside the badge because two things need it —
+ * the badge and the trip form's dropdown — and the version that lived in the
+ * form had already drifted into a second copy of the labels.
  */
 export const TRIP_STATUS_STYLES: Record<TripStatus, { label: TranslationKey; className: string }> = {
   pending: {

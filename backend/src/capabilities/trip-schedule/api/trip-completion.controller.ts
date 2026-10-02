@@ -105,18 +105,19 @@ export class TripCompletionController {
   }
 
   /**
-   * ★ "ĐÃ XÁC NHẬN" — THE SUPERADMIN DECLARES THE TRIP DONE.
+   * ★ BREAK-GLASS MANUAL COMPLETION — EXCEPTIONAL AND TEMPORARY, NOT THE LIFECYCLE.
    *
-   * TEMPORARY, while the Driver flow is not yet the only way to finish a trip:
-   * the board's status control calls this for "Đã xác nhận". The same canonical
-   * closure as the approval above (`closeTrip`) — status `finished`, the closing
-   * stamp, one history row — in ONE step: there is no second confirmation
-   * after it, because this is the confirmation. The trip leaves Lịch xe for
+   * A trip is completed by its driver's request and the SuperAdmin's approval
+   * (above). This route exists only for the trip whose driver will never ask —
+   * no portal access, a hired carrier, a lost phone — and NO SCREEN OFFERS IT:
+   * Lịch xe has no completion action, by decision. The same canonical closure
+   * (`closeTrip`) — status `finished`, the closing stamp, one history row
+   * marked `manual_completion` — in ONE step, and the trip leaves Lịch xe for
    * Lịch sử chuyến at once.
    *
-   * `trip.complete.review`, the key approval asks: moving a trip along the
-   * board (`trip.write`) is not closing it. 409 if it is already closed, or if a
-   * driver's request is waiting — that request is the completion being asked for.
+   * `trip.complete.review`, the key approval asks (global tier, granted by no
+   * function). 409 if it is already closed, or if a driver's request is
+   * waiting — that request is the completion being asked for; decide it.
    */
   @Post('trip-schedules/:tripId/complete')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)

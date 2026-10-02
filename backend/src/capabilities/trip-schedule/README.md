@@ -173,8 +173,9 @@ và ngày (Hồ Chí Minh) của nó **là** `scheduled_on` · `delivery_at` = t
 
 Một route tạo, một quyền (`trip.create`), một pipeline (`TripScheduleService.create`).
 Client nói **vì sao** nhập chuyến (`entryMode`); server quyết **chuyến bắt đầu thế nào**
-(`initialLifecycle` trong `domain/trip-status-history.ts`): booking mở `pending` (hoặc
-trạng thái board cho phép, không bao giờ `finished`); chuyến đã chạy sinh ra `finished`
+(`initialLifecycle` trong `domain/trip-status-history.ts`): booking **luôn** mở `pending`
+(gửi `pending` là no-op; trạng thái khác → 422 `STATUS_SET_BY_SERVER`, `finished` → 409);
+chuyến đã chạy sinh ra `finished`
 bằng `createFinished` (dòng + `closed_by`/`closed_at` = người và lúc nhập), một dòng
 history `null → finished` lý do `historical_entry`, và crew
 (`application/trip-entry-crew.ts`) là assignment ghi-rồi-kết-thúc với cùng lý do — kiểm
@@ -206,11 +207,25 @@ bằng `reason`:
 | Cửa | `reason` |
 |---|---|
 | duyệt lượt cuối (`TripCompletionService.approve`) — luồng đích, do tài xế | `All assignments approved.` |
-| SuperAdmin chọn "Đã xác nhận" — `POST /trip-schedules/:id/complete`, `trip.complete.review`; **tạm thời**, tới khi luồng tài xế là đường duy nhất | `manual_completion` |
+| **break-glass**: `POST /trip-schedules/:id/complete`, `trip.complete.review` — chỉ cho chuyến mà tài xế sẽ không bao giờ gửi yêu cầu; **không màn hình nào gọi**; tạm thời | `manual_completion` |
 | chuẩn hoá `confirmed` cũ (`LegacyConfirmedNormalization`) | `legacy_status_normalization` |
 
-`PATCH /trip-schedules/:id/status` không bao giờ đóng chuyến (`finished` → 409). Đóng tay
-bị từ chối (409) khi tài xế còn yêu cầu hoàn tất đang chờ — duyệt yêu cầu đó mới là cách.
+Đóng tay bị từ chối (409) khi tài xế còn yêu cầu hoàn tất đang chờ — duyệt yêu cầu đó mới là cách.
+
+## Vòng đời thuộc về server — văn phòng không đổi trạng thái (2026-10-02)
+
+| Bước | Ai | Ở đâu |
+|---|---|---|
+| `null → pending` | người tạo booking | `POST /trip-schedules` (`entryMode: operational`) |
+| `pending → executing` | **tài xế** — mốc thực hiện sống đầu tiên được chấp nhận; lý do `execution_started`, `changed_by` = tài xế | `TripExecutionService.recordEvent`, cùng transaction, dưới khoá dòng chuyến |
+| `→ finished` | SuperAdmin duyệt yêu cầu hoàn tất (hoặc break-glass ở trên) | `closeTrip` |
+
+`PATCH /trip-schedules/:id/status` **đã bị gỡ**. `PATCH /trip-schedules/:id` nhận `status`
+chỉ khi bằng trạng thái hiện tại (no-op — form sửa của Lịch sử chuyến gửi lại `finished`);
+khác đi → 422 `STATUS_SET_BY_SERVER` (`finished` → 409, mở lại chuyến đã xong → 409,
+`confirmed` → 422). Huỷ (void) mốc không đổi trạng thái: chuyến vẫn `executing` kể cả khi
+mọi mốc đã bị huỷ. Tạo booking có yêu cầu hoàn tất mà không có mốc nào (mất sóng) vẫn
+`pending` cho tới khi được duyệt.
 Chuyến `finished` không còn là việc của ai: danh sách việc của tài xế và hàng chờ duyệt
 loại nó; mọi thao tác ghi của tài xế từ chối chuyến đã đóng (kể cả sửa chi phí, `editCost`).
 

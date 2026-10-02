@@ -42,11 +42,11 @@ export const TRIP_STATUSES: readonly TripStatus[] = [
 /**
  * What each status is CALLED, once — the legend, as translation keys.
  *
- * ★ HERE RATHER THAN BESIDE THE COLOURS, because two things now need the name
- * without needing the palette: the badge that renders it and the mutation that
- * says "Chờ xe → Đang giao" in its receipt. `TRIP_STATUS_STYLES` reads this map
- * instead of restating it — the labels drifting into a second copy is a mistake
- * this file has already made once, in the trip form.
+ * ★ HERE RATHER THAN BESIDE THE COLOURS, because two things need the name
+ * without needing the palette: the badge that renders it and the Excel export.
+ * `TRIP_STATUS_STYLES` reads this map instead of restating it — the labels
+ * drifting into a second copy is a mistake this file has already made once, in
+ * the trip form.
  */
 export const TRIP_STATUS_LABELS: Record<TripStatus, TranslationKey> = {
   pending: 'tripPending',
@@ -54,33 +54,6 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, TranslationKey> = {
   executing: 'tripExecuting',
   finished: 'tripFinished',
 };
-
-/**
- * The statuses a dispatcher may MOVE a trip between — on the board and in the
- * form. Everything above is what a trip may BE.
- *
- * ★ THREE CEO-FACING STATUSES (business owner, 2026-09-29): Chờ xử lý
- * (`pending`), Đang thực hiện (`executing`), Đã xác nhận (`finished`) — and
- * "Đã xác nhận" MEANS THE TRIP IS DONE. So:
- *
- *   · `confirmed` is retired: stored rows still show it ("Đã xác nhận (dữ
- *     liệu cũ)" — what they meant, marked as old), but nothing offers it and
- *     the server refuses it
- *   · `finished` is not a board move but a completion — `completeTrip`, offered
- *     only to whoever may complete trips (`BOARD_STATUS_OPTIONS`)
- *
- * ⚠ THE TWO STAY UNORDERED: the server allows either move, which is what lets
- * a dispatcher send a trip back after a mis-click.
- */
-export const DISPATCH_SELECTABLE_STATUSES: readonly TripStatus[] = ['pending', 'executing'];
-
-/**
- * The board dropdown's options: the two moves, and — for a SuperAdmin
- * (`trip.complete.review`) — "Đã xác nhận", which completes the trip and sends
- * it to Lịch sử chuyến. TEMPORARY, while the Driver flow is not the only way.
- */
-export const boardStatusOptions = (mayComplete: boolean): readonly TripStatus[] =>
-  mayComplete ? [...DISPATCH_SELECTABLE_STATUSES, 'finished'] : DISPATCH_SELECTABLE_STATUSES;
 
 /**
  * ★ WHO IS DRIVING, AS A FILTER — `?assignment=` on `GET /trip-schedules`.

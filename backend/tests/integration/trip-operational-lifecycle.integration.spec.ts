@@ -175,6 +175,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       users,
       notifications,
       requests,
+      history,
     );
     money = new TripCostService(
       database,
@@ -2379,23 +2380,22 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(history[0]).toMatchObject({ from: null, to: 'pending', changedBy: operator });
     });
 
-    it('records both ends of every board move, with who and why', async () => {
-      const trip = await newTrip();
-      await board.updateStatus(trip, 'executing', operator, 'Đã có khách.');
+    it('records both ends of the driver’s start, with who and why', async () => {
+      const { trip, assignment } = await runningTrip();
+      await execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'h-tap', recordedBy: driverA });
 
       const history = await board.statusHistory(trip);
       expect(history[0]).toMatchObject({
         from: 'pending',
         to: 'executing',
-        reason: 'Đã có khách.',
-        changedBy: operator,
+        reason: 'execution_started',
+        changedBy: driverA,
       });
     });
 
-    it('★ refuses every board route that tries to reach done', async () => {
+    it('★ refuses every office route that tries to reach done', async () => {
       const trip = await newTrip();
 
-      await expect(board.updateStatus(trip, 'finished', operator)).rejects.toBeInstanceOf(ConflictError);
       await expect(board.update(trip, { status: 'finished' }, operator)).rejects.toBeInstanceOf(
         ConflictError,
       );
@@ -2409,25 +2409,24 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(row!.status).not.toBe('finished');
     });
 
-    it('writes no history when the status is set to what it already is', async () => {
+    it('writes no history when an edit names the status the trip already holds', async () => {
       const trip = await newTrip();
-      await board.updateStatus(trip, 'pending', operator);
+      await board.update(trip, { status: 'pending', note: 'x' }, operator);
 
       expect(await board.statusHistory(trip)).toHaveLength(1);
     });
 
-    it('★ every status the trip ever held is reconstructible', async () => {
-      const trip = await newTrip();
-      await board.updateStatus(trip, 'executing', operator);
-      await board.updateStatus(trip, 'pending', operator);
-      await board.updateStatus(trip, 'executing', operator);
+    it('★ every status the trip ever held is reconstructible — booked, started by the driver, closed by approval', async () => {
+      const { trip, assignment } = await runningTrip();
+      await execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'r-tap', recordedBy: driverA });
+      await completion.submit(assignment, driverA, 'none');
+      await approve(trip);
 
       const history = await board.statusHistory(trip);
-      expect(history.map((h) => h.to)).toEqual([
-        'executing',
-        'pending',
-        'executing',
-        'pending',
+      expect(history.map((h) => [h.from, h.to])).toEqual([
+        ['executing', 'finished'],
+        ['pending', 'executing'],
+        [null, 'pending'],
       ]);
     });
   });
@@ -4112,7 +4111,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('B. ★ a PAST day moves nothing — an overdue trip nobody closed is still work', async () => {
       const trip = await newTrip(); // 30/08/2026: long past
-      await board.updateStatus(trip, 'executing', operator);
+      // On the road, as a driver's first milestone leaves it (no crew wired here).
+      await sql(`UPDATE trip_schedules SET status = 'executing' WHERE id = $1`, [trip]);
 
       expect(await statusOf(trip)).toBe('executing');
       expect(await where(trip)).toEqual(ON_BOARD);
@@ -4196,8 +4196,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     });
 
     it('2. ★ lists an executing trip whose day passed a month ago — the date decides nothing', async () => {
-      const { trip } = await runningTrip(); // 30/08/2026
-      await board.updateStatus(trip, 'executing', operator);
+      const { trip, assignment } = await runningTrip(); // 30/08/2026
+      await execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'old-tap', recordedBy: driverA });
 
       expect(await onBoard(trip)).toHaveLength(1);
     });
@@ -4468,19 +4468,177 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
     });
 
-    it('C. pending ↔ executing unchanged; the retired `confirmed` is written by nobody; a plain move never closes', async () => {
-      const trip = await newTrip();
-      await board.updateStatus(trip, 'executing', operator);
-      await board.updateStatus(trip, 'pending', operator);
-      expect((await rowOf(trip)).status).toBe('pending');
+    it('C. ★ the office drives no lifecycle: create cannot choose it, an edit cannot move it either way, `confirmed` and `finished` keep their refusals', async () => {
+      const SET_BY_SERVER = { details: { status: 'STATUS_SET_BY_SERVER' } };
 
-      await expect(board.updateStatus(trip, 'confirmed', operator)).rejects.toThrow(ValidationError);
+      // Create: a booking opens pending, and cannot open on the road.
+      await expect(
+        board.create({ scheduledOn: '2026-08-30', status: 'executing', createdBy: operator }),
+      ).rejects.toMatchObject(SET_BY_SERVER);
+
+      // Edit: pending → executing is the driver's; executing → pending is nobody's.
+      const trip = await newTrip();
+      await expect(board.update(trip, { status: 'executing' }, operator)).rejects.toMatchObject(SET_BY_SERVER);
+      await sql(`UPDATE trip_schedules SET status = 'executing' WHERE id = $1`, [trip]);
+      await expect(board.update(trip, { status: 'pending' }, operator)).rejects.toMatchObject(SET_BY_SERVER);
+      expect((await rowOf(trip)).status).toBe('executing');
+
+      // The older refusals still speak first.
       await expect(board.update(trip, { status: 'confirmed' }, operator)).rejects.toThrow(ValidationError);
       await expect(
         board.create({ scheduledOn: '2026-08-30', status: 'confirmed', createdBy: operator }),
       ).rejects.toThrow(ValidationError);
-      await expect(board.updateStatus(trip, 'finished', operator)).rejects.toThrow(ConflictError);
-      expect((await rowOf(trip)).status).toBe('pending');
+      await expect(board.update(trip, { status: 'finished' }, operator)).rejects.toThrow(ConflictError);
+
+      // Naming the status it already holds is a no-op edit, not a move.
+      const corrected = await board.update(trip, { status: 'executing', note: 'Đổi giờ' }, operator);
+      expect(corrected).toMatchObject({ status: 'executing', note: 'Đổi giờ' });
+      expect(await rowOf(trip)).toMatchObject({ status: 'executing' });
+    });
+
+    it('C5. ★ the board row\'s `started` is a live milestone on that turn — it clears when the last one is withdrawn, the status does not', async () => {
+      // What Lịch xe reads for its urgency and crew labels.
+      const { trip, assignment } = await runningTrip();
+      const startedOnList = async () => {
+        const { day } = await rowOf(trip);
+        const page = await board.list({
+          from: day,
+          to: day,
+          page: 1,
+          limit: 200,
+          assignment: 'all',
+          lifecycle: 'operational',
+          sort: 'executionDate',
+          direction: 'desc',
+        });
+        return page.items.find((row) => row.id === trip)!.assignments.map((turn) => turn.started);
+      };
+
+      expect(await startedOnList()).toEqual([false]);
+      const tap = await execution.recordEvent({
+        assignmentId: assignment,
+        type: 'ARRIVED_PICKUP',
+        clientEventId: 'c5-tap',
+        recordedBy: driverA,
+      });
+      expect(await startedOnList()).toEqual([true]);
+      expect((await rowOf(trip)).status).toBe('executing');
+
+      await execution.voidEvent(trip, tap.id, { by: operator, reason: 'Ghi nhầm.' });
+      expect(await startedOnList()).toEqual([false]);
+      expect((await rowOf(trip)).status).toBe('executing');
+    });
+
+    /**
+     * ★ THE DRIVER OWNS EXECUTION. A booking opens `pending`; the first live
+     * milestone a driver reports puts it `executing`, in the same transaction,
+     * with its own history row; completion stays the request → approval →
+     * `closeTrip` it always was. Nothing here touches the board's status route.
+     */
+    describe('F. the driver starts execution — pending → executing on the first live milestone', () => {
+      const moves = async (trip: string) =>
+        (await sql(
+          `SELECT from_status, to_status, reason, changed_by FROM trip_status_history
+            WHERE trip_id = $1 ORDER BY changed_at ASC, id ASC`,
+          [trip],
+        )) as { from_status: string | null; to_status: string; reason: string | null; changed_by: string }[];
+      const tap = (assignmentId: string, clientEventId: string, recordedBy = driverA) =>
+        execution.recordEvent({ assignmentId, type: 'ARRIVED_PICKUP', clientEventId, recordedBy });
+      const started = { from_status: 'pending', to_status: 'executing', reason: 'execution_started' };
+
+      it('F1. ★ a pending trip goes executing on the first driver event — recorded as the driver’s move, still on Lịch xe', async () => {
+        const { trip, assignment } = await runningTrip();
+        expect((await rowOf(trip)).status).toBe('pending');
+
+        await tap(assignment, 'f1-tap');
+
+        expect((await rowOf(trip)).status).toBe('executing');
+        expect(await moves(trip)).toEqual([
+          { from_status: null, to_status: 'pending', reason: null, changed_by: operator },
+          { ...started, changed_by: driverA },
+        ]);
+        expect((await seenIn(trip)).lichXe).toBe(true);
+      });
+
+      it('F2. ★ repeated events keep it executing — a retry, a second arrival, another lorry’s first report: one move, ever', async () => {
+        const { trip, assignment } = await runningTrip();
+        const second = await assignTo(trip, driverB);
+
+        const first = await tap(assignment, 'f2-tap');
+        // The same tap again: the row it repeats, and nothing else.
+        expect((await tap(assignment, 'f2-tap')).id).toBe(first.id);
+        // A driver who leaves and comes back reports an arrival twice.
+        await tap(assignment, 'f2-again');
+        // The other lorry's FIRST report is not the trip's.
+        await tap(second.id, 'f2-other', driverB);
+
+        expect((await rowOf(trip)).status).toBe('executing');
+        expect((await moves(trip)).filter((move) => move.reason === 'execution_started')).toEqual([
+          { ...started, changed_by: driverA },
+        ]);
+      });
+
+      it('F3. ★ withdrawing a milestone moves nothing — not one of two, not the last', async () => {
+        const { trip, assignment } = await runningTrip();
+        const first = await tap(assignment, 'f3-tap');
+        const again = await tap(assignment, 'f3-again');
+
+        // One of two withdrawn: still on the road, the way back still refused.
+        await execution.voidEvent(trip, first.id, { by: operator, reason: 'Ghi nhầm.' });
+        expect((await rowOf(trip)).status).toBe('executing');
+        await expect(board.update(trip, { status: 'pending' }, operator)).rejects.toThrow(/set by the server/);
+
+        // Every one withdrawn: a void is a correction of the record, not a
+        // lifecycle move — the status stays where the driver put it.
+        await execution.voidEvent(trip, again.id, { by: operator, reason: 'Ghi nhầm.' });
+        expect((await rowOf(trip)).status).toBe('executing');
+
+        // Voiding writes no status and no history of its own.
+        expect(await moves(trip)).toHaveLength(2);
+      });
+
+      it('F4. ★ a completion request needs no status move from anybody; approval closes it into History', async () => {
+        const { trip, assignment } = await runningTrip();
+        await tap(assignment, 'f4-tap');
+        await completion.submit(assignment, driverA, 'none');
+
+        // Under review, still operational — nobody touched the status.
+        expect((await rowOf(trip)).status).toBe('executing');
+        expect(await seenIn(trip)).toMatchObject({ lichXe: true, history: false, reviewQueue: true });
+
+        await approve(trip);
+
+        expect(await rowOf(trip)).toMatchObject({ status: 'finished', closed_by: reviewer });
+        expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+        expect((await moves(trip)).map((move) => [move.from_status, move.to_status, move.reason])).toEqual([
+          [null, 'pending', null],
+          ['pending', 'executing', 'execution_started'],
+          ['executing', 'finished', 'All assignments approved.'],
+        ]);
+      });
+
+      it('F5. a driver who closes out with NO milestone (lost signal) leaves it pending until approval closes it', async () => {
+        // `submit` asks for no milestone, by design — and a request is not an
+        // execution event, so it starts nothing.
+        const { trip, assignment } = await runningTrip();
+        await completion.submit(assignment, driverA, 'none');
+        expect((await rowOf(trip)).status).toBe('pending');
+
+        await approve(trip);
+
+        expect((await rowOf(trip)).status).toBe('finished');
+        expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+      });
+
+      it('F6. the retired `confirmed` is not put on the road — it meant done, and is the normalization’s to settle', async () => {
+        const { trip, assignment } = await runningTrip();
+        await sql(`UPDATE trip_schedules SET status = 'confirmed' WHERE id = $1`, [trip]);
+
+        await tap(assignment, 'f6-tap');
+
+        expect((await rowOf(trip)).status).toBe('confirmed');
+        expect((await moves(trip)).some((move) => move.reason === 'execution_started')).toBe(false);
+      });
     });
 
     it('D/E. ★ legacy `confirmed`: the dry run writes nothing; apply closes the approved ids, truthfully, inventing nothing', async () => {

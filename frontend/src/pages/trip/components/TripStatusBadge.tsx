@@ -3,11 +3,11 @@ import type { TripStatus } from '@/types/trip';
 import { TRIP_STATUS_STYLES } from './tripStatus';
 
 /**
- * The state of a trip, as a badge — for a reader who may not change it.
+ * The state of a trip, as a badge.
  *
- * The colours and labels are the workbook's legend; see `tripStatus.ts`. When
- * the viewer HOLDS `trip.write`, `TripStatusSelect` renders the same badge as
- * something they can operate instead.
+ * The colours and labels are the workbook's legend; see `tripStatus.ts`.
+ * Status is information, never a control: what moves a trip is a named action
+ * (Lịch xe's detail panel), not this badge.
  */
 export function TripStatusBadge({ status }: Readonly<{ status: TripStatus }>) {
   const { t } = useLanguage();
