@@ -10,6 +10,8 @@ interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   className?: string;
+  /** Classes for the scrolling body — its background and padding, for a dialog laid out as a workspace. */
+  bodyClassName?: string;
 }
 
 /** Everything focusable, in document order. */
@@ -47,7 +49,7 @@ const FOCUSABLE =
  * Escape closes, the scrim closes, body scroll is locked while open, and every
  * listener is removed on cleanup.
  */
-export function Modal({ isOpen, onClose, title, children, footer, className }: Readonly<ModalProps>) {
+export function Modal({ isOpen, onClose, title, children, footer, className, bodyClassName }: Readonly<ModalProps>) {
   const { t } = useLanguage();
   const dialogRef = React.useRef<HTMLDialogElement>(null);
 
@@ -184,7 +186,7 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: R
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4 custom-scrollbar">{children}</div>
+        <div className={cn('flex-1 overflow-y-auto px-6 py-4 custom-scrollbar', bodyClassName)}>{children}</div>
 
         {footer && (
           <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-xl flex items-center justify-end gap-3">

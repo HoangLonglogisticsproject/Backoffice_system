@@ -1,6 +1,7 @@
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { cn } from '@/utils/cn';
 import { formatPlate } from '@/utils/format';
 import type { TripVehicle } from '@/types/trip';
 import type { TripEntry } from '../entry/useTripEntryForm';
@@ -14,7 +15,16 @@ import { DriverSelect } from './DriverSelect';
  * path the dispatch panel uses; the trip body carries no lorry. A row shows
  * its own refusal beside it — see `checkCrew` in the form.
  */
-export function CrewFields({ entry, vehicles }: Readonly<{ entry: TripEntry; vehicles: TripVehicle[] }>) {
+export function CrewFields({
+  entry,
+  vehicles,
+  framed = true,
+}: Readonly<{
+  entry: TripEntry;
+  vehicles: TripVehicle[];
+  /** Drawn in its own bordered box (the trip form); `false` inside a section that already frames it. */
+  framed?: boolean;
+}>) {
   const { t } = useLanguage();
   const { crew, takenVehicleIds } = entry;
   const drivers = entry.drivers.data ?? [];
@@ -24,8 +34,8 @@ export function CrewFields({ entry, vehicles }: Readonly<{ entry: TripEntry; veh
   const onAddRow = entry.addCrew;
 
   return (
-    <fieldset className="space-y-3 rounded-lg border border-gray-200 p-3">
-      <legend className="px-1 text-sm font-medium text-gray-700">{t('dispatchTitle')}</legend>
+    <fieldset className={cn('min-w-0 space-y-3', framed && 'rounded-lg border border-gray-200 p-3')}>
+      <legend className={framed ? 'px-1 text-sm font-medium text-gray-700' : 'sr-only'}>{t('dispatchTitle')}</legend>
 
       {crew.map((row, index) => (
         <div key={row.key} className="space-y-1">

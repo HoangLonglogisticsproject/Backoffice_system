@@ -194,6 +194,13 @@ const fillTimes = (day = '2099-09-01', hour = '08:30', delivery = '2099-09-01T17
   fireEvent.change(screen.getByLabelText('Thời gian giao hàng'), { target: { value: delivery } });
 };
 
+/**
+ * The trip form's submit: "Tạo booking" in the booking workspace ("Thêm
+ * chuyến"), "Lưu" in the correction form. The place dialog's own "Lưu" is
+ * told apart by its `form` attribute where a test needs it.
+ */
+const SAVE_TRIP = /^(Lưu|Tạo booking)$/;
+
 /** An hour on a day in Hồ Chí Minh, as the ISO instant the API is sent. */
 const hcm = (day: string, hour: string): string => new Date(`${day}T${hour}:00+07:00`).toISOString();
 
@@ -822,6 +829,10 @@ describe('TripSchedulePage', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Thêm chuyến' }));
       await screen.findByLabelText('Ngày lấy hàng *');
       fillTimes();
+      // The booking workspace folds the optional crew rows away until asked —
+      // and draws no fold at all for somebody who may not dispatch.
+      const crew = screen.queryByRole('button', { name: /Phân công xe ngay/ });
+      if (crew) fireEvent.click(crew);
     };
 
     /** Adds a row and fills it; `''` leaves that half of the pair empty. */
@@ -836,7 +847,7 @@ describe('TripSchedulePage', () => {
     };
 
     const save = () => {
-      const buttons = screen.getAllByRole('button', { name: 'Lưu' });
+      const buttons = screen.getAllByRole('button', { name: SAVE_TRIP });
       fireEvent.click(buttons[buttons.length - 1]!);
     };
 
@@ -1317,7 +1328,7 @@ describe('TripSchedulePage', () => {
       expect(screen.queryByLabelText('Địa chỉ lấy hàng')).toBeNull();
 
       fillTimes();
-      const saves = screen.getAllByRole('button', { name: 'Lưu' });
+      const saves = screen.getAllByRole('button', { name: SAVE_TRIP });
       fireEvent.click(saves[saves.length - 1]!);
 
       await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
@@ -1474,7 +1485,7 @@ describe('TripSchedulePage', () => {
         await chooseCustomer('c9');
         await choose('Điểm giao hàng', 'l2');
         fillTimes();
-        const saves = screen.getAllByRole('button', { name: 'Lưu' });
+        const saves = screen.getAllByRole('button', { name: SAVE_TRIP });
         fireEvent.click(saves[saves.length - 1]!);
 
         await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
@@ -1529,7 +1540,7 @@ describe('TripSchedulePage', () => {
 
       fireEvent.change(screen.getByLabelText('Địa chỉ giao hàng'), { target: { value: 'Bãi tạm Q9' } });
       fillTimes();
-      const saves = screen.getAllByRole('button', { name: 'Lưu' });
+      const saves = screen.getAllByRole('button', { name: SAVE_TRIP });
       fireEvent.click(saves[saves.length - 1]!);
 
       await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
@@ -1572,7 +1583,7 @@ describe('TripSchedulePage', () => {
       expect((screen.getByLabelText('Điểm giao hàng') as HTMLSelectElement).value).toBe('');
       expect(screen.queryAllByRole('option', { name: 'Kho A' })).toHaveLength(0);
 
-      const saves = screen.getAllByRole('button', { name: 'Lưu' });
+      const saves = screen.getAllByRole('button', { name: SAVE_TRIP });
       fireEvent.click(saves[saves.length - 1]!);
 
       await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
@@ -1611,7 +1622,7 @@ describe('TripSchedulePage', () => {
       const dialog = () => within(screen.getByRole('dialog'));
 
       const save = async () => {
-        const saves = screen.getAllByRole('button', { name: 'Lưu' });
+        const saves = screen.getAllByRole('button', { name: SAVE_TRIP });
         fireEvent.click(saves[saves.length - 1]!);
         await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
         return updateTripSchedule.mock.calls[0]![1] as Record<string, unknown>;
@@ -1734,7 +1745,7 @@ describe('TripSchedulePage', () => {
       fireEvent.change(await screen.findByLabelText('Tên địa điểm'), { target: { value: 'Kho mới' } });
       fireEvent.change(screen.getByLabelText('Địa chỉ'), { target: { value: 'Thủ Dầu Một' } });
       const placeSave = screen
-        .getAllByRole('button', { name: 'Lưu' })
+        .getAllByRole('button', { name: SAVE_TRIP })
         .find((button) => button.getAttribute('form') === 'location-form');
       fireEvent.click(placeSave!);
 
@@ -1767,7 +1778,7 @@ describe('TripSchedulePage', () => {
       // The place dialog sits inside the trip dialog; its Save is the one
       // bound to the place form, not the trip form's.
       const placeSave = screen
-        .getAllByRole('button', { name: 'Lưu' })
+        .getAllByRole('button', { name: SAVE_TRIP })
         .find((button) => button.getAttribute('form') === 'location-form');
       fireEvent.click(placeSave!);
 
@@ -1834,7 +1845,7 @@ describe('TripSchedulePage', () => {
       await openEditor();
 
       fireEvent.change(screen.getByLabelText('Ghi chú'), { target: { value: 'sửa ghi chú' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+      fireEvent.click(screen.getByRole('button', { name: SAVE_TRIP }));
 
       await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
 
@@ -2052,7 +2063,7 @@ describe('TripSchedulePage', () => {
    */
   describe('★ the operational form carries no status', () => {
     const write = ['trip.read', 'trip.create', 'customer.create', 'location.create', 'trip.write'];
-    const save = () => fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+    const save = () => fireEvent.click(last(screen.getAllByRole('button', { name: SAVE_TRIP })));
 
     it('★ create: no status field, and the body names none — the server opens it at pending', async () => {
       useSession.mockReturnValue(session(write));
@@ -2112,7 +2123,7 @@ describe('TripSchedulePage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Thêm chuyến' }));
       await screen.findByLabelText('Ngày lấy hàng *');
     };
-    const save = () => fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+    const save = () => fireEvent.click(last(screen.getAllByRole('button', { name: SAVE_TRIP })));
     const delivery = () => screen.getByLabelText('Thời gian giao hàng') as HTMLInputElement;
     const REFUSAL = 'Thời gian giao hàng phải sau thời gian lấy hàng.';
 
@@ -2665,7 +2676,7 @@ describe('TripSchedulePage', () => {
       await screen.findByLabelText('Thông tin hàng');
       fillTimes();
 
-      fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+      fireEvent.click(last(screen.getAllByRole('button', { name: SAVE_TRIP })));
 
       await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
       const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
@@ -2715,7 +2726,7 @@ describe('TripSchedulePage', () => {
         await editBooking();
         await screen.findByLabelText('Giá cước bán (VND) *');
 
-        fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+        fireEvent.click(last(screen.getAllByRole('button', { name: SAVE_TRIP })));
 
         await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
         const [, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
@@ -2762,7 +2773,7 @@ describe('TripSchedulePage', () => {
         expect(screen.getByText(/chỉ sửa được giá cước/i)).toBeInTheDocument();
 
         fireEvent.change(sell, { target: { value: '5000000' } });
-        fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+        fireEvent.click(last(screen.getAllByRole('button', { name: SAVE_TRIP })));
 
         await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
         const [id, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
@@ -2786,7 +2797,7 @@ describe('TripSchedulePage', () => {
       expect(buy.value).toBe('3,000,000');
       fillTimes();
 
-      fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+      fireEvent.click(last(screen.getAllByRole('button', { name: SAVE_TRIP })));
 
       await waitFor(() => expect(createTripSchedule).toHaveBeenCalled());
       const [body] = createTripSchedule.mock.calls[0] as [Record<string, unknown>];
@@ -2840,7 +2851,7 @@ describe('TripSchedulePage', () => {
       // dialog that rewrote it on the way in would change money by being opened.
       expect(sell.value).toBe('4,500,000.00');
       fireEvent.change(sell, { target: { value: '' } });
-      fireEvent.click(last(screen.getAllByRole('button', { name: 'Lưu' })));
+      fireEvent.click(last(screen.getAllByRole('button', { name: SAVE_TRIP })));
 
       await waitFor(() => expect(updateTripSchedule).toHaveBeenCalled());
       const [, payload] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];
@@ -2890,14 +2901,14 @@ describe('★ an existing trip and its snapshot', () => {
 
   const placeSaveButton = (): HTMLElement => {
     const button = screen
-      .getAllByRole('button', { name: 'Lưu' })
+      .getAllByRole('button', { name: SAVE_TRIP })
       .find((candidate) => candidate.getAttribute('form') === 'location-form');
     if (!button) throw new Error('no place-form save button');
     return button;
   };
 
   const saveTrip = async (): Promise<Record<string, unknown>> => {
-    const saves = screen.getAllByRole('button', { name: 'Lưu' });
+    const saves = screen.getAllByRole('button', { name: SAVE_TRIP });
     fireEvent.click(saves[saves.length - 1]!);
     await waitFor(() => expect(updateTripSchedule).toHaveBeenCalledTimes(1));
     const [, body] = updateTripSchedule.mock.calls[0] as [string, Record<string, unknown>];

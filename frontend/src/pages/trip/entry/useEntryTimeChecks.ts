@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TranslationKey } from '@/types/translate';
 import type { TripEntryMode } from '@/types/trip';
 import { timelineErrors } from '@/utils/tripTimeline';
@@ -7,6 +7,12 @@ import { useNow } from '@/hooks/useNow';
 import { instantsOf, pickupControls } from '../components/tripFormTimes';
 import type { FormState } from './tripEntryModel';
 import type { BookingRefusal, SaveRefusal } from './tripEntrySave';
+
+/** Which form a refusal met on save belongs to — the two the server can refuse by the clock. */
+const REFUSAL_FIELD_IDS: Record<BookingRefusal['field'], string> = {
+  scheduledOn: 'trip-date',
+  pickupAt: 'trip-pickup-time',
+};
 
 /**
  * ★ WHETHER THE FORM'S TIMES ARE ACCEPTABLE — the server's calendar policy
@@ -71,6 +77,13 @@ export function useEntryTimeChecks({
     if (live) return t(live);
     return field === 'deliveryAt' ? null : refusalAt(field);
   };
+
+  // ★ A REFUSAL MET ON SAVE TAKES THE FOCUS to the field it is about, so the
+  // keyboard lands where the fix is typed — the browser does the same for its
+  // own constraint failures before a submit ever reaches here.
+  useEffect(() => {
+    if (refusal) document.getElementById(REFUSAL_FIELD_IDS[refusal.field])?.focus();
+  }, [refusal]);
 
   return { pickup, timelineRefused, fieldError, setRefusal };
 }
