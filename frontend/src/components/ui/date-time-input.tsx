@@ -46,14 +46,16 @@ export function DateTimeInput({
   const [dayFormat, setDayFormat] = React.useState<string | null>(null);
   const [timeFormat, setTimeFormat] = React.useState<string | null>(null);
 
-  // Follow the value when the form changes it; a half-entered pair is the field's own.
+  // Follow the value when the form changes it. A half-entered pair is the
+  // field's own (the form holds '' for it); a whole pair under '' was cleared
+  // by the form — reopened on a trip without a delivery — and is dropped.
   React.useEffect(() => {
-    if (value) {
+    if (value || (day && time)) {
       const [nextDay, nextTime] = split(value);
       setDay(nextDay);
       setTime(nextTime);
     }
-  }, [value]);
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const choose = (nextDay: string, nextTime: string) => {
     setDay(nextDay);

@@ -280,4 +280,24 @@ describe('DateTimeInput — a typed day and a picked hour, as one moment', () =>
     expect(field()).toHaveValue('05/10/2026');
     expect(hour()).toHaveValue('09:30 AM');
   });
+
+  it('★ empties both halves when the form clears a whole moment, and keeps a half-entered one', () => {
+    const onChange = vi.fn();
+    const control = (value: string) => (
+      <LanguageProvider>
+        <label htmlFor="f">Thời gian</label>
+        <DateTimeInput id="f" value={value} onChange={onChange} timeLabel="Giờ giao" />
+      </LanguageProvider>
+    );
+    // The form reopens on a trip without a delivery after one with it.
+    const { rerender } = render(control('2026-10-05T09:30'));
+    rerender(control(''));
+    expect(field()).toHaveValue('');
+    expect(hour()).toHaveValue('');
+
+    // A day typed alone: the form holds '' for it, and the day stays.
+    fireEvent.change(field(), { target: { value: '05/10/2026' } });
+    expect(onChange).toHaveBeenLastCalledWith('');
+    expect(field()).toHaveValue('05/10/2026');
+  });
 });
