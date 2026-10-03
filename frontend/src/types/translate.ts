@@ -1133,6 +1133,8 @@ const PHRASES = {
   // card); "Thời gian" a date AND an hour. Only the date is compulsory: a
   // trip is booked for a day before anybody knows the hour.
   fieldPickupDate: { vi: 'Ngày lấy hàng *', en: 'Pickup date *' },
+  // The same hour, required: a booking for today must say when it picks up.
+  fieldPickupAtRequired: { vi: 'Giờ lấy hàng *', en: 'Pickup time *' },
   fieldDeliveryDateTime: { vi: 'Thời gian giao hàng', en: 'Delivery date & time' },
   timeMayBeUnknown: { vi: 'Để trống nếu chưa chốt giờ.', en: 'Leave empty until the hour is agreed.' },
   historicalInstantInFuture: {
@@ -1146,6 +1148,14 @@ const PHRASES = {
   deliveryNotAfterPickup: {
     vi: 'Thời gian giao hàng phải sau thời gian lấy hàng.',
     en: 'The delivery time must be after the pickup time.',
+  },
+  pickupTimeRequiredToday: {
+    vi: 'Chuyến hôm nay phải có giờ lấy hàng.',
+    en: 'A trip for today needs a pickup time.',
+  },
+  pickupInPast: {
+    vi: 'Giờ lấy hàng đã qua. Chuyến đã chạy được ghi nhận bằng “Nhập chuyến cũ” ở Lịch sử chuyến.',
+    en: 'This pickup time has passed. Record a trip that already ran with “Record a past trip” in Trip history.',
   },
   pickupOnPastDay: {
     vi: 'Ngày lấy hàng đã qua. Chuyến đã chạy được ghi nhận bằng “Nhập chuyến cũ” ở Lịch sử chuyến.',

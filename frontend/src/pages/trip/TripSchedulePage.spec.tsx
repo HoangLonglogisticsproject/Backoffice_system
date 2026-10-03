@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -2116,7 +2116,7 @@ describe('TripSchedulePage', () => {
     const delivery = () => screen.getByLabelText('Thời gian giao hàng') as HTMLInputElement;
     const REFUSAL = 'Thời gian giao hàng phải sau thời gian lấy hàng.';
 
-    it('★ asks for the pickup DATE, and the hours only when they are known', async () => {
+    it('★ asks for the pickup DATE; the hour is required for today and optional for any later day', async () => {
       await openCreate();
 
       expect(screen.getByRole('heading', { name: 'Tạo chuyến mới' })).toBeInTheDocument();
@@ -2125,8 +2125,23 @@ describe('TripSchedulePage', () => {
       // ★ The picker opens on today and nothing earlier — a booking is work still to run.
       expect(screen.getByLabelText('Ngày lấy hàng *')).toHaveAttribute('min', todayAsCalendarDay());
       expect(screen.getByLabelText('Ngày lấy hàng *')).not.toHaveAttribute('max');
-      expect(screen.getByLabelText('Giờ lấy hàng')).toHaveAttribute('type', 'time');
+
+      // ★ Today: the hour is asked for, and the "leave it empty" hint is gone.
+      expect(screen.getByLabelText('Giờ lấy hàng *')).toHaveAttribute('type', 'time');
+      expect(screen.getByLabelText('Giờ lấy hàng *')).toBeRequired();
+      expect(screen.queryByText('Để trống nếu chưa chốt giờ.')).toBeNull();
+
+      // A later day: optional again, with what was typed kept across the switch.
+      fireEvent.change(screen.getByLabelText('Giờ lấy hàng *'), { target: { value: '23:59' } });
+      fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: '2099-09-23' } });
       expect(screen.getByLabelText('Giờ lấy hàng')).not.toBeRequired();
+      expect(screen.getByLabelText('Giờ lấy hàng')).toHaveValue('23:59');
+      expect(screen.getByText('Để trống nếu chưa chốt giờ.')).toBeInTheDocument();
+
+      // And back to today: required again.
+      fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: todayAsCalendarDay() } });
+      expect(screen.getByLabelText('Giờ lấy hàng *')).toBeRequired();
+      expect(screen.getByLabelText('Giờ lấy hàng *')).toHaveValue('23:59');
       expect(delivery()).toHaveAttribute('type', 'datetime-local');
       expect(delivery()).not.toBeRequired();
       expect(screen.queryByLabelText(/Ngày chạy/)).toBeNull();
@@ -2198,6 +2213,131 @@ describe('TripSchedulePage', () => {
       fireEvent.submit(delivery().form!);
       await act(async () => {});
       expect(createTripSchedule).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ★ TODAY'S BOOKING AT 10:52:43 IN HỒ CHÍ MINH. Only `Date` is faked: the
+     * query client and the DOM keep their real timers.
+     */
+    describe('★ at 2026-10-03 10:52:43 — today’s booking says its hour, and not one already gone', () => {
+      const PAST = 'Giờ lấy hàng đã qua. Chuyến đã chạy được ghi nhận bằng “Nhập chuyến cũ” ở Lịch sử chuyến.';
+      const NEEDED = 'Chuyến hôm nay phải có giờ lấy hàng.';
+      const date = () => screen.getByLabelText('Ngày lấy hàng *') as HTMLInputElement;
+      const hour = () => screen.getByLabelText(/^Giờ lấy hàng/) as HTMLInputElement;
+      const at = (iso: string) => vi.setSystemTime(new Date(iso));
+
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        at('2026-10-03T10:52:43+07:00');
+      });
+      afterEach(() => vi.useRealTimers());
+
+      it('★ opens today’s pickers on today and on the current minute — the hour required', async () => {
+        await openCreate();
+
+        expect(date()).toHaveAttribute('min', '2026-10-03');
+        expect(hour()).toHaveAttribute('min', '10:52');
+        expect(hour()).toBeRequired();
+        // Another day: no hour bound, and no hour asked for.
+        fireEvent.change(date(), { target: { value: '2026-10-04' } });
+        expect(hour()).not.toHaveAttribute('min');
+        expect(hour()).not.toBeRequired();
+      });
+
+      it('★ refuses today with no hour under its field, keeps what was typed, and sends nothing', async () => {
+        await openCreate();
+        fireEvent.change(screen.getByLabelText('Ghi chú'), { target: { value: 'gọi trước 30 phút' } });
+
+        fireEvent.submit(hour().form!);
+        await act(async () => {});
+
+        expect(createTripSchedule).not.toHaveBeenCalled();
+        const message = screen.getByText(NEEDED);
+        expect(hour()).toHaveAttribute('aria-invalid', 'true');
+        expect(hour().getAttribute('aria-describedby')).toContain(message.id);
+        expect(screen.getByLabelText('Ghi chú')).toHaveValue('gọi trước 30 phút');
+
+        // Giving the hour clears it; the booking goes.
+        fireEvent.change(hour(), { target: { value: '11:00' } });
+        expect(screen.queryByText(NEEDED)).toBeNull();
+        save();
+        await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+        expect(createTripSchedule.mock.calls[0]![0]).toMatchObject({
+          scheduledOn: '2026-10-03',
+          pickupAt: hcm('2026-10-03', '11:00'),
+          note: 'gọi trước 30 phút',
+        });
+      });
+
+      it('★ refuses 10:51 at the field and sends nothing; takes 10:52 — the seconds are not compared', async () => {
+        await openCreate();
+        fireEvent.change(hour(), { target: { value: '10:51' } });
+
+        expect(hour()).toHaveAttribute('aria-invalid', 'true');
+        expect(screen.getByText(PAST)).toBeInTheDocument();
+        fireEvent.submit(hour().form!);
+        await act(async () => {});
+        expect(createTripSchedule).not.toHaveBeenCalled();
+
+        fireEvent.change(hour(), { target: { value: '10:52' } });
+        expect(screen.queryByText(PAST)).toBeNull();
+        save();
+        await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+        expect(createTripSchedule.mock.calls[0]![0]).toMatchObject({
+          scheduledOn: '2026-10-03',
+          pickupAt: hcm('2026-10-03', '10:52'),
+          entryMode: 'operational',
+        });
+      });
+
+      it('★ books tomorrow with no hour — there it stays optional', async () => {
+        await openCreate();
+        fireEvent.change(date(), { target: { value: '2026-10-04' } });
+        save();
+
+        await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+        expect(createTripSchedule.mock.calls[0]![0]).toMatchObject({ scheduledOn: '2026-10-04', pickupAt: null });
+      });
+
+      it('★ a dialog left open past its hour: the server refuses on its own clock, under the field, in the form’s words', async () => {
+        at('2026-10-03T10:50:00+07:00');
+        await openCreate();
+        fireEvent.change(hour(), { target: { value: '10:51' } });
+        expect(screen.queryByText(PAST)).toBeNull();
+
+        // Three minutes at the coffee machine; the server's clock moved on.
+        at('2026-10-03T10:53:10+07:00');
+        createTripSchedule.mockRejectedValue(
+          new ApiError(422, 'VALIDATION_FAILED', 'A new booking cannot pick up earlier than now.', {
+            pickupAt: 'PAST_INSTANT',
+          }),
+        );
+        save();
+
+        await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+        expect(hour()).toHaveAttribute('aria-invalid', 'true');
+        expect((await screen.findAllByText(PAST)).length).toBeGreaterThan(0);
+        expect(screen.queryByText('A new booking cannot pick up earlier than now.')).toBeNull();
+        expect(hour()).toHaveValue('10:51');
+      });
+
+      it('★ a dialog left open past midnight: “tomorrow, no hour” became today — refused under the hour', async () => {
+        at('2026-10-02T23:58:00+07:00');
+        await openCreate();
+        fireEvent.change(date(), { target: { value: '2026-10-03' } });
+        expect(hour()).not.toBeRequired();
+
+        at('2026-10-03T00:01:00+07:00');
+        createTripSchedule.mockRejectedValue(
+          new ApiError(422, 'VALIDATION_FAILED', 'A booking for today needs a pickup time.', { pickupAt: 'TIME_REQUIRED' }),
+        );
+        save();
+
+        await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+        const message = await screen.findByText(NEEDED);
+        expect(hour().getAttribute('aria-describedby')).toContain(message.id);
+        expect(date()).toHaveValue('2026-10-03');
+      });
     });
 
     it('★ corrects a record with no hours — the note alone — without asking for any', async () => {

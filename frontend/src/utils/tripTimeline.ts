@@ -35,12 +35,18 @@ export const calendarError = (
   return null;
 };
 
+const MINUTE_MS = 60_000;
+
 /**
  * What to say under the pickup date, the pickup hour and the delivery, or `null`.
  *
  * ★ A RECORDED RUN HAS ENDED, so on "Nhập chuyến cũ" an hour that IS given may
  * not lie after now — 15:00 today is refused at 14:00. An hour left empty is
- * never asked for. A booking takes future hours: that is what it is for.
+ * never asked for.
+ *
+ * ★ A BOOKING IS WORK STILL TO RUN, so on "Thêm chuyến" a pickup hour that IS
+ * given may not lie before now — 10:51 is refused at 10:52, the current minute
+ * is taken (the server's grain). Future hours are what a booking is for.
  */
 export const timelineErrors = (
   trip: { scheduledOn: string; pickupAt: string | null; deliveryAt: string | null },
@@ -51,10 +57,16 @@ export const timelineErrors = (
   // A day already refused says it once, under the date.
   const ahead = (iso: string | null): boolean =>
     mode === 'historical' && scheduledOn === null && iso !== null && new Date(iso).getTime() > now.getTime();
+  const thisMinute = Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS;
+  const behind = (iso: string | null): boolean =>
+    mode === 'operational' && scheduledOn === null && iso !== null && new Date(iso).getTime() < thisMinute;
+  let pickupAt: TranslationKey | null = null;
+  if (ahead(trip.pickupAt)) pickupAt = 'historicalInstantInFuture';
+  else if (behind(trip.pickupAt)) pickupAt = 'pickupInPast';
 
   let deliveryAt: TranslationKey | null = null;
   if (deliversBeforePickup(trip.pickupAt, trip.deliveryAt)) deliveryAt = 'deliveryNotAfterPickup';
   else if (ahead(trip.deliveryAt)) deliveryAt = 'historicalInstantInFuture';
 
-  return { scheduledOn, pickupAt: ahead(trip.pickupAt) ? 'historicalInstantInFuture' : null, deliveryAt };
+  return { scheduledOn, pickupAt, deliveryAt };
 };

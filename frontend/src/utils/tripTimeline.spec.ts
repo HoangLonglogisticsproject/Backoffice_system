@@ -43,15 +43,47 @@ describe('calendarError — the entry intent’s policy, on the pickup DATE', ()
 describe('timelineErrors', () => {
   it('★ holds the timeline in every mode, and puts each refusal under its own field', () => {
     const backwards = { scheduledOn: '2026-09-23', pickupAt: hcm('2026-09-23T17:36'), deliveryAt: hcm('2026-09-23T16:36') };
-    // 23:00 that day: still today for a booking, both hours past for a record.
-    const now = new Date(hcm('2026-09-23T23:00'));
+    // A booking typed that morning, both hours ahead; a record or a
+    // correction at 23:00, both hours past.
+    const nowFor = (mode: 'operational' | 'historical' | null) =>
+      new Date(hcm(mode === 'operational' ? '2026-09-23T08:00' : '2026-09-23T23:00'));
     for (const mode of ['operational', 'historical', null] as const) {
-      expect(timelineErrors(backwards, mode, now)).toEqual({
+      expect(timelineErrors(backwards, mode, nowFor(mode))).toEqual({
         scheduledOn: null,
         pickupAt: null,
         deliveryAt: 'deliveryNotAfterPickup',
       });
     }
+  });
+
+  describe('★ a booking at 2026-10-03 10:52 — the server’s boundary, mirrored', () => {
+    const now = new Date(hcm('2026-10-03T10:52'));
+    const booking = (pickup: string) => ({ scheduledOn: pickup.slice(0, 10), pickupAt: hcm(pickup), deliveryAt: null });
+    const clear = { scheduledOn: null, pickupAt: null, deliveryAt: null };
+
+    it.each([
+      ['2026-10-03T09:00', { ...clear, pickupAt: 'pickupInPast' }],
+      ['2026-10-03T10:51', { ...clear, pickupAt: 'pickupInPast' }],
+      ['2026-10-03T10:52', clear],
+      ['2026-10-03T11:00', clear],
+      ['2026-10-04T08:00', clear],
+    ])('%s → %j', (pickup, errors) => {
+      expect(timelineErrors(booking(pickup), 'operational', now)).toEqual(errors);
+    });
+
+    it('refuses yesterday once, under the date', () => {
+      expect(timelineErrors(booking('2026-10-02T15:00'), 'operational', now)).toEqual({
+        ...clear,
+        scheduledOn: 'pickupOnPastDay',
+      });
+    });
+
+    it('takes today with no hour, and leaves a correction (no intent) alone', () => {
+      expect(timelineErrors({ scheduledOn: '2026-10-03', pickupAt: null, deliveryAt: null }, 'operational', now)).toEqual(
+        clear,
+      );
+      expect(timelineErrors(booking('2026-10-03T09:00'), null, now)).toEqual(clear);
+    });
   });
 
   describe('★ a recorded run has ended — at 14:00 on 29/09', () => {
