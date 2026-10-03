@@ -1,5 +1,6 @@
 import type { UpdateTripInput } from '@/api/tripSchedule';
 import type { TripScheduleWithRefs } from '@/types/trip';
+import type { TranslationKey } from '@/types/translate';
 import { businessClockOf, businessInstant, todayAsCalendarDay } from '@/utils/format/datetime';
 
 /**
@@ -69,5 +70,31 @@ export const timesPayload = (times: FormTimes, trip: TripScheduleWithRefs | null
   return {
     ...(pickupTouched ? { scheduledOn: times.scheduledOn, pickupAt } : {}),
     ...(times.deliveryAt === was.deliveryAt ? {} : { deliveryAt }),
+  };
+};
+
+/**
+ * The pickup date and hour controls, as the entry intent and the clock set them.
+ *
+ * ★ A BOOKING IS NOW OR LATER — the server's rule, mirrored. Its date starts
+ * today; for TODAY the hour is asked for and starts at the current minute (the
+ * server refuses it otherwise); any later day leaves the hour open. A recorded
+ * run's date ends today. A correction has no bound.
+ */
+export const pickupControls = (
+  intent: { booking: boolean; historicalEntry: boolean },
+  times: { scheduledOn: string; pickupTime: string },
+  clock: { today: string; now: number },
+  t: (key: TranslationKey) => string,
+) => {
+  const forToday = intent.booking && times.scheduledOn === clock.today;
+  return {
+    dateMin: intent.booking ? clock.today : undefined,
+    dateMax: intent.historicalEntry ? clock.today : undefined,
+    hourLabel: t(forToday ? 'fieldPickupAtRequired' : 'fieldPickupAt'),
+    hourHint: forToday ? undefined : t('timeMayBeUnknown'),
+    hourRequired: forToday,
+    hourMissing: forToday && times.pickupTime === '',
+    hourMin: forToday ? businessClockOf(new Date(clock.now).toISOString()) : undefined,
   };
 };
