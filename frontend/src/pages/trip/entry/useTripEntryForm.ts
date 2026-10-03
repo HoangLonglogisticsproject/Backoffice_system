@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { updateTripSchedule } from '@/api/tripSchedule';
 import type { TripEntryMode, TripScheduleWithRefs } from '@/types/trip';
@@ -45,6 +45,13 @@ export function useTripEntryForm({ isOpen, trip, mode, mayDispatch, onClose, onS
   const permissions = useEntryPermissions(trip);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [busy, setBusy] = useState(false);
+  /**
+   * ★ ONE SAVE AT A TIME. `busy` disables the button, but only once React has
+   * re-rendered; two presses inside one frame both reach `submit`. The ref
+   * answers synchronously, so the second is dropped before anything is sent —
+   * with `createdTripId`, the reason a double press never books two trips.
+   */
+  const inFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   /**
    * ★ THE TRIP IS CREATED ONCE, EVEN IF SAVE IS PRESSED TWICE.
@@ -89,7 +96,13 @@ export function useTripEntryForm({ isOpen, trip, mode, mayDispatch, onClose, onS
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    await save();
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      await save();
+    } finally {
+      inFlight.current = false;
+    }
   };
 
   const save = async () => {

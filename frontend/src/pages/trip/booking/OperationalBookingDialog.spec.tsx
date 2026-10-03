@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { ApiError } from '@/utils/errors';
@@ -279,6 +279,26 @@ describe('★ the workspace: sections, summary, action', () => {
 });
 
 describe('★ saving', () => {
+  it('★ a double press books ONE trip — and the button says it is working meanwhile', async () => {
+    let answer: (value: unknown) => void = () => {};
+    createTripSchedule.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    renderBooking();
+    fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: '2099-09-01' } });
+    fireEvent.change(screen.getByLabelText('Giá cước bán (VND) *'), { target: { value: '4500000' } });
+
+    const form = screen.getByRole('button', { name: 'Tạo booking' }).closest('dialog')!.querySelector('form')!;
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    const working = await screen.findByRole('button', { name: /Đang tạo booking/ });
+    expect(working).toBeDisabled();
+    expect(createTripSchedule).toHaveBeenCalledTimes(1);
+
+    await act(async () => answer({ id: 't-new' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(createTripSchedule).toHaveBeenCalledTimes(1);
+  });
+
   it('★ closes only once the server has confirmed — and refreshes Lịch xe', async () => {
     renderBooking();
     await typeBooking();
