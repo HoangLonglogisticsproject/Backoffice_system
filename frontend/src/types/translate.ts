@@ -1158,6 +1158,18 @@ const PHRASES = {
   // The same hour, required: a booking for today must say when it picks up.
   fieldPickupAtRequired: { vi: 'Giờ lấy hàng *', en: 'Pickup time *' },
   fieldDeliveryDateTime: { vi: 'Thời gian giao hàng', en: 'Delivery date & time' },
+  fieldDeliveryTime: { vi: 'Giờ giao hàng', en: 'Delivery time' },
+  // The date and time controls (`DateInput`, `TimeInput`): dd/mm/yyyy and a picked hour in any browser.
+  dateFormatInvalid: { vi: 'Nhập ngày theo dạng dd/mm/yyyy.', en: 'Enter the date as dd/mm/yyyy.' },
+  dateTimeIncomplete: { vi: 'Nhập đủ cả ngày và giờ.', en: 'Enter both the date and the time.' },
+  chooseDate: { vi: 'Chọn ngày trên lịch', en: 'Pick a date' },
+  timePickerDialog: { vi: 'Chọn giờ', en: 'Choose a time' },
+  timePickerHour: { vi: 'Giờ', en: 'Hour' },
+  timePickerMinute: { vi: 'Phút', en: 'Minute' },
+  timePickerPeriod: { vi: 'Sáng/chiều (AM/PM)', en: 'AM/PM' },
+  timePickerClear: { vi: 'Xóa', en: 'Clear' },
+  timePickerDone: { vi: 'Xong', en: 'Done' },
+  timePickerIncomplete: { vi: 'Chọn đủ giờ, phút và AM/PM.', en: 'Pick the hour, the minute and AM or PM.' },
   timeMayBeUnknown: { vi: 'Để trống nếu chưa chốt giờ.', en: 'Leave empty until the hour is agreed.' },
   historicalInstantInFuture: {
     vi: 'Chuyến cũ không thể có thời gian sau thời điểm hiện tại.',

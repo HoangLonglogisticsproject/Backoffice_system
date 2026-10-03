@@ -121,7 +121,8 @@ const typeBooking = async () => {
   fireEvent.change(screen.getByLabelText('Ghi chú'), { target: { value: 'Gọi trước 30 phút' } });
   fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: '2099-09-01' } });
   fireEvent.change(screen.getByLabelText('Giờ lấy hàng'), { target: { value: '08:30' } });
-  fireEvent.change(screen.getByLabelText('Thời gian giao hàng'), { target: { value: '2099-09-02T17:00' } });
+  fireEvent.change(screen.getByLabelText('Thời gian giao hàng'), { target: { value: '2099-09-02' } });
+  fireEvent.change(screen.getByLabelText('Giờ giao hàng'), { target: { value: '17:00' } });
   fireEvent.change(screen.getByLabelText('Giá cước mua (VND)'), { target: { value: '3000000' } });
   fireEvent.change(screen.getByLabelText('Giá cước bán (VND) *'), { target: { value: '4500000' } });
 };
@@ -174,6 +175,40 @@ describe('★ the booking workspace replaces the old form for "Thêm chuyến" �
 
     expect(after).toEqual(before);
     expect(after).toEqual(CANONICAL);
+  });
+
+  it('★ 09:30 PM tonight and 09:30 AM tomorrow, picked — never typed — and sent as the same instants', async () => {
+    renderBooking();
+    const choose = (label: string, hour: string, minute: string, period: 'AM' | 'PM') => {
+      fireEvent.click(screen.getByLabelText(label));
+      const column = (name: RegExp) => within(screen.getByRole('listbox', { name }));
+      fireEvent.click(column(/^Giờ$/).getByRole('option', { name: hour }));
+      fireEvent.click(column(/^Phút$/).getByRole('option', { name: minute }));
+      fireEvent.click(column(/AM\/PM/).getByRole('option', { name: period }));
+      fireEvent.click(screen.getByRole('button', { name: 'Xong' }));
+    };
+    fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: '01092099' } });
+    choose('Giờ lấy hàng', '09', '30', 'PM');
+    fireEvent.change(screen.getByLabelText('Thời gian giao hàng'), { target: { value: '02092099' } });
+    choose('Giờ giao hàng', '09', '30', 'AM');
+    fireEvent.change(screen.getByLabelText('Giá cước bán (VND) *'), { target: { value: '4500000' } });
+
+    const shown = ['Ngày lấy hàng *', 'Giờ lấy hàng', 'Thời gian giao hàng', 'Giờ giao hàng'].map(
+      (label) => (screen.getByLabelText(label) as HTMLInputElement).value,
+    );
+    expect(shown).toEqual(['01/09/2099', '09:30 PM', '02/09/2099', '09:30 AM']);
+    // The summary reads the form's 24-hour value.
+    expect(within(screen.getByRole('complementary', { name: 'Tóm tắt booking' })).getByText('01/09/2099 · 21:30')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tạo booking' }));
+    await waitFor(() => expect(createTripSchedule).toHaveBeenCalledTimes(1));
+    expect(createTripSchedule.mock.calls[0]![0]).toMatchObject({
+      scheduledOn: '2099-09-01',
+      pickupAt: hcm('2099-09-01', '21:30'),
+      deliveryAt: hcm('2099-09-02', '09:30'),
+    });
+    // 21:30 in Hồ Chí Minh is 14:30 UTC — the normalisation is the one it always was.
+    expect(hcm('2099-09-01', '21:30')).toBe('2099-09-01T14:30:00.000Z');
   });
 
   it('★ sends no price key for a booker who may not see prices — and draws no price field', async () => {
@@ -264,8 +299,8 @@ describe('★ the workspace: sections, summary, action', () => {
     expect(summary.getByText('Kho OSC')).toBeInTheDocument();
     // A hand-typed address is named by its first line.
     expect(summary.getByText('Bãi tạm Q9')).toBeInTheDocument();
-    expect(summary.getByText('1/9/2099 · 08:30')).toBeInTheDocument();
-    expect(summary.getByText('2/9/2099 · 17:00')).toBeInTheDocument();
+    expect(summary.getByText('01/09/2099 · 08:30')).toBeInTheDocument();
+    expect(summary.getByText('02/09/2099 · 17:00')).toBeInTheDocument();
     expect(summary.getByText('3,000,000')).toBeInTheDocument();
     expect(summary.getByText('4,500,000')).toBeInTheDocument();
   });
@@ -322,7 +357,7 @@ describe('★ saving', () => {
     expect(screen.getByLabelText('Khách hàng')).toHaveValue('c9');
     expect(screen.getByLabelText('Điểm lấy hàng')).toHaveValue('l1');
     expect(screen.getByLabelText('Địa chỉ giao hàng')).toHaveValue('Bãi tạm Q9\nCổng 2');
-    expect(screen.getByLabelText('Giờ lấy hàng')).toHaveValue('08:30');
+    expect(screen.getByLabelText('Giờ lấy hàng')).toHaveValue('08:30 AM');
     expect(screen.getByLabelText('Giá cước bán (VND) *')).toHaveValue('4,500,000');
     expect(screen.getByLabelText('Ghi chú')).toHaveValue('Gọi trước 30 phút');
   });

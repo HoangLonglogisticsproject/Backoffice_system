@@ -84,7 +84,9 @@ const renderPage = () =>
 const fill = (day: string, hour: string, delivery: string) => {
   fireEvent.change(screen.getByLabelText('Ngày lấy hàng *'), { target: { value: day } });
   fireEvent.change(screen.getByLabelText('Giờ lấy hàng'), { target: { value: hour } });
-  fireEvent.change(screen.getByLabelText('Thời gian giao hàng'), { target: { value: delivery } });
+  const [deliveryDay = '', deliveryHour = ''] = delivery.split('T');
+  fireEvent.change(screen.getByLabelText('Thời gian giao hàng'), { target: { value: deliveryDay } });
+  fireEvent.change(screen.getByLabelText('Giờ giao hàng'), { target: { value: deliveryHour } });
 };
 const save = () => {
   const saves = screen.getAllByRole('button', { name: 'Lưu' });
@@ -238,8 +240,9 @@ describe('TripHistoryPage', () => {
     fireEvent.change(await screen.findByLabelText('Ngày lấy hàng *'), { target: { value: '2099-09-23' } });
 
     // ★ The picker ends on today — and reaches back as far as the run did.
-    expect(screen.getByLabelText('Ngày lấy hàng *')).toHaveAttribute('max', todayAsCalendarDay());
-    expect(screen.getByLabelText('Ngày lấy hàng *')).not.toHaveAttribute('min');
+    const calendar = document.getElementById('trip-date-calendar')!;
+    expect(calendar).toHaveAttribute('max', todayAsCalendarDay());
+    expect(calendar).not.toHaveAttribute('min');
     expect(screen.getByText('Chuyến cũ phải có ngày lấy hàng không muộn hơn hôm nay.')).toBeInTheDocument();
     fireEvent.submit(screen.getByLabelText('Ngày lấy hàng *').closest('form')!);
     await act(async () => {});

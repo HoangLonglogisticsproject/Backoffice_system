@@ -15,7 +15,7 @@ export function BookingSummary({
   customers,
   className,
 }: Readonly<{ entry: TripEntry; customers: TripCustomer[]; className?: string }>) {
-  const { t, language } = useLanguage();
+  const { t } = useLanguage();
   const id = useId();
   const customer = customers.find((row) => row.id === entry.form.customerId);
   const rows = summaryRows(
@@ -24,7 +24,6 @@ export function BookingSummary({
     customer?.name ?? null,
     entry.mayViewPrices,
     t,
-    language,
   );
 
   return (

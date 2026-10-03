@@ -104,7 +104,8 @@ export function DeliveryAtField({ entry }: Readonly<{ entry: TripEntry }>) {
     <TripTimeField
       id="trip-delivery-at"
       label={t('fieldDeliveryDateTime')}
-      type="datetime-local"
+      type="datetime"
+      timeLabel={t('fieldDeliveryTime')}
       value={entry.form.deliveryAt}
       onChange={(value) => entry.set('deliveryAt', value)}
       error={entry.fieldError('deliveryAt')}

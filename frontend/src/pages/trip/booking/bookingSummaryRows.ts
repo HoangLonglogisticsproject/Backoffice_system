@@ -1,11 +1,10 @@
+import { displayCalendarDate } from '@/components/ui/dateTimeText';
 import type { useLanguage } from '@/contexts/LanguageContext';
-import { formatCalendarDay } from '@/utils/format/datetime';
 import { formatMoney } from '@/utils/format/money';
 import type { FormState } from '../entry/tripEntryModel';
 import type { ChosenPlace } from '../entry/tripEntryPlaces';
 
 type Translate = ReturnType<typeof useLanguage>['t'];
-type Language = ReturnType<typeof useLanguage>['language'];
 
 /** One line of the summary: what it is, and what the form says. */
 interface SummaryRow {
@@ -25,8 +24,9 @@ const endLabel = (place: ChosenPlace | null, typed: string): string => place?.na
  * `TripEntry` the sections type into — the times as typed on the business
  * clock, the money as the plain decimal string the server is sent — so the
  * summary can never disagree with the booking it summarises. Both times read
- * "day · hour". A row is drawn only once it has something to say; prices only
- * for a caller who may see them.
+ * "dd/mm/yyyy · HH:mm", exactly as the fields beside them show them. A row is
+ * drawn only once it has something to say; prices only for a caller who may
+ * see them.
  */
 export const summaryRows = (
   form: FormState,
@@ -34,9 +34,8 @@ export const summaryRows = (
   customerName: string | null,
   mayViewPrices: boolean,
   t: Translate,
-  language: Language,
 ): SummaryRow[] => {
-  const pickupDay = form.scheduledOn ? formatCalendarDay(form.scheduledOn, language) : '';
+  const pickupDay = displayCalendarDate(form.scheduledOn);
   // The `datetime-local` value, already on the business clock: "YYYY-MM-DDTHH:mm".
   const [deliveryDay, deliveryTime] = form.deliveryAt.split('T');
   const rows: SummaryRow[] = [
@@ -52,7 +51,7 @@ export const summaryRows = (
     {
       key: 'deliveryAt',
       label: t('bookingSummaryDeliveryTime'),
-      value: deliveryDay && deliveryTime ? `${formatCalendarDay(deliveryDay, language)} · ${deliveryTime}` : '',
+      value: deliveryDay && deliveryTime ? `${displayCalendarDate(deliveryDay)} · ${deliveryTime}` : '',
     },
   ];
   if (mayViewPrices) {
