@@ -1335,7 +1335,7 @@ khởi đầu (`initialLifecycle`):
 
 | `entryMode` | Màn hình | Trạng thái khởi đầu | Lịch | Crew trong body |
 |---|---|---|---|---|
-| `operational` | Lịch xe — "Thêm chuyến" | `status` gửi lên (mặc định `pending`); `finished` → **409** | ngày lấy hàng **trước hôm nay** → **422** `details.scheduledOn: 'PAST_DAY'` | **422** `details.crew: 'CREW_AFTER_BOOKING'` — điều độ qua route phân công sau khi có chuyến (như trước) |
+| `operational` | Lịch xe — "Thêm chuyến" | `status` gửi lên (mặc định `pending`); `finished` → **409** | **chỉ hiện tại hoặc tương lai** (đồng hồ server, Hồ Chí Minh, theo phút): ngày **trước hôm nay** → **422** `details.scheduledOn: 'PAST_DAY'`; **hôm nay** mà thiếu `pickupAt` → **422** `details.pickupAt: 'TIME_REQUIRED'`; hôm nay mà `pickupAt` trước phút hiện tại → **422** `details.pickupAt: 'PAST_INSTANT'` (lúc 10:52:43: 10:51 từ chối, 10:52 nhận). Ngày sau hôm nay: giờ vẫn optional. Chỉ khi **tạo** — sửa chuyến không bị luật này | **422** `details.crew: 'CREW_AFTER_BOOKING'` — điều độ qua route phân công sau khi có chuyến (như trước) |
 | `historical` | Lịch sử chuyến — "Nhập chuyến cũ" | **`finished` do server đặt**; gửi kèm `status` bất kỳ → **422** `details.status: 'STATUS_SET_BY_ENTRY'` | ngày **sau hôm nay** → **422** `'FUTURE_DAY'`; `pickupAt` / `deliveryAt` **có giá trị** mà sau thời điểm hiện tại → **422** `details.pickupAt` / `details.deliveryAt: 'FUTURE_INSTANT'` | `crew?: { vehicleId, driverUserId }[]` (≤ 20), cần **`dispatch.write`** (thiếu → **403**); trùng xe → **422** `details.crew: 'DUPLICATE_VEHICLE'` |
 
 `POST /trip-schedules/historical` **không còn** (404). Với `historical`, cùng một

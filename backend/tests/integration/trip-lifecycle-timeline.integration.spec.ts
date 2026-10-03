@@ -256,18 +256,66 @@ describeIntegration('Trip lifecycle projections and timeline against real Postgr
       expect(created.pickupAt?.toISOString()).toBe(soon.toISOString());
     });
 
-    it('books a pickup earlier TODAY — today’s work — and it starts the ordinary lifecycle', async () => {
-      const created = await fx.trips.create({
-        pickupAt: at(day(0), '00:00'),
-        deliveryAt: at(day(0), '23:59'),
-        entryMode: 'operational',
-        createdBy: fx.author,
+    /**
+     * ★ THE OPERATIONAL BOUNDARY, THROUGH THE SERVICE AND POSTGRESQL, WITH THE
+     * SERVER'S CLOCK PINNED to 2026-10-03 10:52 in Hồ Chí Minh — the one `now`
+     * a caller may pass, and only tests do.
+     */
+    describe('★ at 2026-10-03 10:52:43 (Hồ Chí Minh)', () => {
+      const now = new Date('2026-10-03T10:52:43+07:00');
+      const book = (entry: { scheduledOn?: string; pickupAt?: Date }) =>
+        fx.trips.create({ ...entry, entryMode: 'operational', createdBy: fx.author }, now);
+
+      it.each([
+        ['yesterday', { scheduledOn: '2026-10-02' }, { scheduledOn: 'PAST_DAY' }],
+        ['today with no pickup time', { scheduledOn: '2026-10-03' }, { pickupAt: 'TIME_REQUIRED' }],
+        ['today 09:00', { pickupAt: at('2026-10-03', '09:00') }, { pickupAt: 'PAST_INSTANT' }],
+        ['today 10:51', { pickupAt: at('2026-10-03', '10:51') }, { pickupAt: 'PAST_INSTANT' }],
+      ])('refuses %s with the usual 422 shape, and stores nothing', async (_case, entry, details) => {
+        await expect(book(entry)).rejects.toMatchObject({ code: 'VALIDATION_FAILED', details });
+        expect(await storedTrips()).toBe(0);
       });
 
-      expect(created.scheduledOn).toBe(day(0));
-      expect(created.status).toBe('pending');
-      expect(await idsIn('operational')).toEqual([created.id]);
-      expect(await idsIn('history')).toEqual([]);
+      it('★ takes today 10:52 and 11:00, tomorrow with and without an hour — each pending on its own day', async () => {
+        const booked = [
+          await book({ pickupAt: at('2026-10-03', '10:52') }),
+          await book({ pickupAt: at('2026-10-03', '11:00') }),
+          await book({ scheduledOn: '2026-10-04' }),
+          await book({ pickupAt: at('2026-10-04', '08:00') }),
+        ];
+
+        expect(booked.map((trip) => [trip.scheduledOn, trip.pickupAt?.toISOString() ?? null, trip.status])).toEqual([
+          ['2026-10-03', at('2026-10-03', '10:52').toISOString(), 'pending'],
+          ['2026-10-03', at('2026-10-03', '11:00').toISOString(), 'pending'],
+          ['2026-10-04', null, 'pending'],
+          ['2026-10-04', at('2026-10-04', '08:00').toISOString(), 'pending'],
+        ]);
+        expect(await storedTrips()).toBe(4);
+      });
+
+      it('leaves the historical intent alone — today with no hour, and 09:00, are runs that happened', async () => {
+        const record = (entry: { scheduledOn?: string; pickupAt?: Date }) =>
+          fx.trips.create({ ...entry, entryMode: 'historical', createdBy: fx.author }, now);
+
+        expect((await record({ scheduledOn: '2026-10-03' })).status).toBe('finished');
+        expect((await record({ pickupAt: at('2026-10-03', '09:00') })).status).toBe('finished');
+      });
+    });
+
+    it('★ a booking whose pickup hour has since passed is still corrected — the rule is the create’s', async () => {
+      // Booked properly on 1/9 for 11:00 that day; long past by any real clock.
+      const booked = await fx.trips.create(
+        { pickupAt: at('2026-09-01', '11:00'), entryMode: 'operational', createdBy: fx.author },
+        new Date('2026-09-01T10:52:43+07:00'),
+      );
+
+      const corrected = await fx.trips.update(
+        booked.id,
+        { note: 'giờ thực tế', sellPrice: '2500000', pickupAt: at('2026-09-01', '10:30') },
+        fx.author,
+      );
+      expect(corrected).toMatchObject({ note: 'giờ thực tế', scheduledOn: '2026-09-01', status: 'pending' });
+      expect(corrected.pickupAt?.toISOString()).toBe(at('2026-09-01', '10:30').toISOString());
     });
 
     it('★ books a DATE with no hour yet — the day is kept, no instant is invented', async () => {

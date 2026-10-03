@@ -96,12 +96,26 @@ describe('the calendar policy is the intent’s', () => {
   });
 
   describe('a booking (operational)', () => {
-    it('★ refuses a past DAY — an earlier hour today is still today’s work', () => {
+    it('★ refuses a past DAY, and an hour today already gone', () => {
       expect(calendarRefusal('operational', entry('2026-09-28'), now)).toEqual({
         field: 'scheduledOn',
         reason: 'PAST_DAY',
       });
-      expect(calendarRefusal('operational', entry('2026-09-29', '2026-09-29T08:00'), now)).toBeNull();
+      expect(calendarRefusal('operational', entry('2026-09-29', '2026-09-29T08:00'), now)).toEqual({
+        field: 'pickupAt',
+        reason: 'PAST_INSTANT',
+      });
+    });
+
+    it('★ refuses today with no hour — nothing would show the pickup is not already gone', () => {
+      expect(calendarRefusal('operational', entry('2026-09-29'), now)).toEqual({
+        field: 'pickupAt',
+        reason: 'TIME_REQUIRED',
+      });
+    });
+
+    it('takes a later day with no hour — there the hour stays optional', () => {
+      expect(calendarRefusal('operational', entry('2026-09-30'), now)).toBeNull();
     });
 
     it('★ takes a future pickup hour — that is what a booking is', () => {
@@ -109,6 +123,45 @@ describe('the calendar policy is the intent’s', () => {
         calendarRefusal('operational', entry('2026-09-29', '2026-09-29T15:00', '2026-09-29T18:00'), now),
       ).toBeNull();
       expect(calendarRefusal('operational', entry('2026-10-01', '2026-10-01T08:00'), now)).toBeNull();
+    });
+  });
+
+  describe('★ a booking at 2026-10-03 10:52:43 (Hồ Chí Minh) — the operational boundary', () => {
+    const now = new Date('2026-10-03T10:52:43+07:00');
+    const booking = (pickup: string) => ({
+      scheduledOn: pickup.slice(0, 10),
+      pickupAt: pickup.length > 10 ? hcm(pickup) : null,
+      deliveryAt: null,
+    });
+
+    it.each([
+      ['yesterday', '2026-10-02', { field: 'scheduledOn', reason: 'PAST_DAY' }],
+      ['today, no pickup time', '2026-10-03', { field: 'pickupAt', reason: 'TIME_REQUIRED' }],
+      ['today 09:00', '2026-10-03T09:00', { field: 'pickupAt', reason: 'PAST_INSTANT' }],
+      ['today 10:51', '2026-10-03T10:51', { field: 'pickupAt', reason: 'PAST_INSTANT' }],
+      ['today 10:52 — the current minute, seconds ignored', '2026-10-03T10:52', null],
+      ['today 10:53', '2026-10-03T10:53', null],
+      ['today 11:00', '2026-10-03T11:00', null],
+      ['tomorrow, no pickup time', '2026-10-04', null],
+      ['tomorrow 08:00', '2026-10-04T08:00', null],
+    ])('%s → %j', (_case, pickup, refusal) => {
+      expect(calendarRefusal('operational', booking(pickup), now)).toEqual(refusal);
+    });
+
+    it('leaves the historical intent its own rule — today with no hour, or 09:00, is a run that happened', () => {
+      expect(calendarRefusal('historical', booking('2026-10-03'), now)).toBeNull();
+      expect(calendarRefusal('historical', booking('2026-10-03T09:00'), now)).toBeNull();
+      expect(calendarRefusal('historical', booking('2026-10-03T10:53'), now)).toEqual({
+        field: 'pickupAt',
+        reason: 'FUTURE_INSTANT',
+      });
+    });
+
+    it('reads the business clock, not the server’s — 03:52 UTC is 10:52 in Hồ Chí Minh', () => {
+      expect(calendarRefusal('operational', booking('2026-10-03T10:51'), new Date('2026-10-03T03:52:00Z'))).toEqual({
+        field: 'pickupAt',
+        reason: 'PAST_INSTANT',
+      });
     });
   });
 

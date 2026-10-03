@@ -164,8 +164,13 @@ và ngày (Hồ Chí Minh) của nó **là** `scheduled_on` · `delivery_at` = t
   kiểm tra danh mục, chỉ áp khi write **đổi** một mốc: dòng cũ vẫn được định giá.
 * **Ngày ↔ giờ lấy không lệch** — 422 `NOT_THE_PICKUP_DAY`. Dòng đang lệch giữ nguyên
   qua sửa không liên quan; đổi pickup là thứ làm nó hội tụ. Không migration dữ liệu.
-* **Lịch theo ý định tạo** (`calendarRefusal`): `entryMode: operational` từ chối ngày
-  đã qua (`PAST_DAY`); `entryMode: historical` từ chối ngày sau hôm nay
+* **Lịch theo ý định tạo** (`calendarRefusal`): `entryMode: operational` chỉ nhận **hiện
+  tại hoặc tương lai** — từ chối ngày đã qua (`PAST_DAY`); với **hôm nay**, giờ lấy
+  **bắt buộc** (`pickupAt: TIME_REQUIRED` — thiếu giờ thì không chứng minh được chuyến
+  chưa chạy) và không trước phút hiện tại (`PAST_INSTANT`; theo phút như giờ được gõ —
+  lúc 10:52:43, 10:51 bị từ chối, 10:52 được nhận). Ngày sau hôm nay: giờ vẫn optional.
+  `now` là đồng hồ server lúc nhận request (`create(input, now = new Date())` — chỉ test
+  truyền vào); `entryMode: historical` từ chối ngày sau hôm nay
   (`FUTURE_DAY`) và giờ lấy / giao **có giá trị** mà sau thời điểm hiện tại
   (`FUTURE_INSTANT`) — chuyến đã chạy thì đã xảy ra. Chỉ khi tạo.
 
