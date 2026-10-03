@@ -18,7 +18,8 @@ import { businessToday as businessDayOf } from '../../../common/pagination/date-
  * ★ WHY A TRIP IS BEING ENTERED — the create INTENT on `POST /trip-schedules`,
  * never inferred from a date and never a status.
  *
- *   operational   "Thêm chuyến": work still to run — no past day.
+ *   operational   "Thêm chuyến": work still to run — now or later. No past
+ *                 day; today only with a pickup hour, and not before now.
  *   historical    "Nhập chuyến cũ": a run that already happened and ended — no
  *                 future day or hour; the server records it finished.
  *
@@ -81,17 +82,27 @@ export const boardDayFor = (
 /** A calendar refusal, and the field it concerns. */
 export type CalendarRefusal =
   | { field: 'scheduledOn'; reason: 'PAST_DAY' | 'FUTURE_DAY' }
+  | { field: 'pickupAt'; reason: 'TIME_REQUIRED' | 'PAST_INSTANT' }
   | { field: 'pickupAt' | 'deliveryAt'; reason: 'FUTURE_INSTANT' };
+
+const MINUTE_MS = 60_000;
 
 /**
  * Why a new trip, entered with `mode` at `now`, is refused — and on which field
  * — or `null`. `undefined` mode — an in-process caller (fixtures, scripts) —
  * has no policy.
  *
- *   operational   day-granular: a dispatcher entering at 10:00 a pickup that
- *                 left at 08:00 today is booking today's work; yesterday is
- *                 history and has its own entry point. Future hours are the
- *                 point of a booking.
+ *   operational   work still to run — NOW OR LATER, provably:
+ *                   a past day         refused (`PAST_DAY`)
+ *                   a later day        taken; its hour stays optional
+ *                   today, no hour     refused (`TIME_REQUIRED`) — without
+ *                                      one, nothing shows the pickup is
+ *                                      not already gone
+ *                   today, an hour     not before the current minute
+ *                                      (`PAST_INSTANT`)
+ *                 MINUTE-GRAINED, as the hour is typed (HH:mm): at 10:52:43,
+ *                 10:51 is refused and 10:52 taken. A run that already left
+ *                 is history and has its own entry point.
  *   historical    the run HAS HAPPENED AND ENDED: its day is not after today,
  *                 and an exact pickup or delivery, WHEN GIVEN, is not after
  *                 `now` — 15:00 today is refused at 14:00. An unknown hour is
@@ -104,7 +115,12 @@ export const calendarRefusal = (
 ): CalendarRefusal | null => {
   const today = businessDayOf(now);
   if (mode === 'operational') {
-    return entry.scheduledOn < today ? { field: 'scheduledOn', reason: 'PAST_DAY' } : null;
+    if (entry.scheduledOn < today) return { field: 'scheduledOn', reason: 'PAST_DAY' };
+    if (entry.scheduledOn > today) return null;
+    // Today. The pickup's day IS `scheduledOn` (`boardDayFor`), so an hour given is today's.
+    if (entry.pickupAt === null) return { field: 'pickupAt', reason: 'TIME_REQUIRED' };
+    const thisMinute = Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS;
+    return entry.pickupAt.getTime() < thisMinute ? { field: 'pickupAt', reason: 'PAST_INSTANT' } : null;
   }
   if (mode !== 'historical') return null;
 

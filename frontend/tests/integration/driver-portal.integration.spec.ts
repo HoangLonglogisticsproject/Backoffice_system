@@ -6,7 +6,7 @@ import { CSRF_HEADER, CSRF_HEADER_VALUE } from '@/api/client';
 import type { DriverTripDetail } from '@/types/driver';
 import { assignmentStatusOf } from '@/utils/driverExecution';
 import { scheduleViewOf } from '@/utils/driverSchedule';
-import { todayAsCalendarDay } from '@/utils/format/datetime';
+import { businessInstant, todayAsCalendarDay } from '@/utils/format/datetime';
 import {
   BASE_URL,
   fixturePassword,
@@ -180,14 +180,28 @@ const sorted = (keys: string[]) => [...keys].sort();
 const shiftDay = (day: string, days: number): string =>
   new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 
+/**
+ * ★ A PICKUP A BOOKING MAY TAKE, WHENEVER THE SUITE RUNS. A booking is "now or
+ * later" and today's must say its hour, so no fixed wall-clock time is safe —
+ * 08:00 fails after breakfast, 23:59 near midnight. Half an hour from the
+ * business now, on the minute; or, when that crosses midnight, 08:00 tomorrow.
+ */
+const bookablePickup = (now = new Date()): { day: string; pickupAt: string } => {
+  const soon = new Date(Math.ceil((now.getTime() + 30 * 60_000) / 60_000) * 60_000);
+  const today = todayAsCalendarDay(now);
+  if (todayAsCalendarDay(soon) === today) return { day: today, pickupAt: soon.toISOString() };
+  const tomorrow = shiftDay(today, 1);
+  return { day: tomorrow, pickupAt: businessInstant(tomorrow, '08:00') };
+};
+
 /** `Date.toJSON` — the ONLY stamp shape the portal's string comparisons are safe on. */
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 describe('driver portal (D1) against the real API', () => {
   const unique = randomBytes(4).toString('hex');
   const today = todayAsCalendarDay();
-  /** 08:00 on the business calendar, so the expected UTC instant is exact. */
-  const pickupAt = `${today}T08:00:00+07:00`;
+  /** The shared trip's day and pickup — today's, or tomorrow's near midnight. */
+  const booked = bookablePickup();
   const SELL_PRICE = '4500000.00';
   const customerName = `Driver Portal Customer ${unique}`;
 
@@ -278,11 +292,11 @@ describe('driver portal (D1) against the real API', () => {
     // A SuperAdmin may price a trip, so the create route REQUIRES a sell price
     // from them. It is also the figure the tests below prove never reaches a driver.
     const trip = await boss.post('/trip-schedules', {
-      scheduledOn: today,
+      scheduledOn: booked.day,
       customerId: customer.data.id,
       pickupAddress: `Pickup ${unique}`,
       deliveryAddress: `Delivery ${unique}`,
-      pickupAt,
+      pickupAt: booked.pickupAt,
       sellPrice: SELL_PRICE,
     });
     expect(trip.status).toBe(201);
@@ -315,7 +329,7 @@ describe('driver portal (D1) against the real API', () => {
   // ---------------------------------------------------------------- reads --
 
   describe('GET /driver/assignments', () => {
-    it('lists the new turn with exactly the DriverTrip fields, on TODAY', async () => {
+    it('lists the new turn with exactly the DriverTrip fields, on its booked day', async () => {
       const response = await driverA.get('/driver/assignments');
 
       expect(response.status).toBe(200);
@@ -329,17 +343,17 @@ describe('driver portal (D1) against the real API', () => {
 
       expect(item).toMatchObject({
         tripId,
-        scheduledOn: today,
+        scheduledOn: booked.day,
         vehicle: { id: expect.any(String), plate: `DP-${unique}-1` },
         customer: { id: expect.any(String), name: customerName },
         pickupAddress: `Pickup ${unique}`,
         deliveryAddress: `Delivery ${unique}`,
-        scheduledPickupAt: new Date(pickupAt).toISOString(),
+        scheduledPickupAt: booked.pickupAt,
         assignment: { id: untouchedId, assignedAt: expect.stringMatching(ISO_UTC) },
       });
       // ★ The day is TEXT, not an instant — `scheduleViewOf` compares it as a string.
       expect(item.scheduledOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(scheduleViewOf(item.scheduledOn, todayAsCalendarDay())).toBe('today');
+      expect(scheduleViewOf(item.scheduledOn, today)).toBe(booked.day === today ? 'today' : 'upcoming');
     });
 
     it('★ carries NO status, events, expenses, accountability or completion — why D1 has no "completed" tab', async () => {
@@ -378,7 +392,7 @@ describe('driver portal (D1) against the real API', () => {
       expect(keysOf(detail)).toEqual(sorted(DETAIL_KEYS));
       expect(detail).toMatchObject({
         tripId,
-        scheduledOn: today,
+        scheduledOn: booked.day,
         assignment: { id: untouchedId },
         events: [],
         expenses: [],
@@ -567,8 +581,10 @@ describe('driver portal (D1) against the real API', () => {
    */
   describe('Lịch xe lifecycle against the real API', () => {
     const booking = async (): Promise<string> => {
+      const { day, pickupAt } = bookablePickup();
       const created = await boss.post('/trip-schedules', {
-        scheduledOn: today,
+        scheduledOn: day,
+        pickupAt,
         pickupAddress: `Lifecycle pickup ${unique}`,
         deliveryAddress: `Lifecycle delivery ${unique}`,
         sellPrice: SELL_PRICE,
@@ -592,7 +608,8 @@ describe('driver portal (D1) against the real API', () => {
     /** The trip as one of the two lists returns it — `undefined` when it is not on that list. */
     const listed = async (trip: string, lifecycle: 'operational' | 'history' = 'operational') => {
       const page = await boss.get('/trip-schedules', {
-        params: { from: today, to: today, lifecycle, page: 1, limit: 200 },
+        // Today's, or tomorrow's when booked near midnight (`bookablePickup`).
+        params: { from: today, to: shiftDay(today, 1), lifecycle, page: 1, limit: 200 },
       });
       expect(page.status).toBe(200);
       return page.data.items.find((row: { id: string }) => row.id === trip);
@@ -645,9 +662,11 @@ describe('driver portal (D1) against the real API', () => {
       };
 
       // A booking cannot open on the road.
+      const { day, pickupAt } = bookablePickup();
       setByServer(
         await boss.post('/trip-schedules', {
-          scheduledOn: today,
+          scheduledOn: day,
+          pickupAt,
           sellPrice: SELL_PRICE,
           entryMode: 'operational',
           status: 'executing',
@@ -707,15 +726,51 @@ describe('driver portal (D1) against the real API', () => {
       expect(late.status).toBe(409);
     });
 
-    it('★ a booking is dated today or later — yesterday 422 PAST_DAY, today and tomorrow 201', async () => {
-      const book = (scheduledOn: string) =>
-        boss.post('/trip-schedules', { scheduledOn, sellPrice: SELL_PRICE, entryMode: 'operational' });
+    /**
+     * ★ THE SERVER DECIDES "TODAY" ON ITS OWN CLOCK. Should midnight fall while
+     * a request is in flight, either day's answer is honest — so a refusal is
+     * checked against the business day before AND after the call, never a guess.
+     */
+    const refusedAs = async (
+      send: () => Promise<{ status: number; data: unknown }>,
+      answerOn: (day: string) => object,
+    ) => {
+      const before = todayAsCalendarDay();
+      const response = await send();
+      const after = todayAsCalendarDay();
+      expect(response.status).toBe(422);
+      expect([answerOn(before), answerOn(after)]).toContainEqual(toApiError(response.status, response.data).details);
+    };
+    const book = (body: { scheduledOn?: string; pickupAt?: string }) =>
+      boss.post('/trip-schedules', { ...body, sellPrice: SELL_PRICE, entryMode: 'operational' });
 
-      const yesterday = await book(shiftDay(today, -1));
-      expect(yesterday.status).toBe(422);
-      expect(toApiError(yesterday.status, yesterday.data).details).toMatchObject({ scheduledOn: 'PAST_DAY' });
-      expect((await book(today)).status).toBe(201);
-      expect((await book(shiftDay(today, 1))).status).toBe(201);
+    it('★ a booking is now or later — yesterday 422 PAST_DAY, today with no hour 422 TIME_REQUIRED, a later day 201 with or without one', async () => {
+      await refusedAs(() => book({ scheduledOn: shiftDay(today, -1) }), () => ({ scheduledOn: 'PAST_DAY' }));
+
+      const asked = todayAsCalendarDay();
+      await refusedAs(
+        () => book({ scheduledOn: asked }),
+        (day) => (day === asked ? { pickupAt: 'TIME_REQUIRED' } : { scheduledOn: 'PAST_DAY' }),
+      );
+
+      // Two days out, so no midnight during the run can make it today.
+      const later = shiftDay(todayAsCalendarDay(), 2);
+      expect((await book({ scheduledOn: later })).status).toBe(201);
+      expect((await book({ scheduledOn: later, pickupAt: businessInstant(later, '08:00') })).status).toBe(201);
+    });
+
+    it('★ a booking’s pickup hour is checked on the SERVER’s clock — minutes ago 422, half an hour ahead 201', async () => {
+      // Two minutes ago: today's hour already gone — or, just past midnight, yesterday.
+      const gone = new Date(Date.now() - 2 * 60_000);
+      await refusedAs(
+        () => book({ pickupAt: gone.toISOString() }),
+        (day) => (todayAsCalendarDay(gone) < day ? { scheduledOn: 'PAST_DAY' } : { pickupAt: 'PAST_INSTANT' }),
+      );
+
+      const { day, pickupAt } = bookablePickup();
+      const accepted = await book({ scheduledOn: day, pickupAt });
+      expect(accepted.status).toBe(201);
+      expect(accepted.data).toMatchObject({ status: 'pending', scheduledOn: day, pickupAt });
     });
   });
 

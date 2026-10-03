@@ -13,13 +13,16 @@ import {
   updateTripSchedule,
   type UpdateTripInput,
 } from '@/api/tripSchedule';
+import type { TranslationKey } from '@/types/translate';
 import { cn } from '@/utils/cn';
 import { isApiError } from '@/utils/errors';
 import { formatPlate } from '@/utils/format';
+import { businessClockOf } from '@/utils/format/datetime';
 import { timelineErrors } from '@/utils/tripTimeline';
 import { useTripLocations } from '@/hooks/trip';
 import { useEligibleDrivers } from '@/hooks/trip/useTripAssignment';
 import { useBusinessToday } from '@/hooks/useBusinessToday';
+import { useNow } from '@/hooks/useNow';
 import {
   type TripCustomer,
   type TripEntryMode,
@@ -306,6 +309,71 @@ const locationIdAt = (form: FormState, end: End): string | null =>
 const failureMessage = (error: unknown, fallback: string): string =>
   isApiError(error) ? error.message : fallback;
 
+/** A refusal of a booking's date or hour, and the field it is drawn under. */
+type BookingRefusal = { field: 'scheduledOn' | 'pickupAt'; key: TranslationKey };
+
+/**
+ * ★ THE SERVER'S REFUSAL OF A BOOKING'S DATE OR HOUR, IN THE FORM'S OWN WORDS.
+ * The form checks the same rule as it is typed, but a dialog left open past
+ * the hour it names — or past midnight, so "tomorrow" became today — is caught
+ * only by the server, on its own clock. That 422 is drawn under its field as
+ * the sentence the field would have shown, not the server's.
+ */
+const BOOKING_REFUSALS: Record<string, TranslationKey> = {
+  PAST_DAY: 'pickupOnPastDay',
+  PAST_INSTANT: 'pickupInPast',
+  TIME_REQUIRED: 'pickupTimeRequiredToday',
+};
+const bookingRefusal = (error: unknown): BookingRefusal | null => {
+  if (!isApiError(error)) return null;
+  for (const field of ['pickupAt', 'scheduledOn'] as const) {
+    const key = BOOKING_REFUSALS[error.details?.[field] ?? ''];
+    if (key) return { field, key };
+  }
+  return null;
+};
+
+/** A refusal met on save, kept with the date and hour it was about. */
+type SaveRefusal = BookingRefusal & { scheduledOn: string; pickupTime: string };
+
+/** A failed save, split: a booking refusal goes under its field, anything else above the form. */
+const saveFailure = (
+  error: unknown,
+  form: { scheduledOn: string; pickupTime: string },
+  fallback: string,
+): { refusal: SaveRefusal | null; message: string | null } => {
+  const refused = bookingRefusal(error);
+  return refused
+    ? { refusal: { ...refused, scheduledOn: form.scheduledOn, pickupTime: form.pickupTime }, message: null }
+    : { refusal: null, message: failureMessage(error, fallback) };
+};
+
+/**
+ * The pickup date and hour controls, as the entry intent and the clock set them.
+ *
+ * ★ A BOOKING IS NOW OR LATER — the server's rule, mirrored. Its date starts
+ * today; for TODAY the hour is asked for and starts at the current minute (the
+ * server refuses it otherwise); any later day leaves the hour open. A recorded
+ * run's date ends today. A correction has no bound.
+ */
+const pickupControls = (
+  intent: { booking: boolean; historicalEntry: boolean },
+  times: { scheduledOn: string; pickupTime: string },
+  clock: { today: string; now: number },
+  t: (key: TranslationKey) => string,
+) => {
+  const forToday = intent.booking && times.scheduledOn === clock.today;
+  return {
+    dateMin: intent.booking ? clock.today : undefined,
+    dateMax: intent.historicalEntry ? clock.today : undefined,
+    hourLabel: t(forToday ? 'fieldPickupAtRequired' : 'fieldPickupAt'),
+    hourHint: forToday ? undefined : t('timeMayBeUnknown'),
+    hourRequired: forToday,
+    hourMissing: forToday && times.pickupTime === '',
+    hourMin: forToday ? businessClockOf(new Date(clock.now).toISOString()) : undefined,
+  };
+};
+
 /** The row's own customer as an option, for `withCurrentReference`. `null` when it has none. */
 const currentCustomerOption = (trip: TripScheduleWithRefs | null): Option | null =>
   trip?.customer ? { id: trip.customer.id, label: trip.customer.name } : null;
@@ -507,6 +575,12 @@ export function TripFormModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
+   * A refusal met on SAVE — the server's, or today's missing hour — kept with
+   * the date and hour it was about, so it shows under its field until either
+   * changes and nothing has to remember to clear it. Nothing typed is lost.
+   */
+  const [refusal, setRefusal] = useState<SaveRefusal | null>(null);
+  /**
    * ★ WHICH ENDS THE OFFICE REFRESHED FROM THIS FORM. Correcting a place
    * through the dialog below changes the master row, not the trip; the trip
    * keeps its snapshot until a save names the place again. These flags are
@@ -521,6 +595,18 @@ export function TripFormModal({
   const historicalEntry = !editing && mode === 'historical';
   /** The picker's bound on a NEW trip: a booking from today on, a recorded run up to today. */
   const today = useBusinessToday();
+  /**
+   * The clock the form checks against — to the minute, re-read as each minute
+   * turns, never frozen at the moment the dialog opened. A submit still goes
+   * to the server, which checks again on its own clock.
+   */
+  const now = useNow();
+  const pickup = pickupControls(
+    { booking: !editing && mode === 'operational', historicalEntry },
+    form,
+    { today, now },
+    t,
+  );
 
   /**
    * ★ CHECKED AS IT IS TYPED, per field. The calendar policy is the entry
@@ -531,8 +617,13 @@ export function TripFormModal({
   const timeline = timelineErrors(
     { scheduledOn: form.scheduledOn, ...instantsOf(form) },
     editing ? null : mode,
+    new Date(now),
   );
-  const timelineRefused = Object.values(timeline).some((refusal) => refusal !== null);
+  const timelineRefused = Object.values(timeline).some((refused) => refused !== null);
+  const refusalAt = (field: BookingRefusal['field']): string | null =>
+    refusal?.field === field && refusal.scheduledOn === form.scheduledOn && refusal.pickupTime === form.pickupTime
+      ? t(refusal.key)
+      : null;
 
   // Reloading the form when the dialog opens on a different row. Keyed on the
   // id rather than on the object, so an unrelated list refresh that produces a
@@ -542,6 +633,7 @@ export function TripFormModal({
     setForm(initialForm(trip));
     setRefreshed(NO_REFRESH);
     setError(null);
+    setRefusal(null);
     setCrew([]);
     setCreatedTripId(null);
   }, [isOpen, trip?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -671,6 +763,11 @@ export function TripFormModal({
     // `TripTimeField`); this covers a submit that did not come through it.
     // A price-only save sends no instant, so nothing here can block it.
     if (!priceOnly && timelineRefused) return;
+    // The browser's `required` stops this first; this covers a submit that did not come through it.
+    if (pickup.hourMissing) {
+      setRefusal({ field: 'pickupAt', key: 'pickupTimeRequiredToday', scheduledOn: form.scheduledOn, pickupTime: '' });
+      return;
+    }
 
     const checked = checkCrew(crew);
     setCrew(checked);
@@ -728,7 +825,9 @@ export function TripFormModal({
       }
       onClose();
     } catch (error_) {
-      setError(failureMessage(error_, t('saveFailed')));
+      const failure = saveFailure(error_, form, t('saveFailed'));
+      setRefusal(failure.refusal);
+      setError(failure.message);
     } finally {
       setBusy(false);
     }
@@ -901,19 +1000,21 @@ export function TripFormModal({
                 type="date"
                 value={form.scheduledOn}
                 onChange={(value) => set('scheduledOn', value)}
-                error={timeline.scheduledOn && t(timeline.scheduledOn)}
-                min={!editing && mode === 'operational' ? today : undefined}
-                max={historicalEntry ? today : undefined}
+                error={(timeline.scheduledOn && t(timeline.scheduledOn)) ?? refusalAt('scheduledOn')}
+                min={pickup.dateMin}
+                max={pickup.dateMax}
                 required
               />
               <TripTimeField
                 id="trip-pickup-time"
-                label={t('fieldPickupAt')}
+                label={pickup.hourLabel}
                 type="time"
                 value={form.pickupTime}
                 onChange={(value) => set('pickupTime', value)}
-                error={timeline.pickupAt && t(timeline.pickupAt)}
-                hint={t('timeMayBeUnknown')}
+                error={(timeline.pickupAt && t(timeline.pickupAt)) ?? refusalAt('pickupAt')}
+                hint={pickup.hourHint}
+                required={pickup.hourRequired}
+                min={pickup.hourMin}
               />
             </div>
           </div>

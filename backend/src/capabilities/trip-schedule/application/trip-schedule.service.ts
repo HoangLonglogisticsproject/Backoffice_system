@@ -250,13 +250,12 @@ export class TripScheduleService {
    * trip that gets entered in a WhatsApp message instead. `createdBy` comes
    * from the session, never from the body, so the row always says who wrote it.
    */
-  async create(input: CreateTripInput & { createdBy: string }): Promise<TripSchedule> {
+  async create(input: CreateTripInput & { createdBy: string }, now = new Date()): Promise<TripSchedule> {
     // Pure, so a request that cannot start a trip is refused before any read.
     const start = startOf(input);
 
     return this.db.transaction(async (tx) => {
-      const values = await this.prepareEntry(input, tx);
-      const now = new Date();
+      const values = await this.prepareEntry(input, tx, now);
       const row = { ...values, status: start.status, createdBy: input.createdBy };
 
       // ★ BORN CLOSED ONLY BY THE HISTORICAL INTENT: row, `finished` and the
@@ -296,13 +295,16 @@ export class TripScheduleService {
    * cũ"; a recorded run has ended, so neither its day nor any hour it gives may
    * lie ahead. Create only: an overdue trip stays correctable, and nothing
    * re-books it on an edit.
+   *
+   * ★ `now` IS THE SERVER'S CLOCK AT THE REQUEST — never the browser's, never
+   * the moment a form was opened. Tests pin it; nothing else passes one.
    */
-  private async prepareEntry(input: CreateTripInput, tx: DatabaseQuery): Promise<TripScheduleValues> {
+  private async prepareEntry(input: CreateTripInput, tx: DatabaseQuery, now: Date): Promise<TripScheduleValues> {
     // No previous row, so every reference here is newly assigned and checked
     // against the catalogue — and both ends are snapshotted from their places.
     const values = await this.resolve(input, 'pending', tx, null, { pickup: true, delivery: true });
 
-    const refused = calendarRefusal(input.entryMode, values, new Date());
+    const refused = calendarRefusal(input.entryMode, values, now);
     if (refused) {
       throw new ValidationError(CALENDAR_REFUSALS[refused.reason], { [refused.field]: refused.reason });
     }
@@ -700,6 +702,8 @@ const retiredStatus = (): ValidationError =>
 /** What each calendar refusal says — the field it concerns rides in `details`. */
 const CALENDAR_REFUSALS: Record<CalendarRefusal['reason'], string> = {
   PAST_DAY: 'A new booking cannot run on a past day. Record a trip that already ran as a historical entry.',
+  PAST_INSTANT: 'A new booking cannot pick up earlier than now. Record a trip that already ran as a historical entry.',
+  TIME_REQUIRED: 'A booking for today needs a pickup time.',
   FUTURE_DAY: 'A trip recorded as already run cannot be dated after today.',
   FUTURE_INSTANT: 'A trip recorded as already run cannot pick up or deliver later than now.',
 };
