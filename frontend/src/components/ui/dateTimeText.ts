@@ -54,11 +54,14 @@ export const partsOf = (value: string): ClockParts => {
 export const canonicalOf = ({ hour, minute, period }: ClockParts): string | null =>
   hour === null || minute === null || period === null ? null : `${pad2(to24(hour, period))}:${pad2(minute)}`;
 
+/** One part of the closed field: its two digits, or `--` while it is not chosen. */
+const shownPart = (value: number | null): string => (value === null ? '--' : pad2(value));
+
 /** The closed field: `09:30 PM`, `09:-- --` while half chosen, `''` when nothing is. */
-export const displayClock12 = ({ hour, minute, period }: ClockParts): string =>
-  hour === null && minute === null && period === null
-    ? ''
-    : `${hour === null ? '--' : pad2(hour)}:${minute === null ? '--' : pad2(minute)} ${period ?? '--'}`;
+export const displayClock12 = ({ hour, minute, period }: ClockParts): string => {
+  if (hour === null && minute === null && period === null) return '';
+  return `${shownPart(hour)}:${shownPart(minute)} ${period ?? '--'}`;
+};
 
 const minuteOfDay = (canonical: string): number => {
   const [hours = 0, minutes = 0] = canonical.split(':').map(Number);
@@ -131,9 +134,11 @@ export const maskCalendarDate = (text: string): string => {
     carry = part.slice(max);
   }
   const [day, month, year] = parts as [string, string, string];
-  const withMonth = typed.length > 1 || month !== '';
-  const withYear = typed.length > 2 || year !== '';
-  return `${day}${withMonth ? `/${month}` : ''}${withYear ? `/${year}` : ''}`;
+  // A part is shown once its slash is typed or a digit has carried into it.
+  const shown = [day];
+  if (typed.length > 1 || month !== '') shown.push(month);
+  if (typed.length > 2 || year !== '') shown.push(year);
+  return shown.join('/');
 };
 
 /** `YYYY-MM-DD` as Vietnam writes it, `dd/mm/yyyy`; `''` stays `''`. */

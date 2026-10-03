@@ -178,29 +178,40 @@ function TimePickerPanel({
 }>) {
   const { t } = useLanguage();
   const blocked = blockedPicks(min, parts);
+  const panel = React.useRef<HTMLDialogElement>(null);
+  const done = () => onClose(true);
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const onOption = (event.target as HTMLElement).getAttribute('role') === 'option';
-    if (event.key === 'Escape' || (event.key === 'Enter' && onOption)) {
+  // Escape closes the picker — and only the picker, not the dialog around the
+  // form; tabbing out of it closes it too, a press inside it does not.
+  React.useEffect(() => {
+    const element = panel.current;
+    if (!element) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
       onClose(true);
-    }
-  };
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget as Node | null;
+      if (next && !element.contains(next) && next !== field.current) onClose(false);
+    };
+    element.addEventListener('keydown', onKeyDown);
+    element.addEventListener('focusout', onFocusOut);
+    return () => {
+      element.removeEventListener('keydown', onKeyDown);
+      element.removeEventListener('focusout', onFocusOut);
+    };
+  }, [onClose, field]);
 
   return (
-    <div
-      role="dialog"
+    <dialog
+      ref={panel}
+      open
       aria-label={t('timePickerDialog')}
-      onKeyDown={onKeyDown}
-      onBlur={(event) => {
-        // Tabbing out of the picker closes it; a press inside it does not.
-        const next = event.relatedTarget as Node | null;
-        if (next && !event.currentTarget.contains(next) && next !== field.current) onClose(false);
-      }}
       className={cn(
-        'absolute top-full z-50 mt-1 w-64 rounded-lg border border-gray-200 bg-white p-2 shadow-lg',
-        align === 'end' ? 'right-0' : 'left-0',
+        'absolute top-full z-50 m-0 mt-1 w-64 rounded-lg border border-gray-200 bg-white p-2 text-gray-900 shadow-lg',
+        align === 'end' ? 'right-0 left-auto' : 'right-auto left-0',
       )}
     >
       <div className="flex gap-1">
@@ -209,6 +220,7 @@ function TimePickerPanel({
           options={HOURS.map((hour) => ({ value: hour, text: pad2(hour), disabled: blocked.hour(hour) }))}
           selected={parts.hour}
           onSelect={(hour) => onChoose({ ...parts, hour })}
+          onDone={done}
           autoFocus
         />
         <PickerColumn
@@ -221,22 +233,24 @@ function TimePickerPanel({
           }))}
           selected={parts.minute}
           onSelect={(minute) => onChoose({ ...parts, minute })}
+          onDone={done}
         />
         <PickerColumn
           label={t('timePickerPeriod')}
           options={PERIODS.map((period) => ({ value: period, text: period, disabled: blocked.period(period) }))}
           selected={parts.period}
           onSelect={(period) => onChoose({ ...parts, period })}
+          onDone={done}
         />
       </div>
       <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2">
         <Button type="button" variant="ghost" size="sm" onClick={() => onChoose(NO_CLOCK_PARTS)}>
           {t('timePickerClear')}
         </Button>
-        <Button type="button" size="sm" className="bg-blue-600 px-3 text-white hover:bg-blue-700" onClick={() => onClose(true)}>
+        <Button type="button" size="sm" className="bg-blue-600 px-3 text-white hover:bg-blue-700" onClick={done}>
           {t('timePickerDone')}
         </Button>
       </div>
-    </div>
+    </dialog>
   );
 }

@@ -133,12 +133,18 @@ describe('TimeInput — a picked hour, laid out by the Backoffice', () => {
 
     fireEvent.keyDown(field(), { key: 'ArrowDown' });
     expect(field()).toHaveAttribute('aria-expanded', 'true');
-    expect(document.activeElement).toBe(option(/^Giờ$/, '09'));
+    // The hour column has the focus, its chosen hour active.
+    const hours = screen.getByRole('listbox', { name: /^Giờ$/ });
+    expect(document.activeElement).toBe(hours);
+    expect(hours).toHaveAttribute('aria-activedescendant', option(/^Giờ$/, '09').id);
 
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
     expect(held()).toBe('10:30');
+    expect(hours).toHaveAttribute('aria-activedescendant', option(/^Giờ$/, '10').id);
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
-    expect(document.activeElement).toBe(option(/^Phút$/, '30'));
+    const minutes = screen.getByRole('listbox', { name: /^Phút$/ });
+    expect(document.activeElement).toBe(minutes);
+    expect(minutes).toHaveAttribute('aria-activedescendant', option(/^Phút$/, '30').id);
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
@@ -179,8 +185,10 @@ describe('TimeInput — a picked hour, laid out by the Backoffice', () => {
       fireEvent.click(field());
       fireEvent.click(option(/^Giờ$/, '10'));
       fireEvent.click(option(/AM\/PM/, 'PM'));
-      expect(option(/^Phút$/, '06')).toHaveAttribute('tabindex', '0');
-      expect(option(/^Phút$/, '00')).toHaveAttribute('tabindex', '-1');
+      expect(screen.getByRole('listbox', { name: /^Phút$/ })).toHaveAttribute(
+        'aria-activedescendant',
+        option(/^Phút$/, '06').id,
+      );
     });
 
     it('leaves a later day wholly open — no floor', () => {
@@ -189,6 +197,18 @@ describe('TimeInput — a picked hour, laid out by the Backoffice', () => {
       const closed = screen.getAllByRole('option').filter((o) => o.getAttribute('aria-disabled') === 'true');
       expect(closed).toEqual([]);
     });
+  });
+
+  it('★ Enter on a column chooses its active option and closes the picker back to the field', () => {
+    render(<Harness kind="time" initial="09:30" />);
+    fireEvent.click(field());
+    const periods = screen.getByRole('listbox', { name: /AM\/PM/ });
+    fireEvent.keyDown(periods, { key: 'ArrowDown' });
+    fireEvent.keyDown(periods, { key: 'Enter' });
+
+    expect(held()).toBe('21:30');
+    expect(field()).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(field());
   });
 
   it('clears with "Xóa" and closes with "Xong"', () => {
