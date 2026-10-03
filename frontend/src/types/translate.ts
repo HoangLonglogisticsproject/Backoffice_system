@@ -1020,6 +1020,28 @@ const PHRASES = {
   // ★ HAI Ý ĐỊNH, HAI CÁCH GỌI, MỘT FORM. "Thêm chuyến" đặt việc sắp chạy;
   // "Nhập chuyến cũ" ghi nhận một chuyến đã chạy — ngày trong quá khứ là hợp lệ.
   createTripTitle: { vi: 'Tạo chuyến mới', en: 'New trip' },
+  // The booking workspace ("Thêm chuyến"): its sections, its summary, its action.
+  // (Customer and route reuse the detail panel's `bookingSectionCustomer` / `bookingSectionRoute`.)
+  bookingSectionTime: { vi: 'Thời gian', en: 'Schedule' },
+  bookingSectionPrice: { vi: 'Giá cước', en: 'Rates' },
+  bookingCrewToggle: { vi: 'Phân công xe ngay (không bắt buộc)', en: 'Assign a lorry now (optional)' },
+  bookingCrewLater: { vi: 'Có thể phân công sau ở Lịch xe', en: 'You can assign one later from the schedule' },
+  bookingCrewAdded: { vi: 'Đã thêm xe', en: 'Lorries added' },
+  bookingSummaryTitle: { vi: 'Tóm tắt booking', en: 'Booking summary' },
+  bookingSummaryEmpty: {
+    vi: 'Thông tin booking sẽ hiện ở đây khi bạn điền form.',
+    en: 'The booking appears here as you fill in the form.',
+  },
+  bookingSummaryPickupTime: { vi: 'Lấy hàng', en: 'Pickup' },
+  bookingSummaryDeliveryTime: { vi: 'Giao hàng', en: 'Delivery' },
+  bookingSummaryPurchase: { vi: 'Giá mua', en: 'Buying price' },
+  bookingSummarySell: { vi: 'Giá bán', en: 'Selling price' },
+  bookingCreate: { vi: 'Tạo booking', en: 'Create booking' },
+  bookingCreating: { vi: 'Đang tạo booking…', en: 'Creating booking…' },
+  bookingCreateHelper: {
+    vi: 'Booking sẽ được tạo ở trạng thái Chờ xử lý. Bạn có thể phân công xe và tài xế sau.',
+    en: 'The booking is created as Pending. You can assign a lorry and driver later.',
+  },
   importTrip: { vi: 'Nhập chuyến cũ', en: 'Record a past trip' },
   // The wording of the system-written end reason `historical_entry` — the crew
   // of a trip recorded after it ran. The stored token is audit data; this is
@@ -1136,6 +1158,18 @@ const PHRASES = {
   // The same hour, required: a booking for today must say when it picks up.
   fieldPickupAtRequired: { vi: 'Giờ lấy hàng *', en: 'Pickup time *' },
   fieldDeliveryDateTime: { vi: 'Thời gian giao hàng', en: 'Delivery date & time' },
+  fieldDeliveryTime: { vi: 'Giờ giao hàng', en: 'Delivery time' },
+  // The date and time controls (`DateInput`, `TimeInput`): dd/mm/yyyy and a picked hour in any browser.
+  dateFormatInvalid: { vi: 'Nhập ngày theo dạng dd/mm/yyyy.', en: 'Enter the date as dd/mm/yyyy.' },
+  dateTimeIncomplete: { vi: 'Nhập đủ cả ngày và giờ.', en: 'Enter both the date and the time.' },
+  chooseDate: { vi: 'Chọn ngày trên lịch', en: 'Pick a date' },
+  timePickerDialog: { vi: 'Chọn giờ', en: 'Choose a time' },
+  timePickerHour: { vi: 'Giờ', en: 'Hour' },
+  timePickerMinute: { vi: 'Phút', en: 'Minute' },
+  timePickerPeriod: { vi: 'Sáng/chiều (AM/PM)', en: 'AM/PM' },
+  timePickerClear: { vi: 'Xóa', en: 'Clear' },
+  timePickerDone: { vi: 'Xong', en: 'Done' },
+  timePickerIncomplete: { vi: 'Chọn đủ giờ, phút và AM/PM.', en: 'Pick the hour, the minute and AM or PM.' },
   timeMayBeUnknown: { vi: 'Để trống nếu chưa chốt giờ.', en: 'Leave empty until the hour is agreed.' },
   historicalInstantInFuture: {
     vi: 'Chuyến cũ không thể có thời gian sau thời điểm hiện tại.',

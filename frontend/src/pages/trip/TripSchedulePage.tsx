@@ -13,6 +13,7 @@ import { DispatchPanel } from './components/DispatchPanel';
 import { NoTripAccess } from './components/NoTripAccess';
 import { TripCostModal } from './components/TripCostModal';
 import { TripFormModal } from './components/TripFormModal';
+import { OperationalBookingDialog } from './booking/OperationalBookingDialog';
 import { TripRangeFilters } from './components/TripRangeFilters';
 import { AssignmentTabs } from './schedule/AssignmentTabs';
 import { BookingDetail } from './schedule/BookingDetail';
@@ -114,17 +115,28 @@ export default function TripSchedulePage() {
         />
       </div>
 
-      <TripFormModal
-        isOpen={formOpen}
-        trip={editing}
-        // "Thêm chuyến" books work still to run; a past run is recorded from
-        // Lịch sử chuyến instead.
-        mode="operational"
+      {/* "Thêm chuyến" books work still to run, in the booking workspace; a
+          past run is recorded from Lịch sử chuyến instead. */}
+      <OperationalBookingDialog
+        isOpen={formOpen && editing === null}
         customers={catalogue.customers.items}
         vehicles={catalogue.vehicles.items}
         // Crewing on create is `dispatch.write`, which `trip.create` does not imply.
         mayDispatch={can('dispatch.write')}
         // `data` is null until the read lands; `items` cannot tell empty from unread.
+        cataloguesLoaded={catalogue.customers.data !== null}
+        onClose={() => setFormOpen(false)}
+        onSaved={trips.reload}
+        onCatalogueChanged={catalogue.reload}
+      />
+      {/* "Sửa" corrects a booking in the trip form, as before. */}
+      <TripFormModal
+        isOpen={formOpen && editing !== null}
+        trip={editing}
+        mode="operational"
+        customers={catalogue.customers.items}
+        vehicles={catalogue.vehicles.items}
+        mayDispatch={can('dispatch.write')}
         cataloguesLoaded={catalogue.customers.data !== null}
         onClose={() => setFormOpen(false)}
         onSaved={trips.reload}
