@@ -77,6 +77,28 @@ export const missingPrerequisite = (
 };
 
 /**
+ * ★ WHAT A TURN STILL OWES BEFORE IT MAY BE CLOSED — every milestone of the
+ * sequence without a live reading, in order. `[]` is a complete execution.
+ *
+ * ★ ALL FOUR, NOT "DELIVERY_CONFIRMED EXISTS". `missingPrerequisite` holds the
+ * order at the moment a milestone is REPORTED, but a reading is withdrawn one
+ * row at a time (`voidEvent` cascades nothing), so a live delivery
+ * confirmation does not prove the arrival before it still stands. Only a live
+ * reading of each milestone does.
+ */
+export const missingMilestones = (reported: readonly ExecutionEventType[]): ExecutionEventType[] => {
+  const seen = new Set(reported);
+  return EXECUTION_EVENT_TYPES.filter((type) => !seen.has(type));
+};
+
+/** The one completeness rule — asked by a completion request and by its approval. */
+export const executionComplete = (reported: readonly ExecutionEventType[]): boolean =>
+  missingMilestones(reported).length === 0;
+
+/** The `details` code on the 422 that refuses a completion over an incomplete execution. */
+export const EXECUTION_INCOMPLETE = 'EXECUTION_INCOMPLETE';
+
+/**
  * Which end of the trip an event belongs to.
  *
  * Used to pick WHICH planned time to snapshot beside the event: a pickup event

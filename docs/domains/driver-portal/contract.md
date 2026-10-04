@@ -1094,6 +1094,14 @@ chốt: **không**.
 **[CONFIRMED]** Completion phải dựa trên **Execution Events** và **Delivery
 Confirmation** — không phải một thao tác đổi trạng thái đứng một mình.
 
+✅ **[ĐÃ ENFORCE 2026-10-04]** Gửi Completion Request **và** duyệt nó đều đòi **đủ bốn
+mốc còn hiệu lực trên chính assignment đó** (Arrival/Pickup tại điểm lấy, Arrival/Delivery
+tại điểm giao) — không phải "có Delivery Confirmation", vì mốc bị huỷ từng dòng một.
+Thiếu → 422 `EXECUTION_INCOMPLETE`, không ghi request, không duyệt, không đóng Trip.
+Hành vi cũ ("mất sóng" vẫn gửi được) đã bỏ; offline/văn phòng ghi mốc là DL-88/DL-89.
+Break-glass `POST /trip-schedules/:id/complete` của SuperAdmin **cố ý** bỏ qua điều kiện
+này và ghi `manual_completion`.
+
 ★ *"Check-in / check-out"* **không** được dùng làm tên của lifecycle hay của business
 status. Từ vựng chuẩn ở §6 là bắt buộc.
 

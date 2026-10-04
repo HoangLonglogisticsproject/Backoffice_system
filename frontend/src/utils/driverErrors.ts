@@ -47,6 +47,16 @@ const LOCATION_FAILURE_KEYS: Record<LocationFailure, TranslationKey> = {
  * accuracy ceiling reaches this screen — a driver needs to know what to do,
  * not what the rule is.
  */
+/** A 422 worded by the reason the server named, when the portal has one. */
+const validationKey = (details: Readonly<Record<string, string>> | undefined): TranslationKey => {
+  // A `fuel` line on a lorry that declares its fuel daily (0034).
+  if (details?.['category'] === 'FUEL_DECLARED_ON_VEHICLE') return 'driverErrFuelOnVehicle';
+  // Completion asked for before every step stands (contract §10.5).
+  if (details?.['execution'] === 'EXECUTION_INCOMPLETE') return 'driverErrExecutionIncomplete';
+  const rejection = details?.['location'];
+  return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
+};
+
 const LOCATION_REJECTION_KEYS: Record<string, TranslationKey> = {
   DESTINATION_MISSING: 'driverErrDestinationMissing',
   LOCATION_REQUIRED: 'driverErrLocationRequired',
@@ -78,12 +88,7 @@ export function driverErrorKey(error: unknown): TranslationKey {
 
   if (error.status === 404) return 'driverErrNotFound';
 
-  if (error.status === 422) {
-    // A `fuel` line on a lorry that declares its fuel daily (0034).
-    if (error.details?.['category'] === 'FUEL_DECLARED_ON_VEHICLE') return 'driverErrFuelOnVehicle';
-    const rejection = error.details?.['location'];
-    return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
-  }
+  if (error.status === 422) return validationKey(error.details);
 
   if (error.status === 429) return 'driverErrTooMany';
 
@@ -113,7 +118,10 @@ export function reviewErrorKey(error: unknown): TranslationKey {
     return error.is('PASSWORD_CHANGE_REQUIRED') ? 'driverErrPasswordChange' : 'reviewErrForbidden';
   }
   if (error.status === 404) return 'driverErrNotFound';
-  if (error.status === 422) return 'reviewErrValidation';
+  if (error.status === 422) {
+    // A milestone withdrawn while the request waited: the turn is not complete any more.
+    return error.details?.['execution'] === 'EXECUTION_INCOMPLETE' ? 'reviewErrExecutionIncomplete' : 'reviewErrValidation';
+  }
   // ★ The two-reviewer race, and the only one that matters here: somebody else
   // decided this request first.
   if (error.status === 409) return 'reviewErrConflict';

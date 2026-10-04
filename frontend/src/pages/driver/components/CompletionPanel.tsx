@@ -4,7 +4,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
-import { completionStage, executionSteps, liveExpenses, suggestedDeclaration } from '@/utils/driverExecution';
+import {
+  completionStage,
+  executionComplete,
+  executionSteps,
+  liveExpenses,
+  suggestedDeclaration,
+} from '@/utils/driverExecution';
 import { formatTimeOnDay } from '@/utils/format/datetime';
 import { formatMoney, sumMoney } from '@/utils/format/money';
 import type { DriverTripDetail, ExpenseDeclaration } from '@/types/driver';
@@ -134,8 +140,11 @@ export function CompletionPanel({
     setConfirmingNone(declared.length > 0);
   };
 
+  // Nothing to send until every step stands — first time or after a rejection.
+  const stepsOwed = !executionComplete(trip.events);
+
   return (
-    <Card className={cn(live && 'ring-primary/60', stage === 'not-ready' && 'opacity-80')}>
+    <Card className={cn(live && 'ring-primary/60', stepsOwed && 'opacity-80')}>
       <CardHeader>
         <CardTitle>{t('driverCompletion')}</CardTitle>
       </CardHeader>
@@ -155,7 +164,7 @@ export function CompletionPanel({
         />
       ) : null}
 
-      {stage === 'not-ready' ? (
+      {stepsOwed ? (
         <p className="rounded-lg bg-muted/60 px-3 py-2 text-center text-sm text-muted-foreground">
           {t('driverFinishStepsFirst')}
         </p>
@@ -164,7 +173,7 @@ export function CompletionPanel({
       )}
       </CardContent>
 
-      {stage === 'not-ready' ? null : (
+      {stepsOwed ? null : (
         <CardFooter className="flex-col items-stretch">
         <DeclarationSection
           chosen={chosen}

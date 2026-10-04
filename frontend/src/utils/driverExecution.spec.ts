@@ -5,6 +5,7 @@ import {
   canCorrectExpense,
   canDeclareExpense,
   canSubmitCompletion,
+  executionComplete,
   completionStage,
   executionSteps,
   canonicalEventOf,
@@ -471,6 +472,24 @@ describe('the completion stage', () => {
     expect(canSubmitCompletion(rejected)).toBe(true);
   });
 
+  it('★ a rejection reopens the figures, not the rule — no resend over an incomplete execution', () => {
+    const rejected = trip({
+      events: reported.slice(0, 3),
+      completion: request({ state: 'rejected', decisionReason: 'Thiếu mốc giao.' }),
+    });
+
+    expect(completionStage(rejected)).toBe('rejected');
+    expect(canSubmitCompletion(rejected)).toBe(false);
+  });
+
+  it('★ counts only live readings — a withdrawn milestone is owed again', () => {
+    const withdrawn = [{ ...reported[0]!, voidedAt: EARLIER, voidedBy: 'u9', voidReason: 'Ghi nhầm.' }, ...reported.slice(1)];
+
+    expect(executionComplete(reported)).toBe(true);
+    expect(executionComplete(withdrawn)).toBe(false);
+    expect(canSubmitCompletion(trip({ events: withdrawn }))).toBe(false);
+  });
+
   it('★ is terminal once approved, and offers nothing further', () => {
     const done = trip({
       events: reported,
@@ -546,9 +565,9 @@ describe('★ where one assignment stands — assignmentStatusOf', () => {
     { name: 'pickup confirmed', over: { events: [AP, PC] }, status: 'in-transit' },
     { name: 'arrived at delivery', over: { events: [AP, PC, AD] }, status: 'at-delivery' },
     { name: 'all four, nothing sent', over: { events: [AP, PC, AD, DC] }, status: 'awaiting-completion' },
-    // ★ The review outranks the journey: a request can be sent before all four
-    // steps are in (lost signal at the gate), and then it is what the driver waits on.
-    { name: 'pending with only the arrival', over: { events: [AP], completion: request({ state: 'pending' }) }, status: 'completion-pending' },
+    // ★ The review outranks the journey: steps withdrawn while a request waits
+    // leave it pending — it is still what the driver waits on.
+    { name: 'pending after steps were withdrawn', over: { events: [AP], completion: request({ state: 'pending' }) }, status: 'completion-pending' },
     { name: 'rejected', over: { events: [AP, PC, AD, DC], completion: request({ state: 'rejected' }) }, status: 'completion-rejected' },
     { name: 'approved', over: { events: [AP, PC, AD, DC], completion: request({ state: 'approved' }) }, status: 'approved' },
     { name: 'immutable with no request', over: { accountability: 'APPROVED_IMMUTABLE', completion: null }, status: 'approved' },

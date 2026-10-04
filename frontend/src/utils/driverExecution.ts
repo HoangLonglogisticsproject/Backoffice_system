@@ -137,6 +137,15 @@ export const nextEvent = (events: readonly ExecutionEvent[]): ExecutionEventType
   EXECUTION_ORDER.find((type) => canonicalEventOf(events, type) === null) ?? null;
 
 /**
+ * ★ THE SERVER'S COMPLETION PREREQUISITE, MIRRORED: every milestone has a live
+ * reading on this turn. `nextEvent` walks the four in order and counts only
+ * live readings (`canonicalEventOf`), so `null` is a complete execution — the
+ * answer `missingMilestones` gives the server for the request and for its
+ * approval. A mirror only: the server refuses whatever this says.
+ */
+export const executionComplete = (events: readonly ExecutionEvent[]): boolean => nextEvent(events) === null;
+
+/**
  * The four steps, with the times that belong to each.
  *
  * The pickup steps are measured against the pickup time and the delivery steps
@@ -284,12 +293,10 @@ export type CompletionStage =
 /**
  * Where the completion stands.
  *
- * ★ `ready` REQUIRES THE FOUR EVENTS, AND THAT IS A UI RULE RATHER THAN A
- * SERVER ONE. The server deliberately does NOT refuse an early submission — a
- * driver who lost signal at the delivery point must still be able to close
- * their trip. So this gates the BUTTON, not the action: the ordinary path is
- * report-then-submit, and a trip that genuinely needs the exception is a
- * conversation with the office rather than a tap.
+ * ★ `ready` REQUIRES THE FOUR EVENTS — the server's rule, mirrored
+ * (`executionComplete`). The server refuses a request, and its approval, over
+ * an incomplete execution (EXECUTION_INCOMPLETE); this only keeps the button
+ * from offering what the server would refuse.
  */
 export const completionStage = (trip: DriverTripDetail): CompletionStage => {
   const request: CompletionRequest | null = trip.completion;
@@ -300,7 +307,7 @@ export const completionStage = (trip: DriverTripDetail): CompletionStage => {
   if (request?.state === 'pending') return 'pending';
   if (request?.state === 'rejected') return 'rejected';
 
-  return nextEvent(trip.events) === null ? 'ready' : 'not-ready';
+  return executionComplete(trip.events) ? 'ready' : 'not-ready';
 };
 
 // ----------------------------------------------------------------- workflow --
@@ -369,9 +376,9 @@ export const currentStage = (trip: DriverTripDetail): WorkflowStage | null =>
  * and on a trip with two lorries one turn can be approved while the other is
  * still on the road, so a trip-level word would be wrong for one of them.
  *
- * ★ THE COMPLETION REQUEST OUTRANKS THE JOURNEY. A request can be sent before
- * all four steps are reported (a driver who lost signal at the gate), and once
- * it is, the review is what the driver is waiting on.
+ * ★ THE COMPLETION REQUEST OUTRANKS THE JOURNEY. A request needs all four steps,
+ * but a step can be withdrawn while it waits; the review is still what the
+ * driver is waiting on, and its approval asks the steps again.
  *
  * ⚠ NO "LATE". How late is too late has never been decided (design O-4); the
  * milestone cards show the minutes and leave the judgement to a person.
@@ -411,9 +418,13 @@ export const assignmentStatusOf = (trip: DriverTripDetail): AssignmentStatus => 
   return owed === null ? 'awaiting-completion' : OWING[owed];
 };
 
-/** May the driver send, or send again, right now? */
+/**
+ * May the driver send, or send again, right now? ★ A rejection reopens the
+ * figures, not the rule: sending again needs the whole execution live too —
+ * a milestone withdrawn since is reported again first.
+ */
 export const canSubmitCompletion = (trip: DriverTripDetail): boolean => {
-  if (trip.closed) return false;
+  if (trip.closed || !executionComplete(trip.events)) return false;
   const stage = completionStage(trip);
   return stage === 'ready' || stage === 'rejected';
 };

@@ -1452,3 +1452,18 @@ Nhiên liệu thuộc **xe**, không thuộc chuyến đầu tiên trong ngày (
 * **Đọc (backoffice, `cost.read`):** `GET /trip-vehicles/:id/costs?from&to&page&limit&category`
   → envelope trang (`items, page, limit, total, totalPages`) + `totalAmount` (chuỗi thập phân,
   chỉ dòng còn hiệu lực). Khoảng ngày như board (mặc định tháng hiện tại, tối đa 366 ngày).
+
+## 27. Hoàn tất chỉ khi đủ tiến trình (2026-10-04)
+
+* `POST /driver/assignments/:id/completion-requests` và
+  `POST /trip-schedules/:id/completion-requests/:requestId/approve` đòi **đủ bốn mốc còn
+  hiệu lực trên lượt đó**: `ARRIVED_PICKUP`, `PICKUP_CONFIRMED`, `ARRIVED_DELIVERY`,
+  `DELIVERY_CONFIRMED`. Thiếu → **422 `details.execution = EXECUTION_INCOMPLETE`**: không tạo
+  request / không duyệt, không khoá thêm tiền, không đóng chuyến.
+* Kiểm tra lại lúc duyệt: một mốc bị huỷ sau khi gửi làm việc duyệt bị từ chối; request vẫn
+  `pending` — tài xế báo lại mốc, hoặc SuperAdmin từ chối kèm lý do.
+* Theo **từng assignment**: mốc của xe A không chứng minh gì cho xe B. Trip vẫn `finished` khi
+  mọi assignment active đã được duyệt (không đổi).
+* Frontend chỉ phản chiếu: tài xế không thấy nút gửi (kể cả sau khi bị từ chối) khi chưa đủ
+  mốc; màn duyệt hiện "Chưa hoàn thành tiến trình" và khoá nút Duyệt.
+* Break-glass `POST /trip-schedules/:id/complete` không đổi — cố ý bỏ qua điều kiện này.

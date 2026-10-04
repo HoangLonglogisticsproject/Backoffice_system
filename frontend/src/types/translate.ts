@@ -72,6 +72,15 @@ const PHRASES = {
   reviewRecordedAt: { vi: 'Máy chủ ghi', en: 'Server recorded' },
   reviewDeviceTime: { vi: 'Đồng hồ thiết bị (tham khảo)', en: 'Device clock (diagnostic)' },
   reviewNotReported: { vi: 'Chưa báo', en: 'Not reported' },
+  reviewExecutionIncomplete: { vi: 'Chưa hoàn thành tiến trình', en: 'Execution not complete' },
+  reviewExecutionIncompleteHint: {
+    vi: 'Lượt này chưa có đủ bốn mốc (đến điểm lấy, đã lấy hàng, đến điểm giao, đã giao hàng). Chưa duyệt được; có thể từ chối kèm lý do để tài xế báo lại.',
+    en: 'This turn does not have all four milestones (arrived at pickup, picked up, arrived at delivery, delivered). It cannot be approved yet; reject it with a reason so the driver reports them.',
+  },
+  reviewErrExecutionIncomplete: {
+    vi: 'Lượt này không còn đủ bốn mốc nên chưa duyệt được. Hãy xem lại tiến trình.',
+    en: 'This turn no longer has all four milestones, so it cannot be approved. Check its progress.',
+  },
   reviewVoided: { vi: 'Đã thu hồi', en: 'Withdrawn' },
   // ★ THE SERVER'S GEOFENCE VERDICT, SHOWN. Four readings of one event, and
   // none of them is computed here: `geofencePassed` and `distanceM` arrive
@@ -421,6 +430,10 @@ const PHRASES = {
     en: 'This trip has no vehicle yet, so expenses cannot be declared',
   },
   driverAmountHint: { vi: 'Ví dụ: 1,500,000', en: 'For example: 1,500,000' },
+  driverErrExecutionIncomplete: {
+    vi: 'Cần báo đủ các bước lấy hàng và giao hàng trước khi gửi hoàn tất chuyến.',
+    en: 'Report every pickup and delivery step before you submit the trip for completion.',
+  },
   driverErrFuelOnVehicle: {
     vi: 'Dầu của xe này được khai mỗi ngày ở bước khai nhiên liệu đầu ngày, không khai vào chi phí chuyến.',
     en: 'This lorry’s fuel is declared once a day in the daily fuel check, not as a trip expense.',

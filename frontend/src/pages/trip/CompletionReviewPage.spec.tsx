@@ -282,6 +282,43 @@ describe('★ approve', () => {
     expect(approveCompletion.mock.calls[0]).toEqual([TRIP, 'r1']);
   });
 
+  it('★ does not offer approval over an incomplete execution — says so, and leaves rejection open', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED'),
+      event('ARRIVED_DELIVERY'),
+    ]);
+    await openReview();
+
+    expect(screen.getByText('Chưa hoàn thành tiến trình')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /duyệt lượt xe này/i })).toBeDisabled();
+    expect(screen.getByLabelText(/lý do từ chối/i)).toBeEnabled();
+  });
+
+  it('★ counts a withdrawn milestone as missing', async () => {
+    fetchExecutionEvents.mockResolvedValue([
+      event('ARRIVED_PICKUP'),
+      event('PICKUP_CONFIRMED', { voidedAt: SERVER_TIME, voidReason: 'Ảnh sai.' }),
+      event('ARRIVED_DELIVERY'),
+      event('DELIVERY_CONFIRMED'),
+    ]);
+    await openReview();
+
+    expect(screen.getByRole('button', { name: /duyệt lượt xe này/i })).toBeDisabled();
+  });
+
+  it('explains the server’s refusal when a milestone was withdrawn while the screen was open', async () => {
+    const { ApiError } = await import('@/utils/errors');
+    approveCompletion.mockRejectedValue(
+      new ApiError(422, 'VALIDATION_FAILED', 'not complete', { execution: 'EXECUTION_INCOMPLETE' }),
+    );
+    await openReview();
+
+    fireEvent.click(screen.getByRole('button', { name: /duyệt lượt xe này/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/không còn đủ bốn mốc/i);
+  });
+
   it('★ warns that it cannot be undone, before the click', async () => {
     await openReview();
 
