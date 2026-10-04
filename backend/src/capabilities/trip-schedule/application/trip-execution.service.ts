@@ -614,6 +614,11 @@ export class TripExecutionService {
    *
    * The row survives with who withdrew it and why — 0017 denies `DELETE`
    * outright, and a timeline that can be quietly shortened proves nothing.
+   *
+   * ★ UNDER THE TRIP LOCK, like every new milestone. A completion request and
+   * its approval read the execution under that lock (`requireCompleteExecution`),
+   * so a withdrawal either lands before they read — and they see the step
+   * missing — or after they commit. Never in between.
    */
   async voidEvent(
     tripId: string,
@@ -622,18 +627,22 @@ export class TripExecutionService {
   ): Promise<ExecutionEvent> {
     const reason = requireReason(input.reason);
 
-    const events = await this.events.listByTrip(tripId, true);
-    const current = events.find((event) => event.id === eventId);
-    // Belonging to the trip in the route is checked by looking only within it:
-    // a caller holding one trip's id must not be able to withdraw another's
-    // event by pairing it with a foreign event id.
-    if (!current) throw new NotFoundError('Event not found.');
-    if (current.voidedAt) throw new ConflictError('That event has already been withdrawn.');
+    return this.db.transaction(async (tx) => {
+      if (!(await this.trips.lockActive(tripId, tx))) throw new NotFoundError('Trip not found.');
 
-    const voided = await this.events.void(eventId, input.by, reason, new Date());
-    if (!voided) throw new ConflictError('That event has already been withdrawn.');
+      const events = await this.events.listByTrip(tripId, true, tx);
+      const current = events.find((event) => event.id === eventId);
+      // Belonging to the trip in the route is checked by looking only within it:
+      // a caller holding one trip's id must not be able to withdraw another's
+      // event by pairing it with a foreign event id.
+      if (!current) throw new NotFoundError('Event not found.');
+      if (current.voidedAt) throw new ConflictError('That event has already been withdrawn.');
 
-    return voided;
+      const voided = await this.events.void(eventId, input.by, reason, new Date(), tx);
+      if (!voided) throw new ConflictError('That event has already been withdrawn.');
+
+      return voided;
+    });
   }
 
   // ---------------------------------------------------------------------------

@@ -3,6 +3,8 @@ import { ConflictError, NotFoundError, ValidationError } from '../../../common/e
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
   accountabilityOf,
+  EXECUTION_INCOMPLETE,
+  missingMilestones,
   type CompletionRequest,
   type ExpenseAccountability,
   type ExpenseDeclaration,
@@ -12,6 +14,7 @@ import { TripCostRepository } from '../persistence/trip-cost.repository';
 import {
   CompletionRequestRepository,
   DriverAssignmentRepository,
+  ExecutionEventRepository,
 } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
@@ -48,6 +51,7 @@ export class TripCompletionService {
     private readonly costs: TripCostRepository,
     private readonly history: TripStatusHistoryRepository,
     private readonly notifications: NotificationService,
+    private readonly events: ExecutionEventRepository,
   ) {}
 
   /** What `closeTrip` writes through — this service's own repositories. */
@@ -65,11 +69,13 @@ export class TripCompletionService {
    * line. And it is THIS turn's lines only: another driver's lorry on the same
    * trip keeps typing (ADR-0004).
    *
-   * ★ WHAT IS DELIBERATELY NOT CHECKED HERE: that the four execution events have
-   * been reported. The ordinary flow reports them first, and a turn submitted
-   * without them shows up as stuck in the read model — but no rule says the
-   * submission must be REFUSED, and inventing one would block a real trip whose
-   * driver lost signal at the delivery point.
+   * ★ ONLY OVER A COMPLETE EXECUTION (contract §10.5, DL-59). Every milestone
+   * of the sequence must have a live reading on THIS assignment — another
+   * lorry's progress on the same trip proves nothing about this one. Checked
+   * last, after the refusals a driver can act on first, under the same trip
+   * lock every milestone and every withdrawal takes. A driver who could not
+   * report is not a reason to close without the record: offline recovery and
+   * an office-recorded milestone are separate decisions (DL-88, DL-89).
    */
   async submit(
     assignmentId: string,
@@ -120,6 +126,8 @@ export class TripCompletionService {
         );
       }
 
+      await this.requireCompleteExecution(assignment.id, tx);
+
       const request = await this.requests.submit(
         { tripId: trip.id, driverAssignmentId: assignment.id, submittedBy, expenseDeclaration },
         tx,
@@ -151,12 +159,18 @@ export class TripCompletionService {
    * ★ ORDER MATTERS FOR ONE OF THEM. The money is frozen BEFORE the trip is
    * marked done, so there is no instant at which a closed trip still has an
    * editable figure on an approved turn.
+   *
+   * ★ AND THE EXECUTION IS ASKED AGAIN, after step 2 and before anything is
+   * written. A milestone can be withdrawn while the request waits; what was
+   * complete when the driver asked proves nothing now. Refused, nothing moves:
+   * the request stays pending, the money stays frozen, the trip stays open.
    */
   async approve(tripId: string, requestId: string, decidedBy: string): Promise<CompletionRequest> {
     const { decided, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
 
       const pending = await this.lockPendingOnTrip(tripId, requestId, tx);
+      await this.requireCompleteExecution(pending.driverAssignmentId, tx);
 
       const decided = await this.requests.decide(
         { id: pending.id, state: 'approved', decidedBy, reason: null, now: new Date() },
@@ -286,6 +300,12 @@ export class TripCompletionService {
    * will never ask, and offered by no screen. The same closure as the approval
    * of a last turn (`closeTrip`), in ONE step.
    *
+   * ⚠ IT DELIBERATELY BYPASSES THE EXECUTION PREREQUISITE that a completion
+   * request and its approval hold (`requireCompleteExecution`): it closes the
+   * trip whatever its milestones say, recorded as `manual_completion` with the
+   * SuperAdmin who did it. That is what makes it break-glass, and why no
+   * normal completion is routed through it.
+   *
    * ★ REFUSED WHILE A DRIVER'S REQUEST WAITS. That request IS the completion
    * being asked for — deciding it is the way; closing around it would leave a
    * request nobody could ever decide. The money is not frozen here: every
@@ -313,6 +333,23 @@ export class TripCompletionService {
    */
   async accountability(tripId: string): Promise<ExpenseAccountability> {
     return accountabilityOf(await this.listRequests(tripId));
+  }
+
+  /**
+   * ★ THE COMPLETION PREREQUISITE, ASKED IN ONE PLACE by the request and by its
+   * approval: every milestone of the sequence live on this assignment
+   * (`missingMilestones`). Read inside the caller's transaction, after the
+   * trip lock — the lock every new milestone and every withdrawal also takes,
+   * so the answer cannot change before the caller commits.
+   */
+  private async requireCompleteExecution(assignmentId: string, tx: DatabaseQuery): Promise<void> {
+    const reported = await this.events.listByAssignment(assignmentId, false, tx);
+    const missing = missingMilestones(reported.map((event) => event.type));
+    if (missing.length === 0) return;
+    throw new ValidationError(
+      `This turn's execution is not complete: ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} no live reading.`,
+      { execution: EXECUTION_INCOMPLETE },
+    );
   }
 
   /**

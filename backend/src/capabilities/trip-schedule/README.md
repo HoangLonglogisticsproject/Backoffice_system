@@ -246,8 +246,10 @@ bằng `reason`:
 chỉ khi bằng trạng thái hiện tại (no-op — form sửa của Lịch sử chuyến gửi lại `finished`);
 khác đi → 422 `STATUS_SET_BY_SERVER` (`finished` → 409, mở lại chuyến đã xong → 409,
 `confirmed` → 422). Huỷ (void) mốc không đổi trạng thái: chuyến vẫn `executing` kể cả khi
-mọi mốc đã bị huỷ. Tạo booking có yêu cầu hoàn tất mà không có mốc nào (mất sóng) vẫn
-`pending` cho tới khi được duyệt.
+mọi mốc đã bị huỷ. **Yêu cầu hoàn tất — và việc duyệt nó — cần đủ bốn mốc còn hiệu lực
+trên chính lượt đó** (`missingMilestones`, contract §10.5): thiếu → 422
+`details.execution = EXECUTION_INCOMPLETE`, không ghi gì. Break-glass `POST …/complete` là
+đường duy nhất cố ý bỏ qua điều kiện này (ghi `manual_completion`).
 Chuyến `finished` không còn là việc của ai: danh sách việc của tài xế và hàng chờ duyệt
 loại nó; mọi thao tác ghi của tài xế từ chối chuyến đã đóng (kể cả sửa chi phí, `editCost`)
 — trừ chi phí của lượt "Nhập chuyến cũ" (mục "Chi phí tài xế" ở trên).

@@ -66,6 +66,11 @@ const activeAssignment = {
   state: 'active',
 };
 
+/** The four live readings of a complete execution — what a closable turn has. */
+const FULL_JOURNEY = ['ARRIVED_PICKUP', 'PICKUP_CONFIRMED', 'ARRIVED_DELIVERY', 'DELIVERY_CONFIRMED'].map(
+  (type) => ({ id: `e-${type}`, type }),
+);
+
 const pendingRequest = (over: Record<string, unknown> = {}) => ({
   id: REQUEST,
   tripId: TRIP,
@@ -119,6 +124,8 @@ describe('completion', () => {
     };
     const history = { record: jest.fn().mockResolvedValue(undefined) };
     const notifications = told();
+    // THIS assignment's live readings: a complete execution unless a case says otherwise.
+    const events = { listByAssignment: jest.fn().mockResolvedValue(FULL_JOURNEY) };
 
     const service = new TripCompletionService(
       database(),
@@ -128,9 +135,10 @@ describe('completion', () => {
       costs as never,
       history as never,
       notifications as never,
+      events as never,
     );
 
-    return { service, trips, assignments, requests, costs, history, notifications };
+    return { service, trips, assignments, requests, costs, history, notifications, events };
   };
 
   describe('submit', () => {
@@ -173,6 +181,25 @@ describe('completion', () => {
       trips.lockActive.mockResolvedValue(openTrip({ status: 'finished' }));
 
       await expect(service.submit(ASSIGNMENT, DRIVER, 'expenses')).rejects.toThrow(ConflictError);
+    });
+
+    it.each([
+      ['no milestone at all', []],
+      ['only the arrival at pickup', FULL_JOURNEY.slice(0, 1)],
+      ['up to the pickup confirmation', FULL_JOURNEY.slice(0, 2)],
+      ['up to the arrival at delivery', FULL_JOURNEY.slice(0, 3)],
+      ['a delivery confirmation whose arrival was withdrawn', FULL_JOURNEY.slice(1)],
+    ])('★ refuses %s — 422 EXECUTION_INCOMPLETE, and writes nothing', async (_case, live) => {
+      const { service, requests, costs, events } = build();
+      events.listByAssignment.mockResolvedValue(live);
+
+      await expect(service.submit(ASSIGNMENT, DRIVER, 'expenses')).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: { execution: 'EXECUTION_INCOMPLETE' },
+      });
+      expect(events.listByAssignment).toHaveBeenCalledWith(ASSIGNMENT, false, TX);
+      expect(requests.submit).not.toHaveBeenCalled();
+      expect(costs.lockForAssignment).not.toHaveBeenCalled();
     });
   });
 
@@ -240,6 +267,20 @@ describe('completion', () => {
 
       expect(order).toEqual(['finalize', 'close']);
       expect(costs.finalizeForAssignment).toHaveBeenCalledWith(ASSIGNMENT, TX);
+    });
+
+    it('★ asks the execution again — a milestone withdrawn while the request waited refuses it, and nothing moves', async () => {
+      const { service, requests, costs, trips, history, events } = approving();
+      events.listByAssignment.mockResolvedValue(FULL_JOURNEY.filter((event) => event.type !== 'PICKUP_CONFIRMED'));
+
+      await expect(service.approve(TRIP, REQUEST, BOSS)).rejects.toMatchObject({
+        details: { execution: 'EXECUTION_INCOMPLETE' },
+      });
+      expect(events.listByAssignment).toHaveBeenCalledWith(ASSIGNMENT, false, TX);
+      expect(requests.decide).not.toHaveBeenCalled();
+      expect(costs.finalizeForAssignment).not.toHaveBeenCalled();
+      expect(trips.updateStatus).not.toHaveBeenCalled();
+      expect(history.record).not.toHaveBeenCalled();
     });
 
     it('★ finalizes only this assignment’s lines, never the trip’s', async () => {
@@ -786,9 +827,10 @@ describe('execution events', () => {
       expect(requests.listByAssignment).not.toHaveBeenCalled();
     });
 
-    it('lets a PENDING turn keep reporting — submitting never required every milestone', async () => {
-      // A driver who lost signal at the delivery submits first and reports the
-      // mark when the phone comes back; the reviewer decides on what stands.
+    it('lets a PENDING turn keep reporting — a milestone withdrawn during review is reported again', async () => {
+      // Submitting needs every milestone live, but a reading can be withdrawn
+      // while the request waits; the driver reports it again, and the approval
+      // asks the execution afresh.
       const { service, events, requests } = build();
       requests.listByAssignment.mockResolvedValue([{ state: 'pending', attemptNo: 1 }]);
 
@@ -1951,6 +1993,7 @@ describe('★ a completion decision is told to the person who asked', () => {
       costs as never,
       history as never,
       notifications as never,
+      { listByAssignment: jest.fn().mockResolvedValue(FULL_JOURNEY) } as never,
     );
     return { service, assignments, requests, notifications };
   };

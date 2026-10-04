@@ -39,6 +39,7 @@ import { OperationalBoardRepository } from '../../src/capabilities/trip-schedule
 import { TripBoardCostRepository } from '../../src/capabilities/trip-schedule/persistence/trip-board-cost.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
+import { EXECUTION_EVENT_TYPES } from '../../src/capabilities/trip-schedule/domain/trip-execution';
 import { VehicleDailyFuelCheckRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-fuel-check.repository';
 import { NotificationService } from '../../src/capabilities/notification/application/notification.service';
 import { NotificationStream } from '../../src/capabilities/notification/application/notification-stream';
@@ -198,6 +199,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       costs,
       history,
       notifications,
+      events,
     );
     operations = new OperationalBoardService(new OperationalBoardRepository(database));
 
@@ -312,6 +314,49 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
   const declare = (assignment: string, amount = '1500000.00', declaredBy = driverA) =>
     money.declareCost({ assignmentId: assignment, category: 'fuel', amount, declaredBy });
+
+  /**
+   * ★ A CLOSABLE EXECUTION: reports, through the real service, every milestone
+   * the turn still owes, in order — the prefix rule, the geofence and the
+   * `pending → executing` move all apply. A trip made without points is given
+   * the helper ones first, so the two confirmations have somewhere to measure.
+   */
+  const completeJourney = async (assignment: string, driver = driverA) => {
+    await sql(
+      `UPDATE trip_schedules t
+          SET pickup_latitude = $2, pickup_longitude = $3, delivery_latitude = $4, delivery_longitude = $5
+         FROM trip_driver_assignments a
+        WHERE a.id = $1 AND t.id = a.trip_id AND (t.pickup_latitude IS NULL OR t.delivery_latitude IS NULL)`,
+      [assignment, PICKUP_POINT.latitude, PICKUP_POINT.longitude, DELIVERY_POINT.latitude, DELIVERY_POINT.longitude],
+    );
+    const [points] = (await sql(
+      `SELECT t.pickup_latitude, t.pickup_longitude, t.delivery_latitude, t.delivery_longitude
+         FROM trip_schedules t JOIN trip_driver_assignments a ON a.trip_id = t.id WHERE a.id = $1`,
+      [assignment],
+    )) as { pickup_latitude: number; pickup_longitude: number; delivery_latitude: number; delivery_longitude: number }[];
+    const at = (latitude: number, longitude: number) => ({ location: readingAt({ latitude, longitude }) });
+    const reading: Record<string, object> = {
+      PICKUP_CONFIRMED: at(points!.pickup_latitude, points!.pickup_longitude),
+      DELIVERY_CONFIRMED: at(points!.delivery_latitude, points!.delivery_longitude),
+    };
+    const live = new Set((await eventRows.listByAssignment(assignment)).map((event) => event.type));
+    for (const type of EXECUTION_EVENT_TYPES) {
+      if (live.has(type)) continue;
+      await execution.recordEvent({
+        assignmentId: assignment,
+        type,
+        clientEventId: `journey:${assignment}:${type}:${Date.now()}`,
+        recordedBy: driver,
+        ...(reading[type] ?? {}),
+      });
+    }
+  };
+
+  /** The normal way a turn asks to be closed: the whole journey, then the request. */
+  const submitDone = async (assignment: string, driver: string, declaration: 'none' | 'expenses') => {
+    await completeJourney(assignment, driver);
+    return completion.submit(assignment, driver, declaration);
+  };
 
   /** The one pending request on a trip that has exactly one — what the old trip-level route decided. */
   const pendingOf = async (trip: string): Promise<string> => {
@@ -695,7 +740,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ allows one PENDING completion request per trip', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
 
       expect(
         await codeOf(() =>
@@ -712,7 +757,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ allows one APPROVED completion request EVER — approval is terminal', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await approve(trip);
 
       expect(
@@ -731,7 +776,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('never reuses an attempt number', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await reject(trip, 'Thiếu chứng từ.');
 
       expect(
@@ -911,7 +956,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const complete = async (): Promise<string> => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await approve(trip);
       return trip;
     };
@@ -954,7 +999,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const approvedLine = async (): Promise<{ trip: string; cost: string }> => {
       const { trip, assignment } = await runningTrip();
       const line = await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await approve(trip);
       return { trip, cost: line.id };
     };
@@ -1015,7 +1060,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('refuses an edit once the line is merely LOCKED, before any approval', async () => {
       const { trip, assignment } = await runningTrip();
       const line = await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
 
       expect(
         await codeOf(() => sql(`UPDATE trip_costs SET amount = 1 WHERE id = $1`, [line.id])),
@@ -1056,7 +1101,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         clientEventId: 'tap-1',
         recordedBy: driverA,
       });
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await reject(trip, 'Sai số.');
       const line = (await costs.listActiveByTrip(trip))[0]!;
       await money.editCost(assignment, line.id, { amount: '1234.00' }, driverA);
@@ -1077,7 +1122,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ leaves NOTHING behind when an approval fails part-way', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
 
       // Force the failure at the last write of the transaction, after the
       // request, the freeze and the status have all been written.
@@ -1187,6 +1232,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('lets only one of two simultaneous completion submissions win', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
+      await completeJourney(assignment);
 
       const results = await Promise.allSettled([
         completion.submit(assignment, driverA, 'expenses'),
@@ -1205,7 +1251,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ lets only one of a simultaneous approve and reject win', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
 
       const results = await Promise.allSettled([
         approve(trip),
@@ -1230,7 +1276,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('lets only one of two simultaneous approvals win', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
 
       const results = await Promise.allSettled([
         approve(trip),
@@ -1243,6 +1289,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ refuses an expense edit that races a completion submit', async () => {
       const { trip, assignment } = await runningTrip();
       const line = await declare(assignment);
+      await completeJourney(assignment);
 
       const results = await Promise.allSettled([
         money.editCost(assignment, line.id, { amount: '9999.00' }, driverA),
@@ -2020,13 +2067,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ the completion decision reaches the driver with the reason, once, and approval closes the loop', async () => {
       const { trip, assignment } = await runningTrip();
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
 
       await reject(trip, 'Thiếu hoá đơn dầu');
       const rejected = (await notesFor(driverA)).find((n) => n.type === 'COMPLETION_REJECTED');
       expect(rejected).toMatchObject({ detail: 'Thiếu hoá đơn dầu', tripId: trip });
 
-      const second = await completion.submit(assignment, driverA, 'none');
+      const second = await submitDone(assignment, driverA, 'none');
       await approve(trip);
       // Deciding the same request twice is a conflict, not a second approval.
       await expect(completion.approve(trip, second.id, reviewer)).rejects.toThrow(ConflictError);
@@ -2139,7 +2186,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const line = await declare(assignment, '5000000.00');
       expect(line.state).toBe('editable');
 
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       expect((await costs.listActiveByTrip(trip))[0]!.state).toBe('locked');
 
       await reject(trip, 'Số tiền dầu sai.');
@@ -2148,7 +2195,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
       await money.editCost(assignment, line.id, { amount: '500000.00' }, driverA);
 
-      const resubmitted = await completion.submit(assignment, driverA, 'expenses');
+      const resubmitted = await submitDone(assignment, driverA, 'expenses');
       expect(resubmitted.attemptNo).toBe(2);
 
       const approved = await approve(trip);
@@ -2182,7 +2229,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ refuses a second completion after the trip is done', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await approve(trip);
 
       await expect(completion.submit(assignment, driverA, 'none')).rejects.toBeInstanceOf(ConflictError);
@@ -2191,7 +2238,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('refuses an execution event after the trip is done', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await approve(trip);
 
       await expect(
@@ -2229,7 +2276,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       await money.voidCost(trip, line.id, { by: operator, reason: 'Khai nhầm chuyến.' });
 
       // The only line on the trip is withdrawn, so "nothing to claim" is true.
-      const request = await completion.submit(assignment, driverA, 'none');
+      const request = await submitDone(assignment, driverA, 'none');
 
       expect(request.expenseDeclaration).toBe('none');
     });
@@ -2237,13 +2284,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('carries a NEW declaration on the resubmission', async () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       await reject(trip, 'Bỏ khoản này đi.');
 
       const line = (await costs.listActiveByTrip(trip))[0]!;
       await money.voidCost(trip, line.id, { by: driverA, reason: 'Khai nhầm.' });
 
-      const second = await completion.submit(assignment, driverA, 'none');
+      const second = await submitDone(assignment, driverA, 'none');
 
       expect(second.attemptNo).toBe(2);
       expect(second.expenseDeclaration).toBe('none');
@@ -2422,7 +2469,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('★ every status the trip ever held is reconstructible — booked, started by the driver, closed by approval', async () => {
       const { trip, assignment } = await runningTrip();
       await execution.recordEvent({ assignmentId: assignment, type: 'ARRIVED_PICKUP', clientEventId: 'r-tap', recordedBy: driverA });
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
       await approve(trip);
 
       const history = await board.statusHistory(trip);
@@ -2626,7 +2673,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const rowOf = async () => (await view()).find((row) => row.assignmentId === first.id);
 
       await declare(first.id);
-      await completion.submit(first.id, driverA, 'expenses');
+      await submitDone(first.id, driverA, 'expenses');
       expect(await rowOf()).toMatchObject({
         stage: 'COMPLETION_PENDING',
         accountability: 'DECLARED_WITH_EXPENSE',
@@ -2641,7 +2688,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         completionRejectionReason: 'Thieu chung tu dau.',
       });
 
-      await completion.submit(first.id, driverA, 'expenses');
+      await submitDone(first.id, driverA, 'expenses');
       await approve(trip);
       expect(await rowOf()).toMatchObject({
         stage: 'DONE',
@@ -2651,7 +2698,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
 
       // The last turn approved finishes the trip: off this board entirely.
-      await completion.submit(second.id, driverB, 'none');
+      await submitDone(second.id, driverB, 'none');
       await approve(trip);
       expect((await view()).some((row) => row.tripId === trip)).toBe(false);
     });
@@ -2659,7 +2706,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     it('tells NOT_DECLARED apart from DECLARED_NO_EXPENSE', async () => {
       const first = await runningTrip();
       const second = await runningTrip();
-      await completion.submit(second.assignment, driverA, 'none');
+      await submitDone(second.assignment, driverA, 'none');
 
       const rows = await view();
       const a = rows.find((r) => r.tripId === first.trip)!;
@@ -2776,7 +2823,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const { trip, assignment } = await runningTrip();
       await declare(assignment);
       const before = Date.now();
-      await completion.submit(assignment, driverA, 'expenses');
+      await submitDone(assignment, driverA, 'expenses');
       const approved = await approve(trip);
       const after = Date.now();
 
@@ -2816,7 +2863,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       return row!.id;
     };
     const declareOn = async (trip: string) => declare(await assignmentOf(trip));
-    const submitOn = async (trip: string) => completion.submit(await assignmentOf(trip), driverA, 'expenses');
+    const submitOn = async (trip: string) => submitDone(await assignmentOf(trip), driverA, 'expenses');
 
     it('★ keeps a trip scheduled LAST MONTH whose completion is still pending', async () => {
       // The defect this method exists for: filtering the queue by
@@ -3630,7 +3677,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     };
 
     /** Submits one turn with no expenses and returns the request. */
-    const ask = (assignment: string, by: string) => completion.submit(assignment, by, 'none');
+    const ask = (assignment: string, by: string) => submitDone(assignment, by, 'none');
 
     const tripStatus = async (trip: string) =>
       (await sql(`SELECT status, closed_by FROM trip_schedules WHERE id = $1`, [trip]))[0] as {
@@ -3738,7 +3785,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const lineA = await declare(a, '1000.00', driverA);
       const lineB = await declare(b, '2000.00', driverB);
 
-      await completion.submit(a, driverA, 'expenses');
+      await submitDone(a, driverA, 'expenses');
 
       const stateOf = async (id: string) =>
         ((await sql(`SELECT state FROM trip_costs WHERE id = $1`, [id]))[0] as { state: string }).state;
@@ -3756,17 +3803,17 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const b = (await assignTo(trip, driverB)).id;
       const lineA = await declare(a, '1000.00', driverA);
       const lineB = await declare(b, '2000.00', driverB);
-      await completion.submit(b, driverB, 'expenses');
+      await submitDone(b, driverB, 'expenses');
 
       const stateOf = async (id: string) =>
         ((await sql(`SELECT state FROM trip_costs WHERE id = $1`, [id]))[0] as { state: string }).state;
 
-      const first = await completion.submit(a, driverA, 'expenses');
+      const first = await submitDone(a, driverA, 'expenses');
       await completion.reject(trip, first.id, { by: reviewer, reason: 'Sai số.' });
       expect(await stateOf(lineA.id)).toBe('editable');
       expect(await stateOf(lineB.id)).toBe('locked');
 
-      const second = await completion.submit(a, driverA, 'expenses');
+      const second = await submitDone(a, driverA, 'expenses');
       await completion.approve(trip, second.id, reviewer);
       expect(await stateOf(lineA.id)).toBe('immutable');
       expect(await stateOf(lineB.id)).toBe('locked');
@@ -3784,7 +3831,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
       await completion.approve(trip, requestA.id, reviewer);
 
-      expect((await tripStatus(trip)).status).toBe('pending');
+      // On the road — both turns walked their journey to ask — and not closed.
+      expect((await tripStatus(trip)).status).toBe('executing');
       expect(await sql(`SELECT 1 FROM trip_status_history WHERE trip_id = $1 AND to_status = 'finished'`, [trip])).toHaveLength(0);
       // The approved turn is closed; the other is still the driver's to work.
       expect((await completion.listRequests(trip)).map((r) => r.state).sort()).toEqual(['approved', 'pending']);
@@ -3815,7 +3863,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(await sql(`SELECT 1 FROM trip_costs WHERE driver_assignment_id = $1`, [a])).toHaveLength(0);
 
       // A rejection reopens B for new lines, exactly as it reopens edits.
-      const requestB = await completion.submit(b, driverB, 'expenses');
+      const requestB = await submitDone(b, driverB, 'expenses');
       await expect(declareOn(b, driverB)).rejects.toThrow(ConflictError);
       await completion.reject(trip, requestB.id, { by: reviewer, reason: 'Thiếu dầu.' });
       await declareOn(b, driverB);
@@ -3845,7 +3893,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       await expect(tap(a, driverA, 'PICKUP_CONFIRMED')).rejects.toThrow(ConflictError);
       // 6. …but the retry of the arrival A already reported is still answered with that row.
       expect((await tap(a, driverA, 'ARRIVED_PICKUP')).id).toBe(arrived.id);
-      expect(await sql(`SELECT 1 FROM trip_execution_events WHERE driver_assignment_id = $1`, [a])).toHaveLength(1);
+      // The four milestones A walked to be allowed to ask — and nothing after.
+      expect(await sql(`SELECT 1 FROM trip_execution_events WHERE driver_assignment_id = $1`, [a])).toHaveLength(4);
 
       // 2. B is pending, not approved: the lifecycle lets it keep reporting.
       await tap(b, driverB, 'ARRIVED_PICKUP');
@@ -3855,7 +3904,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // 3. A rejection reopens B for the corrections it asks for.
       await completion.reject(trip, requestB.id, { by: reviewer, reason: 'Thiếu mốc giao.' });
       await tap(b, driverB, 'PICKUP_CONFIRMED');
-      expect(await sql(`SELECT 1 FROM trip_execution_events WHERE driver_assignment_id = $1`, [b])).toHaveLength(2);
+      // The four B walked to ask, plus one reported while pending and one after the rejection.
+      expect(await sql(`SELECT 1 FROM trip_execution_events WHERE driver_assignment_id = $1`, [b])).toHaveLength(6);
     });
 
     it('★ a declaration and a submission arriving together leave no editable line on a pending turn', async () => {
@@ -3867,6 +3917,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       // orders them. Either the line lands first and the submit freezes it, or
       // the submit lands first and the line is refused — never a live editable
       // line under a pending request.
+      await completeJourney(a);
       const outcomes = await Promise.allSettled([declareOn(), completion.submit(a, driverA, 'none')]);
       const pending = (await sql(
         `SELECT state FROM trip_completion_requests WHERE driver_assignment_id = $1`,
@@ -3898,7 +3949,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
       await completion.approve(trip, (await ask(a, driverA)).id, reviewer);
       await completion.approve(trip, (await ask(b, driverB)).id, reviewer);
-      expect((await tripStatus(trip)).status).toBe('pending');
+      // Two of three approved: on the road, not closed.
+      expect((await tripStatus(trip)).status).toBe('executing');
 
       await completion.approve(trip, (await ask(c, driverA)).id, reviewer);
 
@@ -4123,7 +4175,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('C. ★ the driver ASKING to close it moves nothing — the request waits on a reviewer', async () => {
       const { trip, assignment } = await runningTrip();
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
 
       expect(await statusOf(trip)).not.toBe('finished');
       expect(await where(trip)).toEqual(ON_BOARD);
@@ -4133,8 +4185,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       const trip = await newTrip();
       const a = await assignTo(trip, driverA);
       const b = await assignTo(trip, driverB);
-      await completion.submit(a.id, driverA, 'none');
-      await completion.submit(b.id, driverB, 'none');
+      await submitDone(a.id, driverA, 'none');
+      await submitDone(b.id, driverB, 'none');
 
       await completion.approve(trip, await requestOf(a.id), reviewer);
       expect(await statusOf(trip)).not.toBe('finished');
@@ -4147,7 +4199,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('E. ★ the approval that closes it: finished, stamped, recorded — off Lịch xe, into History', async () => {
       const { trip, assignment } = await runningTrip();
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
       const before = await statusOf(trip);
 
       await approve(trip);
@@ -4207,7 +4259,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('3. ★ drops a trip the moment its final approval finishes it — and not before', async () => {
       const { trip, assignment } = await runningTrip();
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
       expect(await onBoard(trip)).toHaveLength(1);
 
       await approve(trip);
@@ -4362,7 +4414,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       await expect(portal.findMyAssignment(assignment, driverA)).rejects.toThrow(NotFoundError);
       expect(await historyOf(driverA)).toEqual([]);
 
-      await completion.submit(replacement.id, driverB, 'none');
+      await submitDone(replacement.id, driverB, 'none');
       await approve(trip);
 
       expect(await historyOf(driverA)).toEqual([assignment]);
@@ -4378,7 +4430,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('a normally completed turn opens closed, and every write on it is refused by the service', async () => {
       const { trip, assignment } = await runningTrip();
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
       await approve(trip);
 
       expect(await historyOf(driverA)).toEqual([assignment]);
@@ -4520,7 +4572,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('refuses while a driver request waits — deciding it is the way, and that ends in the SAME finished', async () => {
       const { trip, assignment } = await runningTrip();
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
 
       await expect(completion.completeManually(trip, reviewer)).rejects.toThrow(ConflictError);
       expect((await rowOf(trip)).status).not.toBe('finished');
@@ -4533,7 +4585,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('a request sent back before "Đã xác nhận" leaves the review queue with the trip', async () => {
       const { trip, assignment } = await runningTrip();
-      await completion.submit(assignment, driverA, 'none');
+      await submitDone(assignment, driverA, 'none');
       await reject(trip, 'Thiếu chứng từ.');
       expect((await seenIn(trip)).reviewQueue).toBe(true);
 
@@ -4674,7 +4726,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       it('F4. ★ a completion request needs no status move from anybody; approval closes it into History', async () => {
         const { trip, assignment } = await runningTrip();
         await tap(assignment, 'f4-tap');
-        await completion.submit(assignment, driverA, 'none');
+        await submitDone(assignment, driverA, 'none');
 
         // Under review, still operational — nobody touched the status.
         expect((await rowOf(trip)).status).toBe('executing');
@@ -4691,17 +4743,19 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         ]);
       });
 
-      it('F5. a driver who closes out with NO milestone (lost signal) leaves it pending until approval closes it', async () => {
-        // `submit` asks for no milestone, by design — and a request is not an
-        // execution event, so it starts nothing.
+      it('F5. ★ a driver cannot close out with NO milestone — refused, nothing written, the trip still pending', async () => {
+        // A lost signal is not a completion: the request needs the whole
+        // execution live (contract §10.5). Offline recovery is DL-88/DL-89.
         const { trip, assignment } = await runningTrip();
-        await completion.submit(assignment, driverA, 'none');
+
+        await expect(completion.submit(assignment, driverA, 'none')).rejects.toMatchObject({
+          code: 'VALIDATION_FAILED',
+          details: { execution: 'EXECUTION_INCOMPLETE' },
+        });
+
         expect((await rowOf(trip)).status).toBe('pending');
-
-        await approve(trip);
-
-        expect((await rowOf(trip)).status).toBe('finished');
-        expect(await seenIn(trip)).toEqual(IN_HISTORY_ONLY);
+        expect(await sql(`SELECT 1 FROM trip_completion_requests WHERE trip_id = $1`, [trip])).toEqual([]);
+        expect(await seenIn(trip)).not.toEqual(IN_HISTORY_ONLY);
       });
 
       it('F6. the retired `confirmed` is not put on the road — it meant done, and is the normalization’s to settle', async () => {
@@ -4797,7 +4851,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
 
     it('★ one batch: the eligible close, and every other id is reported and left EXACTLY as it was', async () => {
       const waiting = await runningTrip();
-      await completion.submit(waiting.assignment, driverA, 'none'); // a driver request nobody has decided
+      await submitDone(waiting.assignment, driverA, 'none'); // a driver request nobody has decided
       const archived = await newTrip();
       const eligible = await newTrip();
       const moved = await newTrip();
@@ -4876,6 +4930,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
           await gate;
           return done;
         });
+      await completeJourney(assignment);
       const submitted = completion.submit(assignment, driverA, 'none');
       const t1 = await holding;
 
