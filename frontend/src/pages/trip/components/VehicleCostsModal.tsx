@@ -85,7 +85,7 @@ export function VehicleCostsModal({ vehicle, onClose }: Readonly<Props>) {
           )}
           {costs.isLoading && <p className="text-sm text-gray-500">{t('driverLoading')}</p>}
 
-          {page && page.items.length === 0 && (
+          {page?.items.length === 0 && (
             <p className="py-6 text-center text-sm text-gray-500">{t('vehicleCostsEmpty')}</p>
           )}
           {page && page.items.length > 0 && <CostTable items={page.items} />}
