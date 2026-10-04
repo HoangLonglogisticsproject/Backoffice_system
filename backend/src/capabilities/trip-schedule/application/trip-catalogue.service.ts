@@ -53,6 +53,7 @@ export class TripCatalogueService {
   async createVehicle(input: {
     plate: string;
     note?: string | null;
+    dailyFuelCheckRequired?: boolean;
     createdBy: string;
   }): Promise<TripVehicle> {
     const plate = requireText(input.plate, 'A vehicle needs a plate.');
@@ -64,12 +65,18 @@ export class TripCatalogueService {
       );
     }
 
-    return this.vehicles.create({ plate, note: trimOrNull(input.note), createdBy: input.createdBy });
+    return this.vehicles.create({
+      plate,
+      note: trimOrNull(input.note),
+      // Off unless asked for: a new lorry is not gated by default (0034).
+      dailyFuelCheckRequired: input.dailyFuelCheckRequired ?? false,
+      createdBy: input.createdBy,
+    });
   }
 
   async updateVehicle(
     id: string,
-    input: { plate?: string; note?: string | null },
+    input: { plate?: string; note?: string | null; dailyFuelCheckRequired?: boolean },
   ): Promise<TripVehicle> {
     const current = await this.vehicles.findById(id);
     if (!current) throw new NotFoundError('Vehicle not found.');
@@ -80,6 +87,14 @@ export class TripCatalogueService {
     const plate =
       input.plate === undefined ? current.plate : requireText(input.plate, 'A vehicle needs a plate.');
     const note = 'note' in input ? trimOrNull(input.note) : current.note;
+    const dailyFuelCheckRequired = input.dailyFuelCheckRequired ?? current.dailyFuelCheckRequired;
+    // ★ A hired lorry's fuel is inside the carrier's price (contract §8.6), so
+    // it owes no daily check. 0034's CHECK refuses the row too, as a 500.
+    if (dailyFuelCheckRequired && current.ownership === 'outsourced') {
+      throw new ValidationError('A hired lorry’s fuel is inside the carrier’s price, so it has no daily fuel check.', {
+        dailyFuelCheckRequired: 'OUTSOURCED_VEHICLE',
+      });
+    }
 
     const clash = await this.findVehicleByKey(plate);
     if (clash && clash.id !== id) {
@@ -88,7 +103,7 @@ export class TripCatalogueService {
       );
     }
 
-    const updated = await this.vehicles.update(id, { plate, note });
+    const updated = await this.vehicles.update(id, { plate, note, dailyFuelCheckRequired });
     if (!updated) throw new NotFoundError('Vehicle not found.');
     return updated;
   }

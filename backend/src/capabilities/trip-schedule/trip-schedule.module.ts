@@ -11,6 +11,7 @@ import { TripCatalogueController } from './api/trip-catalogue.controller';
 import { TripCompletionController } from './api/trip-completion.controller';
 import { TripCostController } from './api/trip-cost.controller';
 import { TripScheduleController } from './api/trip-schedule.controller';
+import { VehicleCostController } from './api/vehicle-cost.controller';
 import { TripBoardService } from './application/trip-board.service';
 import { TripCatalogueService } from './application/trip-catalogue.service';
 import { DriverPortalService } from './application/driver-portal.service';
@@ -21,6 +22,7 @@ import { TripExecutionService } from './application/trip-execution.service';
 import { TripEntryCrew } from './application/trip-entry-crew';
 import { LegacyConfirmedNormalization } from './application/legacy-confirmed-normalization';
 import { TripScheduleService } from './application/trip-schedule.service';
+import { VehicleCostService } from './application/vehicle-cost.service';
 import {
   TripCustomerRepository,
   TripLocationRepository,
@@ -41,6 +43,8 @@ import { OperationalBoardRepository } from './persistence/operational-board.repo
 import { TripBoardCostRepository } from './persistence/trip-board-cost.repository';
 import { TripScheduleRepository } from './persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from './persistence/trip-status-history.repository';
+import { VehicleCostRepository } from './persistence/vehicle-cost.repository';
+import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-check.repository';
 
 /**
  * Hoàng Long's dispatch board.
@@ -64,6 +68,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     TripCostController,
     DriverPortalController,
     TripCompletionController,
+    VehicleCostController,
   ],
   providers: [
     TripScheduleService,
@@ -76,6 +81,7 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     LegacyConfirmedNormalization,
     DriverPortalService,
     OperationalBoardService,
+    VehicleCostService,
     ActiveAssignmentGuard,
     ExpenseAssignmentGuard,
     ReadableAssignmentGuard,
@@ -93,6 +99,8 @@ import { TripStatusHistoryRepository } from './persistence/trip-status-history.r
     CompletionRequestRepository,
     DriverTripReadModelRepository,
     OperationalBoardRepository,
+    VehicleDailyFuelCheckRepository,
+    VehicleCostRepository,
   ],
   exports: [
     TripScheduleService,

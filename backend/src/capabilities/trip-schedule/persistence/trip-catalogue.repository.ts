@@ -35,17 +35,19 @@ interface VehicleRow {
   status: CatalogueStatus;
   ownership: VehicleOwnership | null;
   carrier_id: string | null;
+  daily_fuel_check_required: boolean;
   created_by: string;
   created_at: Date;
   updated_at: Date;
 }
 
-interface CustomerRow extends Omit<VehicleRow, 'plate' | 'ownership' | 'carrier_id'> {
+interface CustomerRow
+  extends Omit<VehicleRow, 'plate' | 'ownership' | 'carrier_id' | 'daily_fuel_check_required'> {
   name: string;
 }
 
 const VEHICLE_COLUMNS =
-  'id, plate, note, status, ownership, carrier_id, created_by, created_at, updated_at';
+  'id, plate, note, status, ownership, carrier_id, daily_fuel_check_required, created_by, created_at, updated_at';
 const CUSTOMER_COLUMNS = 'id, name, note, status, created_by, created_at, updated_at';
 
 const toVehicle = (row: VehicleRow): TripVehicle => ({
@@ -55,6 +57,7 @@ const toVehicle = (row: VehicleRow): TripVehicle => ({
   status: row.status,
   ownership: row.ownership,
   carrierId: row.carrier_id,
+  dailyFuelCheckRequired: row.daily_fuel_check_required,
   createdBy: row.created_by,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -116,16 +119,29 @@ export class TripVehicleRepository {
     return rows[0] ? toVehicle(rows[0]) : null;
   }
 
+  /**
+   * The lorry, held FOR SHARE until the caller's transaction ends: its policy
+   * cannot change under a fuel declaration or a gate that read it (0034). Taken
+   * after the trip and the assignment, never before — the order everywhere.
+   */
+  async findForShare(id: string, executor: DatabaseQuery): Promise<TripVehicle | null> {
+    const rows = await executor.query<VehicleRow>(
+      `SELECT ${VEHICLE_COLUMNS} FROM trip_vehicles WHERE id = $1 FOR SHARE`,
+      [id],
+    );
+    return rows[0] ? toVehicle(rows[0]) : null;
+  }
+
   async create(
-    input: { plate: string; note: string | null; createdBy: string },
+    input: { plate: string; note: string | null; dailyFuelCheckRequired: boolean; createdBy: string },
     executor: DatabaseQuery = this.db,
   ): Promise<TripVehicle> {
     try {
       const rows = await executor.query<VehicleRow>(
-        `INSERT INTO trip_vehicles (plate, note, created_by)
-         VALUES ($1, $2, $3)
+        `INSERT INTO trip_vehicles (plate, note, daily_fuel_check_required, created_by)
+         VALUES ($1, $2, $3, $4)
          RETURNING ${VEHICLE_COLUMNS}`,
-        [input.plate, input.note, input.createdBy],
+        [input.plate, input.note, input.dailyFuelCheckRequired, input.createdBy],
       );
 
       const row = rows[0];
@@ -139,16 +155,16 @@ export class TripVehicleRepository {
 
   async update(
     id: string,
-    values: { plate: string; note: string | null },
+    values: { plate: string; note: string | null; dailyFuelCheckRequired: boolean },
     executor: DatabaseQuery = this.db,
   ): Promise<TripVehicle | null> {
     try {
       const rows = await executor.query<VehicleRow>(
         `UPDATE trip_vehicles
-            SET plate = $2, note = $3
+            SET plate = $2, note = $3, daily_fuel_check_required = $4
           WHERE id = $1 AND status = 'active'
           RETURNING ${VEHICLE_COLUMNS}`,
-        [id, values.plate, values.note],
+        [id, values.plate, values.note, values.dailyFuelCheckRequired],
       );
       return rows[0] ? toVehicle(rows[0]) : null;
     } catch (error) {
