@@ -258,10 +258,10 @@ function DecisionForm({
   return (
     <div className="space-y-3 rounded-lg border border-border p-3">
       {complete ? null : (
-        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          <p className="font-medium">{t('reviewExecutionIncomplete')}</p>
-          <p className="mt-0.5 text-xs">{t('reviewExecutionIncompleteHint')}</p>
-        </div>
+        <output className="block rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <span className="block font-medium">{t('reviewExecutionIncomplete')}</span>
+          <span className="mt-0.5 block text-xs">{t('reviewExecutionIncompleteHint')}</span>
+        </output>
       )}
       <div>
         <label
