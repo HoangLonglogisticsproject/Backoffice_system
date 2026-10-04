@@ -107,6 +107,7 @@ const trip = (over: Record<string, unknown> = {}) => ({
   closed: false,
   // The server's answer for live work with nothing holding its money.
   expensesOpen: true,
+  fuelOnVehicle: false,
   ...over,
 });
 

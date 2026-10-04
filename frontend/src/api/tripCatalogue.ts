@@ -25,11 +25,13 @@ import type {
 export interface CreateVehicleInput {
   plate: string;
   note?: string | null;
+  dailyFuelCheckRequired?: boolean;
 }
 
 export interface UpdateVehicleInput {
   plate?: string;
   note?: string | null;
+  dailyFuelCheckRequired?: boolean;
 }
 
 export interface CreateCustomerInput {

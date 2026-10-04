@@ -64,6 +64,8 @@ type CatalogueRowData = {
   display: string;
   note: string | null;
   status: string;
+  /** Vehicles only: "Khai nhiên liệu đầu ngày" — a real flag, never the note. */
+  dailyFuelCheckRequired?: boolean;
 };
 
 export default function TripMasterDataPage() {
@@ -155,6 +157,9 @@ export default function TripMasterDataPage() {
                 {t(tab === 'vehicles' ? 'colVehicle' : 'colCustomer')}
               </TableHead>
               <TableHead className="font-semibold text-gray-600">{t('colNote')}</TableHead>
+              {tab === 'vehicles' && (
+                <TableHead className="font-semibold text-gray-600">{t('fuelPolicyLabel')}</TableHead>
+              )}
               <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
               {(canManage || tab === 'customers') && (
                 <TableHead className="font-semibold text-gray-600">{t('colActions')}</TableHead>
@@ -166,6 +171,7 @@ export default function TripMasterDataPage() {
               <CatalogueRow
                 key={row.id}
                 row={row}
+                showFuelPolicy={tab === 'vehicles'}
                 canManage={canManage}
                 onEdit={() => setEditing(row)}
                 onArchive={() => setArchiving(row)}
@@ -250,12 +256,14 @@ function TabButton({
 
 function CatalogueRow({
   row,
+  showFuelPolicy,
   canManage,
   onEdit,
   onArchive,
   onLocations,
 }: Readonly<{
   row: CatalogueRowData;
+  showFuelPolicy: boolean;
   canManage: boolean;
   onEdit: () => void;
   onArchive: () => void;
@@ -270,6 +278,11 @@ function CatalogueRow({
     <TableRow className={cn('transition-colors hover:bg-blue-50/30', archived && 'opacity-60')}>
       <TableCell className="font-medium text-gray-900">{row.display}</TableCell>
       <TableCell className="text-gray-600">{row.note ?? '—'}</TableCell>
+      {showFuelPolicy && (
+        <TableCell className={row.dailyFuelCheckRequired ? 'font-medium text-blue-700' : 'text-gray-500'}>
+          {t(row.dailyFuelCheckRequired ? 'fuelPolicyRequired' : 'fuelPolicyNotApplicable')}
+        </TableCell>
+      )}
       <TableCell>
         <span
           className={cn(
@@ -370,13 +383,14 @@ function CatalogueFormModal({
 }: Readonly<{
   isOpen: boolean;
   tab: Tab;
-  editing: { id: string; label: string; note: string | null } | null;
+  editing: { id: string; label: string; note: string | null; dailyFuelCheckRequired?: boolean } | null;
   onClose: () => void;
   onSaved: () => void;
 }>) {
   const { t } = useLanguage();
   const [label, setLabel] = useState('');
   const [note, setNote] = useState('');
+  const [fuelRequired, setFuelRequired] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -392,6 +406,7 @@ function CatalogueFormModal({
     // makes "what is on screen" and "what would be sent" the same value.
     setLabel(tab === 'vehicles' ? stripPlate(editing?.label) : (editing?.label ?? ''));
     setNote(editing?.note ?? '');
+    setFuelRequired(editing?.dailyFuelCheckRequired ?? false);
     setError(null);
   }
 
@@ -408,9 +423,8 @@ function CatalogueFormModal({
         // in that form; stripping again here is the payload saying so at the
         // one place a reader looks for it, and costs nothing — it is idempotent.
         const plate = stripPlate(label);
-        await (editing
-          ? updateTripVehicle(editing.id, { plate, note: trimmedNote })
-          : createTripVehicle({ plate, note: trimmedNote }));
+        const values = { plate, note: trimmedNote, dailyFuelCheckRequired: fuelRequired };
+        await (editing ? updateTripVehicle(editing.id, values) : createTripVehicle(values));
       } else {
         await (editing
           ? updateTripCustomer(editing.id, { name: label, note: trimmedNote })
@@ -419,7 +433,10 @@ function CatalogueFormModal({
       onSaved();
       onClose();
     } catch (error_) {
-      setError(isApiError(error_) ? error_.message : t('saveFailed'));
+      // A hired lorry refused the policy (0034): said in words, not the server's English.
+      const outsourced = isApiError(error_) && error_.details?.['dailyFuelCheckRequired'] === 'OUTSOURCED_VEHICLE';
+      if (outsourced) setError(t('fuelPolicyOutsourced'));
+      else setError(isApiError(error_) ? error_.message : t('saveFailed'));
     } finally {
       setBusy(false);
     }
@@ -504,6 +521,8 @@ function CatalogueFormModal({
           />
         </div>
 
+        {isVehicle && <FuelPolicyField required={fuelRequired} onChange={setFuelRequired} />}
+
         {error && (
           <p role="alert" className="text-sm text-red-600">
             {error}
@@ -511,6 +530,41 @@ function CatalogueFormModal({
         )}
       </form>
     </Modal>
+  );
+}
+
+/**
+ * "Khai nhiên liệu đầu ngày" — [ Bắt buộc / Không áp dụng ]. Two radios, so the
+ * choice is one tap and the state is never the note (0034). A hired lorry is
+ * refused it by the server, which the form says in words.
+ */
+function FuelPolicyField({ required, onChange }: Readonly<{ required: boolean; onChange: (value: boolean) => void }>) {
+  const { t } = useLanguage();
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium text-gray-700">{t('fuelPolicyLabel')}</legend>
+      <div className="inline-flex rounded-lg border border-gray-200 p-0.5">
+        {[true, false].map((option) => (
+          <label
+            key={String(option)}
+            className={cn(
+              'cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500',
+              required === option ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-gray-50',
+            )}
+          >
+            <input
+              type="radio"
+              name="catalogue-fuel-policy"
+              className="sr-only"
+              checked={required === option}
+              onChange={() => onChange(option)}
+            />
+            {t(option ? 'fuelPolicyRequired' : 'fuelPolicyNotApplicable')}
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-gray-500">{t('fuelPolicyHint')}</p>
+    </fieldset>
   );
 }
 

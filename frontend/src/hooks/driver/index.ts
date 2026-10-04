@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
+  declareDailyFuel,
   declareExpense,
   editExpense,
   fetchMyAssignment,
@@ -16,6 +17,7 @@ import {
   type RecordEventInput,
 } from '@/api/driverPortal';
 import type {
+  DailyFuelDeclarationInput,
   DriverHistoryCursor,
   DriverTrip,
   DriverTripDetail,
@@ -174,7 +176,7 @@ export function useMyAssignment(assignmentId: string | undefined): {
 }
 
 /**
- * The four writes, sharing one invalidation.
+ * The writes, sharing one invalidation — and the lorry's daily fuel check.
  *
  * Each returns the TanStack mutation so a screen can read `isPending` for the
  * button it owns — a driver tapping "đã đến" on a slow connection has to see
@@ -240,5 +242,12 @@ export function useDriverActions(assignmentId: string) {
     },
   });
 
-  return { report, declare, correct, complete };
+  // The lorry's daily fuel check. No refresh of its own: the milestone it was
+  // asked for is retried at once, and that write refreshes the screen.
+  const fuel = useMutation({
+    mutationFn: (input: DailyFuelDeclarationInput) => declareDailyFuel(assignmentId, input),
+    onSuccess: () => notifySuccess('toastFuelDeclared'),
+  });
+
+  return { report, declare, correct, complete, fuel };
 }

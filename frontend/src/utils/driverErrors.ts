@@ -79,6 +79,8 @@ export function driverErrorKey(error: unknown): TranslationKey {
   if (error.status === 404) return 'driverErrNotFound';
 
   if (error.status === 422) {
+    // A `fuel` line on a lorry that declares its fuel daily (0034).
+    if (error.details?.['category'] === 'FUEL_DECLARED_ON_VEHICLE') return 'driverErrFuelOnVehicle';
     const rejection = error.details?.['location'];
     return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
   }
@@ -117,6 +119,14 @@ export function reviewErrorKey(error: unknown): TranslationKey {
   if (error.status === 409) return 'reviewErrConflict';
   return 'reviewErrUnknown';
 }
+
+/**
+ * ★ THE FIRST MILESTONE OF THE DAY WAS HELD FOR THE LORRY'S DAILY FUEL CHECK.
+ * Not an error to show: the screen asks for the declaration instead, then
+ * retries the same milestone (0034).
+ */
+export const needsDailyFuelCheck = (error: unknown): boolean =>
+  isApiError(error) && error.status === 422 && error.details?.['dailyFuelCheck'] === 'FUEL_DECLARATION_REQUIRED';
 
 /**
  * Whether the screen should re-read the trip after this failure.

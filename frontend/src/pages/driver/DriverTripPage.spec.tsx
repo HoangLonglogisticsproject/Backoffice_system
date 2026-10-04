@@ -5,6 +5,7 @@ import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { driverKeys } from '@/hooks/driver';
 import { ApiError } from '@/utils/errors';
+import { formatPlate } from '@/utils/format';
 import DriverTripPage from './DriverTripPage';
 import DriverTripsPage from './DriverTripsPage';
 
@@ -26,8 +27,10 @@ const recordExecutionEvent = vi.fn();
 const declareExpense = vi.fn();
 const editExpense = vi.fn();
 const submitCompletion = vi.fn();
+const declareDailyFuel = vi.fn();
 
 vi.mock('@/api/driverPortal', () => ({
+  declareDailyFuel: (...a: unknown[]) => declareDailyFuel(...a),
   fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),
   fetchMyAssignment: (...a: unknown[]) => fetchMyAssignment(...a),
   recordExecutionEvent: (...a: unknown[]) => recordExecutionEvent(...a),
@@ -120,6 +123,7 @@ const trip = (over: Record<string, unknown> = {}) => ({
   closed: false,
   // The server's answer for live work with nothing holding its money.
   expensesOpen: true,
+  fuelOnVehicle: false,
   ...over,
 });
 
@@ -174,6 +178,7 @@ beforeEach(() => {
   declareExpense.mockResolvedValue(cost());
   editExpense.mockResolvedValue(cost({ amount: '1550000.00' }));
   submitCompletion.mockResolvedValue({ id: 'r1', attemptNo: 1, state: 'pending' });
+  declareDailyFuel.mockResolvedValue({ businessDate: '2026-10-04', outcome: 'no_fuel' });
 });
 
 describe('★ a driver sees only their own trips', () => {
@@ -1772,5 +1777,125 @@ describe('★ a closed trip — opened from "Đã chạy xong", read-only', () =
     expect(screen.queryByText('Đã đóng')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /tôi đã đến điểm lấy hàng/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /gửi hoàn tất chuyến/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('★ the day’s first milestone, held for the lorry’s daily fuel check', () => {
+  const held = () =>
+    new ApiError(422, 'VALIDATION_FAILED', 'This lorry needs its daily fuel check.', {
+      dailyFuelCheck: 'FUEL_DECLARATION_REQUIRED',
+    });
+  const fuelDialog = () => screen.findByRole('dialog', { name: 'Khai báo nhiên liệu đầu ngày' });
+  const arrive = async () => fireEvent.click(await screen.findByRole('button', { name: 'Tôi đã đến điểm lấy hàng' }));
+
+  it('asks for the declaration — the lorry and the day read-only — instead of showing an error', async () => {
+    recordExecutionEvent.mockRejectedValueOnce(held());
+    renderDetail();
+    await arrive();
+
+    const dialog = await fuelDialog();
+    expect(within(dialog).getByText(formatPlate('51D-65233'))).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' })).toBeDisabled();
+    expect(screen.queryByText(/thông tin chưa hợp lệ/i)).not.toBeInTheDocument();
+  });
+
+  it('★ "no fuel today" sends no figure, then retries the SAME milestone without a second tap', async () => {
+    recordExecutionEvent.mockRejectedValueOnce(held());
+    renderDetail();
+    await arrive();
+    const dialog = await fuelDialog();
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu hôm nay' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' }));
+
+    await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalledTimes(2));
+    expect(declareDailyFuel).toHaveBeenCalledWith('a1', { outcome: 'no_fuel', clientRequestId: expect.any(String) });
+    const [[, first], [, second]] = recordExecutionEvent.mock.calls as [string, { type: string; clientEventId: string }][];
+    expect(second).toMatchObject({ type: 'ARRIVED_PICKUP', clientEventId: first.clientEventId });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('fuel added: the amount is required; liters (a comma read as the point), odometer and note are sent', async () => {
+    recordExecutionEvent.mockRejectedValueOnce(held());
+    renderDetail();
+    await arrive();
+    const dialog = await fuelDialog();
+    const save = within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' });
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Có đổ nhiên liệu' }));
+    expect(save).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('Số tiền *'), { target: { value: '1250000' } });
+    fireEvent.change(within(dialog).getByLabelText('Số lít (không bắt buộc)'), { target: { value: '50,5' } });
+    fireEvent.change(within(dialog).getByLabelText('Số km trên đồng hồ (không bắt buộc)'), { target: { value: '182345' } });
+    fireEvent.change(within(dialog).getByLabelText('Ghi chú (không bắt buộc)'), { target: { value: 'Petrolimex Q7' } });
+    fireEvent.click(save);
+
+    await waitFor(() =>
+      expect(declareDailyFuel).toHaveBeenCalledWith('a1', {
+        outcome: 'fuel_added',
+        amount: '1250000',
+        liters: '50.5',
+        odometerKm: 182345,
+        note: 'Petrolimex Q7',
+        clientRequestId: expect.any(String),
+      }),
+    );
+    await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalledTimes(2));
+  });
+
+  it('refuses impossible liters before sending anything', async () => {
+    recordExecutionEvent.mockRejectedValueOnce(held());
+    renderDetail();
+    await arrive();
+    const dialog = await fuelDialog();
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Có đổ nhiên liệu' }));
+    fireEvent.change(within(dialog).getByLabelText('Số tiền *'), { target: { value: '1250000' } });
+    fireEvent.change(within(dialog).getByLabelText('Số lít (không bắt buộc)'), { target: { value: '0' } });
+
+    expect(within(dialog).getByText(/Số lít phải lớn hơn 0/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' })).toBeDisabled();
+  });
+
+  it('★ a refused declaration keeps the dialog open, says why, and reports nothing', async () => {
+    recordExecutionEvent.mockRejectedValueOnce(held());
+    declareDailyFuel.mockRejectedValueOnce(new ApiError(0, undefined, 'Network error'));
+    renderDetail();
+    await arrive();
+    const dialog = await fuelDialog();
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu hôm nay' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/không có kết nối/i);
+    expect(recordExecutionEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('★ one key per opening: a retry after a dropped connection sends the same clientRequestId', async () => {
+    recordExecutionEvent.mockRejectedValueOnce(held());
+    declareDailyFuel.mockRejectedValueOnce(new ApiError(0, undefined, 'Network error'));
+    renderDetail();
+    await arrive();
+    const dialog = await fuelDialog();
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu hôm nay' }));
+    const save = within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' });
+    fireEvent.click(save);
+    await within(dialog).findByRole('alert');
+    fireEvent.click(save);
+
+    await waitFor(() => expect(declareDailyFuel).toHaveBeenCalledTimes(2));
+    const [[, first], [, second]] = declareDailyFuel.mock.calls as [string, { clientRequestId: string }][];
+    expect(second.clientRequestId).toBe(first.clientRequestId);
+  });
+
+  it('★ leaves `fuel` out of the trip expense headings where the lorry declares it daily', async () => {
+    fetchMyAssignment.mockResolvedValue(trip({ events: [event('ARRIVED_PICKUP')], fuelOnVehicle: true }));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Thêm khoản chi' }));
+
+    expect(await screen.findByRole('button', { name: 'Cầu trạm' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dầu' })).not.toBeInTheDocument();
   });
 });

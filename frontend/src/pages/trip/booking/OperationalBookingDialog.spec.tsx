@@ -79,6 +79,7 @@ const LORRY = {
   plate: '50H49266',
   note: null,
   status: 'active' as const,
+  dailyFuelCheckRequired: false,
   createdBy: 'u9',
   createdAt: '2026-08-01T00:00:00.000Z',
   updatedAt: '2026-08-01T00:00:00.000Z',

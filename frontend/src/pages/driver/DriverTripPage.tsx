@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Stepper } from '@/components/common/Stepper';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useDriverActions, useMyAssignment } from '@/hooks/driver';
-import { driverErrorKey, isFinalRefusal, shouldReloadAfter } from '@/utils/driverErrors';
+import { driverErrorKey, isFinalRefusal, needsDailyFuelCheck, shouldReloadAfter } from '@/utils/driverErrors';
 import { assignmentStatusOf, currentStage, workflowStages, type WorkflowStage } from '@/utils/driverExecution';
 import { captureLocation } from '@/utils/driverLocation';
 import { wasOpenedFromSchedule } from '@/utils/driverSchedule';
@@ -19,6 +19,7 @@ import type { DriverTripDetail, ExecutionEventType, ExpenseDeclaration, Location
 import type { TripCostCategory } from '@/types/tripCost';
 import { AssignmentStatusPill } from './components/AssignmentStatusPill';
 import { CompletionPanel } from './components/CompletionPanel';
+import { DailyFuelDialog } from './components/DailyFuelDialog';
 import { DriverLoadError } from './components/DriverLoadError';
 import { ExpensePanel } from './components/ExpensePanel';
 import { FactRow } from './components/FactRow';
@@ -56,7 +57,7 @@ export default function DriverTripPage() {
   // `actionError`, and the read failure had no name of its own — so it took
   // the generic one and every `catch` below had to avoid it.
   const { trip, loading, error: loadError, reload } = useMyAssignment(assignmentId);
-  const { report, declare, correct, complete } = useDriverActions(assignmentId ?? '');
+  const { report, declare, correct, complete, fuel } = useDriverActions(assignmentId ?? '');
 
   const [actionError, setActionError] = useState<unknown>(null);
   /** The handset is being asked where it is. Separate from the request in flight. */
@@ -69,6 +70,12 @@ export default function DriverTripPage() {
    * making the driver find it themselves is the bug this replaces.
    */
   const [openExpenseForm, setOpenExpenseForm] = useState(false);
+  /**
+   * ★ THE MILESTONE THE SERVER HELD FOR THE LORRY'S DAILY FUEL CHECK. While
+   * set, the declaration is asked for; once the server has it, this same
+   * milestone is sent again — the driver does not tap twice.
+   */
+  const [fuelFor, setFuelFor] = useState<ExecutionEventType | null>(null);
 
   /**
    * Brings the figures into view — used by the checkpoint and by a rejection.
@@ -146,20 +153,28 @@ export default function DriverTripPage() {
         }
       }
 
-      await report.mutateAsync({
-        type,
-        // ★ NO TIME IS SENT, AND THAT IS THE RULE RATHER THAN AN OMISSION.
-        // `actual_at` is what every delay is measured from, and a phone's
-        // clock is set by the phone's owner. The server stamps it when the
-        // tap arrives. The handset's own reading goes in `deviceReportedAt`,
-        // which is DIAGNOSTIC — kept so a disagreement can be investigated,
-        // never read by anything that computes a delay or an order.
-        deviceReportedAt: new Date().toISOString(),
-        ...(location ? { location } : {}),
-        // ★ ONE ID PER INTENT, NOT PER ATTEMPT. A retried request must collide
-        // with its own first attempt so an arrival is never recorded twice.
-        clientEventId: `${trip.assignment.id}:${type}`,
-      });
+      try {
+        await report.mutateAsync({
+          type,
+          // ★ NO TIME IS SENT, AND THAT IS THE RULE RATHER THAN AN OMISSION.
+          // `actual_at` is what every delay is measured from, and a phone's
+          // clock is set by the phone's owner. The server stamps it when the
+          // tap arrives. The handset's own reading goes in `deviceReportedAt`,
+          // which is DIAGNOSTIC — kept so a disagreement can be investigated,
+          // never read by anything that computes a delay or an order.
+          deviceReportedAt: new Date().toISOString(),
+          ...(location ? { location } : {}),
+          // ★ ONE ID PER INTENT, NOT PER ATTEMPT. A retried request must collide
+          // with its own first attempt so an arrival is never recorded twice.
+          clientEventId: `${trip.assignment.id}:${type}`,
+        });
+      } catch (error) {
+        // Not a failure to show: the day's first milestone waits for the
+        // lorry's fuel check. The refused tap wrote nothing, so the retry
+        // after the declaration — same key — is simply new.
+        if (!needsDailyFuelCheck(error)) throw error;
+        setFuelFor(type);
+      }
     });
 
   /**
@@ -234,6 +249,19 @@ export default function DriverTripPage() {
         openForm={openExpenseForm}
         onFormClosed={() => setOpenExpenseForm(false)}
       />
+
+      {fuelFor ? (
+        <DailyFuelDialog
+          plate={trip.vehicle?.plate ?? null}
+          saving={fuel.isPending}
+          onSubmit={(input) => fuel.mutateAsync(input)}
+          onDeclared={() => {
+            setFuelFor(null);
+            reportEvent(fuelFor);
+          }}
+          onClose={() => setFuelFor(null)}
+        />
+      ) : null}
 
       <CompletionPanel
         trip={trip}

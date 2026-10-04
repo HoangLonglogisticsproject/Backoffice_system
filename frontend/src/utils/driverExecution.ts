@@ -220,10 +220,15 @@ export const isOverdue = (step: ExecutionStep, now: Date): boolean =>
 export const allowedCategories = (
   ownership: VehicleOwnership | null,
   all: readonly TripCostCategory[],
+  fuelOnVehicle = false,
 ): TripCostCategory[] =>
-  ownership === 'outsourced'
-    ? all.filter((category) => category !== 'fuel' && category !== 'toll')
-    : [...all];
+  all.filter(
+    (category) =>
+      !(ownership === 'outsourced' && (category === 'fuel' || category === 'toll')) &&
+      // ★ The lorry declares its fuel daily (`fuelOnVehicle`, the server's
+      // answer): a `fuel` trip line would count the same fill twice.
+      !(fuelOnVehicle && category === 'fuel'),
+  );
 
 /**
  * The ownership of the lorry this trip ran, as the events recorded it.

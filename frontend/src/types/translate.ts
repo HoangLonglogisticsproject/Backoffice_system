@@ -421,6 +421,29 @@ const PHRASES = {
     en: 'This trip has no vehicle yet, so expenses cannot be declared',
   },
   driverAmountHint: { vi: 'Ví dụ: 1,500,000', en: 'For example: 1,500,000' },
+  driverErrFuelOnVehicle: {
+    vi: 'Dầu của xe này được khai mỗi ngày ở bước khai nhiên liệu đầu ngày, không khai vào chi phí chuyến.',
+    en: 'This lorry’s fuel is declared once a day in the daily fuel check, not as a trip expense.',
+  },
+
+  // The lorry's daily fuel check — asked before the day's first milestone.
+  driverFuelTitle: { vi: 'Khai báo nhiên liệu đầu ngày', en: 'Daily fuel check' },
+  driverFuelIntro: {
+    vi: 'Xe này cần khai nhiên liệu một lần mỗi ngày trước chuyến đầu tiên.',
+    en: 'This lorry needs its fuel declared once a day, before its first run.',
+  },
+  driverFuelVehicle: { vi: 'Xe', en: 'Lorry' },
+  driverFuelDay: { vi: 'Ngày', en: 'Day' },
+  driverFuelOutcome: { vi: 'Hôm nay xe có đổ nhiên liệu không?', en: 'Was the lorry fuelled today?' },
+  driverFuelAdded: { vi: 'Có đổ nhiên liệu', en: 'Fuel added' },
+  driverFuelNone: { vi: 'Không đổ nhiên liệu hôm nay', en: 'No fuel today' },
+  driverFuelAmount: { vi: 'Số tiền *', en: 'Amount *' },
+  driverFuelLiters: { vi: 'Số lít (không bắt buộc)', en: 'Liters (optional)' },
+  driverFuelOdometer: { vi: 'Số km trên đồng hồ (không bắt buộc)', en: 'Odometer, km (optional)' },
+  driverFuelNote: { vi: 'Ghi chú (không bắt buộc)', en: 'Note (optional)' },
+  driverFuelLitersInvalid: { vi: 'Số lít phải lớn hơn 0, tối đa 2 chữ số thập phân.', en: 'Liters must be above 0, with at most 2 decimals.' },
+  driverFuelOdometerInvalid: { vi: 'Số km phải là số nguyên.', en: 'The odometer must be a whole number.' },
+  driverFuelSubmit: { vi: 'Lưu và tiếp tục', en: 'Save and continue' },
 
   driverCompletion: { vi: 'Hoàn tất chuyến', en: 'Completing the trip' },
   driverSubmitCompletion: { vi: 'Gửi hoàn tất chuyến', en: 'Submit for completion' },
@@ -1465,6 +1488,18 @@ const PHRASES = {
   customerNameLabel: { vi: 'Tên khách hàng *', en: 'Customer name *' },
   customerNamePlaceholder: { vi: 'Nhập tên khách hàng', en: 'Enter the customer name' },
   noteOptional: { vi: 'Ghi chú (không bắt buộc)', en: 'Note (optional)' },
+  // A lorry's daily fuel policy — a real flag on the vehicle, never the note.
+  fuelPolicyLabel: { vi: 'Khai nhiên liệu đầu ngày', en: 'Daily fuel check' },
+  fuelPolicyRequired: { vi: 'Bắt buộc', en: 'Required' },
+  fuelPolicyNotApplicable: { vi: 'Không áp dụng', en: 'Not applicable' },
+  fuelPolicyHint: {
+    vi: 'Bắt buộc: tài xế khai nhiên liệu một lần mỗi ngày trước chuyến đầu tiên của xe.',
+    en: 'Required: the driver declares the lorry’s fuel once a day, before its first run.',
+  },
+  fuelPolicyOutsourced: {
+    vi: 'Xe thuê ngoài đã gồm nhiên liệu trong giá thuê, không áp dụng khai nhiên liệu đầu ngày.',
+    en: 'A hired lorry’s fuel is inside the carrier’s price, so it has no daily fuel check.',
+  },
   showArchived: { vi: 'Hiện cả mục đã lưu trữ', en: 'Show archived' },
   statusArchived: { vi: 'Đã lưu trữ', en: 'Archived' },
   emptyVehicles: { vi: 'Chưa có xe nào.', en: 'No vehicles yet.' },
@@ -1581,6 +1616,7 @@ const PHRASES = {
   // The driver portal. Read one-handed, in a cab, so they are shorter still.
   toastEventReported: { vi: 'Đã ghi nhận', en: 'Recorded' },
   toastExpenseDeclared: { vi: 'Đã khai chi phí', en: 'Expense declared' },
+  toastFuelDeclared: { vi: 'Đã khai nhiên liệu', en: 'Fuel declared' },
   toastExpenseCorrected: { vi: 'Đã sửa khoản chi phí', en: 'Expense corrected' },
   toastCompletionSubmitted: {
     vi: 'Đã gửi hoàn tất — chờ văn phòng duyệt',

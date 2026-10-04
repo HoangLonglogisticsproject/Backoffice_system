@@ -202,4 +202,35 @@ export interface DriverTripDetail extends DriverTrip {
    * decides nothing about money itself.
    */
   expensesOpen: boolean;
+  /**
+   * ★ THIS TURN'S FUEL IS DECLARED ON THE LORRY, NOT AS A TRIP EXPENSE: live
+   * work on a lorry with a daily fuel check. The expense form leaves `fuel` out;
+   * the server refuses it either way. The server's answer, never re-derived.
+   */
+  fuelOnVehicle: boolean;
+}
+
+/** The lorry's answer for the business day: it was filled, or it was not. */
+export type DailyFuelOutcome = 'fuel_added' | 'no_fuel';
+
+/**
+ * "Khai báo nhiên liệu đầu ngày". ★ No lorry and no day: both are the server's
+ * (the assignment's lorry, today in Asia/Ho_Chi_Minh). Amounts and liters are
+ * decimal STRINGS for the reason `DeclareExpenseInput.amount` gives.
+ */
+export type DailyFuelDeclarationInput =
+  | {
+      outcome: 'fuel_added';
+      amount: string;
+      liters: string | null;
+      odometerKm: number | null;
+      note: string | null;
+      clientRequestId: string;
+    }
+  | { outcome: 'no_fuel'; clientRequestId: string };
+
+/** The check that stands for the lorry today — possibly another driver's. */
+export interface DailyFuelCheck {
+  businessDate: string;
+  outcome: DailyFuelOutcome;
 }

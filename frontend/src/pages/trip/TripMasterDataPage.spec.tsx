@@ -71,6 +71,7 @@ const vehicle = (over: Record<string, unknown> = {}) => ({
   plate: '51D.65233',
   note: null,
   status: 'active',
+  dailyFuelCheckRequired: false,
   createdBy: 'u9',
   createdAt: '2026-08-01T00:00:00.000Z',
   updatedAt: '2026-08-01T00:00:00.000Z',
@@ -479,7 +480,7 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       await waitFor(() =>
-        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: 'xe nhà' }),
+        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: 'xe nhà', dailyFuelCheckRequired: false }),
       );
     });
 
@@ -504,7 +505,7 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       await waitFor(() =>
-        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: null }),
+        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: null, dailyFuelCheckRequired: false }),
       );
     });
 
@@ -517,7 +518,7 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       await waitFor(() =>
-        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: null }),
+        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: null, dailyFuelCheckRequired: false }),
       );
     });
 
@@ -584,8 +585,64 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       await waitFor(() =>
-        expect(updateTripVehicle).toHaveBeenCalledWith('v1', { plate: '51D65234', note: null }),
+        expect(updateTripVehicle).toHaveBeenCalledWith('v1', { plate: '51D65234', note: null, dailyFuelCheckRequired: false }),
       );
+    });
+  });
+
+  describe('★ "Khai nhiên liệu đầu ngày" — a real flag on the lorry, never the note', () => {
+    it('shows each lorry’s policy in the list', async () => {
+      fetchTripVehicles.mockResolvedValue([vehicle({ dailyFuelCheckRequired: true })]);
+      renderPage();
+
+      expect(await screen.findByRole('columnheader', { name: 'Khai nhiên liệu đầu ngày' })).toBeTruthy();
+      expect(await screen.findByRole('cell', { name: 'Bắt buộc' })).toBeTruthy();
+    });
+
+    it('adds a lorry with the policy on, as `dailyFuelCheckRequired: true`', async () => {
+      renderPage();
+      await screen.findByText('51D-65233');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Thêm xe' }));
+      // Off by default: a new lorry is not gated unless somebody says so.
+      expect(screen.getByRole('radio', { name: 'Không áp dụng' })).toBeChecked();
+      fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '50H44266' } });
+      fireEvent.click(screen.getByRole('radio', { name: 'Bắt buộc' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() =>
+        expect(createTripVehicle).toHaveBeenCalledWith({ plate: '50H44266', note: null, dailyFuelCheckRequired: true }),
+      );
+    });
+
+    it('seeds the policy from the row, and turns it off', async () => {
+      fetchTripVehicles.mockResolvedValue([vehicle({ dailyFuelCheckRequired: true })]);
+      renderPage();
+      await screen.findByText('51D-65233');
+
+      fireEvent.click(actionButton('Sửa'));
+      expect(screen.getByRole('radio', { name: 'Bắt buộc' })).toBeChecked();
+      fireEvent.click(screen.getByRole('radio', { name: 'Không áp dụng' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+
+      await waitFor(() =>
+        expect(updateTripVehicle).toHaveBeenCalledWith('v1', { plate: '51D65233', note: null, dailyFuelCheckRequired: false }),
+      );
+    });
+
+    it('says in words why a hired lorry cannot take it', async () => {
+      const { ApiError } = await import('@/utils/errors');
+      updateTripVehicle.mockRejectedValue(
+        new ApiError(422, 'VALIDATION_FAILED', 'A hired lorry…', { dailyFuelCheckRequired: 'OUTSOURCED_VEHICLE' }),
+      );
+      renderPage();
+      await screen.findByText('51D-65233');
+
+      fireEvent.click(actionButton('Sửa'));
+      fireEvent.click(screen.getByRole('radio', { name: 'Bắt buộc' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Xe thuê ngoài đã gồm nhiên liệu trong giá thuê');
     });
   });
 

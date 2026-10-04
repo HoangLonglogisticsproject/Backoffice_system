@@ -125,6 +125,7 @@ const trip = (over: Partial<DriverTripDetail> = {}): DriverTripDetail => ({
   closed: false,
   // The server's answer for live work with nothing holding its money.
   expensesOpen: true,
+  fuelOnVehicle: false,
   ...over,
 });
 
@@ -352,6 +353,17 @@ describe('which expense headings are offered', () => {
     // `null` means unclassified, never "hired". Hiding two headings on the
     // strength of a fact nobody stated would lose real money.
     expect(allowedCategories(null, TRIP_COST_CATEGORIES)).toHaveLength(5);
+  });
+
+  it('★ leaves fuel out where the lorry declares it daily — the other four stay', () => {
+    // The morning fill sits on the lorry; a `fuel` trip line would count it twice.
+    expect(allowedCategories('company', TRIP_COST_CATEGORIES, true)).toEqual([
+      'toll',
+      'warehouse',
+      'loading',
+      'overtime',
+    ]);
+    expect(allowedCategories(null, TRIP_COST_CATEGORIES, true)).not.toContain('fuel');
   });
 
   it('reads the ownership off the snapshot on an event', () => {
