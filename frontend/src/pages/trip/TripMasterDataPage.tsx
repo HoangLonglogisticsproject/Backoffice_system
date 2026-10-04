@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Archive, MapPin, Pencil, Plus, Wallet } from 'lucide-react';
+import { Archive, ChevronRight, MapPin, Pencil, Plus } from 'lucide-react';
+import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PlateInput } from '@/components/ui/plate-input';
@@ -16,6 +17,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { NoTripAccess } from '@/pages/trip/components/NoTripAccess';
 import { useSession } from '@/contexts/SessionProvider';
 import { useTripCatalogue } from '@/hooks/trip';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import {
   archiveTripCustomer,
   archiveTripVehicle,
@@ -29,7 +31,7 @@ import { formatPlate, stripPlate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import type { TranslationKey } from '@/types/translate';
 import { CustomerLocationsModal } from './components/CustomerLocationsModal';
-import { VehicleCostsModal } from './components/VehicleCostsModal';
+import { VehicleDetailModal } from './components/VehicleDetailModal';
 
 /**
  * The two catalogues behind the dispatch board.
@@ -90,8 +92,12 @@ export default function TripMasterDataPage() {
   const [archiving, setArchiving] = useState<CatalogueRowData | null>(null);
   /** The customer whose places are being managed. Places live under a customer, nowhere else. */
   const [locationsFor, setLocationsFor] = useState<CatalogueRowData | null>(null);
-  /** The lorry whose costs are open ("Chi phí xe"). */
-  const [costsFor, setCostsFor] = useState<CatalogueRowData | null>(null);
+  /**
+   * The lorry open in its detail view. ★ A LORRY IS AN OBJECT, NOT A ROW OF
+   * ICONS: the row opens one view, and everything the lorry has — its overview,
+   * its costs, later its maintenance — is a section there.
+   */
+  const [detailFor, setDetailFor] = useState<CatalogueRowData | null>(null);
 
   const canManage = can('trip.write');
   // ★ ONE KEY PER CATALOGUE (DL-112). Every booking function files customers
@@ -100,7 +106,10 @@ export default function TripMasterDataPage() {
   const canAddPlace = can('location.create');
   // A lorry's money is `cost.read`, exactly as the route behind it asks.
   const canReadCosts = can('cost.read');
-  const showActions = tab === 'customers' || canManage || canReadCosts;
+  // Below `md` a lorry is a card with a "Xem chi tiết" button, not a table
+  // row scrolled sideways.
+  const wide = useMediaQuery('(min-width: 768px)');
+  const asCards = tab === 'vehicles' && !wide;
 
   // Both lists, from one hook — this is the screen that passes `includeArchived`,
   // because it is the only one where a retired row is something to look at
@@ -156,6 +165,9 @@ export default function TripMasterDataPage() {
           </label>
         </div>
 
+        {asCards ? (
+          <VehicleCards rows={rows} onOpen={setDetailFor} />
+        ) : (
         <Table>
           <TableHeader className="bg-gray-50/50">
             <TableRow>
@@ -167,9 +179,10 @@ export default function TripMasterDataPage() {
                 <TableHead className="font-semibold text-gray-600">{t('fuelPolicyLabel')}</TableHead>
               )}
               <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
-              {showActions && (
-                <TableHead className="font-semibold text-gray-600">{t('colActions')}</TableHead>
-              )}
+              <TableHead className="font-semibold text-gray-600">
+                {/* The lorry's one control opens it; the header says so to a reader. */}
+                {tab === 'vehicles' ? <span className="sr-only">{t('vehicleViewDetail')}</span> : t('colActions')}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -179,14 +192,15 @@ export default function TripMasterDataPage() {
                 row={row}
                 showFuelPolicy={tab === 'vehicles'}
                 canManage={canManage}
+                onOpen={tab === 'vehicles' ? () => setDetailFor(row) : undefined}
                 onEdit={() => setEditing(row)}
                 onArchive={() => setArchiving(row)}
-                onLocations={tab === 'customers' ? () => setLocationsFor(row) : undefined}
-                onCosts={tab === 'vehicles' && canReadCosts ? () => setCostsFor(row) : undefined}
+                onLocations={() => setLocationsFor(row)}
               />
             ))}
           </TableBody>
         </Table>
+        )}
 
         {!resource.loading && rows.length === 0 && !resource.error && (
           <p className="px-6 py-10 text-center text-sm text-gray-500">
@@ -237,16 +251,28 @@ export default function TripMasterDataPage() {
         />
       )}
 
-      {costsFor && canReadCosts && (
-        <VehicleCostsModal
+      {detailFor && (
+        <VehicleDetailModal
           vehicle={{
-            id: costsFor.id,
-            display: costsFor.display,
-            note: costsFor.note,
-            dailyFuelCheckRequired: costsFor.dailyFuelCheckRequired ?? false,
-            archived: costsFor.status !== 'active',
+            id: detailFor.id,
+            display: detailFor.display,
+            note: detailFor.note,
+            dailyFuelCheckRequired: detailFor.dailyFuelCheckRequired ?? false,
+            archived: detailFor.status !== 'active',
           }}
-          onClose={() => setCostsFor(null)}
+          canReadCosts={canReadCosts}
+          canManage={canManage}
+          // One dialog at a time: the detail hands over to the edit or archive
+          // dialog rather than stacking under it.
+          onEdit={() => {
+            setDetailFor(null);
+            setEditing(detailFor);
+          }}
+          onArchive={() => {
+            setDetailFor(null);
+            setArchiving(detailFor);
+          }}
+          onClose={() => setDetailFor(null)}
         />
       )}
     </div>
@@ -274,32 +300,77 @@ function TabButton({
   );
 }
 
+/** The status pill both the row and the card wear. */
+function CatalogueStatus({ archived }: Readonly<{ archived: boolean }>) {
+  const { t } = useLanguage();
+  return (
+    <StatusPill tone={archived ? 'gray' : 'green'}>{t(archived ? 'statusArchived' : 'statusActive')}</StatusPill>
+  );
+}
+
+/**
+ * The one control that opens a lorry, stretched over its whole row or card.
+ *
+ * ★ A REAL BUTTON, NOT A CLICKABLE `<tr>`. Its `::after` covers the row (whose
+ * `relative` makes it the box), so a click anywhere opens the lorry while
+ * there is still exactly one focus stop, a native Enter/Space, and a name a
+ * screen reader can say — "Xem chi tiết 51H-273.14".
+ */
+function OpenVehicleButton({ row, onOpen, className }: Readonly<{ row: CatalogueRowData; onOpen: () => void; className?: string }>) {
+  const { t } = useLanguage();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={onOpen}
+      // The visible words lead the name (WCAG 2.5.3); the plate says which lorry.
+      aria-label={`${t('vehicleViewDetail')} ${row.display}`}
+      // ★ NO PRESS NUDGE. The shared button moves 1px while pressed, and a
+      // `translate` makes it the box its `::after` is laid out in — the overlay
+      // would shrink to the button mid-click and the release land on the row.
+      className={cn('cursor-pointer gap-1 after:absolute after:inset-0 active:not-aria-[haspopup]:translate-none', className)}
+    >
+      {t('vehicleViewDetail')}
+      <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+    </Button>
+  );
+}
+
 function CatalogueRow({
   row,
   showFuelPolicy,
   canManage,
+  onOpen,
   onEdit,
   onArchive,
   onLocations,
-  onCosts,
 }: Readonly<{
   row: CatalogueRowData;
   showFuelPolicy: boolean;
   canManage: boolean;
+  /** Vehicles: the row opens the lorry's detail, where its actions live. */
+  onOpen?: () => void;
   onEdit: () => void;
   onArchive: () => void;
-  /** Customers only: their places. A vehicle has none. */
-  onLocations?: () => void;
-  /** Vehicles only, with `cost.read`: the lorry's own costs. Open on an archived lorry too. */
-  onCosts?: () => void;
+  /** Customers: their places. */
+  onLocations: () => void;
 }>) {
   const { t } = useLanguage();
 
   const archived = row.status !== 'active';
 
   return (
-    <TableRow className={cn('transition-colors hover:bg-blue-50/30', archived && 'opacity-60')}>
-      <TableCell className="font-medium text-gray-900">{row.display}</TableCell>
+    <TableRow
+      className={cn(
+        'transition-colors hover:bg-blue-50/30',
+        onOpen && 'group relative cursor-pointer focus-within:bg-blue-50/40',
+        archived && 'opacity-60',
+      )}
+    >
+      <TableCell className={cn('font-medium', onOpen ? 'text-blue-700 group-hover:underline' : 'text-gray-900')}>
+        {row.display}
+      </TableCell>
       <TableCell className="text-gray-600">{row.note ?? '—'}</TableCell>
       {showFuelPolicy && (
         <TableCell className={row.dailyFuelCheckRequired ? 'font-medium text-blue-700' : 'text-gray-500'}>
@@ -307,73 +378,76 @@ function CatalogueRow({
         </TableCell>
       )}
       <TableCell>
-        <span
-          className={cn(
-            'inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset',
-            archived
-              ? 'bg-gray-50 text-gray-600 ring-gray-500/10'
-              : 'bg-green-50 text-green-700 ring-green-600/20',
-          )}
-        >
-          {t(archived ? 'statusArchived' : 'statusActive')}
-        </span>
+        <CatalogueStatus archived={archived} />
       </TableCell>
-      {(canManage || onLocations || onCosts) && (
-        <TableCell>
-          <div className="flex items-center gap-1">
-            {onCosts && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2 text-gray-600"
-                onClick={onCosts}
-                title={t('vehicleCostsSection')}
-              >
-                <Wallet className="h-3.5 w-3.5" />
-                <span className="sr-only">{t('vehicleCostsSection')}</span>
-              </Button>
-            )}
-            {onLocations && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1 px-2 text-gray-600"
-                onClick={onLocations}
-              >
-                <MapPin className="h-3.5 w-3.5" />
-                <span className="sr-only">{t('manageLocations')}</span>
-              </Button>
-            )}
+      <TableCell>
+        {onOpen ? (
+          <OpenVehicleButton row={row} onOpen={onOpen} />
+        ) : (
+          // ★ LABELLED, NOT ICON-ONLY: an operator reads the word, not the glyph.
+          <div className="flex flex-wrap items-center gap-1">
+            <Button variant="outline" size="sm" className="h-8 gap-1 px-2 text-gray-600" onClick={onLocations}>
+              <MapPin className="h-3.5 w-3.5" aria-hidden />
+              {t('manageLocations')}
+            </Button>
             {canManage && (
               <>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-2 text-gray-600"
-              onClick={onEdit}
-              // An archived row is refused edits by the server (409); the
-              // button is hidden rather than left to produce that error.
-              disabled={archived}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              <span className="sr-only">{t('edit')}</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-2 text-gray-600"
-              onClick={onArchive}
-              disabled={archived}
-            >
-              <Archive className="h-3.5 w-3.5" />
-              <span className="sr-only">{t('archive')}</span>
-            </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1 px-2 text-gray-600"
+                  onClick={onEdit}
+                  // An archived row is refused edits by the server (409); the
+                  // button is disabled rather than left to produce that error.
+                  disabled={archived}
+                >
+                  <Pencil className="h-3.5 w-3.5" aria-hidden />
+                  {t('edit')}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1 px-2 text-gray-600"
+                  onClick={onArchive}
+                  disabled={archived}
+                >
+                  <Archive className="h-3.5 w-3.5" aria-hidden />
+                  {t('archive')}
+                </Button>
               </>
             )}
           </div>
-        </TableCell>
-      )}
+        )}
+      </TableCell>
     </TableRow>
+  );
+}
+
+/** The lorries below `md`: one card each, opened by its "Xem chi tiết" button. */
+function VehicleCards({ rows, onOpen }: Readonly<{ rows: CatalogueRowData[]; onOpen: (row: CatalogueRowData) => void }>) {
+  const { t } = useLanguage();
+  return (
+    <ul className="divide-y divide-gray-100">
+      {rows.map((row) => {
+        const archived = row.status !== 'active';
+        return (
+          <li key={row.id} className={cn('relative space-y-2 p-4', archived && 'opacity-60')}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-gray-900">{row.display}</span>
+              <CatalogueStatus archived={archived} />
+            </div>
+            <p className="text-sm text-gray-600">
+              {t('fuelPolicyLabel')}:{' '}
+              <span className={row.dailyFuelCheckRequired ? 'font-medium text-blue-700' : 'text-gray-500'}>
+                {t(row.dailyFuelCheckRequired ? 'fuelPolicyRequired' : 'fuelPolicyNotApplicable')}
+              </span>
+            </p>
+            {row.note && <p className="text-sm text-gray-500">{row.note}</p>}
+            <OpenVehicleButton row={row} onOpen={() => onOpen(row)} className="h-11 w-full justify-center" />
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
