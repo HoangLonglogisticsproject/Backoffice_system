@@ -74,8 +74,8 @@ export function DailyFuelDialog({
     try {
       await onSubmit(input);
       onDeclared();
-    } catch (failure) {
-      setError(failure);
+    } catch (error_) {
+      setError(error_);
     }
   };
 
