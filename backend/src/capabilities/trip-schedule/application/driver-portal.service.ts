@@ -7,6 +7,7 @@ import type {
   DriverTripDetail,
 } from '../domain/driver-read-model';
 import { accountabilityOf, driverExpensesOpen } from '../domain/trip-execution';
+import { fuelDeclaredOnVehicle } from '../domain/vehicle-fuel';
 import { DriverTripReadModelRepository } from '../persistence/driver-read-model.repository';
 import { TripCostRepository } from '../persistence/trip-cost.repository';
 import {
@@ -112,8 +113,8 @@ export class DriverPortalService {
       this.requests.listByAssignment(assignmentId),
     ]);
 
-    // The scope is how `expensesOpen` is decided, never something to send.
-    const { expenseScope, ...readable } = trip;
+    // The scope and the fuel policy decide two answers below; neither is sent.
+    const { expenseScope, dailyFuelCheckRequired, ...readable } = trip;
     return {
       ...readable,
       events,
@@ -123,6 +124,7 @@ export class DriverPortalService {
       // needs the one they have to act on.
       completion: requests[0] ?? null,
       expensesOpen: driverExpensesOpen(expenseScope, trip.vehicle !== null, requests),
+      fuelOnVehicle: fuelDeclaredOnVehicle(expenseScope, { dailyFuelCheckRequired }),
     };
   }
 }

@@ -23,6 +23,7 @@ import { TripEntryCrew } from './application/trip-entry-crew';
 import { LegacyConfirmedNormalization } from './application/legacy-confirmed-normalization';
 import { TripScheduleService } from './application/trip-schedule.service';
 import { VehicleCostService } from './application/vehicle-cost.service';
+import { VehicleFuelService } from './application/vehicle-fuel.service';
 import {
   TripCustomerRepository,
   TripLocationRepository,
@@ -81,6 +82,7 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     LegacyConfirmedNormalization,
     DriverPortalService,
     OperationalBoardService,
+    VehicleFuelService,
     VehicleCostService,
     ActiveAssignmentGuard,
     ExpenseAssignmentGuard,

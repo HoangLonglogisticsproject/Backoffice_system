@@ -18,6 +18,7 @@ import { DriverPortalService } from '../application/driver-portal.service';
 import { TripCompletionService } from '../application/trip-completion.service';
 import { TripCostService } from '../application/trip-cost.service';
 import { TripExecutionService } from '../application/trip-execution.service';
+import { VehicleFuelService } from '../application/vehicle-fuel.service';
 import { DriverTripReadModelRepository } from '../persistence/driver-read-model.repository';
 import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
@@ -105,6 +106,7 @@ describe('driver-portal HTTP security', () => {
   let execution: { recordEvent: jest.Mock };
   let money: { declareCost: jest.Mock; editCost: jest.Mock };
   let completion: { submit: jest.Mock };
+  let fuel: { declare: jest.Mock };
   let assignments: { findActiveById: jest.Mock; findById: jest.Mock };
   let trips: { findById: jest.Mock };
   let readModel: { findForDriver: jest.Mock };
@@ -134,6 +136,21 @@ describe('driver-portal HTTP security', () => {
       editCost: jest.fn().mockResolvedValue({ id: COST }),
     };
     completion = { submit: jest.fn().mockResolvedValue({ id: 'request-1', attemptNo: 1 }) };
+    // The check that stands — possibly another driver's, which is why the
+    // route tells only its day and outcome back.
+    fuel = {
+      declare: jest.fn().mockResolvedValue({
+        vehicleId: 'vehicle-of-b',
+        businessDate: '2026-10-04',
+        outcome: 'fuel_added',
+        vehicleCostId: 'cost-of-b',
+        sourceTripId: 'trip-of-b',
+        sourceAssignmentId: ASSIGNMENT_B,
+        clientRequestId: 'b-key',
+        createdBy: DRIVER_B,
+        createdAt: new Date(),
+      }),
+    };
 
     // The real assignment table, faked at its edge: A and B each hold an ACTIVE
     // turn on the same trip; a turn REPLACED before the end is ended with
@@ -199,6 +216,7 @@ describe('driver-portal HTTP security', () => {
         { provide: TripExecutionService, useValue: execution },
         { provide: TripCostService, useValue: money },
         { provide: TripCompletionService, useValue: completion },
+        { provide: VehicleFuelService, useValue: fuel },
         { provide: DriverAssignmentRepository, useValue: assignments },
         { provide: TripScheduleRepository, useValue: trips },
         { provide: DriverTripReadModelRepository, useValue: readModel },
@@ -249,6 +267,7 @@ describe('driver-portal HTTP security', () => {
       ['post', `/driver/assignments/${assignment}/expenses`],
       ['patch', `/driver/assignments/${assignment}/expenses/${COST}`],
       ['post', `/driver/assignments/${assignment}/completion-requests`],
+      ['post', `/driver/assignments/${assignment}/fuel-checks`],
     ];
 
   /** A body valid enough for every route, so a 422 never masks a 403. */
@@ -258,6 +277,8 @@ describe('driver-portal HTTP security', () => {
     category: 'fuel',
     amount: '1500000.00',
     expenseDeclaration: 'expenses',
+    outcome: 'no_fuel',
+    clientRequestId: 'fuel-1',
   };
 
   const noWriteHappened = (): void => {
@@ -266,6 +287,7 @@ describe('driver-portal HTTP security', () => {
       ...Object.values(execution),
       ...Object.values(money),
       ...Object.values(completion),
+      ...Object.values(fuel),
     ]) {
       expect(mock).not.toHaveBeenCalled();
     }
@@ -409,7 +431,9 @@ describe('driver-portal HTTP security', () => {
     it.each<Route>([
       ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/execution-events`],
       ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/completion-requests`],
-    ])('★ refuses %s %s — reporting and completion stay active-only', async (method, path) => {
+      // A recorded run never starts, so it owes no daily fuel check.
+      ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/fuel-checks`],
+    ])('★ refuses %s %s — reporting, completion and the fuel check stay active-only', async (method, path) => {
       const response = await authed(method, path).send(anyBody);
 
       expect(response.status).toBe(403);
@@ -628,11 +652,72 @@ describe('driver-portal HTTP security', () => {
 
       expect(completion.submit).toHaveBeenCalledWith(ASSIGNMENT_A, DRIVER_A, 'none');
     });
+
+    it('answers the lorry’s fuel check against the session user and the route’s assignment', async () => {
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-checks`)
+        .send({ outcome: 'fuel_added', amount: '900000.00', liters: '40.5', clientRequestId: 'fuel-1' })
+        .expect(201);
+
+      expect(fuel.declare).toHaveBeenCalledWith({
+        assignmentId: ASSIGNMENT_A,
+        declaration: { outcome: 'fuel_added', amount: '900000.00', liters: '40.5', odometerKm: null, note: null },
+        clientRequestId: 'fuel-1',
+        declaredBy: DRIVER_A,
+      });
+    });
+
+    it('refuses a fuel check without its key — a double tap must not become two fills', async () => {
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-checks`)
+        .send({ outcome: 'no_fuel' })
+        .expect(422);
+      expect(fuel.declare).not.toHaveBeenCalled();
+    });
   });
 
   // ---------------------------------------------------------- body vs route --
 
   describe('★ the body cannot widen what the route scoped', () => {
+    it('★ takes no lorry and no day from the body of a fuel check — and tells back only the day and outcome', async () => {
+      // The lorry is the assignment's and the day is the server's. A body that
+      // named either would let a driver declare for a lorry they are not
+      // driving, or for a day of their choosing.
+      const response = await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-checks`)
+        .send({
+          outcome: 'no_fuel',
+          clientRequestId: 'fuel-1',
+          vehicleId: 'someone-elses-lorry',
+          businessDate: '2020-01-01',
+          assignmentId: ASSIGNMENT_B,
+          tripId: TRIP,
+          sourceTripId: TRIP,
+          sourceAssignmentId: ASSIGNMENT_B,
+          createdBy: DRIVER_B,
+          driverUserId: DRIVER_B,
+          vehicleCostId: COST,
+        })
+        .expect(201);
+
+      expect(fuel.declare).toHaveBeenCalledWith({
+        assignmentId: ASSIGNMENT_A,
+        declaration: { outcome: 'no_fuel' },
+        clientRequestId: 'fuel-1',
+        declaredBy: DRIVER_A,
+      });
+      // The standing check here is driver B's: none of its ids — nor its key — reach A.
+      expect(response.body).toEqual({ businessDate: '2026-10-04', outcome: 'fuel_added' });
+    });
+
+    it('★ driver A holding driver B’s assignment id AND key reaches no service — 403 before any retry', async () => {
+      // A retry is looked up by key; if that lookup ran for a caller who does
+      // not hold the turn, knowing two ids would read somebody else's check.
+      const response = await authed('post', `/driver/assignments/${ASSIGNMENT_B}/fuel-checks`)
+        .send({ outcome: 'no_fuel', clientRequestId: 'b-key' })
+        .expect(403);
+
+      expect(response.body.error.code).toBe('FORBIDDEN');
+      expect(fuel.declare).not.toHaveBeenCalled();
+    });
+
     it('ignores an assignmentId and a tripId in the body of an execution event', async () => {
       // The guard checked the ROUTE. If the handler read the body instead, a
       // driver holding one turn could act on any other and the guard would

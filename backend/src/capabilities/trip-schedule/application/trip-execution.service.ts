@@ -16,7 +16,6 @@ import {
   type DriverTripHistoryRow,
   type ExecutionEvent,
   type ExecutionEventType,
-  type VehicleOwnership,
 } from '../domain/trip-execution';
 import {
   checkMilestoneLocation,
@@ -25,6 +24,8 @@ import {
   type LocationRejection,
 } from '../domain/trip-location';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
+import { VehicleDailyFuelCheckRepository } from '../persistence/vehicle-fuel-check.repository';
+import { requireDailyFuelCheck } from './vehicle-fuel-gate';
 import { requireDispatchableVehicle, requireEligibleDriver } from './dispatch-eligibility';
 import {
   CompletionRequestRepository,
@@ -70,6 +71,7 @@ export class TripExecutionService {
     private readonly notifications: NotificationService,
     private readonly requests: CompletionRequestRepository,
     private readonly history: TripStatusHistoryRepository,
+    private readonly fuelChecks: VehicleDailyFuelCheckRepository,
   ) {}
 
   // ------------------------------------------------------------ assignment ----
@@ -356,7 +358,10 @@ export class TripExecutionService {
     location?: LocationEvidence | null;
     clientEventId: string;
     recordedBy: string;
-  }): Promise<ExecutionEvent> {
+  },
+  /** The server's clock at the request — what the fuel gate's day is read from. Tests pin it. */
+  serverNow = new Date(),
+  ): Promise<ExecutionEvent> {
     const clientEventId = input.clientEventId.trim();
     if (clientEventId === '') {
       throw new ValidationError('An event needs a client event id, so a retry cannot duplicate it.');
@@ -490,6 +495,20 @@ export class TripExecutionService {
         );
       }
 
+      // ★ THE LORRY'S DAILY FUEL CHECK HOLDS THE TURN'S START (0034) — its first
+      // live milestone, and only that: a turn already on the road is not asked
+      // again past midnight. Refused before anything is written, so the same
+      // milestone retried after the declaration is simply new. Its day is the
+      // SERVER's (`serverNow`), never `actualAt`; the lorry is held FOR SHARE so
+      // its policy cannot change before this commits (trip → assignment → lorry).
+      const actualAt = input.actualAt ?? serverNow;
+      const vehicle = await this.vehicles.findForShare(assignment.vehicleId, tx);
+      await requireDailyFuelCheck(
+        this.fuelChecks,
+        { vehicle, turnStarted: reported.length > 0, serverNow },
+        tx,
+      );
+
       // ★ THE GEOFENCE IS DECIDED HERE, UNDER THE LOCK, FROM THE TRIP'S OWN
       // COORDINATES. The browser sent a reading; it did not send a verdict, and
       // could not have — see the DTO. What the trip says its pickup or delivery
@@ -533,13 +552,15 @@ export class TripExecutionService {
           type: input.type,
           // ★ THE ASSIGNMENT'S LORRY, never `trip.vehicleId` (legacy, ADR-0004).
           vehicleId: assignment.vehicleId,
-          vehicleOwnership: await this.ownershipOf(assignment.vehicleId, tx),
+          // The lorry's ownership at the moment of writing, `null` while it is
+          // unclassified — never read as `company` (0013).
+          vehicleOwnership: vehicle?.ownership ?? null,
           // Pickup events are late against the pickup time and delivery events
           // against the delivery time. Comparing either with the other produces
           // a delay wrong by the length of the journey.
           scheduledAt: isPickupEvent(input.type) ? trip.pickupAt : trip.deliveryAt,
           // ★ THE SERVER'S CLOCK, unless a caller inside the process pinned one.
-          actualAt: input.actualAt ?? new Date(),
+          actualAt,
           deviceReportedAt: input.deviceReportedAt ?? null,
           location,
           geofencePassed,
@@ -630,19 +651,6 @@ export class TripExecutionService {
     if (!trip) throw new NotFoundError('Trip not found.');
     if (trip.status === 'finished') throw new ConflictError('That trip is closed.');
     return trip;
-  }
-
-  /**
-   * The lorry's ownership at the moment of writing.
-   *
-   * ★ RETURNS `null` FREELY, AND NOTHING DOWNSTREAM SUBSTITUTES A VALUE. A
-   * vehicle may not have been classified yet — 0013 leaves every existing
-   * lorry unclassified on purpose. That is an honest absence, and turning it
-   * into `company` would be the system asserting something nobody said.
-   */
-  private async ownershipOf(vehicleId: string, tx: DatabaseQuery): Promise<VehicleOwnership | null> {
-    const vehicle = await this.vehicles.findById(vehicleId, tx);
-    return vehicle?.ownership ?? null;
   }
 
   private async requireTrip(tripId: string): Promise<void> {

@@ -588,7 +588,10 @@ describe('execution events', () => {
       void: jest.fn(),
       ...over,
     };
-    const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
+    const vehicles = {
+      findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }),
+      findForShare: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }),
+    };
     const users = drivers();
     const notifications = told();
     const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
@@ -603,6 +606,7 @@ describe('execution events', () => {
       notifications as never,
       requests as never,
       history as never,
+      { exists: jest.fn().mockResolvedValue(false) } as never,
     );
 
     return { service, trips, assignments, events, vehicles, users, notifications, requests, history };
@@ -656,14 +660,15 @@ describe('execution events', () => {
       expect.objectContaining({ vehicleId: VEHICLE, vehicleOwnership: 'company' }),
       TX,
     );
-    expect(vehicles.findById).toHaveBeenCalledWith(VEHICLE, TX);
+    // Read under the turn's locks, FOR SHARE — the same row the fuel gate reads.
+    expect(vehicles.findForShare).toHaveBeenCalledWith(VEHICLE, TX);
   });
 
   it('records an unclassified lorry as null, never as company', async () => {
     // ★ 0013 leaves every existing lorry unclassified on purpose. Substituting
     // a value here would be the system asserting a fact nobody stated.
     const { service, events, vehicles } = build();
-    vehicles.findById.mockResolvedValue({ id: VEHICLE, ownership: null });
+    vehicles.findForShare.mockResolvedValue({ id: VEHICLE, ownership: null });
 
     await service.recordEvent(arriving);
 
@@ -1044,7 +1049,10 @@ describe('dispatch assignment', () => {
       // Not started unless a case says otherwise.
       hasLiveEvents: jest.fn().mockResolvedValue(false),
     };
-    const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }) };
+    const vehicles = {
+      findById: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }),
+      findForShare: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }),
+    };
     const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
     const service = new TripExecutionService(
       database(),
@@ -1056,6 +1064,7 @@ describe('dispatch assignment', () => {
       notifications as never,
       requests as never,
       { record: jest.fn() } as never,
+      { exists: jest.fn().mockResolvedValue(false) } as never,
     );
     return { service, trips, assignments, events, vehicles, users, notifications, requests };
   };
@@ -1207,7 +1216,10 @@ describe('a driver’s declared expense', () => {
       findById: jest.fn().mockResolvedValue(activeAssignment),
       lockById: jest.fn().mockResolvedValue(activeAssignment),
     };
-    const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
+    const vehicles = {
+      findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }),
+      findForShare: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }),
+    };
     // No completion request on the turn yet — the ordinary, declarable state.
     const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
 
@@ -1670,7 +1682,10 @@ describe('★ assignment eligibility and what the driver is told', () => {
       end: jest.fn().mockResolvedValue({ ...activeAssignment, state: 'ended' }),
     };
     const events = { findByClientEventId: jest.fn(), hasLiveEvents: jest.fn().mockResolvedValue(false) };
-    const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }) };
+    const vehicles = {
+      findById: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }),
+      findForShare: jest.fn().mockResolvedValue({ id: VEHICLE, status: 'active' }),
+    };
     const requests = { listByAssignment: jest.fn().mockResolvedValue([]) };
     const service = new TripExecutionService(
       database(),
@@ -1682,6 +1697,7 @@ describe('★ assignment eligibility and what the driver is told', () => {
       notifications as never,
       requests as never,
       { record: jest.fn() } as never,
+      { exists: jest.fn().mockResolvedValue(false) } as never,
     );
     return { service, trips, assignments, users, notifications };
   };
@@ -1809,7 +1825,10 @@ describe('★ confirming a delivery is geofenced against the DELIVERY point', ()
         { type: 'ARRIVED_DELIVERY' },
       ]),
     };
-    const vehicles = { findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }) };
+    const vehicles = {
+      findById: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }),
+      findForShare: jest.fn().mockResolvedValue({ id: VEHICLE, ownership: 'company' }),
+    };
     const service = new TripExecutionService(
       database(),
       trips as never,
@@ -1820,6 +1839,7 @@ describe('★ confirming a delivery is geofenced against the DELIVERY point', ()
       told() as never,
       { listByAssignment: jest.fn().mockResolvedValue([]) } as never,
       { record: jest.fn() } as never,
+      { exists: jest.fn().mockResolvedValue(false) } as never,
     );
     return { service, events };
   };

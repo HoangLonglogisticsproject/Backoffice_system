@@ -25,9 +25,9 @@ import {
   type DriverAssignment,
   type DriverExpenseScope,
   type TripCostEdit,
-  type VehicleOwnership,
 } from '../domain/trip-execution';
-import type { TripSchedule } from '../domain/trip-schedule';
+import type { TripSchedule, TripVehicle } from '../domain/trip-schedule';
+import { FUEL_DECLARED_ON_VEHICLE, fuelDeclaredOnVehicle } from '../domain/vehicle-fuel';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
 import {
   CompletionRequestRepository,
@@ -210,7 +210,7 @@ export class TripCostService {
 
       const assignment = await this.assignments.lockById(input.assignmentId, tx);
       if (!assignment) throw new NotFoundError('Assignment not found.');
-      requireExpenseScope(assignment, trip);
+      const scope = requireExpenseScope(assignment, trip);
 
       // ★ NO LORRY, NO EXPENSE — contract §4.1a, the operational ordering. An
       // assignment written since 0027 always names one; this is the pre-0027
@@ -252,7 +252,11 @@ export class TripCostService {
       }
 
       // ★ THE ASSIGNMENT'S LORRY, never `trip.vehicleId` (legacy, ADR-0004).
-      const vehicleOwnership = await this.ownershipOf(assignment.vehicleId, tx);
+      // `null` ownership stays `null`: 0013 leaves lorries unclassified, and
+      // reading that as `company` would let a hired lorry's fuel through below.
+      const vehicle = await this.vehicles.findById(assignment.vehicleId, tx);
+      const vehicleOwnership = vehicle?.ownership ?? null;
+      refuseFuelDeclaredOnVehicle(input.category, scope, vehicle);
 
       // ★ SAID HERE AS WELL AS IN THE DATABASE, AND FOR A DIFFERENT AUDIENCE.
       // `trip_costs_outsourced_category` refuses the same row, but a CHECK
@@ -320,7 +324,7 @@ export class TripCostService {
       if (!trip) throw new NotFoundError('Trip not found.');
       const assignment = await this.assignments.lockById(assignmentId, tx);
       if (!assignment) throw new NotFoundError('Assignment not found.');
-      requireExpenseScope(assignment, trip);
+      const scope = requireExpenseScope(assignment, trip);
 
       const current = await this.costs.lockById(costId, tx);
       // Belonging to the assignment in the route is checked, not assumed: a
@@ -344,6 +348,12 @@ export class TripCostService {
       }
       if (current.createdBy !== editedBy) {
         throw new ForbiddenError('A driver may only correct the figures they declared.');
+      }
+
+      // Moving a line TO fuel is a new fuel line in all but name. A legacy fuel
+      // line stays correctable — rewriting history is not this rule's job.
+      if (patch.category === 'fuel' && current.category !== 'fuel' && assignment.vehicleId) {
+        refuseFuelDeclaredOnVehicle('fuel', scope, await this.vehicles.findById(assignment.vehicleId, tx));
       }
 
       const values = {
@@ -498,23 +508,6 @@ export class TripCostService {
     }
     return already;
   }
-
-  /**
-   * The lorry's ownership at the moment of writing.
-   *
-   * ★ `null` IS RETURNED AS `null`. 0013 leaves every existing lorry
-   * unclassified on purpose, and reading that absence as `company` would let a
-   * hired lorry's fuel through the rule above by assuming a fact nobody stated.
-   * An unclassified lorry simply carries no snapshot, and the check does not
-   * fire — which is the honest behaviour, and visible in the data as a null.
-   */
-  private async ownershipOf(
-    vehicleId: string,
-    tx: DatabaseQuery,
-  ): Promise<VehicleOwnership | null> {
-    const vehicle = await this.vehicles.findById(vehicleId, tx);
-    return vehicle?.ownership ?? null;
-  }
 }
 
 /**
@@ -530,6 +523,23 @@ const requireExpenseScope = (assignment: DriverAssignment, trip: TripSchedule): 
   const scope = driverExpenseScope(assignment, { status: trip.status, archived: false });
   if (scope) return scope;
   throw new ConflictError('That trip is closed.');
+};
+
+/**
+ * ★ NO `fuel` TRIP LINE WHERE THE LORRY DECLARES ITS FUEL DAILY (0034) — on an
+ * operational turn the same fill would sit on the lorry and on the trip, and be
+ * counted twice. The other headings are untouched, and so is a run recorded
+ * after the fact (`fuelDeclaredOnVehicle` says which).
+ */
+const refuseFuelDeclaredOnVehicle = (
+  category: TripCostCategory,
+  scope: DriverExpenseScope,
+  vehicle: TripVehicle | null,
+): void => {
+  if (category !== 'fuel' || !fuelDeclaredOnVehicle(scope, vehicle)) return;
+  throw new ValidationError('This lorry’s fuel is declared on the lorry each day, not as a trip expense.', {
+    category: FUEL_DECLARED_ON_VEHICLE,
+  });
 };
 
 /**

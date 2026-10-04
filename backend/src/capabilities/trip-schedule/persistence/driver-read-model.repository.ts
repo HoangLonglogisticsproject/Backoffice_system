@@ -257,16 +257,25 @@ export class DriverTripReadModelRepository {
     assignmentId: string,
     driverUserId: string,
     executor: DatabaseQuery = this.db,
-  ): Promise<(DriverTrip & { closed: boolean; expenseScope: DriverExpenseScope | null }) | null> {
+  ): Promise<
+    | (DriverTrip & {
+        closed: boolean;
+        expenseScope: DriverExpenseScope | null;
+        dailyFuelCheckRequired: boolean;
+      })
+    | null
+  > {
     const rows = await executor.query<
       DriverTripRow & {
         closed: boolean;
         trip_status: TripStatus;
         turn_state: 'active' | 'ended';
         recorded_turn: boolean;
+        daily_fuel_check_required: boolean;
       }
     >(
       `SELECT ${DRIVER_TRIP_COLUMNS},
+              v.daily_fuel_check_required,
               t.status = 'finished' AS closed,
               t.status AS trip_status,
               a.state AS turn_state,
@@ -289,6 +298,9 @@ export class DriverTripReadModelRepository {
         { state: row.turn_state, endReason: row.recorded_turn ? HISTORICAL_ENTRY_REASON : null },
         { status: row.trip_status, archived: false },
       ),
+      // The lorry's fuel policy, so the service can say whether `fuel` is a
+      // trip expense here (0034). Like the scope, a decision input — not sent.
+      dailyFuelCheckRequired: row.daily_fuel_check_required,
     };
   }
 }

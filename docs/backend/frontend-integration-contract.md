@@ -1411,3 +1411,44 @@ nằm ở `GET /driver/history`, mở chi tiết `closed: true` **và** `expense
   xuất — tổng tính trực tiếp, không snapshot.
 * Chuyến `finished` bình thường (duyệt hoàn tất / break-glass) vẫn **chỉ xem**:
   `expensesOpen: false`, khai → 409.
+
+## 26. Nhiên liệu đầu ngày theo xe (2026-10-04)
+
+Nhiên liệu thuộc **xe**, không thuộc chuyến đầu tiên trong ngày (migration `0034`).
+
+* **Policy trên xe:** `TripVehicle.dailyFuelCheckRequired: boolean` ("Khai nhiên liệu
+  đầu ngày" trong Danh mục xe & khách). `POST /trip-vehicles` / `PATCH /trip-vehicles/:id`
+  nhận `dailyFuelCheckRequired`; mặc định `false`. Xe `ownership = 'outsourced'` không bật
+  được → 422 `details.dailyFuelCheckRequired = OUTSOURCED_VEHICLE`. Không đọc từ ghi chú.
+* **Gate ở mốc đầu tiên của lượt.** `POST /driver/assignments/:id/execution-events` khi lượt
+  **chưa có mốc nào** và xe có policy mà hôm nay (Asia/Ho_Chi_Minh, đồng hồ server) xe chưa
+  khai → **422 `details.dailyFuelCheck = FUEL_DECLARATION_REQUIRED`**, không ghi gì, chuyến
+  vẫn `pending`. Lượt đã bắt đầu (kể cả chạy qua nửa đêm) không bị hỏi lại.
+* **Khai:** `POST /driver/assignments/:id/fuel-checks` (guard active-only):
+  `{ outcome: 'fuel_added', amount, liters?, odometerKm?, note?, clientRequestId }` hoặc
+  `{ outcome: 'no_fuel', clientRequestId }`. `clientRequestId` **bắt buộc**. Body **không** có
+  xe hay ngày — server lấy xe từ assignment, ngày từ đồng hồ của mình; gửi kèm cũng bị bỏ.
+  Trả `{ businessDate, outcome }` của check đang đứng cho xe hôm nay (có thể của tài xế khác
+  đã khai trước — không lộ id của họ). Retry cùng key → cùng câu trả lời.
+* **Sau khi khai:** frontend gửi lại **đúng** mốc bị giữ với **cùng** `clientEventId`.
+* **Thứ tự xác thực:** Auth → CSRF → DriverOnly → `ActiveAssignmentGuard` (lượt active, của
+  chính tài xế) → service kiểm tra lại chủ lượt **trước** khi tra retry theo key. Biết
+  `assignmentId` + `clientRequestId` của người khác → 403, không đọc được gì.
+* **Một key = một khai báo.** Cùng key, cùng lượt → trả lại đúng check nó đã tạo (kể cả retry
+  trễ qua nửa đêm). Cùng key dùng cho lượt khác (cùng ngày hay ngày khác) → **409 CONFLICT**,
+  không bao giờ trả check của lượt kia, không bao giờ lỗi DB 500.
+* **Một đồng hồ:** ngày nghĩa vụ = ngày Asia/Ho_Chi_Minh theo **đồng hồ server** lúc request —
+  cho cả khai báo lẫn gate. Thời điểm của mốc không quyết định ngày.
+* **Provenance:** xe của khoản dầu = xe của assignment, nguồn = chính assignment đó, người khai
+  = session — **invariant của service** (đọc từ assignment đã khoá), không phải ràng buộc FK.
+  Policy của xe được đọc `FOR SHARE` (trip → assignment → xe → check) nên không đổi giữa chừng.
+* **Một check / xe / ngày** (PK `(vehicle_id, business_date)`); số lần đổ dầu không giới hạn.
+  `no_fuel` không tạo chi phí 0đ. Huỷ một khoản dầu không xoá check.
+* **Chống tính hai lần:** chi tiết tài xế có `fuelOnVehicle: boolean` (server trả lời) — lượt
+  operational trên xe có policy: không khai `fuel` vào chi phí chuyến (UI ẩn; server → 422
+  `details.category = FUEL_DECLARED_ON_VEHICLE`). Chuyến nhập cũ giữ nguyên.
+* **Dầu theo xe không vào tổng chuyến:** `costSummary`, "Chi phí chuyến" của Lịch sử, cột chi phí
+  trong Excel và `cost-summary` không đọc `vehicle_costs`.
+* **Đọc (backoffice, `cost.read`):** `GET /trip-vehicles/:id/costs?from&to&page&limit&category`
+  → envelope trang (`items, page, limit, total, totalPages`) + `totalAmount` (chuỗi thập phân,
+  chỉ dòng còn hiệu lực). Khoảng ngày như board (mặc định tháng hiện tại, tối đa 366 ngày).
