@@ -460,7 +460,32 @@ describeIntegration('Vehicle daily fuel against real PostgreSQL', () => {
       const page = await ledger.page(vehicle, { from: today(), to: today(), page: 1, limit: 20, category: 'fuel' });
       expect(page).toMatchObject({ total: 1, totalPages: 1, totalAmount: '1250000.00' });
       expect(page.items[0]).toMatchObject({ amount: '1250000.00', liters: '50.25', odometerKm: 182345, createdByUser: { displayName: 'Tài Xế A' } });
+      // The trip it was declared on rides along as context — still in no trip's total.
+      expect(page.items[0]!.sourceTrip).toEqual({ id: trip, scheduledOn: '2026-10-04', customerName: null });
       expect(await ledger.page(vehicle, { from: '2026-01-01', to: '2026-01-31', page: 1, limit: 20 })).toMatchObject({ items: [], total: 0, totalAmount: '0.00' });
+    });
+
+    it('★ the ledger holds 0..N costs a lorry a day, and a cost with no trip has no trip — provenance is optional', async () => {
+      const vehicle = await newVehicle(true);
+      await declare((await turn(vehicle)).assignment);
+      // No writer adds a second same-day cost yet; the ledger itself must take it.
+      for (const amount of ['300000.00', '45000.00']) {
+        await sql(
+          `INSERT INTO vehicle_costs (vehicle_id, business_date, category, amount, source, created_by)
+           VALUES ($1, $2::date, 'fuel', $3::numeric, 'backoffice', $4)`,
+          [vehicle, today(), amount, operator],
+        );
+      }
+
+      const page = await ledger.page(vehicle, { from: today(), to: today(), page: 1, limit: 20 });
+
+      expect(page).toMatchObject({ total: 3, totalAmount: '1595000.00' });
+      const tripless = page.items.filter((cost) => cost.source === 'backoffice');
+      expect(tripless).toHaveLength(2);
+      for (const cost of tripless) {
+        expect(cost).toMatchObject({ sourceTripId: null, sourceTrip: null, sourceAssignmentId: null });
+      }
+      expect(page.items.find((cost) => cost.source === 'driver_portal')?.sourceTrip).not.toBeNull();
     });
   });
 
