@@ -39,6 +39,7 @@ import { OperationalBoardRepository } from '../../src/capabilities/trip-schedule
 import { TripBoardCostRepository } from '../../src/capabilities/trip-schedule/persistence/trip-board-cost.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
+import { VehicleDailyFuelCheckRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-fuel-check.repository';
 import { NotificationService } from '../../src/capabilities/notification/application/notification.service';
 import { NotificationStream } from '../../src/capabilities/notification/application/notification-stream';
 import { NotificationRepository } from '../../src/capabilities/notification/persistence/notification.repository';
@@ -177,6 +178,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       notifications,
       requests,
       history,
+      new VehicleDailyFuelCheckRepository(database),
     );
     money = new TripCostService(
       database,

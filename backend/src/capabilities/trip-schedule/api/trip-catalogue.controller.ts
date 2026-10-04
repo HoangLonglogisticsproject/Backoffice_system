@@ -55,8 +55,19 @@ const plate = z.string().trim().min(1).max(50);
 const customerName = z.string().trim().min(1).max(200);
 const note = z.string().trim().max(2000).nullable();
 
-const createVehicleSchema = z.object({ plate, note: note.optional() });
-const updateVehicleSchema = z.object({ plate: plate.optional(), note: note.optional() });
+/** "Khai nhiên liệu đầu ngày": a real boolean, never the note (0034). */
+const dailyFuelCheckRequired = z.boolean();
+
+const createVehicleSchema = z.object({
+  plate,
+  note: note.optional(),
+  dailyFuelCheckRequired: dailyFuelCheckRequired.optional(),
+});
+const updateVehicleSchema = z.object({
+  plate: plate.optional(),
+  note: note.optional(),
+  dailyFuelCheckRequired: dailyFuelCheckRequired.optional(),
+});
 
 const createCustomerSchema = z.object({ name: customerName, note: note.optional() });
 const updateCustomerSchema = z.object({ name: customerName.optional(), note: note.optional() });

@@ -12,6 +12,7 @@ import { DriverPortalService } from '../application/driver-portal.service';
 import { TripCompletionService } from '../application/trip-completion.service';
 import { TripCostService } from '../application/trip-cost.service';
 import { TripExecutionService } from '../application/trip-execution.service';
+import { VehicleFuelService } from '../application/vehicle-fuel.service';
 import type {
   DriverHistoryPage,
   DriverTrip,
@@ -25,6 +26,12 @@ import {
   type ExecutionEvent,
 } from '../domain/trip-execution';
 import { isRecordableAmount, TRIP_COST_CATEGORIES } from '../domain/trip-cost';
+import {
+  forDriver,
+  isRecordableLiters,
+  type DailyFuelDeclaration,
+  type DriverDailyFuelCheck,
+} from '../domain/vehicle-fuel';
 import { ActiveAssignmentGuard } from './active-assignment.guard';
 import { ExpenseAssignmentGuard } from './expense-assignment.guard';
 import { ReadableAssignmentGuard } from './readable-assignment.guard';
@@ -126,6 +133,34 @@ const declareExpenseSchema = z.object({
 });
 
 /**
+ * The lorry's daily fuel check (0034).
+ *
+ * ★ NO `vehicleId` AND NO DATE — the lorry is the assignment's and the day is
+ * the server's; a body that sent either has it stripped here. `no_fuel` takes
+ * nothing but its key: there is no 0-đồng cost to write. The key is required,
+ * because the handset retries this on a weak signal and a double tap must not
+ * become two fills.
+ */
+const clientRequestId = z.string().trim().min(1).max(200);
+
+const declareFuelCheckSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('fuel_added'),
+    amount,
+    liters: z
+      .string()
+      .trim()
+      .refine(isRecordableLiters, 'Expected a positive number of liters, e.g. "45.50".')
+      .nullable()
+      .optional(),
+    odometerKm: z.number().int().min(0).max(2_147_483_647).nullable().optional(),
+    note,
+    clientRequestId,
+  }),
+  z.object({ outcome: z.literal('no_fuel'), clientRequestId }),
+]);
+
+/**
  * The patch.
  *
  * `.partial()` of the fields a driver may correct — and `category`, `amount` and
@@ -180,6 +215,19 @@ type RecordEventBody = z.infer<typeof recordEventSchema>;
 type DeclareExpenseBody = z.infer<typeof declareExpenseSchema>;
 type EditExpenseBody = z.infer<typeof editExpenseSchema>;
 type SubmitCompletionBody = z.infer<typeof submitCompletionSchema>;
+type DeclareFuelCheckBody = z.infer<typeof declareFuelCheckSchema>;
+
+/** The body's declaration, with the optional readings made explicit. */
+const declarationOf = (body: DeclareFuelCheckBody): DailyFuelDeclaration =>
+  body.outcome === 'no_fuel'
+    ? { outcome: 'no_fuel' }
+    : {
+        outcome: 'fuel_added',
+        amount: body.amount,
+        liters: body.liters ?? null,
+        odometerKm: body.odometerKm ?? null,
+        note: body.note || null,
+      };
 
 @Controller('driver')
 export class DriverPortalController {
@@ -188,6 +236,7 @@ export class DriverPortalController {
     private readonly execution: TripExecutionService,
     private readonly money: TripCostService,
     private readonly completion: TripCompletionService,
+    private readonly fuel: VehicleFuelService,
   ) {}
 
   /**
@@ -329,6 +378,32 @@ export class DriverPortalController {
     @CurrentUser() actor: SessionUser,
   ): Promise<TripCost> {
     return this.money.editCost(assignmentId, costId, body, actor.id);
+  }
+
+  // ------------------------------------------------------------ fuel check ----
+
+  /**
+   * Answers the lorry's daily fuel check — "Khai báo nhiên liệu đầu ngày".
+   *
+   * ★ `ActiveAssignmentGuard`: only a live turn starts, so only a live turn
+   * owes the check. A turn recorded after the run never starts and never asks.
+   * The answer is the check that stands for the lorry today — possibly another
+   * driver's — told as the day and the outcome only (`forDriver`).
+   */
+  @Post('assignments/:assignmentId/fuel-checks')
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
+  async declareFuelCheck(
+    @Param('assignmentId', UuidParam) assignmentId: string,
+    @Body(new ZodValidationPipe(declareFuelCheckSchema)) body: DeclareFuelCheckBody,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<DriverDailyFuelCheck> {
+    const check = await this.fuel.declare({
+      assignmentId,
+      declaration: declarationOf(body),
+      clientRequestId: body.clientRequestId,
+      declaredBy: actor.id,
+    });
+    return forDriver(check);
   }
 
   // ------------------------------------------------------------ completion ----

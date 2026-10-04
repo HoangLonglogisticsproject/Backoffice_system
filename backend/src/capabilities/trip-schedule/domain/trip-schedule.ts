@@ -325,6 +325,13 @@ export interface TripVehicle {
   /** The carrier a hired lorry belongs to. Set exactly when `ownership` is `outsourced`. */
   carrierId: string | null;
 
+  /**
+   * ★ ITS DRIVER DECLARES ITS FUEL ONCE EACH BUSINESS DAY, ON THE LORRY (0034)
+   * — before the day's first milestone, and never as a trip expense. Off by
+   * default, set by an administrator, never on for a hired lorry.
+   */
+  dailyFuelCheckRequired: boolean;
+
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;

@@ -508,7 +508,6 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
         'listCostEdits',
         'listCosts',
         'listHires',
-        'ownershipOf',
         'requireTrip',
         'summary',
         'voidCost',

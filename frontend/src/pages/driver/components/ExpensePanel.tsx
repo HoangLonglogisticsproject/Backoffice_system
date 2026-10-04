@@ -153,7 +153,7 @@ export function ExpensePanel({
   // `null` when a line is not a plain decimal — see `sumMoney`. Computed here
   // rather than in the markup so the fallback is a value, not a branch.
   const declaredTotal = sumMoney(lines.map((line) => line.amount));
-  const categories = allowedCategories(vehicleOwnershipOf(trip), TRIP_COST_CATEGORIES);
+  const categories = allowedCategories(vehicleOwnershipOf(trip), TRIP_COST_CATEGORIES, trip.fuelOnVehicle);
   const open = canDeclareExpense(trip);
 
   const close = () => {

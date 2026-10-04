@@ -186,4 +186,12 @@ export interface DriverTripDetail extends DriverTrip {
    * rule the expense guard and `TripCostService` enforce.
    */
   expensesOpen: boolean;
+
+  /**
+   * ★ THIS TURN'S FUEL IS DECLARED ON THE LORRY, NOT AS A TRIP EXPENSE (0034):
+   * live work on a lorry with a daily fuel check. The handset leaves `fuel` out
+   * of its expense headings; `TripCostService` refuses it either way
+   * (`fuelDeclaredOnVehicle`, the one rule both read).
+   */
+  fuelOnVehicle: boolean;
 }

@@ -275,6 +275,34 @@ describe('the money — no path around the lifecycle', () => {
   });
 });
 
+describe('★ a lorry’s fuel — counted once (0034)', () => {
+  it('never reaches a trip total: the board, the export and cost-summary read no vehicle cost', async () => {
+    // The morning fill belongs to the lorry. A trip total that read
+    // `vehicle_costs` would charge it to one run — and count it beside any
+    // `fuel` line the trip already carries.
+    for (const file of ['trip-board-cost.repository.ts', 'trip-cost.repository.ts']) {
+      const body = code(await read('persistence', file));
+      expect([file, /vehicle_costs|vehicle_daily_fuel_checks/.test(body)]).toEqual([file, false]);
+    }
+  });
+
+  it('★ writes a lorry’s fuel from one service, and never into trip_costs', async () => {
+    const writers: string[] = [];
+    for (const folder of ['api', 'application', 'persistence']) {
+      for (const file of await listFiles(folder)) {
+        if (/INSERT INTO vehicle_costs|INSERT INTO vehicle_daily_fuel_checks/.test(code(await read(folder, file)))) {
+          writers.push(`${folder}/${file}`);
+        }
+      }
+    }
+    expect(writers.sort()).toEqual([
+      'persistence/vehicle-cost.repository.ts',
+      'persistence/vehicle-fuel-check.repository.ts',
+    ]);
+    expect(code(await read('application', 'vehicle-fuel.service.ts'))).not.toMatch(/trip_costs|TripCostRepository/);
+  });
+});
+
 describe("★ the driver read model — what cannot leave", () => {
   it('never selects a wildcard', async () => {
     // `SELECT *` hands a driver every column the table has TODAY and every one
@@ -300,7 +328,7 @@ describe("★ the driver read model — what cannot leave", () => {
     // than by filtering: there is no amount in the result set to leak.
     const repository = code(await read('persistence', 'driver-read-model.repository.ts'));
 
-    for (const table of ['trip_costs', 'trip_outsource_hires', 'trip_carriers']) {
+    for (const table of ['trip_costs', 'trip_outsource_hires', 'trip_carriers', 'vehicle_costs']) {
       expect([table, repository.includes(table)]).toEqual([table, false]);
     }
   });
@@ -391,8 +419,8 @@ describe('★ driver write routes — resource scope', () => {
     const controller = code(await read('api', 'driver-portal.controller.ts'));
     const params = [...controller.matchAll(/@Param\('assignmentId', UuidParam\)/g)];
 
-    // Four writes plus the detail read.
-    expect(params).toHaveLength(5);
+    // Five writes (event, expense, correction, fuel check, completion) plus the detail read.
+    expect(params).toHaveLength(6);
     expect(controller).not.toMatch(/body\.(assignmentId|tripId)/);
   });
 

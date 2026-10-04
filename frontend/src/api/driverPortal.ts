@@ -1,6 +1,8 @@
 import { httpClient } from './client';
 import type {
   CompletionRequest,
+  DailyFuelCheck,
+  DailyFuelDeclarationInput,
   DriverHistoryCursor,
   DriverHistoryPage,
   DriverTrip,
@@ -158,6 +160,20 @@ export async function declareExpense(
   input: DeclareExpenseInput,
 ): Promise<TripCost> {
   const { data } = await httpClient.post<TripCost>(`${assignmentPath(assignmentId)}/expenses`, input);
+  return data;
+}
+
+/**
+ * Answers the lorry's daily fuel check, the step the first milestone of the
+ * day is held for (`FUEL_DECLARATION_REQUIRED`). The answer is the check that
+ * stands — another driver's, if they answered first; either way the milestone
+ * may now be retried.
+ */
+export async function declareDailyFuel(
+  assignmentId: string,
+  input: DailyFuelDeclarationInput,
+): Promise<DailyFuelCheck> {
+  const { data } = await httpClient.post<DailyFuelCheck>(`${assignmentPath(assignmentId)}/fuel-checks`, input);
   return data;
 }
 

@@ -109,6 +109,7 @@ const DRIVER_TRIP_KEYS = [
 // `closed`: the trip is finished — the detail of a "Đã chạy xong" card, with no
 // milestone and no completion. `expensesOpen`: whether money may be written —
 // the server's answer, which the screen reads and never re-derives.
+// `fuelOnVehicle`: the lorry declares its fuel daily, so `fuel` is no trip line.
 const DETAIL_KEYS = [
   ...DRIVER_TRIP_KEYS,
   'events',
@@ -117,6 +118,7 @@ const DETAIL_KEYS = [
   'completion',
   'closed',
   'expensesOpen',
+  'fuelOnVehicle',
 ];
 const EVENT_KEYS = [
   'id',
@@ -209,6 +211,7 @@ describe('driver portal (D1) against the real API', () => {
   let driverA: Client;
   let driverAId: string;
   let driverB: Client;
+  let driverBUserId: string;
   let tripId: string;
   /** Driver A's turn that nothing below writes to — the read tests' subject. */
   let untouchedId: string;
@@ -303,6 +306,7 @@ describe('driver portal (D1) against the real API', () => {
     tripId = trip.data.id;
 
     untouchedId = await assignLorry(driverAId);
+    driverBUserId = b.userId;
     driverBAssignmentId = await assignLorry(b.userId);
   });
 
@@ -902,6 +906,174 @@ describe('driver portal (D1) against the real API', () => {
 
       expect(await historyIds()).not.toContain(recordedTurn);
       expect((await driverA.get(`/driver/assignments/${recordedTurn}`)).status).toBe(403);
+    });
+  });
+  /**
+   * ★ A LORRY'S DAILY FUEL CHECK (0034) — the HTTP contract the handset and the
+   * office read: the 422 that holds the day's first milestone, a declaration
+   * whose lorry and day are the server's, the `fuel` trip line refused, and the
+   * fill on the lorry's own ledger — never in the trip's total.
+   */
+  describe('★ a lorry’s daily fuel check', () => {
+    const FILL_KEY = `fuel-${unique}`;
+    let fuelTrip: string;
+    let fuelTurn: string;
+    let fuelVehicle: string;
+
+    beforeAll(async () => {
+      lorries += 1;
+      const vehicle = await boss.post('/trip-vehicles', { plate: `FC-${unique}-${lorries}`, dailyFuelCheckRequired: true });
+      expect(vehicle.status).toBe(201);
+      expect(vehicle.data.dailyFuelCheckRequired).toBe(true);
+      fuelVehicle = vehicle.data.id;
+
+      const trip = await boss.post('/trip-schedules', {
+        scheduledOn: booked.day,
+        pickupAddress: `Fuel pickup ${unique}`,
+        deliveryAddress: `Fuel delivery ${unique}`,
+        pickupAt: booked.pickupAt,
+        sellPrice: SELL_PRICE,
+      });
+      expect(trip.status).toBe(201);
+      fuelTrip = trip.data.id;
+
+      const assigned = await boss.post(`/trip-schedules/${fuelTrip}/driver-assignments`, {
+        vehicleId: fuelVehicle,
+        driverUserId: driverAId,
+      });
+      expect(assigned.status).toBe(201);
+      fuelTurn = assigned.data.id;
+    });
+
+    const arrive = () =>
+      driverA.post(`/driver/assignments/${fuelTurn}/execution-events`, {
+        type: 'ARRIVED_PICKUP',
+        deviceReportedAt: new Date().toISOString(),
+        clientEventId: `${fuelTurn}:ARRIVED_PICKUP`,
+      });
+
+    it('the catalogue carries the policy — off unless an administrator sets it', async () => {
+      lorries += 1;
+      const plain = await boss.post('/trip-vehicles', { plate: `FC-${unique}-${lorries}` });
+      expect(plain.data.dailyFuelCheckRequired).toBe(false);
+
+      const turnedOn = await boss.patch(`/trip-vehicles/${plain.data.id}`, { dailyFuelCheckRequired: true });
+      expect(turnedOn.status).toBe(200);
+      expect(turnedOn.data.dailyFuelCheckRequired).toBe(true);
+    });
+
+    it('★ the day’s first milestone is held: 422 FUEL_DECLARATION_REQUIRED, nothing written, still pending', async () => {
+      const detail = await detailOf(fuelTurn);
+      expect(keysOf(detail)).toEqual(sorted(DETAIL_KEYS));
+      expect(detail.fuelOnVehicle).toBe(true);
+
+      const held = await arrive();
+      expect(held.status).toBe(422);
+      expect(toApiError(held.status, held.data).details).toEqual({ dailyFuelCheck: 'FUEL_DECLARATION_REQUIRED' });
+
+      expect((await detailOf(fuelTurn)).events).toEqual([]);
+      expect((await boss.get(`/trip-schedules/${fuelTrip}`)).data.status).toBe('pending');
+    });
+
+    it('★ refuses a `fuel` trip line on this lorry; the other headings pass', async () => {
+      const fuel = await driverA.post(`/driver/assignments/${fuelTurn}/expenses`, { category: 'fuel', amount: '300000.00' });
+      expect(fuel.status).toBe(422);
+      expect(toApiError(fuel.status, fuel.data).details).toEqual({ category: 'FUEL_DECLARED_ON_VEHICLE' });
+
+      const toll = await driverA.post(`/driver/assignments/${fuelTurn}/expenses`, { category: 'toll', amount: '120000.00' });
+      expect(toll.status).toBe(201);
+    });
+
+    it('★ declares with the lorry and the day the SERVER’s — a body naming either changes nothing', async () => {
+      expect((await driverA.post(`/driver/assignments/${fuelTurn}/fuel-checks`, { outcome: 'no_fuel' })).status).toBe(422);
+      expect(
+        (await driverB.post(`/driver/assignments/${fuelTurn}/fuel-checks`, { outcome: 'no_fuel', clientRequestId: 'b' }))
+          .status,
+      ).toBe(403);
+
+      const body = {
+        outcome: 'fuel_added',
+        amount: '1250000.00',
+        liters: '50.25',
+        odometerKm: 182345,
+        note: 'Petrolimex',
+        clientRequestId: FILL_KEY,
+        vehicleId: randomUUID(),
+        businessDate: '2020-01-01',
+        tripId: randomUUID(),
+        sourceTripId: randomUUID(),
+        createdBy: randomUUID(),
+      };
+      const declared = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-checks`, body);
+      expect(declared.status).toBe(201);
+      expect(declared.data).toEqual({ businessDate: todayAsCalendarDay(), outcome: 'fuel_added' });
+
+      // A retry on a weak signal is answered with the same check, and writes no second fill.
+      const retried = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-checks`, body);
+      expect(retried.status).toBe(201);
+      expect(retried.data).toEqual(declared.data);
+    });
+
+    it('★ another driver on another trip of the same lorry is told only that the check stands — no ids', async () => {
+      // Driver B holding A's turn id and A's key is refused at the door.
+      expect(
+        (await driverB.post(`/driver/assignments/${fuelTurn}/fuel-checks`, { outcome: 'no_fuel', clientRequestId: FILL_KEY }))
+          .status,
+      ).toBe(403);
+
+      const trip = await boss.post('/trip-schedules', {
+        scheduledOn: booked.day,
+        pickupAddress: `Fuel pickup B ${unique}`,
+        deliveryAddress: `Fuel delivery B ${unique}`,
+        pickupAt: booked.pickupAt,
+        sellPrice: SELL_PRICE,
+      });
+      expect(trip.status).toBe(201);
+      const theirs = await boss.post(`/trip-schedules/${trip.data.id}/driver-assignments`, {
+        vehicleId: fuelVehicle,
+        driverUserId: driverBUserId,
+      });
+      expect(theirs.status).toBe(201);
+
+      // B declares "no fuel" with a key of their own: A's fill already answered the
+      // lorry's day, so B is told THAT — the day and the outcome, nothing of A's.
+      const loser = await driverB.post(`/driver/assignments/${theirs.data.id}/fuel-checks`, {
+        outcome: 'no_fuel',
+        clientRequestId: `fuel-b-${unique}`,
+      });
+      expect(loser.status).toBe(201);
+      expect(keysOf(loser.data)).toEqual(['businessDate', 'outcome']);
+      expect(loser.data).toEqual({ businessDate: todayAsCalendarDay(), outcome: 'fuel_added' });
+    });
+
+    it('★ the held milestone, retried with the SAME key, now starts the trip', async () => {
+      const started = await arrive();
+      expect(started.status).toBe(201);
+      expect((await boss.get(`/trip-schedules/${fuelTrip}`)).data.status).toBe('executing');
+    });
+
+    it('★ the office reads the fill on the lorry — and the trip’s total never counts it', async () => {
+      const day = todayAsCalendarDay();
+      const ledger = await boss.get(`/trip-vehicles/${fuelVehicle}/costs`, { params: { from: day, to: day } });
+      expect(ledger.status).toBe(200);
+      expect(ledger.data).toMatchObject({ total: 1, totalAmount: '1250000.00', page: 1 });
+      expect(ledger.data.items[0]).toMatchObject({
+        vehicleId: fuelVehicle,
+        businessDate: day,
+        category: 'fuel',
+        amount: '1250000.00',
+        liters: '50.25',
+        odometerKm: 182345,
+        source: 'driver_portal',
+        sourceTripId: fuelTrip,
+        sourceAssignmentId: fuelTurn,
+      });
+
+      const summary = await boss.get(`/trip-schedules/${fuelTrip}/cost-summary`);
+      expect(summary.data.combined).toBe('120000.00');
+
+      // A driver reads no money, the lorry's included.
+      expect((await driverA.get(`/trip-vehicles/${fuelVehicle}/costs`)).status).toBe(403);
     });
   });
 });
