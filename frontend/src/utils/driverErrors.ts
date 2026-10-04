@@ -81,6 +81,8 @@ export function driverErrorKey(error: unknown): TranslationKey {
   if (error.status === 422) {
     // A `fuel` line on a lorry that declares its fuel daily (0034).
     if (error.details?.['category'] === 'FUEL_DECLARED_ON_VEHICLE') return 'driverErrFuelOnVehicle';
+    // Completion asked for before every step stands (contract §10.5).
+    if (error.details?.['execution'] === 'EXECUTION_INCOMPLETE') return 'driverErrExecutionIncomplete';
     const rejection = error.details?.['location'];
     return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
   }
@@ -113,7 +115,10 @@ export function reviewErrorKey(error: unknown): TranslationKey {
     return error.is('PASSWORD_CHANGE_REQUIRED') ? 'driverErrPasswordChange' : 'reviewErrForbidden';
   }
   if (error.status === 404) return 'driverErrNotFound';
-  if (error.status === 422) return 'reviewErrValidation';
+  if (error.status === 422) {
+    // A milestone withdrawn while the request waited: the turn is not complete any more.
+    return error.details?.['execution'] === 'EXECUTION_INCOMPLETE' ? 'reviewErrExecutionIncomplete' : 'reviewErrValidation';
+  }
   // ★ The two-reviewer race, and the only one that matters here: somebody else
   // decided this request first.
   if (error.status === 409) return 'reviewErrConflict';

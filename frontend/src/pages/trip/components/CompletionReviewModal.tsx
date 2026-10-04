@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { cn } from '@/utils/cn';
 import { reviewErrorKey } from '@/utils/driverErrors';
+import { executionComplete } from '@/utils/driverExecution';
 import { formatDateTime } from '@/utils/format/datetime';
 import { formatDistance } from '@/utils/format/distance';
 import { formatMoney } from '@/utils/format/money';
@@ -207,6 +208,7 @@ export function CompletionReviewModal({
         <DecisionForm
           approving={approve.isPending}
           rejecting={reject.isPending}
+          executionComplete={executionComplete(events)}
           onApprove={() => void run(() => approve.mutateAsync())}
           onReject={(reason) => void run(() => reject.mutateAsync(reason))}
         />
@@ -231,11 +233,18 @@ export function CompletionReviewModal({
 function DecisionForm({
   approving,
   rejecting,
+  executionComplete: complete,
   onApprove,
   onReject,
 }: Readonly<{
   approving: boolean;
   rejecting: boolean;
+  /**
+   * Every milestone of THIS turn live? Approval is not offered otherwise — the
+   * server refuses it either way (EXECUTION_INCOMPLETE). Rejecting stays open:
+   * a reason is how the driver learns what to report.
+   */
+  executionComplete: boolean;
   onApprove: () => void;
   onReject: (reason: string) => void;
 }>) {
@@ -248,6 +257,12 @@ function DecisionForm({
 
   return (
     <div className="space-y-3 rounded-lg border border-border p-3">
+      {complete ? null : (
+        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <p className="font-medium">{t('reviewExecutionIncomplete')}</p>
+          <p className="mt-0.5 text-xs">{t('reviewExecutionIncompleteHint')}</p>
+        </div>
+      )}
       <div>
         <label
           htmlFor="review-reject-reason"
@@ -284,7 +299,7 @@ function DecisionForm({
           {t('reviewReject')}
         </Button>
 
-        <Button size="lg" className="flex-1" disabled={deciding} onClick={onApprove}>
+        <Button size="lg" className="flex-1" disabled={deciding || !complete} onClick={onApprove}>
           {approving ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
           {t('reviewApprove')}
         </Button>

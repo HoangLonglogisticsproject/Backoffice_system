@@ -264,6 +264,72 @@ describe('driver portal (D1) against the real API', () => {
     return assigned.data.id as string;
   };
 
+  /** Tân Sơn Nhất cargo, then District 1: the two points a walkable trip runs between. */
+  const PICKUP_POINT = { latitude: 10.8188, longitude: 106.6564 };
+  const DELIVERY_POINT = { latitude: 10.7769, longitude: 106.7009 };
+  let places = 0;
+  let journeyCustomer: string | null = null;
+  /** A trip names its customer's own places only, so the walkable trips share one customer. */
+  const customerForJourneys = async (): Promise<string> => {
+    if (journeyCustomer) return journeyCustomer;
+    const created = await boss.post('/trip-customers', { name: `Journey Customer ${unique}` });
+    expect(created.status).toBe(201);
+    journeyCustomer = created.data.id as string;
+    return journeyCustomer;
+  };
+  const placeAt = async (customerId: string, point: { latitude: number; longitude: number }) => {
+    places += 1;
+    const created = await boss.post(`/trip-customers/${customerId}/locations`, {
+      name: `Journey ${unique} ${places}`,
+      address: `Journey address ${unique} ${places}`,
+      ...point,
+    });
+    expect(created.status).toBe(201);
+    return created.data.id as string;
+  };
+  /** A booking whose two ends carry points — so the whole journey can be confirmed. */
+  const walkableBooking = async (): Promise<string> => {
+    const { day, pickupAt } = bookablePickup();
+    const customerId = await customerForJourneys();
+    const created = await boss.post('/trip-schedules', {
+      scheduledOn: day,
+      pickupAt,
+      customerId,
+      pickupLocationId: await placeAt(customerId, PICKUP_POINT),
+      deliveryLocationId: await placeAt(customerId, DELIVERY_POINT),
+      sellPrice: SELL_PRICE,
+      entryMode: 'operational',
+    });
+    expect(created.status).toBe(201);
+    return created.data.id as string;
+  };
+  /** One more lorry, on any trip. */
+  const lorryOn = async (trip: string, driverUserId: string) => {
+    lorries += 1;
+    const vehicle = await boss.post('/trip-vehicles', { plate: `DPW-${unique}-${lorries}` });
+    expect(vehicle.status).toBe(201);
+    const assigned = await boss.post(`/trip-schedules/${trip}/driver-assignments`, {
+      vehicleId: vehicle.data.id,
+      driverUserId,
+    });
+    expect(assigned.status).toBe(201);
+    return assigned.data.id as string;
+  };
+  /** Reports these milestones on a turn of driver A's, as the handset sends them — a reading at each confirmation. */
+  const walk = async (turn: string, types: readonly string[]) => {
+    for (const type of types) {
+      const point = (type === 'PICKUP_CONFIRMED' && PICKUP_POINT) || (type === 'DELIVERY_CONFIRMED' && DELIVERY_POINT);
+      const reported = await driverA.post(`/driver/assignments/${turn}/execution-events`, {
+        type,
+        deviceReportedAt: new Date().toISOString(),
+        clientEventId: `${turn}:${type}`,
+        ...(point ? { location: { ...point, accuracyM: 10, capturedAt: new Date().toISOString() } } : {}),
+      });
+      expect([type, reported.status]).toEqual([type, 201]);
+    }
+  };
+  const JOURNEY = ['ARRIVED_PICKUP', 'PICKUP_CONFIRMED', 'ARRIVED_DELIVERY', 'DELIVERY_CONFIRMED'] as const;
+
   const detailOf = async (assignmentId: string) => {
     const response = await driverA.get(`/driver/assignments/${assignmentId}`);
     expect(response.status).toBe(200);
@@ -520,18 +586,9 @@ describe('driver portal (D1) against the real API', () => {
       });
     });
 
-    it('★ a completion sent BEFORE the journey is finished is accepted, and outranks it — "completion-pending"', async () => {
-      const assignmentId = await assignLorry(driverAId);
-
-      expect(
-        (
-          await driverA.post(`/driver/assignments/${assignmentId}/execution-events`, {
-            type: 'ARRIVED_PICKUP',
-            deviceReportedAt: new Date().toISOString(),
-            clientEventId: `${assignmentId}:ARRIVED_PICKUP`,
-          })
-        ).status,
-      ).toBe(201);
+    it('★ a completion asked for before the journey is complete is refused — even straight at the API — and accepted once it is', async () => {
+      const assignmentId = await lorryOn(await walkableBooking(), driverAId);
+      await walk(assignmentId, JOURNEY.slice(0, 1));
       // `expenses` must match the lines — the server refuses a contradiction.
       expect(
         (
@@ -543,8 +600,16 @@ describe('driver portal (D1) against the real API', () => {
         ).status,
       ).toBe(201);
 
-      // Three events still owed. The server does not refuse this on purpose: a
-      // driver who lost signal at the gate must still be able to close out.
+      // ★ Three milestones still owed. The handset would not offer the button;
+      // the API refuses the request anyway — the rule is the server's.
+      const early = await driverA.post(`/driver/assignments/${assignmentId}/completion-requests`, {
+        expenseDeclaration: 'expenses',
+      });
+      expect(early.status).toBe(422);
+      expect(toApiError(early.status, early.data).details).toEqual({ execution: 'EXECUTION_INCOMPLETE' });
+      expect((await detailOf(assignmentId)).completion).toBeNull();
+
+      await walk(assignmentId, JOURNEY.slice(1));
       const submitted = await driverA.post(`/driver/assignments/${assignmentId}/completion-requests`, {
         expenseDeclaration: 'expenses',
       });
@@ -691,9 +756,10 @@ describe('driver portal (D1) against the real API', () => {
     });
 
     it('★ completion is the driver\'s request and the SuperAdmin\'s approval — then the trip is History\'s', async () => {
-      const trip = await booking();
+      const trip = await walkableBooking();
       const turn = await crew(trip, driverAId);
-      expect((await arrive(turn)).status).toBe(201);
+      // The whole journey first: a completion needs every milestone live.
+      await walk(turn, JOURNEY);
 
       const asked = await driverA.post(`/driver/assignments/${turn}/completion-requests`, {
         expenseDeclaration: 'none',

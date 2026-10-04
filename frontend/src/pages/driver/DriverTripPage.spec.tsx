@@ -908,6 +908,29 @@ describe('★ completion', () => {
     await waitFor(() => expect(submitCompletion).toHaveBeenCalledWith('a1', 'expenses'));
   });
 
+  it('★ after a rejection, asks for the missing step before it offers a resend', async () => {
+    fetchMyAssignment.mockResolvedValue(
+      trip({
+        events: ALL_REPORTED.slice(0, 3),
+        accountability: 'REJECTED_NEEDS_CORRECTION',
+        completion: {
+          id: 'r1',
+          attemptNo: 1,
+          state: 'rejected',
+          expenseDeclaration: 'none',
+          submittedAt: EARLIER,
+          decisionReason: 'Thiếu mốc giao hàng.',
+        },
+      }),
+    );
+    renderDetail();
+
+    expect(await screen.findByText(/yêu cầu bị từ chối/i)).toBeInTheDocument();
+    expect(screen.getByText('Hoàn tất các bước vận chuyển ở trên trước')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^gửi lại$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /gửi hoàn tất chuyến/i })).not.toBeInTheDocument();
+  });
+
   it('★ shows a completed trip as closed, with NO way to reopen it', async () => {
     // Approval is terminal — a trigger makes it irreversible — so a control
     // that appeared to undo it would be a lie.
@@ -929,6 +952,18 @@ describe('★ completion', () => {
 });
 
 describe('★ failures a driver can act on', () => {
+  it('words the server’s EXECUTION_INCOMPLETE for a driver — a step withdrawn since the screen loaded', async () => {
+    fetchMyAssignment.mockResolvedValue(trip({ events: ALL_REPORTED }));
+    submitCompletion.mockRejectedValue(
+      new ApiError(422, 'VALIDATION_FAILED', 'not complete', { execution: 'EXECUTION_INCOMPLETE' }),
+    );
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /gửi hoàn tất chuyến/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/báo đủ các bước lấy hàng và giao hàng/i);
+  });
+
   it('turns a 409 into one sentence, and re-reads the trip', async () => {
     fetchMyAssignment.mockResolvedValue(trip({ events: ALL_REPORTED }));
     submitCompletion.mockRejectedValue(new ApiError(409, 'CONFLICT', 'Already submitted.'));
