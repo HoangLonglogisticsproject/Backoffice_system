@@ -13,7 +13,8 @@ import { tripKeys } from '@/hooks/trip/keys';
 import { isApiError } from '@/utils/errors';
 import { currentMonthRange, formatCalendarDay } from '@/utils/format/datetime';
 import { formatMoney } from '@/utils/format/money';
-import type { VehicleCost } from '@/types/vehicleCost';
+import type { TranslationKey } from '@/types/translate';
+import type { VehicleCost, VehicleCostCategory } from '@/types/vehicleCost';
 
 /**
  * One lorry, as an object — "Tổng quan", then whatever the lorry has.
@@ -229,13 +230,16 @@ function CostTable({ items }: Readonly<{ items: VehicleCost[] }>) {
   );
 }
 
+/** One label per heading. A new heading is a compile error here — never shown as fuel. */
+const CATEGORY_LABEL: Record<VehicleCostCategory, TranslationKey> = { fuel: 'costFuel' };
+
 function CostRow({ cost }: Readonly<{ cost: VehicleCost }>) {
   const { t, language } = useLanguage();
   const trip = cost.sourceTrip;
   return (
     <TableRow>
       <TableCell className="whitespace-nowrap">{formatCalendarDay(cost.businessDate, language)}</TableCell>
-      <TableCell>{t('costFuel')}</TableCell>
+      <TableCell>{t(CATEGORY_LABEL[cost.category])}</TableCell>
       <TableCell className="text-right font-medium tabular-nums">{formatMoney(cost.amount)}</TableCell>
       <TableCell className="text-right tabular-nums">{cost.liters ? formatMoney(cost.liters) : '—'}</TableCell>
       <TableCell className="text-right tabular-nums">
