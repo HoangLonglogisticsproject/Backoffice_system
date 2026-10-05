@@ -24,6 +24,8 @@ interface VehicleCostRow {
   note: string | null;
   source: TripCostSource;
   source_trip_id: string | null;
+  source_trip_scheduled_on: string | null;
+  source_trip_customer_name: string | null;
   source_assignment_id: string | null;
   created_by: string;
   created_by_display_name: string;
@@ -50,6 +52,10 @@ const toVehicleCost = (row: VehicleCostRow): VehicleCost => ({
   note: row.note,
   source: row.source,
   sourceTripId: row.source_trip_id,
+  sourceTrip:
+    row.source_trip_id && row.source_trip_scheduled_on
+      ? { id: row.source_trip_id, scheduledOn: row.source_trip_scheduled_on, customerName: row.source_trip_customer_name }
+      : null,
   sourceAssignmentId: row.source_assignment_id,
   createdBy: row.created_by,
   createdByUser: { id: row.created_by, displayName: row.created_by_display_name },
@@ -115,6 +121,9 @@ export class VehicleCostRepository {
    * ★ ONE STATEMENT. The totals and the page come from the same snapshot, and
    * a page past the end still carries them — the LEFT JOIN keeps the totals'
    * single row when the page itself is empty.
+   *
+   * The source trip and its customer are joined by primary key — at most one
+   * row each, so neither can multiply a fill into the count or the sum.
    */
   async page(
     vehicleId: string,
@@ -124,9 +133,13 @@ export class VehicleCostRepository {
   ): Promise<{ items: VehicleCost[]; total: number; totalAmount: string }> {
     const rows = await this.db.query<PageRow>(
       `WITH matching AS (
-         SELECT c.*, u.display_name AS created_by_display_name
+         SELECT c.*, u.display_name AS created_by_display_name,
+                st.scheduled_on::text AS source_trip_scheduled_on,
+                sc.name AS source_trip_customer_name
            FROM vehicle_costs c
            JOIN users u ON u.id = c.created_by
+           LEFT JOIN trip_schedules st ON st.id = c.source_trip_id
+           LEFT JOIN trip_customers sc ON sc.id = st.customer_id
           WHERE c.vehicle_id = $1
             AND c.business_date BETWEEN $2::date AND $3::date
             AND c.voided_at IS NULL
@@ -139,7 +152,8 @@ export class VehicleCostRepository {
        SELECT totals.row_count, totals.total_amount,
               p.id, p.vehicle_id, p.business_date::text AS business_date, p.category,
               p.amount::text AS amount, p.liters::text AS liters, p.odometer_km, p.note,
-              p.source, p.source_trip_id, p.source_assignment_id, p.created_by,
+              p.source, p.source_trip_id, p.source_trip_scheduled_on, p.source_trip_customer_name,
+              p.source_assignment_id, p.created_by,
               p.created_by_display_name, p.created_at, p.voided_at, p.voided_by, p.void_reason
          FROM totals
          LEFT JOIN LATERAL (

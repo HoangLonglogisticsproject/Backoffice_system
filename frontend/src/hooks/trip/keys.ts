@@ -76,6 +76,12 @@ export const tripKeys = {
   hires: (tripId: string, includeVoided: boolean) =>
     [...tripKeys.money(tripId), 'hires', { includeVoided }] as const,
   costSummary: (tripId: string) => [...tripKeys.money(tripId), 'summary'] as const,
+  /**
+   * One lorry's costs over a range. ★ UNDER THE MONEY ROOT, so losing
+   * `cost.read` drops them with every trip's figures (`useTripCosts`).
+   */
+  vehicleCosts: (vehicleId: string, range: { from: string; to: string }) =>
+    [...tripKeys.all, 'money', 'vehicle', vehicleId, range] as const,
 
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,

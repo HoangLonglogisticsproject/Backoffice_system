@@ -1132,6 +1132,7 @@ describe('driver portal (D1) against the real API', () => {
         odometerKm: 182345,
         source: 'driver_portal',
         sourceTripId: fuelTrip,
+        sourceTrip: { id: fuelTrip, scheduledOn: booked.day, customerName: null },
         sourceAssignmentId: fuelTurn,
       });
 

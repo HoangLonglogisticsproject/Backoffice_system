@@ -1514,6 +1514,37 @@ const PHRASES = {
     en: 'A hired lorry’s fuel is inside the carrier’s price, so it has no daily fuel check.',
   },
   showArchived: { vi: 'Hiện cả mục đã lưu trữ', en: 'Show archived' },
+  // "Chi phí xe" — the lorry's own ledger (0034), read only. Never a trip cost.
+  vehicleCostsSection: { vi: 'Chi phí xe', en: 'Vehicle costs' },
+  vehicleCostsTotal: { vi: 'Tổng chi phí xe', en: 'Total vehicle cost' },
+  vehicleCostsTransactions: { vi: 'giao dịch', en: 'transactions' },
+  vehicleCostsColDate: { vi: 'Ngày', en: 'Date' },
+  vehicleCostsColCategory: { vi: 'Khoản', en: 'Heading' },
+  vehicleCostsColAmount: { vi: 'Số tiền', en: 'Amount' },
+  vehicleCostsColLiters: { vi: 'Số lít', en: 'Liters' },
+  vehicleCostsColOdometer: { vi: 'Công-tơ-mét (km)', en: 'Odometer (km)' },
+  vehicleCostsColSource: { vi: 'Nguồn', en: 'Source' },
+  vehicleCostsColTrip: { vi: 'Chuyến liên quan', en: 'Related trip' },
+  vehicleCostsSourceDriver: { vi: 'Tài xế khai', en: 'Driver declared' },
+  vehicleCostsSourceBackoffice: { vi: 'Văn phòng', en: 'Office' },
+  vehicleCostsEmpty: { vi: 'Không có chi phí xe trong khoảng ngày này.', en: 'No vehicle costs in this range.' },
+  vehicleCostsRangeInvalid: {
+    vi: 'Khoảng ngày không hợp lệ: ngày bắt đầu không được sau ngày kết thúc, tối đa 366 ngày.',
+    en: 'Invalid range: the start may not be after the end, and at most 366 days.',
+  },
+  // "Đang hiển thị 200/257 giao dịch mới nhất." — the two counts sit between these.
+  vehicleCostsShowing: { vi: 'Đang hiển thị', en: 'Showing' },
+  vehicleCostsLatest: { vi: 'giao dịch mới nhất.', en: 'latest transactions.' },
+  vehicleCostsTruncated: {
+    vi: 'Tổng chi phí vẫn tính trên cả khoảng ngày; thu hẹp khoảng ngày để xem giao dịch cũ hơn.',
+    en: 'The total still covers the whole range; narrow the range to see older transactions.',
+  },
+  // ★ SAYS WHAT THE TRIP COLUMN IS NOT. A cost beside a trip reads as that
+  // trip's cost; it is the lorry's, and in no trip's total.
+  vehicleCostsNotTripCost: {
+    vi: 'Chuyến liên quan: chỉ dùng để truy vết nguồn phát sinh. Chi phí xe không được cộng vào chi phí chuyến.',
+    en: 'Related trip: only traces where a cost arose. Vehicle costs are never added to a trip’s cost.',
+  },
   statusArchived: { vi: 'Đã lưu trữ', en: 'Archived' },
   emptyVehicles: { vi: 'Chưa có xe nào.', en: 'No vehicles yet.' },
   emptyCustomers: { vi: 'Chưa có khách hàng nào.', en: 'No customers yet.' },

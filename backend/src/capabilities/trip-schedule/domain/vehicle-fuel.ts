@@ -56,6 +56,12 @@ export interface VehicleCost {
   note: string | null;
   source: TripCostSource;
   sourceTripId: string | null;
+  /**
+   * The trip the cost arose on, when it arose on one — its day and customer,
+   * so a reader can place it. ★ OPTIONAL PROVENANCE, NEVER OWNERSHIP: the cost
+   * is the lorry's and is in no trip's total. `null` whenever `sourceTripId` is.
+   */
+  sourceTrip: { id: string; scheduledOn: string; customerName: string | null } | null;
   sourceAssignmentId: string | null;
   createdBy: string;
   createdByUser: UserSummary;

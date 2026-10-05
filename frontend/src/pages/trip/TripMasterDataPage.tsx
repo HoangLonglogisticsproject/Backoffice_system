@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, MapPin, Pencil, Plus } from 'lucide-react';
+import { Archive, MapPin, Pencil, Plus, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PlateInput } from '@/components/ui/plate-input';
@@ -29,6 +29,7 @@ import { formatPlate, stripPlate } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import type { TranslationKey } from '@/types/translate';
 import { CustomerLocationsModal } from './components/CustomerLocationsModal';
+import { VehicleCostsModal } from './components/VehicleCostsModal';
 
 /**
  * The two catalogues behind the dispatch board.
@@ -89,12 +90,17 @@ export default function TripMasterDataPage() {
   const [archiving, setArchiving] = useState<CatalogueRowData | null>(null);
   /** The customer whose places are being managed. Places live under a customer, nowhere else. */
   const [locationsFor, setLocationsFor] = useState<CatalogueRowData | null>(null);
+  /** The lorry whose costs are open ("Chi phí xe"). */
+  const [costsFor, setCostsFor] = useState<CatalogueRowData | null>(null);
 
   const canManage = can('trip.write');
   // ★ ONE KEY PER CATALOGUE (DL-112). Every booking function files customers
   // and places; only dispatch and the superadmin add a lorry to the fleet.
   const canAdd = can(tab === 'vehicles' ? 'vehicle.create' : 'customer.create');
   const canAddPlace = can('location.create');
+  // A lorry's money is `cost.read`, exactly as the route behind it asks.
+  const canReadCosts = can('cost.read');
+  const showActions = tab === 'customers' || canManage || canReadCosts;
 
   // Both lists, from one hook — this is the screen that passes `includeArchived`,
   // because it is the only one where a retired row is something to look at
@@ -161,7 +167,7 @@ export default function TripMasterDataPage() {
                 <TableHead className="font-semibold text-gray-600">{t('fuelPolicyLabel')}</TableHead>
               )}
               <TableHead className="font-semibold text-gray-600">{t('colStatus')}</TableHead>
-              {(canManage || tab === 'customers') && (
+              {showActions && (
                 <TableHead className="font-semibold text-gray-600">{t('colActions')}</TableHead>
               )}
             </TableRow>
@@ -176,6 +182,7 @@ export default function TripMasterDataPage() {
                 onEdit={() => setEditing(row)}
                 onArchive={() => setArchiving(row)}
                 onLocations={tab === 'customers' ? () => setLocationsFor(row) : undefined}
+                onCosts={tab === 'vehicles' && canReadCosts ? () => setCostsFor(row) : undefined}
               />
             ))}
           </TableBody>
@@ -229,6 +236,19 @@ export default function TripMasterDataPage() {
           onClose={() => setLocationsFor(null)}
         />
       )}
+
+      {costsFor && canReadCosts && (
+        <VehicleCostsModal
+          vehicle={{
+            id: costsFor.id,
+            display: costsFor.display,
+            note: costsFor.note,
+            dailyFuelCheckRequired: costsFor.dailyFuelCheckRequired ?? false,
+            archived: costsFor.status !== 'active',
+          }}
+          onClose={() => setCostsFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -261,6 +281,7 @@ function CatalogueRow({
   onEdit,
   onArchive,
   onLocations,
+  onCosts,
 }: Readonly<{
   row: CatalogueRowData;
   showFuelPolicy: boolean;
@@ -269,6 +290,8 @@ function CatalogueRow({
   onArchive: () => void;
   /** Customers only: their places. A vehicle has none. */
   onLocations?: () => void;
+  /** Vehicles only, with `cost.read`: the lorry's own costs. Open on an archived lorry too. */
+  onCosts?: () => void;
 }>) {
   const { t } = useLanguage();
 
@@ -295,9 +318,21 @@ function CatalogueRow({
           {t(archived ? 'statusArchived' : 'statusActive')}
         </span>
       </TableCell>
-      {(canManage || onLocations) && (
+      {(canManage || onLocations || onCosts) && (
         <TableCell>
           <div className="flex items-center gap-1">
+            {onCosts && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2 text-gray-600"
+                onClick={onCosts}
+                title={t('vehicleCostsSection')}
+              >
+                <Wallet className="h-3.5 w-3.5" />
+                <span className="sr-only">{t('vehicleCostsSection')}</span>
+              </Button>
+            )}
             {onLocations && (
               <Button
                 variant="outline"
