@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchNotifications, markNotificationRead, notificationStreamUrl } from '@/api/notifications';
 import { driverKeys } from './driver';
+import { bookingKeys } from './driver/openBookings';
 
 export const notificationKeys = {
   all: ['notifications'] as const,
@@ -58,6 +59,9 @@ export function useNotificationStream(): void {
     const reconcile = () => {
       void client.invalidateQueries({ queryKey: notificationKeys.all });
       void client.invalidateQueries({ queryKey: driverKeys.assignments() });
+      // Open bookings and the driver's asks (0035): an approval, a rejection or
+      // another driver winning changes both.
+      void client.invalidateQueries({ queryKey: bookingKeys.all });
     };
 
     const onVisible = () => {

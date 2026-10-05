@@ -10,6 +10,14 @@ export const NOTIFICATION_TYPES = [
   'TRIP_UNASSIGNED',
   'COMPLETION_REJECTED',
   'COMPLETION_APPROVED',
+  /** Your ask for an open booking was declined; `detail` is why, if given (0035). */
+  'ASSIGNMENT_REQUEST_REJECTED',
+  /**
+   * The booking you asked for stopped being open. `detail` is the server's
+   * fixed word — `trip_assigned` (someone got it), `trip_closed`,
+   * `trip_archived` — never prose to show as is.
+   */
+  'ASSIGNMENT_REQUEST_SUPERSEDED',
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];

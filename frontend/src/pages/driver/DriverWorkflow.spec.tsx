@@ -168,6 +168,15 @@ const renderAt = (
  */
 const tab = (label: string) => screen.getByRole('tab', { name: (name) => name.startsWith(label) });
 
+/** The day tabs inside "Chuyến của tôi" — the section tabs above them have their own cases (0035). */
+const dayTabs = () => within(screen.getByRole('tablist', { name: 'Chuyến theo ngày' }));
+
+/** The open day's panel: the innermost, inside the "Chuyến của tôi" section's own panel. */
+const dayPanel = () => {
+  const panels = screen.getAllByRole('tabpanel');
+  return panels[panels.length - 1] as HTMLElement;
+};
+
 /**
  * Today's cards, once the schedule has loaded. A card is its list item — the
  * route inside it is a list of its own, so only the outer items count.
@@ -186,7 +195,7 @@ const hrefs = (links: HTMLElement[]) => links.map((link) => link.getAttribute('h
 
 /** The day headings of the open tab, in the order they are shown. */
 const dayHeadings = () =>
-  within(screen.getByRole('tabpanel'))
+  within(dayPanel())
     .getAllByRole('heading', { level: 2 })
     .map((heading) => heading.textContent);
 
@@ -339,7 +348,7 @@ describe('★ the work schedule', () => {
     expect(tab('Sắp tới')).toHaveAttribute('aria-selected', 'true');
     expect(dayHeadings()).toEqual(['Thứ Hai, 31/08/2026', 'Thứ Ba, 01/09/2026']);
     expect(within(nextDay).getByRole('link')).toHaveAttribute('href', '/driver/assignments/a-aug31');
-    expect(hrefs(within(screen.getByRole('tabpanel')).getAllByRole('link'))).toEqual([
+    expect(hrefs(within(dayPanel()).getAllByRole('link'))).toEqual([
       '/driver/assignments/a-aug31',
       '/driver/assignments/a-sep1',
     ]);
@@ -362,7 +371,7 @@ describe('★ the work schedule', () => {
     await screen.findByRole('region', { name: 'Thứ Bảy, 29/08/2026' });
     expect(tab('Chuyến đã chạy')).toHaveAttribute('aria-selected', 'true');
     expect(dayHeadings()).toEqual(['Thứ Bảy, 29/08/2026', 'Thứ Sáu, 28/08/2026']);
-    const panel = screen.getByRole('tabpanel');
+    const panel = dayPanel();
     expect(hrefs(within(panel).getAllByRole('link'))).toEqual(['/driver/assignments/a-29', '/driver/assignments/a-28']);
     expect(within(panel).queryByText(/hoàn thành|hoàn tất/i)).toBeNull();
   });
@@ -377,7 +386,7 @@ describe('★ the work schedule', () => {
 
     expect(await screen.findByText(empty)).toBeInTheDocument();
     expect(tab(label)).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getAllByRole('tab', { selected: true })).toHaveLength(1);
+    expect(dayTabs().getAllByRole('tab', { selected: true })).toHaveLength(1);
     expect(screen.queryByRole('link')).toBeNull();
   });
 
@@ -386,7 +395,7 @@ describe('★ the work schedule', () => {
     renderAt('/driver');
     await todayCards();
 
-    expect(screen.getAllByRole('tab').map((option) => option.textContent)).toEqual([
+    expect(dayTabs().getAllByRole('tab').map((option) => option.textContent)).toEqual([
       'Hôm nay 2',
       'Sắp tới 1',
       'Chuyến đã chạy 0',

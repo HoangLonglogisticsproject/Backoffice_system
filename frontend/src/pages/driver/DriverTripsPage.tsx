@@ -10,6 +10,7 @@ import { formatCalendarWeekday } from '@/utils/format/datetime';
 import type { TranslationKey } from '@/types/translate';
 import { AssignmentCard, AssignmentCardSkeleton } from './components/AssignmentCard';
 import { DriverLoadError } from './components/DriverLoadError';
+import { MyRequestsSection, OpenBookingsSection } from './components/OpenBookingSections';
 
 /**
  * The driver's work schedule — "which trips do I drive today?"
@@ -23,7 +24,23 @@ import { DriverLoadError } from './components/DriverLoadError';
  * ★ THE VIEW IS IN THE URL (`?view=upcoming`), so going back from a trip lands
  * on the tab the driver left, and today — the common case — is the bare
  * `/driver`.
+ *
+ * ★ THREE SECTIONS, AND ONLY THE FIRST IS THE DRIVER'S WORK (0035). "Chuyến
+ * của tôi" is their assignments, split by day as before; "Booking đang mở" and
+ * "Yêu cầu của tôi" are where they ask for more (`?section=open|requests`). An
+ * ask is not a trip: it shows up in "Chuyến của tôi" only once Dispatch
+ * approves it and chooses the lorry.
  */
+
+const SECTIONS = ['mine', 'open', 'requests'] as const;
+type Section = (typeof SECTIONS)[number];
+const isSection = (value: unknown): value is Section => SECTIONS.some((section) => section === value);
+
+const SECTION_LABEL: Record<Section, TranslationKey> = {
+  mine: 'driverSectionMine',
+  open: 'driverSectionOpen',
+  requests: 'driverSectionRequests',
+};
 
 const VIEW_LABEL: Record<ScheduleView, TranslationKey> = {
   today: 'driverViewToday',
@@ -40,13 +57,55 @@ const EMPTY: Record<ScheduleView, TranslationKey> = {
 export default function DriverTripsPage() {
   const { t, language } = useLanguage();
   const [params, setParams] = useSearchParams();
+  const requestedSection = params.get('section');
+  const section: Section = isSection(requestedSection) ? requestedSection : 'mine';
+  // The business calendar's today — never the handset's (see `driverSchedule`).
+  const today = useBusinessToday();
+
+  // `replace`: switching sections is not a place to go back to. "Mine" is the
+  // bare `/driver`, so a notification or the nav lands on today's trips.
+  const open = (next: unknown) => {
+    if (!isSection(next)) return;
+    setParams(next === 'mine' ? {} : { section: next }, { replace: true });
+  };
+
+  return (
+    <div className="space-y-4">
+      <header>
+        <h1 className="text-xl font-semibold">{t('driverSchedule')}</h1>
+        <p className="text-sm text-muted-foreground">{formatCalendarWeekday(today, language)}</p>
+      </header>
+
+      <Tabs value={section} onValueChange={open}>
+        <TabsList aria-label={t('driverSchedule')} className="h-auto min-h-12 w-full p-0.5">
+          {SECTIONS.map((option) => (
+            <TabsTrigger key={option} value={option} className="min-h-11 px-1 whitespace-normal leading-tight">
+              {t(SECTION_LABEL[option])}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <TabsContent value="mine">
+          <MyTrips today={today} />
+        </TabsContent>
+        <TabsContent value="open">
+          <OpenBookingsSection />
+        </TabsContent>
+        <TabsContent value="requests">
+          <MyRequestsSection />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+/** The driver's own assignments, by day — the screen as it was before open bookings. */
+function MyTrips({ today }: Readonly<{ today: string }>) {
+  const { t } = useLanguage();
+  const [params, setParams] = useSearchParams();
   const { assignments, loading, error, reload } = useMyAssignments();
 
   const requested = params.get('view');
   const view: ScheduleView = isScheduleView(requested) ? requested : 'today';
-  // The business calendar's today — never the handset's (see `driverSchedule`)
-  // — and it turns over at midnight while the page stays open.
-  const today = useBusinessToday();
   const schedule = useMemo(() => scheduleOf(assignments, today), [assignments, today]);
   // ★ A FAILED REFRESH DOES NOT TAKE AWAY A SCHEDULE ALREADY ON SCREEN — a
   // lost signal is said above the cards, which stay. A REFUSAL DOES: after a
@@ -62,40 +121,33 @@ export default function DriverTripsPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-xl font-semibold">{t('driverSchedule')}</h1>
-        <p className="text-sm text-muted-foreground">{formatCalendarWeekday(today, language)}</p>
-      </header>
-
-      <Tabs value={view} onValueChange={show}>
-        {/* 48px with a 2px inset: each tab is a full 44px thumb target. */}
-        <TabsList className="h-12 w-full p-0.5">
-          {SCHEDULE_VIEWS.map((option) => (
-            <TabsTrigger key={option} value={option}>
-              {t(VIEW_LABEL[option])}
-              {/* The space is its own text node: a name is built from each
-                  element's TRIMMED text, so one inside the span would be lost
-                  and a screen reader would hear "Hôm nay2". */}
-              {settled ? (
-                <>
-                  {' '}
-                  <span className="text-xs tabular-nums">{countOf(schedule[option])}</span>
-                </>
-              ) : null}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-
+    <Tabs value={view} onValueChange={show}>
+      {/* 48px with a 2px inset: each tab is a full 44px thumb target. */}
+      <TabsList aria-label={t('driverDaysLabel')} className="h-12 w-full p-0.5">
         {SCHEDULE_VIEWS.map((option) => (
-          <TabsContent key={option} value={option}>
-            {loading ? <ScheduleSkeleton /> : null}
-            {error ? <DriverLoadError error={error} onRetry={reload} /> : null}
-            {settled ? <ScheduleDays view={option} days={schedule[option]} /> : null}
-          </TabsContent>
+          <TabsTrigger key={option} value={option}>
+            {t(VIEW_LABEL[option])}
+            {/* The space is its own text node: a name is built from each
+                element's TRIMMED text, so one inside the span would be lost
+                and a screen reader would hear "Hôm nay2". */}
+            {settled ? (
+              <>
+                {' '}
+                <span className="text-xs tabular-nums">{countOf(schedule[option])}</span>
+              </>
+            ) : null}
+          </TabsTrigger>
         ))}
-      </Tabs>
-    </div>
+      </TabsList>
+
+      {SCHEDULE_VIEWS.map((option) => (
+        <TabsContent key={option} value={option}>
+          {loading ? <ScheduleSkeleton /> : null}
+          {error ? <DriverLoadError error={error} onRetry={reload} /> : null}
+          {settled ? <ScheduleDays view={option} days={schedule[option]} /> : null}
+        </TabsContent>
+      ))}
+    </Tabs>
   );
 }
 

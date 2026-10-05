@@ -92,7 +92,8 @@ const BACKOFFICE_ROWS = [
   /báo cáo/i,
   /ai điều phối/i,
   /phê duyệt/i,
-  /yêu cầu/i,
+  // The Backoffice menu row exactly — the portal's own "Yêu cầu của tôi" (0035) is the driver's.
+  /^yêu cầu$/i,
   /tài liệu/i,
 ];
 

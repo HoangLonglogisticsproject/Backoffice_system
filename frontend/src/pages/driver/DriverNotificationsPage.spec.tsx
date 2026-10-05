@@ -159,7 +159,32 @@ describe('DriverNotificationsPage', () => {
   });
 });
 
+/** The types about a trip the driver holds; an ask's outcome goes elsewhere (below). */
 const TYPES: NotificationType[] = ['TRIP_ASSIGNED', 'TRIP_UNASSIGNED', 'COMPLETION_REJECTED', 'COMPLETION_APPROVED'];
+
+describe('★ an ask for an open booking — told, and led to "Yêu cầu của tôi" (0035)', () => {
+  it('words a superseded ask by WHY, never by the server’s fixed word', async () => {
+    fetchNotifications.mockResolvedValue({
+      items: [
+        note({ id: 'n1', type: 'ASSIGNMENT_REQUEST_SUPERSEDED', detail: 'trip_assigned' }),
+        note({ id: 'n2', type: 'ASSIGNMENT_REQUEST_SUPERSEDED', detail: 'trip_archived' }),
+        note({ id: 'n3', type: 'ASSIGNMENT_REQUEST_REJECTED', detail: 'Đã đủ xe' }),
+      ],
+      unreadCount: 3,
+    });
+    renderPage();
+
+    const [taken, closed, declined] = await screen.findAllByRole('button', { name: /booking bạn xin nhận|bị từ chối/i });
+    expect(taken).toHaveTextContent('Đã có tài xế khác nhận');
+    expect(closed).toHaveTextContent('Booking đã đóng');
+    expect(declined).toHaveTextContent('Lý do: Đã đủ xe');
+    expect(screen.queryByText(/trip_assigned|trip_archived/)).toBeNull();
+  });
+
+  it.each(['ASSIGNMENT_REQUEST_REJECTED', 'ASSIGNMENT_REQUEST_SUPERSEDED'] as const)('%s leads to the driver’s requests', (type) => {
+    expect(destinationOf(note({ type }), '2026-08-30')).toBe('/driver?section=requests');
+  });
+});
 
 describe('destinationOf', () => {
   it.each([

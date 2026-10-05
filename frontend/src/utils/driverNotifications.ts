@@ -15,6 +15,10 @@ import { scheduleViewOf } from '@/utils/driverSchedule';
  * `today` is `todayAsCalendarDay()` — the business calendar, not the handset's.
  */
 export const destinationOf = (notification: Notification, today: string): string => {
+  // An ask is not a trip: its outcome lives in "Yêu cầu của tôi" (0035).
+  if (notification.type === 'ASSIGNMENT_REQUEST_REJECTED' || notification.type === 'ASSIGNMENT_REQUEST_SUPERSEDED') {
+    return '/driver?section=requests';
+  }
   const view = scheduleViewOf(notification.tripScheduledOn, today);
   return view === 'today' ? '/driver' : `/driver?view=${view}`;
 };
