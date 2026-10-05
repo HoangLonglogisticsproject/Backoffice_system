@@ -1452,6 +1452,13 @@ Nhiên liệu thuộc **xe**, không thuộc chuyến đầu tiên trong ngày (
 * **Đọc (backoffice, `cost.read`):** `GET /trip-vehicles/:id/costs?from&to&page&limit&category`
   → envelope trang (`items, page, limit, total, totalPages`) + `totalAmount` (chuỗi thập phân,
   chỉ dòng còn hiệu lực). Khoảng ngày như board (mặc định tháng hiện tại, tối đa 366 ngày).
+  Mỗi dòng có `sourceTrip: { id, scheduledOn, customerName } | null` (2026-10-04) — nguồn phát
+  sinh, **chỉ để truy vết**, không phải chuyến chịu chi phí; `null` khi `sourceTripId` null (chi phí
+  xe không bắt buộc gắn với chuyến). Sổ chi phí xe có 0..N giao dịch mỗi xe mỗi ngày.
+* **UI (2026-10-04):** Danh mục xe → nút "Chi phí xe" (chỉ hiện với `cost.read`) mở modal của
+  xe: tổng chi phí xe, từng giao dịch (ngày, khoản, số tiền, số lít, công-tơ-mét, nguồn, "Chuyến
+  liên quan"). Một lần đọc tối đa 200 dòng; vượt thì UI ghi "Đang hiển thị 200/N giao dịch mới
+  nhất" (tổng tiền vẫn của cả khoảng). Chỉ đọc; bảng danh mục không thêm cột tiền.
 
 ## 27. Hoàn tất chỉ khi đủ tiến trình (2026-10-04)
 

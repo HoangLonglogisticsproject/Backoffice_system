@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TripMasterDataPage from './TripMasterDataPage';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { currentMonthRange } from '@/utils/format/datetime';
 
 const fetchTripVehicles = vi.fn();
 const fetchTripCustomers = vi.fn();
@@ -14,6 +15,7 @@ const updateTripCustomer = vi.fn();
 const archiveTripVehicle = vi.fn();
 const archiveTripCustomer = vi.fn();
 const useSession = vi.fn();
+const fetchVehicleCosts = vi.fn();
 
 const fetchTripLocations = vi.fn();
 const createTripLocation = vi.fn();
@@ -46,6 +48,9 @@ vi.mock('@/api/tripCatalogue', () => ({
   createTripLocation: (...a: unknown[]) => createTripLocation(...a),
   updateTripLocationById: (...a: unknown[]) => updateTripLocationById(...a),
   archiveTripLocation: (...a: unknown[]) => archiveTripLocation(...a),
+}));
+vi.mock('@/api/vehicleCost', () => ({
+  fetchVehicleCosts: (...a: unknown[]) => fetchVehicleCosts(...a),
 }));
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
@@ -643,6 +648,140 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent('Xe thuê ngoài đã gồm nhiên liệu trong giá thuê');
+    });
+  });
+
+  describe('★ "Chi phí xe" — the lorry’s own ledger, read only', () => {
+    const fill = (over: Record<string, unknown> = {}) => ({
+      id: 'vc1',
+      vehicleId: 'v1',
+      businessDate: '2026-10-04',
+      category: 'fuel',
+      amount: '650000.00',
+      liters: '42.50',
+      odometerKm: 182345,
+      note: null,
+      source: 'driver_portal',
+      sourceTripId: 't1',
+      sourceTrip: { id: 't1', scheduledOn: '2026-10-03', customerName: 'VIỄN ĐẠT' },
+      sourceAssignmentId: 'a1',
+      createdBy: 'd1',
+      createdByUser: { id: 'd1', displayName: 'Tài Xế A' },
+      createdAt: '2026-10-04T11:37:00.000Z',
+      voidedAt: null,
+      voidedBy: null,
+      voidReason: null,
+      ...over,
+    });
+    const ledger = (items: unknown[], totalAmount: string) => ({
+      items,
+      page: 1,
+      limit: 200,
+      total: items.length,
+      totalPages: items.length === 0 ? 0 : 1,
+      totalAmount,
+    });
+    const openCosts = async () => {
+      await screen.findByText('51D-65233');
+      fireEvent.click(screen.getByRole('button', { name: 'Chi phí xe' }));
+      return screen.findByRole('dialog');
+    };
+
+    beforeEach(() => {
+      useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+      fetchVehicleCosts.mockReset().mockResolvedValue(ledger([fill()], '650000.00'));
+    });
+
+    it('★ is offered only to a holder of cost.read, and the list gains no money column', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      renderPage();
+      await screen.findByText('51D-65233');
+
+      expect(screen.queryByRole('button', { name: 'Chi phí xe' })).toBeNull();
+      expect(screen.queryByRole('columnheader', { name: /Chi phí|Số tiền/ })).toBeNull();
+      expect(fetchVehicleCosts).not.toHaveBeenCalled();
+    });
+
+    it('★ opens on the business month with the total, every detail of a fill, and its run as a reference only', async () => {
+      renderPage();
+      const dialog = await openCosts();
+
+      expect(fetchVehicleCosts).toHaveBeenCalledWith('v1', currentMonthRange());
+      await within(dialog).findByText('Tài Xế A');
+      expect(dialog).toHaveTextContent('Tổng chi phí xe: 650,000');
+      expect(dialog).toHaveTextContent('1 giao dịch');
+
+      const row = within(dialog).getAllByRole('row')[1] as HTMLElement;
+      for (const shown of ['4/10/2026', 'Dầu', '650,000', '42.50', '182,345', 'Tài xế khai', '3/10/2026', 'VIỄN ĐẠT']) {
+        expect(row).toHaveTextContent(shown);
+      }
+      expect(within(dialog).getByRole('columnheader', { name: 'Chuyến liên quan' })).toBeInTheDocument();
+      expect(dialog).toHaveTextContent('Chuyến liên quan: chỉ dùng để truy vết nguồn phát sinh. Chi phí xe không được cộng vào chi phí chuyến.');
+      expect(dialog).not.toHaveTextContent('Đang hiển thị');
+    });
+
+    it('★ says exactly how many of the range it shows when the ledger holds more than one read', async () => {
+      // Several costs on one day are an ordinary ledger, not an anomaly — 0..N a lorry a day.
+      const many = [fill(), fill({ id: 'vc2', amount: '120000.00' })];
+      fetchVehicleCosts.mockResolvedValue({ ...ledger(many, '9999000.00'), total: 257, totalPages: 129 });
+      renderPage();
+      const dialog = await openCosts();
+
+      expect(await within(dialog).findByText(/Đang hiển thị 2\/257 giao dịch mới nhất\./)).toBeInTheDocument();
+      expect(dialog).toHaveTextContent('Tổng chi phí xe: 9,999,000');
+      expect(dialog).toHaveTextContent('257 giao dịch');
+    });
+
+    it('shows a dash where the driver gave no liters or odometer, and for a fill with no run', async () => {
+      fetchVehicleCosts.mockResolvedValue(
+        ledger([fill({ liters: null, odometerKm: null, source: 'backoffice', sourceTripId: null, sourceTrip: null, sourceAssignmentId: null })], '650000.00'),
+      );
+      renderPage();
+      const dialog = await openCosts();
+
+      const row = (await within(dialog).findAllByRole('row'))[1] as HTMLElement;
+      expect(within(row).getAllByText('—')).toHaveLength(3);
+      expect(row).toHaveTextContent('Văn phòng');
+    });
+
+    it('★ asks the server again for the range typed — never filters a page in the browser', async () => {
+      renderPage();
+      const dialog = await openCosts();
+      await within(dialog).findByText('Tài Xế A');
+
+      fireEvent.change(within(dialog).getByLabelText('Từ ngày'), { target: { value: '01/09/2026' } });
+
+      await waitFor(() =>
+        expect(fetchVehicleCosts).toHaveBeenLastCalledWith('v1', { from: '2026-09-01', to: currentMonthRange().to }),
+      );
+    });
+
+    it('says the range holds nothing, with a zero total', async () => {
+      fetchVehicleCosts.mockResolvedValue(ledger([], '0.00'));
+      renderPage();
+      const dialog = await openCosts();
+
+      expect(await within(dialog).findByText('Không có chi phí xe trong khoảng ngày này.')).toBeInTheDocument();
+      expect(dialog).toHaveTextContent('Tổng chi phí xe: 0');
+    });
+
+    it('stays readable on a retired lorry — its money outlives its service', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write', 'cost.read']));
+      fetchTripVehicles.mockResolvedValue([vehicle({ status: 'archived' })]);
+      renderPage();
+      await openCosts();
+
+      expect(fetchVehicleCosts).toHaveBeenCalledWith('v1', currentMonthRange());
+      expect((actionButton('Sửa') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('offers no costs on a customer', async () => {
+      renderPage();
+      await screen.findByText('51D-65233');
+      fireEvent.click(screen.getByRole('button', { name: 'Khách hàng' }));
+      await screen.findByText('VIỄN ĐẠT');
+
+      expect(screen.queryByRole('button', { name: 'Chi phí xe' })).toBeNull();
     });
   });
 
