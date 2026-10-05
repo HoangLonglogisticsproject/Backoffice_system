@@ -111,10 +111,41 @@ const renderPage = () => {
   );
 };
 
-/** The row's two icon buttons, which carry their label in an `sr-only` span. */
+/** A customer row's labelled action — the last match, after any dialog's own. */
 const actionButton = (name: 'Sửa' | 'Lưu trữ') => {
   const found = screen.getAllByRole('button', { name });
   return found[found.length - 1] as HTMLElement;
+};
+
+/**
+ * The viewport, as the page reads it. The shared setup answers `false` to
+ * every query, which is the narrow layout; the table is the wide one.
+ */
+const viewport = (wide: boolean) =>
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query: string) =>
+      ({
+        matches: wide && query === '(min-width: 768px)',
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  );
+
+/** Opens the lorry the way an operator does — its one "Xem chi tiết" control. */
+const openVehicle = async (plate = '51D-65233') => {
+  fireEvent.click(await screen.findByRole('button', { name: `Xem chi tiết ${plate}` }));
+  return screen.findByRole('dialog');
+};
+
+/** An administrative action, which lives in the lorry's detail, labelled. */
+const vehicleAction = async (name: 'Sửa xe' | 'Lưu trữ xe') => {
+  const dialog = await openVehicle();
+  fireEvent.click(within(dialog).getByRole('button', { name }));
 };
 
 /**
@@ -137,6 +168,7 @@ describe('TripMasterDataPage', () => {
     useSession.mockReset().mockReturnValue(
       session(['trip.read', 'vehicle.create', 'customer.create', 'location.create', 'trip.write']),
     );
+    viewport(true);
   });
 
   describe('the two catalogues', () => {
@@ -211,9 +243,10 @@ describe('TripMasterDataPage', () => {
       renderPage();
       await screen.findByText('51D-65233');
 
-      expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
       expect(screen.queryByText('Thao tác')).toBeNull();
+      const dialog = await openVehicle();
+      expect(within(dialog).queryByRole('button', { name: 'Sửa xe' })).toBeNull();
+      expect(within(dialog).queryByRole('button', { name: 'Lưu trữ xe' })).toBeNull();
     });
 
     it('hides the add button from a caller without trip.create', async () => {
@@ -569,9 +602,7 @@ describe('TripMasterDataPage', () => {
       // reads as though saving would add a SECOND row for the same truck — the
       // exact duplicate this catalogue exists to prevent.
       renderPage();
-      await screen.findByText('51D-65233');
-
-      fireEvent.click(actionButton('Sửa'));
+      await vehicleAction('Sửa xe');
 
       expect(await screen.findByRole('heading', { name: 'Sửa xe' })).toBeTruthy();
       // ★ SEEDED FROM THE ROW, SHOWN IN THE ONE SPELLING. The catalogue still
@@ -583,9 +614,7 @@ describe('TripMasterDataPage', () => {
 
     it('sends the correction to the row it was opened on', async () => {
       renderPage();
-      await screen.findByText('51D-65233');
-
-      fireEvent.click(actionButton('Sửa'));
+      await vehicleAction('Sửa xe');
       fireEvent.change(screen.getByLabelText('Biển số *'), { target: { value: '51D-65234' } });
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
@@ -623,9 +652,7 @@ describe('TripMasterDataPage', () => {
     it('seeds the policy from the row, and turns it off', async () => {
       fetchTripVehicles.mockResolvedValue([vehicle({ dailyFuelCheckRequired: true })]);
       renderPage();
-      await screen.findByText('51D-65233');
-
-      fireEvent.click(actionButton('Sửa'));
+      await vehicleAction('Sửa xe');
       expect(screen.getByRole('radio', { name: 'Bắt buộc' })).toBeChecked();
       fireEvent.click(screen.getByRole('radio', { name: 'Không áp dụng' }));
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
@@ -641,13 +668,80 @@ describe('TripMasterDataPage', () => {
         new ApiError(422, 'VALIDATION_FAILED', 'A hired lorry…', { dailyFuelCheckRequired: 'OUTSOURCED_VEHICLE' }),
       );
       renderPage();
-      await screen.findByText('51D-65233');
-
-      fireEvent.click(actionButton('Sửa'));
+      await vehicleAction('Sửa xe');
       fireEvent.click(screen.getByRole('radio', { name: 'Bắt buộc' }));
       fireEvent.click(screen.getByRole('button', { name: 'Lưu' }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent('Xe thuê ngoài đã gồm nhiên liệu trong giá thuê');
+    });
+  });
+
+  describe('★ a lorry is an object: the row opens its detail', () => {
+    it('★ offers one labelled control per lorry — no icon-only buttons on the list', async () => {
+      renderPage();
+      await screen.findByText('51D-65233');
+
+      const table = screen.getByRole('table');
+      const buttons = within(table).getAllByRole('button');
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]).toHaveAccessibleName('Xem chi tiết 51D-65233');
+      expect(buttons[0]).toHaveTextContent('Xem chi tiết');
+    });
+
+    it('★ the row-opening control never moves while pressed — a moved button would shrink its row overlay mid-click', () => {
+      // jsdom has no layout, so the class list is the thing to pin: the shared
+      // Button's press nudge must be MERGED AWAY (tailwind-merge), not left to
+      // lose a CSS-order contest with the override. Real-browser check: PR notes.
+      renderPage();
+      return screen.findByRole('button', { name: 'Xem chi tiết 51D-65233' }).then((open) => {
+        expect(open.className).not.toMatch(/translate-y/);
+        expect(open.className).toMatch(/after:inset-0/);
+      });
+    });
+
+    it('★ opens on "Tổng quan" with the plate, status, note and fuel policy', async () => {
+      fetchTripVehicles.mockResolvedValue([vehicle({ note: 'xe đầu kéo', dailyFuelCheckRequired: true })]);
+      renderPage();
+      const dialog = await openVehicle();
+
+      expect(within(dialog).getByRole('tab', { name: 'Tổng quan' })).toHaveAttribute('aria-selected', 'true');
+      for (const fact of ['51D-65233', 'Đang làm việc', 'xe đầu kéo', 'Bắt buộc']) {
+        expect(dialog).toHaveTextContent(fact);
+      }
+    });
+
+    it('★ hands over to the edit dialog — one dialog at a time', async () => {
+      renderPage();
+      await vehicleAction('Sửa xe');
+
+      expect(await screen.findByRole('heading', { name: 'Sửa xe' })).toBeTruthy();
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+      expect(screen.queryByRole('tab', { name: 'Tổng quan' })).toBeNull();
+    });
+
+    it('★ on a phone, each lorry is a card with "Xem chi tiết" — no table to scroll', async () => {
+      viewport(false);
+      fetchTripVehicles.mockResolvedValue([vehicle({ dailyFuelCheckRequired: true })]);
+      renderPage();
+
+      const open = await screen.findByRole('button', { name: 'Xem chi tiết 51D-65233' });
+      expect(screen.queryByRole('table')).toBeNull();
+      expect(open.closest('li')).toHaveTextContent('Khai nhiên liệu đầu ngày: Bắt buộc');
+
+      fireEvent.click(open);
+      expect(await screen.findByRole('tab', { name: 'Tổng quan' })).toBeInTheDocument();
+    });
+
+    it('keeps the customers a table with labelled actions, whatever the width', async () => {
+      viewport(false);
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Khách hàng' }));
+      await screen.findByText('VIỄN ĐẠT');
+
+      expect(screen.getByRole('table')).toBeInTheDocument();
+      for (const name of ['Địa điểm', 'Sửa', 'Lưu trữ']) {
+        expect(screen.getByRole('button', { name }).querySelector('.sr-only')).toBeNull();
+      }
     });
   });
 
@@ -682,9 +776,9 @@ describe('TripMasterDataPage', () => {
       totalAmount,
     });
     const openCosts = async () => {
-      await screen.findByText('51D-65233');
-      fireEvent.click(screen.getByRole('button', { name: 'Chi phí xe' }));
-      return screen.findByRole('dialog');
+      const dialog = await openVehicle();
+      fireEvent.click(within(dialog).getByRole('tab', { name: 'Chi phí xe' }));
+      return dialog;
     };
 
     beforeEach(() => {
@@ -692,14 +786,24 @@ describe('TripMasterDataPage', () => {
       fetchVehicleCosts.mockReset().mockResolvedValue(ledger([fill()], '650000.00'));
     });
 
-    it('★ is offered only to a holder of cost.read, and the list gains no money column', async () => {
+    it('★ is a section only for a holder of cost.read, and the list gains no money column', async () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.write']));
       renderPage();
-      await screen.findByText('51D-65233');
+      const dialog = await openVehicle();
 
-      expect(screen.queryByRole('button', { name: 'Chi phí xe' })).toBeNull();
+      expect(within(dialog).getByRole('tab', { name: 'Tổng quan' })).toBeInTheDocument();
+      expect(within(dialog).queryByRole('tab', { name: 'Chi phí xe' })).toBeNull();
       expect(screen.queryByRole('columnheader', { name: /Chi phí|Số tiền/ })).toBeNull();
       expect(fetchVehicleCosts).not.toHaveBeenCalled();
+    });
+
+    it('★ opening the lorry asks for no costs — only choosing "Chi phí xe" does', async () => {
+      renderPage();
+      const dialog = await openVehicle();
+      expect(fetchVehicleCosts).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole('tab', { name: 'Chi phí xe' }));
+      await waitFor(() => expect(fetchVehicleCosts).toHaveBeenCalledTimes(1));
     });
 
     it('★ opens on the business month with the total, every detail of a fill, and its run as a reference only', async () => {
@@ -769,10 +873,12 @@ describe('TripMasterDataPage', () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.write', 'cost.read']));
       fetchTripVehicles.mockResolvedValue([vehicle({ status: 'archived' })]);
       renderPage();
-      await openCosts();
+      const dialog = await openVehicle();
+      // Retired: nothing to edit or archive, its costs still readable.
+      expect(within(dialog).queryByRole('button', { name: 'Sửa xe' })).toBeNull();
+      fireEvent.click(within(dialog).getByRole('tab', { name: 'Chi phí xe' }));
 
-      expect(fetchVehicleCosts).toHaveBeenCalledWith('v1', currentMonthRange());
-      expect((actionButton('Sửa') as HTMLButtonElement).disabled).toBe(true);
+      await waitFor(() => expect(fetchVehicleCosts).toHaveBeenCalledWith('v1', currentMonthRange()));
     });
 
     it('offers no costs on a customer', async () => {
@@ -781,7 +887,7 @@ describe('TripMasterDataPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Khách hàng' }));
       await screen.findByText('VIỄN ĐẠT');
 
-      expect(screen.queryByRole('button', { name: 'Chi phí xe' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /Xem chi tiết/ })).toBeNull();
     });
   });
 
@@ -790,9 +896,7 @@ describe('TripMasterDataPage', () => {
       // People read "lưu trữ" as a delete and worry that last month's trips
       // lose the plate they were run under. The dialog has to say they do not.
       renderPage();
-      await screen.findByText('51D-65233');
-
-      fireEvent.click(actionButton('Lưu trữ'));
+      await vehicleAction('Lưu trữ xe');
 
       expect(
         await screen.findByText(
@@ -805,11 +909,8 @@ describe('TripMasterDataPage', () => {
 
     it('archives the vehicle on confirmation', async () => {
       renderPage();
-      await screen.findByText('51D-65233');
-
-      fireEvent.click(actionButton('Lưu trữ'));
-      const [, confirm] = await screen.findAllByRole('button', { name: 'Lưu trữ' });
-      fireEvent.click(confirm as HTMLElement);
+      await vehicleAction('Lưu trữ xe');
+      fireEvent.click(await screen.findByRole('button', { name: 'Lưu trữ' }));
 
       await waitFor(() => expect(archiveTripVehicle).toHaveBeenCalledWith('v1'));
     });
@@ -827,14 +928,24 @@ describe('TripMasterDataPage', () => {
       expect(archiveTripVehicle).not.toHaveBeenCalled();
     });
 
-    it('★ offers neither control on a row that is already retired', async () => {
-      // The server answers 409 for both; the buttons are disabled rather than
-      // left to produce an error the user could not have predicted.
+    it('★ offers neither control on a lorry that is already retired', async () => {
+      // The server answers 409 for both; the actions are not offered rather
+      // than left to produce an error the user could not have predicted.
       fetchTripVehicles.mockResolvedValue([vehicle({ status: 'archived' })]);
       renderPage();
-      await screen.findByText('51D-65233');
+      const dialog = await openVehicle();
 
-      expect(screen.getByText('Đã lưu trữ')).toBeTruthy();
+      expect(within(dialog).getByText('Đã lưu trữ')).toBeTruthy();
+      expect(within(dialog).queryByRole('button', { name: 'Sửa xe' })).toBeNull();
+      expect(within(dialog).queryByRole('button', { name: 'Lưu trữ xe' })).toBeNull();
+    });
+
+    it('keeps a retired customer’s controls visible but disabled', async () => {
+      fetchTripCustomers.mockResolvedValue([customer({ status: 'archived' })]);
+      renderPage();
+      fireEvent.click(screen.getByRole('button', { name: 'Khách hàng' }));
+      await screen.findByText('VIỄN ĐẠT');
+
       expect((actionButton('Sửa') as HTMLButtonElement).disabled).toBe(true);
       expect((actionButton('Lưu trữ') as HTMLButtonElement).disabled).toBe(true);
     });

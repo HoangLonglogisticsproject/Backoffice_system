@@ -1514,6 +1514,11 @@ const PHRASES = {
     en: 'A hired lorry’s fuel is inside the carrier’s price, so it has no daily fuel check.',
   },
   showArchived: { vi: 'Hiện cả mục đã lưu trữ', en: 'Show archived' },
+  // A lorry as an object: the catalogue opens it, its sections are tabs.
+  vehicleViewDetail: { vi: 'Xem chi tiết', en: 'View details' },
+  vehicleDetailSections: { vi: 'Các mục của xe', en: 'Vehicle sections' },
+  vehicleOverview: { vi: 'Tổng quan', en: 'Overview' },
+  archiveVehicle: { vi: 'Lưu trữ xe', en: 'Archive vehicle' },
   // "Chi phí xe" — the lorry's own ledger (0034), read only. Never a trip cost.
   vehicleCostsSection: { vi: 'Chi phí xe', en: 'Vehicle costs' },
   vehicleCostsTotal: { vi: 'Tổng chi phí xe', en: 'Total vehicle cost' },
