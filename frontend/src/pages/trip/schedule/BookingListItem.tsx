@@ -8,7 +8,7 @@ import { formatPlate } from '@/utils/format';
 import { formatCalendarDay, formatTime } from '@/utils/format/datetime';
 import { TripStatusBadge } from '../components/TripStatusBadge';
 import { ACTION_LABELS, bookingActions, placeLine, urgencyOf } from './bookingPresentation';
-import { CrewPill, UrgencyPill } from './BookingSignals';
+import { CrewPill, RequestsPill, UrgencyPill } from './BookingSignals';
 
 /**
  * One booking in the list — what dispatch scans for, and nothing else: when,
@@ -70,6 +70,7 @@ export function BookingListItem({
           )}
           <TripStatusBadge status={trip.status} />
           <CrewPill trip={trip} />
+          <RequestsPill tripId={trip.id} />
           <UrgencyPill urgency={urgencyOf(trip, now)} />
         </span>
         <span className="mt-1 block truncate font-semibold text-gray-900 sm:pl-8">

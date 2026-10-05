@@ -3,6 +3,7 @@ import { Plus, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useSession } from '@/contexts/SessionProvider';
 import {
   useChangeDriverAssignment,
   useEligibleDrivers,
@@ -11,6 +12,7 @@ import {
 import { isApiError } from '@/utils/errors';
 import { formatDateTime } from '@/utils/format/datetime';
 import { formatPlate } from '@/utils/format';
+import { AssignmentRequestsReview } from './AssignmentRequestsReview';
 import { DriverSelect } from './DriverSelect';
 import type { DriverAssignment } from '@/api/tripAssignment';
 import type { UserSummary } from '@/types/organization';
@@ -50,6 +52,7 @@ interface Props {
  */
 export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
   const { t } = useLanguage();
+  const { can } = useSession();
   const open = trip !== null;
   const drivers = useEligibleDrivers(open);
   const history = useTripAssignments(trip?.id ?? null);
@@ -77,6 +80,8 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
   const showAddButton = !closed && !adding;
   const showAddForm = !closed && adding;
   const showHistory = !history.error && ended.length > 0;
+  // Drivers' asks for this booking (0035) — Dispatch's to decide, nobody else's.
+  const showRequests = !closed && can('dispatch.write');
 
   return (
     <Modal isOpen={open} onClose={onClose} title={t('dispatchTitle')}>
@@ -98,6 +103,10 @@ export function DispatchPanel({ trip, vehicles, onClose }: Readonly<Props>) {
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {t('dispatchLegacyVehicle')}
             </p>
+          )}
+
+          {showRequests && (
+            <AssignmentRequestsReview tripId={trip.id} vehicles={offeredVehicles} crewed={active.length > 0} />
           )}
 
           {active.length === 0 ? (
