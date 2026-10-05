@@ -27,11 +27,24 @@ const SAFE_METHODS = new Set(['get', 'head', 'options']);
 export const CSRF_HEADER = 'X-Requested-With';
 export const CSRF_HEADER_VALUE = 'XMLHttpRequest';
 
+/**
+ * Where the API lives, as a prefix.
+ *
+ * ★ EXPORTED BECAUSE ONE CALLER CANNOT USE `httpClient` AT ALL. Leaflet builds
+ * its own `<img>` elements for map tiles, so that one URL has to be a STRING
+ * handed to a library rather than a request this module makes — and it still
+ * has to resolve the same way `/places` does, or the map breaks in exactly one
+ * environment. `/api` in production, `http://localhost:3000` in development:
+ * the difference is real, and a second copy of this expression is how it gets
+ * out of step.
+ */
+export const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? '';
+
 export const httpClient = axios.create({
   // Same-origin by default: production serves the client and the API from one
   // origin, which is also why CORS is off there. Development points this at the
   // API's own port.
-  baseURL: import.meta.env.VITE_API_URL ?? '',
+  baseURL: API_BASE_URL,
 
   // The session cookie, and the only credential that exists.
   withCredentials: true,
