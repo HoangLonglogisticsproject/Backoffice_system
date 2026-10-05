@@ -339,8 +339,10 @@ mọi assignment active đã được duyệt, quyết định trong chính tran
 
 Ba điều dễ làm sai:
 
-1. **Không bao giờ** thêm `UNIQUE(trip_id, driver_user_id)`. Test kiến trúc
-   `tests/architecture/trip-write-paths.spec.ts` fail nếu migration nào thêm.
+1. **Không bao giờ** thêm `UNIQUE(trip_id, driver_user_id)` trên **`trip_driver_assignments`**.
+   Test kiến trúc `tests/architecture/trip-write-paths.spec.ts` fail nếu migration nào thêm.
+   (Bảng *request* của 0035 được phép "một request **pending** / tài xế / trip" — đó là giới
+   hạn việc xin, không giới hạn số xe một người lái.)
 2. `trip_schedules.vehicle_id` là **legacy**: đọc để hiển thị, **không ghi**, không
    DROP. Cùng test kiến trúc cấm mọi write path chạm cột này.
 3. *Started* là **có event chưa void** trên assignment — không có `started_at`.
@@ -353,6 +355,23 @@ active** — Operations theo dõi từng xe đang chạy, không gộp về trip
 Thứ tự khoá luôn là **trip → assignment → request/cost**. Xem
 [`docs/architecture/adr-0004-dispatch-assignment-multi-vehicle.md`](../../../../docs/architecture/adr-0004-dispatch-assignment-multi-vehicle.md)
 để biết vì sao không có bảng mới, không có lineage và không có transfer.
+
+## Booking đang mở — tài xế xin nhận, Điều độ phân công (0035, 2026-10-06)
+
+**Request ≠ Assignment.** `trip_assignment_requests` giữ việc *xin*; chỉ duyệt (`dispatch.write`,
+kèm **chọn xe**) mới tạo assignment — qua `DispatchCrew`, **cùng một lõi** với phân công trực
+tiếp (`TripExecutionService.assign`), nên luật xe/tài xế và thông báo `TRIP_ASSIGNED` chỉ có
+một chỗ. Mọi đường làm booking hết "mở" — phân công (trực tiếp hoặc duyệt), archive, đóng tay —
+gọi `AssignmentRequestSupersession` trong cùng transaction: không còn request `pending` treo.
+
+* "Đang mở" nói **một lần**, ở `OPEN_BOOKING` (`persistence/open-booking.repository.ts`):
+  `status = 'pending'`, chưa archive, không assignment active. Danh sách và mọi kiểm tra lúc
+  xin/duyệt đều dùng nó.
+* Projection an toàn quyết định **trong SELECT** (không giá, chi phí, khách, liên hệ) —
+  architecture test giữ. Sau khi được duyệt, tài xế đọc qua DTO assignment hiện có.
+* Khoá: **trip → request → xe/assignment → thông báo**. Xin cũng khoá trip trước, nên không thể
+  lọt một request vào booking vừa được phân công.
+* Contract: `docs/backend/frontend-integration-contract.md` §28; làm rõ hợp đồng Driver Portal §4.1.
 
 ## Những gì cố ý KHÔNG có
 

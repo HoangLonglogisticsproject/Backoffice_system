@@ -1,4 +1,4 @@
-import { entryCrewOn } from '../helpers/trip-board-fixture';
+import { entryCrewOn, dispatchCrewOn, supersessionOn } from '../helpers/trip-board-fixture';
 import { Pool } from 'pg';
 import {
   TEST_URL,
@@ -84,6 +84,7 @@ describeIntegration('Completion needs a complete execution — real PostgreSQL',
       history,
       new TripLocationRepository(database),
       entryCrewOn(database),
+      supersessionOn(database),
     );
     execution = new TripExecutionService(
       database,
@@ -96,6 +97,7 @@ describeIntegration('Completion needs a complete execution — real PostgreSQL',
       requests,
       history,
       new VehicleDailyFuelCheckRepository(database),
+      dispatchCrewOn(database),
     );
     completion = new TripCompletionService(
       database,
@@ -106,6 +108,7 @@ describeIntegration('Completion needs a complete execution — real PostgreSQL',
       history,
       notifications,
       events,
+      supersessionOn(database),
     );
 
     operator = (await users.insertUser({ displayName: 'Điều Độ' })).id;

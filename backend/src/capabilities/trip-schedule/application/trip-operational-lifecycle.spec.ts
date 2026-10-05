@@ -10,6 +10,10 @@ import { TripCompletionService } from './trip-completion.service';
 import { TripCostService } from './trip-cost.service';
 import { TripExecutionService } from './trip-execution.service';
 import { TripScheduleService } from './trip-schedule.service';
+import { DispatchCrew } from './dispatch-crew';
+
+/** No driver is asking for any of these bookings (0035): superseding finds nothing. */
+const noAsks = () => ({ supersede: jest.fn().mockResolvedValue([]), deliver: jest.fn() });
 
 /**
  * The operational lifecycle, without a database.
@@ -136,6 +140,7 @@ describe('completion', () => {
       history as never,
       notifications as never,
       events as never,
+      noAsks() as never,
     );
 
     return { service, trips, assignments, requests, costs, history, notifications, events };
@@ -457,6 +462,7 @@ describe('the one write path to DONE — and no office path through the lifecycl
       { findById: jest.fn().mockResolvedValue(null) } as never,
       // No trip here is recorded after it ran, so no crew is written with one.
       { recordEnded: jest.fn() } as never,
+      noAsks() as never,
     );
 
     return { service, trips, history };
@@ -648,6 +654,7 @@ describe('execution events', () => {
       requests as never,
       history as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
+      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noAsks() as never),
     );
 
     return { service, trips, assignments, events, vehicles, users, notifications, requests, history };
@@ -1107,6 +1114,7 @@ describe('dispatch assignment', () => {
       requests as never,
       { record: jest.fn() } as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
+      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noAsks() as never),
     );
     return { service, trips, assignments, events, vehicles, users, notifications, requests };
   };
@@ -1740,6 +1748,7 @@ describe('★ assignment eligibility and what the driver is told', () => {
       requests as never,
       { record: jest.fn() } as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
+      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noAsks() as never),
     );
     return { service, trips, assignments, users, notifications };
   };
@@ -1882,6 +1891,7 @@ describe('★ confirming a delivery is geofenced against the DELIVERY point', ()
       { listByAssignment: jest.fn().mockResolvedValue([]) } as never,
       { record: jest.fn() } as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
+      new DispatchCrew(assignments as never, vehicles as never, drivers() as never, told() as never, noAsks() as never),
     );
     return { service, events };
   };
@@ -1994,6 +2004,7 @@ describe('★ a completion decision is told to the person who asked', () => {
       history as never,
       notifications as never,
       { listByAssignment: jest.fn().mockResolvedValue(FULL_JOURNEY) } as never,
+      noAsks() as never,
     );
     return { service, assignments, requests, notifications };
   };

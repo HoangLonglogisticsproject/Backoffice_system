@@ -3,6 +3,12 @@ import type { Database } from '@common/types/database.port';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripBoardService } from '../../src/capabilities/trip-schedule/application/trip-board.service';
 import { TripEntryCrew } from '../../src/capabilities/trip-schedule/application/trip-entry-crew';
+import { AssignmentRequestSupersession } from '../../src/capabilities/trip-schedule/application/assignment-request-supersession';
+import { DispatchCrew } from '../../src/capabilities/trip-schedule/application/dispatch-crew';
+import { TripAssignmentRequestRepository } from '../../src/capabilities/trip-schedule/persistence/trip-assignment-request.repository';
+import { NotificationService } from '../../src/capabilities/notification/application/notification.service';
+import { NotificationRepository } from '../../src/capabilities/notification/persistence/notification.repository';
+import { NotificationStream } from '../../src/capabilities/notification/application/notification-stream';
 import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
 import {
   TripScheduleService,
@@ -69,6 +75,7 @@ export async function openTripBoard(schema: string): Promise<TripBoardFixture> {
     new TripStatusHistoryRepository(counted),
     new TripLocationRepository(counted),
     entryCrewOn(counted),
+    supersessionOn(counted),
   );
   const users = new UserRepository(base);
   const author = (await users.insertUser({ displayName: 'Điều Độ' })).id;
@@ -88,6 +95,23 @@ export async function openTripBoard(schema: string): Promise<TripBoardFixture> {
 /** The crew writer `TripScheduleService` takes, on `db` — for specs that build the service by hand. */
 export const entryCrewOn = (db: Database): TripEntryCrew =>
   new TripEntryCrew(new DriverAssignmentRepository(db), new TripVehicleRepository(db), new UserRepository(db));
+
+const notificationsOn = (db: Database): NotificationService =>
+  new NotificationService(new NotificationRepository(db), new NotificationStream());
+
+/** What ends the drivers' pending asks when a booking stops being open (0035). */
+export const supersessionOn = (db: Database, notifications = notificationsOn(db)): AssignmentRequestSupersession =>
+  new AssignmentRequestSupersession(new TripAssignmentRequestRepository(db), notifications);
+
+/** The one crew path direct dispatch and an approved ask share (0035). */
+export const dispatchCrewOn = (db: Database, notifications = notificationsOn(db)): DispatchCrew =>
+  new DispatchCrew(
+    new DriverAssignmentRepository(db),
+    new TripVehicleRepository(db),
+    new UserRepository(db),
+    notifications,
+    supersessionOn(db, notifications),
+  );
 
 /** August 2026, first page, the default order — override what a case is about. */
 export const boardQuery = (over: Partial<TripBoardQuery> = {}): TripBoardQuery => ({

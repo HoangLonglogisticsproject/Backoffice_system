@@ -21,6 +21,7 @@ import { TripStatusHistoryRepository } from '../persistence/trip-status-history.
 import { COMPLETION_APPROVED_REASON, MANUAL_COMPLETION_REASON } from '../domain/trip-status-history';
 import { NotificationService } from '../../notification/application/notification.service';
 import { closeTrip } from './trip-closure';
+import { AssignmentRequestSupersession } from './assignment-request-supersession';
 import { eventKeys } from '../../notification/domain/notification';
 
 /**
@@ -52,6 +53,7 @@ export class TripCompletionService {
     private readonly history: TripStatusHistoryRepository,
     private readonly notifications: NotificationService,
     private readonly events: ExecutionEventRepository,
+    private readonly supersession: AssignmentRequestSupersession,
   ) {}
 
   /** What `closeTrip` writes through — this service's own repositories. */
@@ -313,15 +315,21 @@ export class TripCompletionService {
    * for a finished trip exactly as it is for any other.
    */
   async completeManually(tripId: string, decidedBy: string): Promise<TripSchedule> {
-    return this.db.transaction(async (tx) => {
+    const { closed, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
       if (await this.requests.hasPendingOnTrip(tripId, tx)) {
         throw new ConflictError(
           "A driver's completion request on this trip is waiting — approve or reject it instead.",
         );
       }
-      return closeTrip(this.closing, trip, { by: decidedBy, reason: MANUAL_COMPLETION_REASON, at: new Date() }, tx);
+      const closed = await closeTrip(this.closing, trip, { by: decidedBy, reason: MANUAL_COMPLETION_REASON, at: new Date() }, tx);
+      // ★ A BOOKING CLOSED BY HAND IS NO LONGER OPEN (0035): any driver still
+      // asking for it is told now, not left "đang chờ duyệt" forever.
+      const told = await this.supersession.supersede(trip, { by: decidedBy, reason: 'trip_closed' }, tx);
+      return { closed, told };
     });
+    this.supersession.deliver(told);
+    return closed;
   }
 
   /**
