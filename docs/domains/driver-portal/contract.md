@@ -192,6 +192,16 @@ tài khoản, và là người (hoặc uỷ quyền Operations) phân công.
 > Trip một lần** khi còn active. Vẫn đúng: Trip là nhiệm vụ được giao; không có driver
 > pool / marketplace / phụ xe; Driver không tự chọn Trip.
 
+> ✅ **[LÀM RÕ 2026-10-06 — Open Booking, migration 0035]** Câu *"Driver không tự chọn Trip"*
+> nay đọc là **Driver không tự GÁN mình vào Trip**. Driver được **XIN NHẬN** một booking đang
+> mở (Trip chưa có assignment active nào — giai đoạn 1); **Request ≠ Assignment**: yêu cầu
+> không cho Driver bất kỳ quyền gì trên Trip. Chỉ Điều độ/SuperAdmin (`dispatch.write`) duyệt
+> yêu cầu **và chọn xe**, qua đúng luồng phân công trực tiếp — lúc đó mới có assignment.
+> **Không đổi:** quyền xem đầy đủ một Trip vẫn đến từ assignment active (§3); Driver **không**
+> thấy Lịch xe — chỉ thấy *projection an toàn* của các booking đang mở (ngày, giờ lấy, tên điểm
+> + khu vực, mô tả hàng, ghi chú cho tài xế; không khách, không liên hệ, không giá). Không có
+> trạng thái Trip mới. Chi tiết: `docs/backend/frontend-integration-contract.md` §28.
+
 **[CONFIRMED]** Driver **nhận booking từ công ty** và thực hiện booking đó ngoài
 thực tế. Trip là **nhiệm vụ được giao**, không phải đơn hàng Driver tự chọn.
 
