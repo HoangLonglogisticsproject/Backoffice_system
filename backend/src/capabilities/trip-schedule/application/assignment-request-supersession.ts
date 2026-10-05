@@ -31,10 +31,10 @@ export class AssignmentRequestSupersession {
       { tripId: trip.id, by: input.by, reason: input.reason, now: new Date(), except: input.except ?? null },
       tx,
     );
-    const told: Array<Notification | null> = [];
-    for (const request of superseded) {
-      told.push(
-        await this.notifications.record(
+    // One client, one transaction: the inserts queue on it in order either way.
+    return Promise.all(
+      superseded.map((request) =>
+        this.notifications.record(
           {
             recipientUserId: request.driverUserId,
             type: 'ASSIGNMENT_REQUEST_SUPERSEDED',
@@ -45,9 +45,8 @@ export class AssignmentRequestSupersession {
           },
           tx,
         ),
-      );
-    }
-    return told;
+      ),
+    );
   }
 
   /** After COMMIT: push what was written. */

@@ -34,7 +34,7 @@ import { MyRequestsSection, OpenBookingsSection } from './components/OpenBooking
 
 const SECTIONS = ['mine', 'open', 'requests'] as const;
 type Section = (typeof SECTIONS)[number];
-const isSection = (value: unknown): value is Section => SECTIONS.some((section) => section === value);
+const isSection = (value: unknown): value is Section => (SECTIONS as readonly unknown[]).includes(value);
 
 const SECTION_LABEL: Record<Section, TranslationKey> = {
   mine: 'driverSectionMine',
