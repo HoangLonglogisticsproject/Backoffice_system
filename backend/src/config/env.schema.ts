@@ -285,6 +285,82 @@ export const envSchema = z.object({
     .default('HoangLongLogistics-Backoffice (https://hoanglonglti.com)'),
 
   /**
+   * Where the MAP's tiles come from — the pictures, not the addresses.
+   *
+   * ★ FETCHED BY THIS PROCESS NOW, NOT BY THE BROWSER, AND THAT IS THE WHOLE
+   * CHANGE. Measured on production: Leaflet initialised correctly — zoom
+   * controls, the 300 m circle and the pin all drew — and every tile came back
+   * empty, leaving a grey square and no error. The bundle was right, the
+   * stylesheet was right, there was no Content-Security-Policy; the browser
+   * simply could not complete a request to `tile.openstreetmap.org`, while the
+   * same request from a developer's machine returned a 38 KB tile. A tile that
+   * arrives on the same connection as the rest of the application cannot be
+   * blocked separately from it, so `/api/tiles/{z}/{x}/{y}` is the repair.
+   *
+   * ★ THE DEFAULT STILL NEEDS NO ACCOUNT. Moving the fetch to the server is
+   * sufficient on its own — this process reaches OpenStreetMap perfectly well —
+   * so the fix works the day it ships rather than the day somebody finishes
+   * buying a tile plan.
+   *
+   * ⚠ AND THE DEFAULT IS A STOPGAP. OpenStreetMap's tiles are donated
+   * infrastructure for modest DIRECT use; re-serving them from a server sits
+   * further outside that bargain, not closer to it. Set this and
+   * `MAP_TILES_KEY` to a provider that sells tiles — both of these, measured
+   * and answering correctly, differ only in the key's parameter name:
+   *
+   *   MapTiler  https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key={key}
+   *   Stadia    https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}.png?api_key={key}
+   *
+   * ★ `{key}` IS A PLACEHOLDER IN THE TEMPLATE RATHER THAN A PARAMETER THE CODE
+   * APPENDS, precisely because those two names differ. A provider swap is then a
+   * configuration change and not a code change — the same property that made
+   * replacing the geocoder a one-directory job.
+   */
+  MAP_TILES_URL: z
+    .string()
+    .url()
+    .refine(
+      (value) => value.includes('{z}') && value.includes('{x}') && value.includes('{y}'),
+      'MAP_TILES_URL must contain the {z}, {x} and {y} placeholders.',
+    )
+    .default('https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
+
+  /**
+   * ⚠ A SERVER KEY, like `GOONG_API_KEY` and for the same rule: it never reaches
+   * the browser, which asks `/api/tiles/…` and never learns who answers.
+   *
+   * ★ OPTIONAL, AND EMPTY IS A WORKING DEPLOYMENT rather than a broken one —
+   * the default provider wants no key, so an unset value costs nothing but the
+   * goodwill noted above. Substituted into `{key}`; a template without that
+   * placeholder ignores it entirely.
+   */
+  MAP_TILES_KEY: z.string().default(''),
+
+  /**
+   * ⚠ A LICENCE TERM, NOT DECORATION, AND IT MUST MATCH `MAP_TILES_URL`.
+   * OpenStreetMap's data is ODbL and naming the contributors is the condition
+   * of drawing it; a paid provider imposes its own line and usually requires
+   * its own name as well. Served to the client by `/api/tiles/meta` rather than
+   * compiled into the bundle, so switching provider credits the right one
+   * without a frontend release — change this on the same deploy as the URL.
+   */
+  MAP_TILES_ATTRIBUTION: z
+    .string()
+    .min(1)
+    .default('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'),
+
+  /**
+   * How far the configured provider actually has imagery.
+   *
+   * Told to the client so Leaflet stops asking rather than requesting squares
+   * that come back 404 — a zoom level past a provider's coverage is a blank map
+   * and a log full of upstream misses. 19 is OpenStreetMap's; most commercial
+   * providers offer 20 or more. The controller keeps its own hard ceiling of 22
+   * regardless, so a generous value here cannot become a request for zoom 400.
+   */
+  MAP_TILES_MAX_ZOOM: z.coerce.number().int().min(1).max(22).default(19),
+
+  /**
    * The bearer secret the AI PLATFORM presents when it calls this backend's
    * internal read-model routes (ADR-0007). One direction only: what THIS
    * backend presents to the AI is a different secret, held by the AI's own
