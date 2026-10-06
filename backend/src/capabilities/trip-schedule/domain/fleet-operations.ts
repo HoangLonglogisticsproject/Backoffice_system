@@ -74,7 +74,7 @@ export const focusOf = <T extends { state: TurnState }>(turns: readonly T[]): { 
   const current =
     turns.find((turn) => turn.state === 'running') ??
     turns.find((turn) => turn.state === 'waiting') ??
-    turns[turns.length - 1] ??
+    turns.at(-1) ??
     null;
   const next = turns.find((turn) => turn !== current && turn.state === 'waiting') ?? null;
   return { current, next };
