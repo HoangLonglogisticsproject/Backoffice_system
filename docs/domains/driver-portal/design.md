@@ -1806,6 +1806,15 @@ nghĩa là một tài xế ở tầng hầm không có sóng GPS không giao đ�
 giải quyết sẽ là gọi điện nhờ điều độ bấm hộ, tức là toàn bộ dấu vết trở thành vô
 nghĩa. → `[OPEN]` **OD-11** (chặn / cảnh báo / chỉ ghi nhận).
 
+> ★ **[CHỐT 2026-10-06 — DL-118] Phase GPS tạm dừng; mốc là nút Driver bấm.**
+> Geofence đã được dựng trước quyết định nghiệp vụ và nay **tắt**: `GEOFENCED_MILESTONES`
+> rỗng, portal không hỏi định vị, không gửi `location`, và **GAP-14 không còn chặn
+> Driver** — chuyến xác nhận được dù kho chưa có toạ độ. Luật geofence (bán kính
+> 300 m · accuracy 100 m · tươi 2 phút · haversine), 6 mã refusal và 4 cột evidence
+> của `0019` giữ nguyên **và vẫn có test**, nên **OD-11** (chặn / cảnh báo / chỉ ghi
+> nhận) vẫn là câu hỏi mở cho ngày bật lại — không phải câu hỏi đã trả lời bằng
+> việc tắt. Xem `decisions.md` DL-118.
+
 ### A-10.3. Verification signal — xếp theo hiệu quả trên chi phí
 
 | Biện pháp | Chi phí | Hiệu quả | Giai đoạn |
