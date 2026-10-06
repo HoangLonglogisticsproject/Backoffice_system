@@ -127,6 +127,14 @@ export interface TripScheduleQuery extends OffsetPageRequest {
    */
   sort?: TripBoardSort;
   direction?: SortDirection;
+  /**
+   * Narrows the board to customers whose name contains this, case-insensitively.
+   *
+   * ★ A REAL FILTER, APPLIED BY THE SERVER. Narrowing a PAGE in the browser
+   * would hide rows while the total beside them described others — "20 of 137"
+   * printed over four. Omitted or empty, the server reads every customer.
+   */
+  customer?: string;
 }
 
 /**
@@ -175,6 +183,15 @@ async function readTripPage(
       lifecycle: request.lifecycle,
       sort: request.sort,
       direction: request.direction,
+      /**
+       * ⚠ THIS WHITELIST IS THE LAST GATE, AND A PARAMETER MISSING FROM IT IS
+       * INVISIBLE EVERYWHERE ELSE. `customer` was built into the request object,
+       * carried through the cache key, and asserted in three tests that mock
+       * `fetchTripSchedules` — and still never left the browser, because this
+       * list did not mention it. Anything added to `TripScheduleQuery` has to be
+       * added here too; `tripSchedule.api.spec` is what now says so out loud.
+       */
+      customer: request.customer,
     },
   });
   return { ...data, items: data.items.map(fromWire) };

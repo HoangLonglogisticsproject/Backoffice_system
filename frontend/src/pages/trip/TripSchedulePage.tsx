@@ -82,7 +82,7 @@ export default function TripSchedulePage() {
             tab whose name matches what the file contains. */}
         <div className="flex flex-wrap items-end justify-between gap-2 border-b border-gray-100 px-4 pt-3">
           <AssignmentTabs value={trips.assignment} onChange={trips.setAssignment} unassignedCount={trips.unassignedCount} />
-          {trips.assignment === 'all' && <TripScheduleExportButton range={trips.range} />}
+          {trips.assignment === 'all' && <TripScheduleExportButton range={trips.range} customer={trips.appliedCustomer} />}
         </div>
         <TripRangeFilters trips={trips} />
       </div>

@@ -20,9 +20,20 @@ import type { TripBoardListFilter } from './keys';
  * the server's decision, from the session — never from anything sent here.
  */
 export const boardListRequest = (
-  { from, to, assignment, lifecycle, sort, direction }: TripBoardListFilter,
+  { from, to, assignment, lifecycle, sort, direction, customer }: TripBoardListFilter,
   { page, limit }: OffsetPageRequest,
-): TripScheduleQuery => ({ from, to, assignment, lifecycle, sort, direction, page, limit });
+): TripScheduleQuery => ({
+  from,
+  to,
+  assignment,
+  lifecycle,
+  sort,
+  direction,
+  page,
+  limit,
+  // Sent as typed; the server trims it and reads an empty one as "no filter".
+  customer,
+});
 
 /**
  * The tab badge's read: how many trips in the range still have nobody on them.
@@ -35,7 +46,8 @@ export const boardListRequest = (
 export const unassignedCountRequest = ({
   from,
   to,
-}: Pick<TripBoardListFilter, 'from' | 'to'>): TripScheduleQuery => ({
+  customer,
+}: Pick<TripBoardListFilter, 'from' | 'to' | 'customer'>): TripScheduleQuery => ({
   from,
   to,
   page: 1,
@@ -43,6 +55,13 @@ export const unassignedCountRequest = ({
   assignment: 'unassigned',
   // The queue is Lịch xe's: a finished trip is nobody's work to crew.
   lifecycle: 'operational',
+  /**
+   * ★ THE BADGE OBEYS THE SEARCH TOO, because the two are read together. A
+   * dispatcher who has narrowed the board to one customer is looking at a tab
+   * saying "chờ phân công"; a number counting every OTHER customer's uncrewed
+   * trips beside a list that shows none of them describes a board nobody is on.
+   */
+  customer,
 });
 
 /**

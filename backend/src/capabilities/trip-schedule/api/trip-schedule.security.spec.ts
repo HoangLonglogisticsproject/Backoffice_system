@@ -758,6 +758,50 @@ describe('trip-schedule HTTP security', () => {
       ]);
     });
 
+    /**
+     * ★ THE CUSTOMER SEARCH. One box on two screens (Lịch xe, Lịch sử chuyến),
+     * and the SAME parameter on the export — so the file a dispatcher downloads
+     * holds exactly the rows they were looking at.
+     */
+    it('passes the typed search through, trimmed', async () => {
+      context = sales();
+      await authed('get', '/trip-schedules?customer=%20vi%E1%BB%85n%20').expect(200);
+
+      expect(trips.list).toHaveBeenCalledWith(expect.objectContaining({ customer: 'viễn' }));
+    });
+
+    it('★ reads every customer when the box was never touched, and when it was CLEARED', async () => {
+      // An emptied box sends `?customer=`. That has to mean "no filter" rather
+      // than a search for the empty string — the same rows either way, but one
+      // of them goes through a predicate and a parameter nothing needs.
+      context = sales();
+      await authed('get', '/trip-schedules').expect(200);
+      await authed('get', '/trip-schedules?customer=').expect(200);
+      await authed('get', '/trip-schedules?customer=%20%20').expect(200);
+
+      expect(trips.list.mock.calls.map(([query]) => (query as { customer: unknown }).customer)).toEqual([
+        null,
+        null,
+        null,
+      ]);
+    });
+
+    it('★ carries the search onto the export, so the file matches the screen', async () => {
+      context = asContext({ global: true });
+      await authed('get', '/trip-schedules/export?customer=3SC').expect(200);
+
+      expect(trips.list).toHaveBeenCalledWith(expect.objectContaining({ customer: '3SC' }));
+    });
+
+    it('refuses a search longer than a customer name can be, before any read', async () => {
+      context = sales();
+      const response = await authed('get', `/trip-schedules?customer=${'a'.repeat(101)}`);
+
+      expect(response.status).toBe(422);
+      expect(response.body.error.details).toHaveProperty('customer');
+      expect(trips.list).not.toHaveBeenCalled();
+    });
+
     it('★ refuses a lifecycle it does not have — a status name included — before any read', async () => {
       context = asContext({ global: true });
       const response = await authed('get', '/trip-schedules?lifecycle=finished');

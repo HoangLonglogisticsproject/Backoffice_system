@@ -69,7 +69,7 @@ export default function TripHistoryPage() {
               {t('importTrip')}
             </Button>
           )}
-          <TripScheduleExportButton range={trips.range} lifecycle="history" />
+          <TripScheduleExportButton range={trips.range} lifecycle="history" customer={trips.appliedCustomer} />
         </div>
       </div>
 

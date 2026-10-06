@@ -1,3 +1,4 @@
+import { Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useLanguage } from '@/contexts/LanguageContext';
@@ -19,7 +20,20 @@ import { TripSortControl } from './TripSortControl';
 export function TripRangeFilters({
   trips,
 }: Readonly<{
-  trips: Pick<TripSchedules, 'range' | 'setFrom' | 'setTo' | 'resetRange' | 'order' | 'setOrder'>;
+  trips: Pick<
+    TripSchedules,
+    'range'
+    | 'setFrom'
+    | 'setTo'
+    | 'resetRange'
+    | 'order'
+    | 'setOrder'
+    | 'customer'
+    | 'setCustomer'
+    | 'appliedCustomer'
+    | 'submitCustomer'
+    | 'clearCustomer'
+  >;
 }>) {
   const { t } = useLanguage();
 
@@ -56,6 +70,68 @@ export function TripRangeFilters({
           {t('thisMonth')}
         </Button>
       </div>
+
+      {/*
+        ★ THE CUSTOMER SEARCH IS A SERVER FILTER LIKE THE RANGE, not a narrowing
+        of the page on screen. It goes into the query and the cache key, so the
+        rows, the total and `totalPages` keep describing one set.
+
+        ★ A REAL `<form>`, SO ENTER SUBMITS WITHOUT A KEY HANDLER. The browser
+        already turns Enter in a single-input form into a submit; writing
+        `onKeyDown === 'Enter'` instead is how a control ends up working for a
+        mouse and not for the keyboard.
+
+        ⚠ `noValidate` AND `type="button"` ARE NOT USED HERE ON PURPOSE: this
+        form submits nothing to a server of its own, so nothing has to be
+        suppressed — `onSubmit` prevents the default and sets the filter.
+      */}
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          trips.submitCustomer();
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <label htmlFor="trip-customer-search" className="text-xs font-medium whitespace-nowrap text-gray-600">
+            {t('tripCustomerSearchLabel')}
+          </label>
+          <div className="relative">
+            <Search
+              aria-hidden
+              className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-gray-400"
+            />
+            <Input
+              id="trip-customer-search"
+              // `search` so a phone keyboard shows a search key. `autoComplete`
+              // off because a customer's name is this board's data, not a form
+              // value worth saving into the browser's profile.
+              type="search"
+              autoComplete="off"
+              value={trips.customer}
+              onChange={(event) => trips.setCustomer(event.target.value)}
+              placeholder={t('tripCustomerSearchHint')}
+              className="h-9 w-[200px] bg-white pl-8"
+            />
+          </div>
+        </div>
+
+        <Button type="submit" className="h-9">
+          {t('tripCustomerSearch')}
+        </Button>
+
+        {/*
+          ★ OFFERED ONLY WHILE A FILTER IS ACTUALLY ON. A permanent "clear"
+          beside an empty box is a control that does nothing, and the board's
+          one honest signal that rows are being hidden is this button existing.
+        */}
+        {trips.appliedCustomer === '' ? null : (
+          <Button type="button" variant="outline" className="h-9 bg-white" onClick={trips.clearCustomer}>
+            <X aria-hidden />
+            {t('tripCustomerSearchClear')}
+          </Button>
+        )}
+      </form>
 
       <TripSortControl value={trips.order} onChange={trips.setOrder} />
     </div>

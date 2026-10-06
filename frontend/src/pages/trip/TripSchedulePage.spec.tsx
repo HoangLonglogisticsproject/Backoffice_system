@@ -307,6 +307,12 @@ describe('TripSchedulePage', () => {
       ([request]) => (request as { limit?: number }).limit !== 1,
     );
 
+  /** The newest board request — the one the last action produced. */
+  const lastCall = () => {
+    const calls = listCalls();
+    return calls[calls.length - 1]![0] as Record<string, unknown>;
+  };
+
   describe('★ dispatch — the lorries and their drivers (ADR-0004)', () => {
     // `dispatch.write` (0032): the crew control is drawn for the dispatch
     // function and the superadmin, never for `trip.write` alone.
@@ -898,7 +904,59 @@ describe('TripSchedulePage', () => {
         direction: 'desc',
         page: 1,
         limit: 20,
+        // Empty until somebody searches. The server reads an empty one as "every
+        // customer", so the opening board is the board it always was.
+        customer: '',
       });
+    });
+
+    /**
+     * ★ THE CUSTOMER SEARCH, END TO END: box → button → request.
+     *
+     * The filter bar has its own cases for which control calls what; this one
+     * exists because those would all still pass while the typed name never
+     * reached the server. What is asserted here is the REQUEST.
+     */
+    it('★ sends nothing new while the name is only being typed', async () => {
+      renderPage();
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(0));
+      const before = listCalls().length;
+
+      fireEvent.change(screen.getByLabelText('Tìm khách hàng'), { target: { value: 'viễn' } });
+
+      // A name is not a complete value halfway through. No prefix of it is read.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(listCalls()).toHaveLength(before);
+    });
+
+    it('★ sends the search once "Tìm" is pressed, and goes back to page one', async () => {
+      fetchTripSchedules.mockResolvedValue({ items: [trip()], page: 1, limit: 20, total: 45, totalPages: 3 });
+      renderPage();
+      await screen.findByText('WWL');
+      fireEvent.click(screen.getByRole('button', { name: 'Sau' }));
+      await waitFor(() => expect(lastCall()).toMatchObject({ page: 2 }));
+
+      fireEvent.change(screen.getByLabelText('Tìm khách hàng'), { target: { value: '  viễn  ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Tìm' }));
+
+      await waitFor(() =>
+        // Trimmed, and page 1: a narrower list may not have the page somebody
+        // was standing on.
+        expect(lastCall()).toMatchObject({ customer: 'viễn', page: 1 }),
+      );
+    });
+
+    it('★ reads every customer again once the search is cleared', async () => {
+      renderPage();
+      await waitFor(() => expect(listCalls().length).toBeGreaterThan(0));
+
+      fireEvent.change(screen.getByLabelText('Tìm khách hàng'), { target: { value: 'viễn' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Tìm' }));
+      await waitFor(() => expect(lastCall()).toMatchObject({ customer: 'viễn' }));
+
+      fireEvent.click(await screen.findByRole('button', { name: /bỏ lọc/i }));
+
+      await waitFor(() => expect(lastCall()).toMatchObject({ customer: '' }));
     });
 
     it('walks to page 2 with every other parameter as it was', async () => {

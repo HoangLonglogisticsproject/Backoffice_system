@@ -30,6 +30,21 @@ export interface TripSchedules extends OffsetPages<TripBoardRow> {
   order: TripBoardOrder;
   setOrder: (order: TripBoardOrder) => void;
   /**
+   * ★ THE BOX AND THE FILTER ARE TWO VALUES, AND THAT IS THE WHOLE DESIGN OF
+   * THIS SEARCH. `customer` is what is being typed; `appliedCustomer` is what
+   * the list is actually narrowed by. They differ for exactly as long as
+   * somebody is typing and has not pressed "Tìm" — which is why a half-typed
+   * name never becomes a request, a cache key, or a total on screen.
+   */
+  customer: string;
+  setCustomer: (search: string) => void;
+  /** What the rows on screen are narrowed by. Empty = every customer. */
+  appliedCustomer: string;
+  /** Submit the box. Pressing Enter in it does the same. */
+  submitCustomer: () => void;
+  /** Empty the box AND the filter, in one action. */
+  clearCustomer: () => void;
+  /**
    * How many trips in the range still have nobody on them — the number on the
    * tab, whichever tab is open. `null` until it has been read once, and always
    * on Lịch sử chuyến, which has no crew queue.
@@ -98,12 +113,39 @@ export function useTripSchedules(lifecycle: TripLifecycle = 'operational'): Trip
   const [range, setRange] = useState<DateRange>(() => currentMonthRange());
   const [assignment, setAssignment] = useState<TripAssignmentFilter>('all');
   const [order, setOrder] = useState<TripBoardOrder>(DEFAULT_TRIP_BOARD_ORDER);
+  /**
+   * ★ THE CUSTOMER SEARCH IS SUBMITTED, NOT DEBOUNCED — unlike the date range
+   * above it, and deliberately.
+   *
+   * A date box holds one value with one meaning the moment it is complete; a
+   * name box does not. "VI" is a prefix of a dozen customers, so a debounce
+   * would fetch, count and render a board for every prefix on the way to the
+   * name somebody meant — work nobody asked for, and a total that changes
+   * under the reader's eyes while they are still typing.
+   *
+   * So the box is a DRAFT until "Tìm" (or Enter). Only `appliedCustomer`
+   * reaches the cache key and the request.
+   */
+  const [customer, setCustomer] = useState('');
+  const [appliedCustomer, setAppliedCustomer] = useState('');
+
   const queried = useDebouncedValue(range, FILTER_DEBOUNCE_MS);
 
   // The list's identity: its cache key, and — through `boardListRequest` — its
   // request. `costs` keeps a page fetched with money apart from one fetched
   // without; see `tripKeys.scheduleList`.
-  const filter: TripBoardListFilter = { ...queried, assignment, lifecycle, ...order, costs: can('cost.read') };
+  //
+  // ★ A NEW KEY IS WHAT SENDS THE WALK BACK TO PAGE ONE, so submitting a search
+  // while on page 4 cannot leave somebody on a page the narrowed list has not
+  // got — see `tripKeys.scheduleList`.
+  const filter: TripBoardListFilter = {
+    ...queried,
+    customer: appliedCustomer,
+    assignment,
+    lifecycle,
+    ...order,
+    costs: can('cost.read'),
+  };
 
   const pages = useOffsetPages<TripBoardRow>(
     tripKeys.scheduleList(filter),
@@ -125,9 +167,14 @@ export function useTripSchedules(lifecycle: TripLifecycle = 'operational'): Trip
    * Keyed on the DEBOUNCED range, like the list, so typing a year in the date
    * box does not fire four counts.
    */
+  // The badge is read under the SAME narrowing as the list: see
+  // `unassignedCountRequest`. Its key carries the search for the same reason the
+  // list's does — two searches are two numbers.
+  const counted = { ...queried, customer: appliedCustomer };
+
   const count = useQuery({
-    queryKey: tripKeys.unassignedCount(queried),
-    queryFn: async () => withoutRows(await fetchTripSchedules(unassignedCountRequest(queried))),
+    queryKey: tripKeys.unassignedCount(counted),
+    queryFn: async () => withoutRows(await fetchTripSchedules(unassignedCountRequest(counted))),
     enabled: state?.status === 'ready' && lifecycle === 'operational',
     staleTime: SCHEDULE_STALE_MS,
     select: (page) => page.total,
@@ -139,6 +186,16 @@ export function useTripSchedules(lifecycle: TripLifecycle = 'operational'): Trip
   );
   const setTo = useCallback((day: string) => setRange((current) => ({ ...current, to: day })), []);
   const resetRange = useCallback(() => setRange(currentMonthRange()), []);
+
+  // Trimmed on the way in, so "  viễn  " and "viễn" are one cache key rather
+  // than two lists of the same rows. The server trims too; this keeps the key
+  // and the request agreeing about which search is which.
+  const submitCustomer = useCallback(() => setAppliedCustomer(customer.trim()), [customer]);
+
+  const clearCustomer = useCallback(() => {
+    setCustomer('');
+    setAppliedCustomer('');
+  }, []);
 
   const reload = useCallback(() => {
     // EVERY page of EVERY range, not just the one on screen: a new trip lands
@@ -158,6 +215,11 @@ export function useTripSchedules(lifecycle: TripLifecycle = 'operational'): Trip
     setAssignment,
     order,
     setOrder,
+    customer,
+    setCustomer,
+    appliedCustomer,
+    submitCustomer,
+    clearCustomer,
     unassignedCount: count.data ?? null,
     reload,
   };

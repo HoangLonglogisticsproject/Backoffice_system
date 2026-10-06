@@ -156,6 +156,8 @@ export interface TripBoardQuery extends DateRangePageQuery, TripBoardOrder {
   assignment: TripAssignmentFilter;
   /** Lịch xe or Lịch sử chuyến — the same trips, split at `finished`. */
   lifecycle: TripLifecycle;
+  /** Narrows to customers whose name contains this. `null` = every customer. */
+  customer: string | null;
 }
 
 /** The fields a patch may CLEAR with `null` — everything but the day, the status and the intent. */
@@ -212,7 +214,15 @@ export class TripScheduleService {
    */
   async list(query: TripBoardQuery): Promise<OffsetPage<TripScheduleWithRefs>> {
     const range = { from: query.from, to: query.to };
-    const filter = { assignment: query.assignment, lifecycle: query.lifecycle };
+    // ★ THE SAME FILTER OBJECT REACHES BOTH READS BELOW. The page and the count
+    // that recovers a stale page number must describe one set; building the
+    // second from a subset of the query is how "20 of 137" gets printed over
+    // four rows.
+    const filter = {
+      assignment: query.assignment,
+      lifecycle: query.lifecycle,
+      customer: query.customer,
+    };
     const offset = (query.page - 1) * query.limit;
 
     const { items, total } = await this.trips.listPage(
