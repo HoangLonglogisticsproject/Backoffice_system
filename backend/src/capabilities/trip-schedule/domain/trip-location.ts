@@ -191,3 +191,82 @@ export const checkMilestoneLocation = (
 
   return { passed: true, distanceM };
 };
+
+/**
+ * ★ THE CALL SITE THAT WAS REMOVED, KEPT AS A RULE RATHER THAN AS DEAD CODE.
+ *
+ * `TripExecutionService.recordEvent` used to decide a geofence verdict inline,
+ * under the trip lock. DL-118 turned the check off, which left that block
+ * provably unreachable — and unreachable code is worse than no code: it is read
+ * as behaviour that happens, it is never exercised, and it rots silently.
+ *
+ * So the WIRING moved here, beside the rule it wires, where it is exported and
+ * covered by `trip-location.spec.ts`. Re-enabling the check is: list the
+ * milestones below, then in `recordEvent` — between the daily-fuel gate and
+ * `events.record` — call `geofencedPointOf`, and when it is not `undefined`
+ * pass it to `checkMilestoneLocation` with `input.location` and
+ * `input.deviceReportedAt`, throwing `ValidationError(LOCATION_REFUSALS[reason],
+ * { location: reason })` on a refusal and writing `geofencePassed` /
+ * `distanceM` from the verdict.
+ *
+ * ⚠ THREE THINGS THAT MUST STAY TRUE WHEN IT COMES BACK, because each was a
+ * real decision and none is obvious from the code alone:
+ *
+ *   under the lock    the trip's coordinates are read with `FOR UPDATE`, so
+ *                     Operations correcting a point mid-request cannot make the
+ *                     check measure against a stale one
+ *   server-side only  the browser sends a READING; the DTO has no field for a
+ *                     verdict, and this is the only place one may be reached
+ *   after the retry   an idempotent repeat is answered with the stored event
+ *                     BEFORE any of this, so a retry needs no fresh fix
+ */
+
+/** The two ends a trip has, as the milestones that would be measured. */
+export interface GeofencedTrip {
+  pickupLatitude: number | null;
+  pickupLongitude: number | null;
+  deliveryLatitude: number | null;
+  deliveryLongitude: number | null;
+}
+
+/** Which milestones the geofence is asked about. Empty since DL-118. */
+export const GEOFENCED_MILESTONES: readonly string[] = [];
+
+const pointOf = (latitude: number | null, longitude: number | null): Coordinates | null =>
+  latitude !== null && longitude !== null ? { latitude, longitude } : null;
+
+/**
+ * Which point a milestone is measured against.
+ *
+ * `undefined` for a milestone that is not geofenced — the two ARRIVALS always,
+ * because arriving is what the driver says on the way in and the check belongs
+ * to the confirmation that follows. `null` for a geofenced confirmation whose
+ * point Operations has not entered yet: refused, and named as the office's
+ * problem rather than the driver's.
+ */
+export const geofencedPointOf = (
+  trip: GeofencedTrip,
+  type: string,
+  geofenced: readonly string[] = GEOFENCED_MILESTONES,
+): Coordinates | null | undefined => {
+  if (!geofenced.includes(type)) return undefined;
+  if (type === 'PICKUP_CONFIRMED') return pointOf(trip.pickupLatitude, trip.pickupLongitude);
+  if (type === 'DELIVERY_CONFIRMED') return pointOf(trip.deliveryLatitude, trip.deliveryLongitude);
+  return undefined;
+};
+
+/**
+ * One sentence per refusal, for whoever reads the API directly. The portal
+ * switches on the CODE in `details.location`, never on these words, so they can
+ * be edited without breaking a screen.
+ */
+export const LOCATION_REFUSALS: Record<LocationRejection, string> = {
+  DESTINATION_MISSING:
+    'This trip has no coordinates for that point yet, so it cannot be confirmed against them. Ask Operations to enter the location.',
+  LOCATION_REQUIRED: 'Confirming this milestone needs the handset’s current position.',
+  INVALID_COORDINATES: 'The position sent is not a place on Earth.',
+  ACCURACY_INSUFFICIENT:
+    'The handset is not sure enough where it is. Move to open sky and try again.',
+  LOCATION_STALE: 'That position is too old. Capture a fresh one and try again.',
+  OUTSIDE_GEOFENCE: 'That position is not at the point being confirmed.',
+};

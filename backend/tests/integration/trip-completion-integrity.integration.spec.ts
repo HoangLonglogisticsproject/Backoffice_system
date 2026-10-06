@@ -8,6 +8,7 @@ import {
   poolAsDatabase,
 } from '../helpers/integration-database';
 import { NotFoundError } from '@common/errors/domain.error';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripCompletionService } from '../../src/capabilities/trip-schedule/application/trip-completion.service';
 import { TripExecutionService } from '../../src/capabilities/trip-schedule/application/trip-execution.service';
@@ -109,6 +110,7 @@ describeIntegration('Completion needs a complete execution — real PostgreSQL',
       notifications,
       events,
       supersessionOn(database),
+      new AuthorizationRepository(database),
     );
 
     operator = (await users.insertUser({ displayName: 'Điều Độ' })).id;

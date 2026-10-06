@@ -9,13 +9,12 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useDriverActions, useMyAssignment } from '@/hooks/driver';
 import { driverErrorKey, isFinalRefusal, needsDailyFuelCheck, shouldReloadAfter } from '@/utils/driverErrors';
 import { assignmentStatusOf, currentStage, workflowStages, type WorkflowStage } from '@/utils/driverExecution';
-import { captureLocation } from '@/utils/driverLocation';
 import { wasOpenedFromSchedule } from '@/utils/driverSchedule';
 import { formatCalendarWeekday, formatTimeOnDay } from '@/utils/format/datetime';
 import { cn } from '@/utils/cn';
 import { formatPlate } from '@/utils/format';
 import type { TranslationKey } from '@/types/translate';
-import type { DriverTripDetail, ExecutionEventType, ExpenseDeclaration, LocationEvidence } from '@/types/driver';
+import type { DriverTripDetail, ExecutionEventType, ExpenseDeclaration } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
 import { AssignmentStatusPill } from './components/AssignmentStatusPill';
 import { CompletionPanel } from './components/CompletionPanel';
@@ -60,8 +59,6 @@ export default function DriverTripPage() {
   const { report, declare, correct, complete, fuel } = useDriverActions(assignmentId ?? '');
 
   const [actionError, setActionError] = useState<unknown>(null);
-  /** The handset is being asked where it is. Separate from the request in flight. */
-  const [locating, setLocating] = useState(false);
   /**
    * ★ THE COMPLETION CHECKPOINT CAN OPEN THE EXPENSE FORM.
    *
@@ -137,22 +134,12 @@ export default function DriverTripPage() {
 
   const reportEvent = (type: ExecutionEventType) =>
     void run(async () => {
-      // ★ CONFIRMING A PICKUP OR A DELIVERY ASKS THE PHONE WHERE IT IS, AND
-      // SENDS THAT — A READING, NOT A VERDICT. The server holds the trip's
-      // coordinates for each end and the radius, measures the distance
-      // itself, and refuses with a reason the screen can name. If the phone
-      // cannot produce a reading, no request is made at all: there is no
-      // confirmation without a position.
-      let location: LocationEvidence | undefined;
-      if (type === 'PICKUP_CONFIRMED' || type === 'DELIVERY_CONFIRMED') {
-        setLocating(true);
-        try {
-          location = await captureLocation();
-        } finally {
-          setLocating(false);
-        }
-      }
-
+      // ★ THE TAP IS THE MILESTONE, AND THE SCREEN ASKS THE PHONE FOR NOTHING.
+      // No permission prompt, no fix to wait for, nothing that can fail between
+      // the thumb and the request. The geofence is off on the server too
+      // (`GEOFENCED_MILESTONES`), which is where that decision lives — contract
+      // §11 keeps GPS [FUTURE], and `utils/driverLocation` stays beside this
+      // file, whole and tested, for the day it comes back.
       try {
         await report.mutateAsync({
           type,
@@ -163,7 +150,6 @@ export default function DriverTripPage() {
           // which is DIAGNOSTIC — kept so a disagreement can be investigated,
           // never read by anything that computes a delay or an order.
           deviceReportedAt: new Date().toISOString(),
-          ...(location ? { location } : {}),
           // ★ ONE ID PER INTENT, NOT PER ATTEMPT. A retried request must collide
           // with its own first attempt so an arrival is never recorded twice.
           clientEventId: `${trip.assignment.id}:${type}`,
@@ -235,8 +221,8 @@ export default function DriverTripPage() {
         </p>
       ) : null}
 
-      <MilestoneCard end="pickup" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} locating={locating} />
-      <MilestoneCard end="delivery" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} locating={locating} />
+      <MilestoneCard end="pickup" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} />
+      <MilestoneCard end="delivery" trip={trip} now={now} onReport={reportEvent} reporting={report.isPending} />
 
       <TripFacts trip={trip} />
 

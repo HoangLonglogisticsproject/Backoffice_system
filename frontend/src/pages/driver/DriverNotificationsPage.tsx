@@ -23,6 +23,12 @@ import type { Notification, NotificationType } from '@/types/notification';
  * notification is a signal, never a key.
  */
 
+/**
+ * ★ TOTAL OVER EVERY TYPE, INCLUDING THE ONE NO DRIVER CAN RECEIVE.
+ * `COMPLETION_SUBMITTED` is addressed to the reviewer (0036), so this screen
+ * will never draw it — but a `Record` that skipped it would stop compiling the
+ * day a seventh type arrives, which is exactly the reminder this map is for.
+ */
 const TITLE: Record<NotificationType, TranslationKey> = {
   TRIP_ASSIGNED: 'notifTripAssigned',
   TRIP_UNASSIGNED: 'notifTripUnassigned',
@@ -30,6 +36,7 @@ const TITLE: Record<NotificationType, TranslationKey> = {
   COMPLETION_APPROVED: 'notifCompletionApproved',
   ASSIGNMENT_REQUEST_REJECTED: 'notifRequestRejected',
   ASSIGNMENT_REQUEST_SUPERSEDED: 'notifRequestSuperseded',
+  COMPLETION_SUBMITTED: 'notifCompletionSubmitted',
 };
 
 const ICON: Record<NotificationType, React.ReactNode> = {
@@ -39,6 +46,7 @@ const ICON: Record<NotificationType, React.ReactNode> = {
   COMPLETION_APPROVED: <CheckCircle2 />,
   ASSIGNMENT_REQUEST_REJECTED: <XCircle />,
   ASSIGNMENT_REQUEST_SUPERSEDED: <CircleSlash />,
+  COMPLETION_SUBMITTED: <Bell />,
 };
 
 /**

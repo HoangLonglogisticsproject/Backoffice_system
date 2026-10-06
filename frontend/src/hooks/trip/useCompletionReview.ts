@@ -50,7 +50,7 @@ const asApiError = (error: unknown): ApiError | null => {
  * ★ TAKES NO RANGE, so nothing here can lose a pending review at a month
  * boundary and no browser clock decides which month it is.
  */
-export function useCompletionQueue(): {
+export function useCompletionQueue(options?: { enabled?: boolean }): {
   rows: OperationalBoardRow[];
   loading: boolean;
   error: ApiError | null;
@@ -59,6 +59,15 @@ export function useCompletionQueue(): {
   const query = useQuery({
     queryKey: reviewKeys.queue(),
     queryFn: () => fetchCompletionReviewQueue(),
+    /**
+     * ★ `enabled` EXISTS FOR THE BELL, AND THE KEY IS WHY IT IS SAFE. The
+     * notification panel wants these rows to name a lorry, but only once
+     * somebody opens it — a bell sitting on every Backoffice screen has no
+     * business fetching a queue nobody asked for. The key is the same one the
+     * review page uses, so when both are mounted there is still exactly one
+     * request and one cache entry; disabling here never hides rows from there.
+     */
+    enabled: options?.enabled ?? true,
   });
 
   return {

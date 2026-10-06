@@ -23,6 +23,7 @@ import { ApiError } from '@/utils/errors';
 const useSession = vi.fn();
 const fetchMyAssignments = vi.fn();
 const fetchMyAssignment = vi.fn();
+const fetchMyWorkday = vi.fn();
 
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
@@ -32,7 +33,7 @@ const fetchNotifications = vi.fn();
 vi.mock('@/api/notifications', () => ({
   fetchNotifications: (...a: unknown[]) => fetchNotifications(...a),
   markNotificationRead: vi.fn(),
-  notificationStreamUrl: () => '/notifications/stream',
+  notificationSocketTarget: () => ({ origin: '', path: '/socket.io' }),
 }));
 vi.mock('@/api/driverPortal', () => ({
   fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),
@@ -45,6 +46,11 @@ vi.mock('@/api/driverPortal', () => ({
   declareExpense: vi.fn(),
   editExpense: vi.fn(),
   submitCompletion: vi.fn(),
+  // "Ca làm việc hôm nay" is the "Hôm nay" tab now, so every render of the
+  // schedule reads it. Empty unless a case says otherwise.
+  fetchMyWorkday: (...a: unknown[]) => fetchMyWorkday(...a),
+  declareDailyFuel: vi.fn(),
+  recordFuelFill: vi.fn(),
 }));
 
 const sessionOf = (accountType: 'driver' | 'employee') => ({
@@ -103,6 +109,8 @@ const navLink = (name: string | RegExp) => within(driverNav()).getByRole('link',
 beforeEach(() => {
   useSession.mockReset().mockReturnValue(sessionOf('driver'));
   fetchMyAssignments.mockReset().mockResolvedValue([]);
+  // No shift today unless a case builds one.
+  fetchMyWorkday.mockReset().mockResolvedValue({ businessDate: '2026-08-30', vehicles: [] });
   // A refusal, so the detail hook's own retry predicate does not retry it.
   fetchMyAssignment.mockReset().mockRejectedValue(new ApiError(404, 'NOT_FOUND', 'Not found.'));
   fetchNotifications.mockReset().mockResolvedValue({ items: [], unreadCount: 2 });

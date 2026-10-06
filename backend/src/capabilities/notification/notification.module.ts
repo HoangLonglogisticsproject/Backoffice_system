@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AppConfig } from '../../config/app.config';
 import { IdentityModule } from '../../core/identity/identity.module';
 import { NotificationController } from './api/notification.controller';
+import { NotificationGateway } from './api/notification.gateway';
 import { NotificationStream } from './application/notification-stream';
 import { NotificationService } from './application/notification.service';
 import { NotificationRepository } from './persistence/notification.repository';
@@ -24,6 +25,9 @@ import { NotificationRepository } from './persistence/notification.repository';
   providers: [
     NotificationService,
     NotificationRepository,
+    // The socket. Authenticates its own handshake against `SessionService`,
+    // which is why `IdentityModule` is imported for more than `AuthGuard` now.
+    NotificationGateway,
     // The limits come from the validated environment, like every other
     // deployment knob; the class itself takes them as a plain value so a test
     // or an integration spec can construct one with its own.
@@ -31,8 +35,8 @@ import { NotificationRepository } from './persistence/notification.repository';
       provide: NotificationStream,
       useFactory: (config: AppConfig) =>
         new NotificationStream({
-          perUser: config.sseMaxConnectionsPerUser,
-          total: config.sseMaxConnections,
+          perUser: config.realtimeMaxConnectionsPerUser,
+          total: config.realtimeMaxConnections,
         }),
       inject: [AppConfig],
     },

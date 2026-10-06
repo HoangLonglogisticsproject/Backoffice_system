@@ -18,6 +18,13 @@ export const NOTIFICATION_TYPES = [
    * `trip_archived` — never prose to show as is.
    */
   'ASSIGNMENT_REQUEST_SUPERSEDED',
+  /**
+   * ★ THE ONE TYPE THAT ARRIVES IN THE BACKOFFICE, NOT IN THE PORTAL (0036). A
+   * driver has finished a turn and asked for it to be closed; it is waiting in
+   * the completion review queue. Addressed to whoever holds global authority,
+   * so a driver never receives one.
+   */
+  'COMPLETION_SUBMITTED',
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];

@@ -116,9 +116,12 @@ export interface RecordEventInput {
   /**
    * ★ A READING, NEVER A VERDICT. Where the handset says it is, how sure it
    * is, and when it took the fix. The server measures the distance to the
-   * trip's own pickup point and decides; there is no `geofencePassed` and no
+   * trip's own point and decides; there is no `geofencePassed` and no
    * `distance` in this body, and the server's schema strips one if sent.
-   * Required by the server for PICKUP_CONFIRMED.
+   *
+   * ⚠ NOTHING SENDS IT TODAY (DL-118): the geofence is off and a milestone is
+   * the driver's tap. The field stays because the day it returns is a wiring
+   * change, and because a reading that does arrive is still stored as evidence.
    */
   location?: LocationEvidence;
   /**

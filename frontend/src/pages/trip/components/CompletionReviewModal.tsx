@@ -446,6 +446,11 @@ const GEOFENCED: ReadonlySet<ExecutionEventType> = new Set(['PICKUP_CONFIRMED', 
  * the coordinates. A missing verdict is reported as missing, not as a failure.
  * Older fixtures and pre-0019 rows may omit the fields entirely; absent is
  * treated exactly as `null`.
+ *
+ * ⚠ SINCE DL-118 EVERY NEW MILESTONE IS `no-evidence`, and that is correct
+ * rather than a regression: the portal sends no reading and the server measures
+ * nothing. The four states stay because the rows written while the geofence WAS
+ * on still carry their verdict and must keep reading as what they were.
  */
 type EvidenceState = 'verified' | 'not-verified' | 'no-verdict' | 'no-evidence';
 
