@@ -53,6 +53,8 @@ const validationKey = (details: Readonly<Record<string, string>> | undefined): T
   if (details?.['category'] === 'FUEL_DECLARED_ON_VEHICLE') return 'driverErrFuelOnVehicle';
   // Completion asked for before every step stands (contract §10.5).
   if (details?.['execution'] === 'EXECUTION_INCOMPLETE') return 'driverErrExecutionIncomplete';
+  // An ask on a booking somebody else got, or that closed (0035).
+  if (details?.['booking'] === 'BOOKING_NOT_OPEN') return 'driverErrBookingNotOpen';
   const rejection = details?.['location'];
   return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
 };

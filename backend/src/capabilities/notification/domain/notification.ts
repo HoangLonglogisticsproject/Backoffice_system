@@ -18,7 +18,7 @@ export class TooManyConnectionsError extends DomainError {
  * whatever phone is listening. The row is the fact; the push is how the phone
  * hears about it quickly. A phone that was asleep reads the rows.
  *
- * ★ FOUR TYPES, AND EACH IS A REAL EVENT THAT ALREADY EXISTS. Nothing here is
+ * ★ EVERY TYPE IS A REAL EVENT THAT ALREADY EXISTS. Nothing here is
  * invented for the sake of a bell icon: an assignment starts or ends, a
  * completion is sent back or approved. There is no per-expense rejection in the
  * lifecycle — a rejected completion reopens every line — so there is no
@@ -33,6 +33,18 @@ export const NOTIFICATION_TYPES = [
   'COMPLETION_REJECTED',
   /** Your completion was approved; the trip is closed. */
   'COMPLETION_APPROVED',
+  /**
+   * Your ask for an open booking was declined (0035). `detail` carries why, if
+   * Dispatch said. An APPROVED ask is not a type of its own: it is an
+   * assignment, and the driver is told by `TRIP_ASSIGNED`.
+   */
+  'ASSIGNMENT_REQUEST_REJECTED',
+  /**
+   * The booking you asked for stopped being open — another driver was put on
+   * it, it was dispatched directly, closed or archived. `detail` is which, as
+   * the fixed word 0035 stores (`trip_assigned` · `trip_closed` · `trip_archived`).
+   */
+  'ASSIGNMENT_REQUEST_SUPERSEDED',
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -88,4 +100,6 @@ export const eventKeys = {
   unassigned: (assignmentId: string) => `assignment:${assignmentId}:ended`,
   completionRejected: (requestId: string) => `completion:${requestId}:rejected`,
   completionApproved: (requestId: string) => `completion:${requestId}:approved`,
+  requestRejected: (requestId: string) => `assignment-request:${requestId}:rejected`,
+  requestSuperseded: (requestId: string) => `assignment-request:${requestId}:superseded`,
 };

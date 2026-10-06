@@ -81,7 +81,11 @@ export function AssignmentCard({ assignment }: Readonly<{ assignment: DriverTrip
  * the ward, the district — is often what tells two warehouses apart; the
  * detail shows it whole.
  */
-function RouteStop({ label, address }: Readonly<{ label: string; address: string | null }>) {
+export function RouteStop({
+  label,
+  address,
+  area = null,
+}: Readonly<{ label: string; address: string | null; area?: string | null }>) {
   const { t } = useLanguage();
 
   return (
@@ -95,6 +99,8 @@ function RouteStop({ label, address }: Readonly<{ label: string; address: string
         <p className={address ? 'line-clamp-2 text-sm font-medium wrap-anywhere' : 'text-sm text-muted-foreground'}>
           {address ?? t('driverNotSet')}
         </p>
+        {/* An open booking names a place and its area, never the address line (0035). */}
+        {area ? <p className="text-xs text-muted-foreground">{area}</p> : null}
       </div>
     </li>
   );

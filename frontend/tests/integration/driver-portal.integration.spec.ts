@@ -1143,4 +1143,88 @@ describe('driver portal (D1) against the real API', () => {
       expect((await driverA.get(`/trip-vehicles/${fuelVehicle}/costs`)).status).toBe(403);
     });
   });
+  describe('★ open bookings — the driver asks, Dispatch assigns (0035)', () => {
+    /** Exactly what a driver may see of a booking that is not theirs. */
+    const OPEN_BOOKING_KEYS = [
+      'cargoInfo', 'delivery', 'driverInstructions', 'myPendingRequestId', 'pickup',
+      'scheduledDeliveryAt', 'scheduledOn', 'scheduledPickupAt', 'tripId',
+    ];
+    let openTrip: string;
+    const listedFor = async (driver: Client) => {
+      const listed = await driver.get('/driver/open-bookings');
+      expect(listed.status).toBe(200);
+      return listed.data as Array<{ tripId: string; myPendingRequestId: string | null }>;
+    };
+
+    beforeAll(async () => {
+      // Priced, with a customer and two places — every figure below must stay out of a driver's reach.
+      openTrip = await walkableBooking();
+    });
+
+    it('★ shows the booking to every driver — the safe projection only: no price, customer, contact', async () => {
+      const item = (await listedFor(driverA)).find((booking) => booking.tripId === openTrip);
+      expect(item).toBeDefined();
+      expect(keysOf(item as object)).toEqual(sorted(OPEN_BOOKING_KEYS));
+      const wire = JSON.stringify(item);
+      for (const secret of [SELL_PRICE, `Journey Customer ${unique}`, `Journey address ${unique}`]) {
+        expect([secret, wire.includes(secret)]).toEqual([secret, false]);
+      }
+      expect((await listedFor(driverB)).some((booking) => booking.tripId === openTrip)).toBe(true);
+    });
+
+    it('★ one ask however often it is tapped; the review is dispatch.write only', async () => {
+      const [first, second] = await Promise.all([
+        driverA.post(`/driver/open-bookings/${openTrip}/requests`, {}),
+        driverA.post(`/driver/open-bookings/${openTrip}/requests`, {}),
+      ]);
+      expect([first.status, second.status]).toEqual([201, 201]);
+      expect(second.data.id).toBe(first.data.id);
+      expect(first.data).toMatchObject({ state: 'pending', assignmentId: null, booking: { tripId: openTrip } });
+      expect((await driverB.post(`/driver/open-bookings/${openTrip}/requests`, {})).status).toBe(201);
+      expect((await listedFor(driverA)).find((booking) => booking.tripId === openTrip)?.myPendingRequestId).toBe(first.data.id);
+
+      const queue = await boss.get('/assignment-request-queue');
+      expect(queue.status).toBe(200);
+      expect(queue.data.filter((ask: { tripId: string }) => ask.tripId === openTrip)).toHaveLength(2);
+      expect((await driverA.get('/assignment-request-queue')).status).toBe(403);
+      expect((await driverA.get(`/trip-schedules/${openTrip}/assignment-requests`)).status).toBe(403);
+    });
+
+    it('★ approval needs a lorry, crews the asking driver, and closes the other driver’s ask', async () => {
+      const asks = await boss.get(`/trip-schedules/${openTrip}/assignment-requests`);
+      const mine = asks.data.find((ask: { driver: { id: string } }) => ask.driver.id === driverAId);
+      const approvePath = `/trip-schedules/${openTrip}/assignment-requests/${mine.id}/approve`;
+
+      expect((await boss.post(approvePath, {})).status).toBe(422);
+      const vehicle = await boss.post('/trip-vehicles', { plate: `OB-${unique}` });
+      expect(vehicle.status).toBe(201);
+      const approved = await boss.post(approvePath, { vehicleId: vehicle.data.id });
+      expect(approved.status).toBe(200);
+      expect(approved.data).toMatchObject({ state: 'approved', driverUserId: driverAId });
+
+      // Driver A: the trip is in "Chuyến của tôi" through the EXISTING read model — still no money.
+      const schedule = await driverA.get('/driver/assignments');
+      const turn = schedule.data.find((row: { tripId: string }) => row.tripId === openTrip);
+      expect(keysOf(turn)).toEqual(sorted(DRIVER_TRIP_KEYS));
+      expect(JSON.stringify(schedule.data)).not.toContain(SELL_PRICE);
+      const mineNow = (await driverA.get('/driver/assignment-requests')).data.find(
+        (ask: { id: string }) => ask.id === mine.id,
+      );
+      expect(mineNow).toMatchObject({ state: 'approved', assignmentId: turn.assignment.id });
+
+      // Driver B: told, superseded — and the trip is still not theirs to open.
+      const theirs = (await driverB.get('/driver/assignment-requests')).data.find(
+        (ask: { booking: { tripId: string } }) => ask.booking.tripId === openTrip,
+      );
+      expect(theirs).toMatchObject({ state: 'superseded', supersededBecause: 'trip_assigned' });
+      const told = await driverB.get('/notifications');
+      expect(
+        told.data.items.some(
+          (row: { type: string; tripId: string }) => row.type === 'ASSIGNMENT_REQUEST_SUPERSEDED' && row.tripId === openTrip,
+        ),
+      ).toBe(true);
+      expect((await driverB.get(`/driver/assignments/${turn.assignment.id}`)).status).toBe(403);
+      expect((await listedFor(driverB)).some((booking) => booking.tripId === openTrip)).toBe(false);
+    });
+  });
 });

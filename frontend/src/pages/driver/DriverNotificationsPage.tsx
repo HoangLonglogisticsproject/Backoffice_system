@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Bell, CheckCircle2, Truck, UserMinus, XCircle } from 'lucide-react';
+import { ArrowLeft, Bell, CheckCircle2, CircleSlash, Truck, UserMinus, XCircle } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useMarkNotificationRead, useNotifications } from '@/hooks/notifications';
@@ -28,6 +28,8 @@ const TITLE: Record<NotificationType, TranslationKey> = {
   TRIP_UNASSIGNED: 'notifTripUnassigned',
   COMPLETION_REJECTED: 'notifCompletionRejected',
   COMPLETION_APPROVED: 'notifCompletionApproved',
+  ASSIGNMENT_REQUEST_REJECTED: 'notifRequestRejected',
+  ASSIGNMENT_REQUEST_SUPERSEDED: 'notifRequestSuperseded',
 };
 
 const ICON: Record<NotificationType, React.ReactNode> = {
@@ -35,6 +37,21 @@ const ICON: Record<NotificationType, React.ReactNode> = {
   TRIP_UNASSIGNED: <UserMinus />,
   COMPLETION_REJECTED: <XCircle />,
   COMPLETION_APPROVED: <CheckCircle2 />,
+  ASSIGNMENT_REQUEST_REJECTED: <XCircle />,
+  ASSIGNMENT_REQUEST_SUPERSEDED: <CircleSlash />,
+};
+
+/**
+ * The line under the title. A superseded ask's `detail` is a fixed word from
+ * the server, said here in the driver's language; every other detail is a
+ * reviewer's own reason and is shown as written.
+ */
+const detailOf = (notification: Notification): { key: TranslationKey } | { reason: string } | null => {
+  if (!notification.detail) return null;
+  if (notification.type === 'ASSIGNMENT_REQUEST_SUPERSEDED') {
+    return { key: notification.detail === 'trip_assigned' ? 'requestStateTakenByOther' : 'requestStateClosed' };
+  }
+  return { reason: notification.detail };
 };
 
 export default function DriverNotificationsPage() {
@@ -101,7 +118,9 @@ export default function DriverNotificationsPage() {
                     aria-hidden
                     className={cn(
                       'mt-0.5 shrink-0 [&_svg]:size-5',
-                      notification.type === 'COMPLETION_REJECTED' ? 'text-destructive' : 'text-primary',
+                      notification.type === 'COMPLETION_REJECTED' || notification.type === 'ASSIGNMENT_REQUEST_REJECTED'
+                        ? 'text-destructive'
+                        : 'text-primary',
                     )}
                   >
                     {ICON[notification.type]}
@@ -113,11 +132,7 @@ export default function DriverNotificationsPage() {
                     <span className="block text-sm text-muted-foreground">
                       {t('driverTripOn')} {formatCalendarDay(notification.tripScheduledOn, language)}
                     </span>
-                    {notification.detail ? (
-                      <span className="mt-1 block whitespace-pre-wrap text-sm">
-                        {t('notifReason')}: {notification.detail}
-                      </span>
-                    ) : null}
+                    <NotificationDetail notification={notification} />
                     <span className="mt-1 block text-xs text-muted-foreground">
                       {formatTimeOnDay(notification.createdAt, language)}
                     </span>
@@ -132,5 +147,16 @@ export default function DriverNotificationsPage() {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+function NotificationDetail({ notification }: Readonly<{ notification: Notification }>) {
+  const { t } = useLanguage();
+  const detail = detailOf(notification);
+  if (!detail) return null;
+  return (
+    <span className="mt-1 block whitespace-pre-wrap text-sm">
+      {'key' in detail ? t(detail.key) : `${t('notifReason')}: ${detail.reason}`}
+    </span>
   );
 }

@@ -196,7 +196,14 @@ describe('the migration directory', () => {
     const files = (await readdir(MIGRATIONS_DIR)).filter((name) => name.endsWith('.sql'));
     for (const file of files) {
       const sql = (await readFile(join(MIGRATIONS_DIR, file), 'utf8')).replace(/--[^\n]*/g, '');
-      expect([file, /UNIQUE[\s\S]{0,200}?\(\s*trip_id\s*,\s*driver_user_id\s*\)/i.test(sql)]).toEqual([file, false]);
+      // Statement by statement, and only those that touch the TURN table: a
+      // driver's pending ASK may be one per trip (0035) — that limits asking,
+      // never how many lorries one person drives.
+      const turnConstraints = sql
+        .split(';')
+        .filter((statement) => /trip_driver_assignments/i.test(statement))
+        .filter((statement) => /UNIQUE[\s\S]{0,200}?\(\s*trip_id\s*,\s*driver_user_id\s*\)/i.test(statement));
+      expect([file, turnConstraints.length]).toEqual([file, 0]);
     }
   });
 });

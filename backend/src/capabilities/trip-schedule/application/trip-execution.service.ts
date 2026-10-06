@@ -26,7 +26,8 @@ import {
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
 import { VehicleDailyFuelCheckRepository } from '../persistence/vehicle-fuel-check.repository';
 import { requireDailyFuelCheck } from './vehicle-fuel-gate';
-import { requireDispatchableVehicle, requireEligibleDriver } from './dispatch-eligibility';
+import { requireEligibleDriver } from './dispatch-eligibility';
+import { DispatchCrew, tell } from './dispatch-crew';
 import {
   CompletionRequestRepository,
   DriverAssignmentRepository,
@@ -38,11 +39,6 @@ import { EXECUTION_STARTED_REASON } from '../domain/trip-status-history';
 import type { UserSummary } from '../../../common/types/user-summary';
 import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { NotificationService } from '../../notification/application/notification.service';
-import {
-  eventKeys,
-  type NotificationInput,
-  type NotificationType,
-} from '../../notification/domain/notification';
 
 /**
  * Who is driving what on a trip, and what they report.
@@ -72,6 +68,7 @@ export class TripExecutionService {
     private readonly requests: CompletionRequestRepository,
     private readonly history: TripStatusHistoryRepository,
     private readonly fuelChecks: VehicleDailyFuelCheckRepository,
+    private readonly crew: DispatchCrew,
   ) {}
 
   // ------------------------------------------------------------ assignment ----
@@ -86,11 +83,11 @@ export class TripExecutionService {
    * the check and the insert. Lock order everywhere: trip → assignment → the
    * rest.
    *
-   * ★ AND THE ONE-TURN-PER-LORRY RULE IS STILL LEFT TO THE INDEX. The check
-   * below exists to produce a readable 409; `uq_trip_active_vehicle_assignment`
-   * is what makes the rule true, including for two callers that both passed
-   * the check. There is no rule about the DRIVER: one person on three lorries
-   * of one trip is dispatch, not a conflict.
+   * ★ THE CREWING ITSELF IS `DispatchCrew`, shared with an approved driver
+   * request (0035), so the lorry and driver rules exist once — and putting a
+   * turn on an open booking supersedes every driver's pending ask on it, in
+   * this same transaction. There is no rule about the DRIVER: one person on
+   * three lorries of one trip is dispatch, not a conflict.
    */
   async assign(
     tripId: string,
@@ -99,20 +96,7 @@ export class TripExecutionService {
   ): Promise<DriverAssignment> {
     const { assignment, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(tripId, tx);
-
-      await this.requireVehicleFree(tripId, input.vehicleId, tx);
-      await this.requireEligibleDriver(input.driverUserId, tx);
-
-      const assignment = await this.assignments.assign(
-        { tripId, vehicleId: input.vehicleId, driverUserId: input.driverUserId, assignedBy },
-        tx,
-      );
-
-      // ★ THE NOTIFICATION IS PART OF THE SAME TRANSACTION, keyed by the
-      // assignment row, so it exists exactly when the assignment does and
-      // exactly once. Pushing to the phone happens after COMMIT, below.
-      const told = [await this.notifications.record(tell('TRIP_ASSIGNED', trip, assignment), tx)];
-      return { assignment, told };
+      return this.crew.crew(trip, input, assignedBy, tx);
     });
 
     this.notifications.deliver(told);
@@ -242,26 +226,6 @@ export class TripExecutionService {
     if (await this.events.hasLiveEvents(assignment.id, tx)) {
       throw new ConflictError(
         'That assignment has started execution, so its lorry and driver can no longer be changed.',
-      );
-    }
-  }
-
-  /**
-   * A readable 409 for a lorry already on this trip. The lock on the existing
-   * row is deliberate: it serialises two operators adding the same lorry, and
-   * `uq_trip_active_vehicle_assignment` catches the pair that still collide.
-   */
-  private async requireVehicleFree(
-    tripId: string,
-    vehicleId: string,
-    tx: DatabaseQuery,
-  ): Promise<void> {
-    await requireDispatchableVehicle(this.vehicles, vehicleId, tx);
-
-    const onTrip = await this.assignments.lockActiveByVehicle(tripId, vehicleId, tx);
-    if (onTrip) {
-      throw new ConflictError(
-        'That vehicle is already dispatched on this trip. Replace its driver or end that assignment instead.',
       );
     }
   }
@@ -722,25 +686,6 @@ const geofencedPointOf = (
   if (type === 'DELIVERY_CONFIRMED') return pointOf(trip.deliveryLatitude, trip.deliveryLongitude);
   return undefined;
 };
-
-/**
- * A notification about one turn on one trip, addressed to the driver of that
- * turn. The plate rides in `detail`: a driver put on three lorries of one trip
- * gets three of these, and "which one" has to be readable from the row.
- */
-const tell = (
-  type: NotificationType,
-  trip: TripSchedule,
-  assignment: DriverAssignment,
-): NotificationInput => ({
-  recipientUserId: assignment.driverUserId,
-  type,
-  tripId: trip.id,
-  tripScheduledOn: trip.scheduledOn,
-  detail: assignment.vehicle?.plate ?? null,
-  eventKey:
-    type === 'TRIP_ASSIGNED' ? eventKeys.assigned(assignment.id) : eventKeys.unassigned(assignment.id),
-});
 
 /**
  * One sentence per refusal, for whoever reads the API directly. The portal

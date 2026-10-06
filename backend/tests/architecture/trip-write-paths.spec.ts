@@ -159,6 +159,18 @@ describe('trip_schedules.status — the write paths', () => {
   });
 });
 
+describe('★ the open-booking projection — decided in the SELECT (0035)', () => {
+  it('never reads a price, a cost, a hire, a customer or a contact — so no mapper can leak one', async () => {
+    const body = code(await read('persistence', 'open-booking.repository.ts'));
+    for (const forbidden of [
+      /sell_price/, /purchase_price/, /trip_costs/, /vehicle_costs/, /trip_outsource_hires/,
+      /trip_customers/, /customer_id/, /contact/, /\b(pl|dl)\.address\b/,
+    ]) {
+      expect([String(forbidden), forbidden.test(body)]).toEqual([String(forbidden), false]);
+    }
+  });
+});
+
 describe('trip_status_history — no bypass', () => {
   it('is written only through the repository built for it', async () => {
     for (const folder of ['api', 'application', 'domain']) {
@@ -512,7 +524,14 @@ describe('★ the legacy lorry column — no writer, no dispatch reader (ADR-000
     const files = (await readdir(migrations)).filter((name) => name.endsWith('.sql'));
     for (const file of files) {
       const sql = (await readFile(join(migrations, file), 'utf8')).replace(/--[^\n]*/g, '');
-      expect([file, /UNIQUE[\s\S]{0,200}?\(\s*trip_id\s*,\s*driver_user_id\s*\)/i.test(sql)]).toEqual([file, false]);
+      // Statement by statement, and only those that touch the TURN table: a
+      // driver's pending ASK may be one per trip (0035) — that limits asking,
+      // never how many lorries one person drives.
+      const turnConstraints = sql
+        .split(';')
+        .filter((statement) => /trip_driver_assignments/i.test(statement))
+        .filter((statement) => /UNIQUE[\s\S]{0,200}?\(\s*trip_id\s*,\s*driver_user_id\s*\)/i.test(statement));
+      expect([file, turnConstraints.length]).toEqual([file, 0]);
     }
   });
 

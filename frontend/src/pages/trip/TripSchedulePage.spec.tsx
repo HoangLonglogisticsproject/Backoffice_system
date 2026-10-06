@@ -54,6 +54,16 @@ vi.mock('@/api/tripAssignment', () => ({
   replaceDriver: (...a: unknown[]) => replaceDriver(...a),
   endDriverAssignment: (...a: unknown[]) => endDriverAssignment(...a),
 }));
+const fetchAssignmentRequestQueue = vi.fn();
+const fetchTripAssignmentRequests = vi.fn();
+const approveAssignmentRequest = vi.fn();
+const rejectAssignmentRequest = vi.fn();
+vi.mock('@/api/assignmentRequests', () => ({
+  fetchAssignmentRequestQueue: (...a: unknown[]) => fetchAssignmentRequestQueue(...a),
+  fetchTripAssignmentRequests: (...a: unknown[]) => fetchTripAssignmentRequests(...a),
+  approveAssignmentRequest: (...a: unknown[]) => approveAssignmentRequest(...a),
+  rejectAssignmentRequest: (...a: unknown[]) => rejectAssignmentRequest(...a),
+}));
 const fetchTripLocations = vi.fn();
 const createTripLocation = vi.fn();
 vi.mock('@/api/tripCatalogue', () => ({
@@ -267,6 +277,10 @@ describe('TripSchedulePage', () => {
     endDriverAssignment.mockReset().mockResolvedValue({ id: 'a1', state: 'ended' });
     fetchDriverAssignments.mockReset().mockResolvedValue([]);
     fetchTripCosts.mockReset().mockResolvedValue({ items: [], total: '0.00' });
+    fetchAssignmentRequestQueue.mockReset().mockResolvedValue([]);
+    fetchTripAssignmentRequests.mockReset().mockResolvedValue([]);
+    approveAssignmentRequest.mockReset().mockResolvedValue(undefined);
+    rejectAssignmentRequest.mockReset().mockResolvedValue(undefined);
     useSession.mockReset().mockReturnValue(session(['trip.read', 'trip.create']));
     viewport(true);
   });
@@ -323,6 +337,85 @@ describe('TripSchedulePage', () => {
       await panel.findByRole('option', { name: 'Tài Xế B' });
       return () => last(panel.getAllByRole('button', { name: /thêm phương tiện/i }));
     };
+
+    describe('★ drivers asking for the booking (0035)', () => {
+      const ask = (over: Record<string, unknown> = {}) => ({
+        id: 'r1',
+        tripId: 't1',
+        driver: { id: 'd1', displayName: 'Tài Xế A' },
+        state: 'pending',
+        requestedAt: '2026-08-03T02:00:00.000Z',
+        resolvedAt: null,
+        resolvedBy: null,
+        approvedAssignmentId: null,
+        resolutionReason: null,
+        ...over,
+      });
+      const asking = () => {
+        const pending = [ask(), ask({ id: 'r2', driver: { id: 'd2', displayName: 'Tài Xế B' } })];
+        fetchAssignmentRequestQueue.mockResolvedValue(pending);
+        fetchTripAssignmentRequests.mockResolvedValue([
+          ...pending,
+          ask({ id: 'r0', state: 'withdrawn', driver: { id: 'd3', displayName: 'Tài Xế C' }, resolvedAt: '2026-08-03T03:00:00.000Z' }),
+        ]);
+      };
+
+      it('★ says on the row how many drivers ask — to dispatch only, from one read for the board', async () => {
+        write();
+        board();
+        asking();
+        renderPage();
+
+        expect(await screen.findByText('2 tài xế xin nhận')).toBeInTheDocument();
+        expect(fetchAssignmentRequestQueue).toHaveBeenCalledTimes(1);
+      });
+
+      it('★ never reads the queue for a booker without dispatch.write', async () => {
+        useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
+        board();
+        asking();
+        renderPage();
+
+        await screen.findByText(/chưa phân công/i);
+        expect(fetchAssignmentRequestQueue).not.toHaveBeenCalled();
+        expect(screen.queryByText(/tài xế xin nhận/)).toBeNull();
+      });
+
+      it('★ approves with the chosen lorry — "Duyệt" cannot go without one', async () => {
+        write();
+        board();
+        fleet();
+        asking();
+        renderPage();
+        const panel = await openPanel(/^phân công xe & tài xế$/i);
+
+        const review = within(await panel.findByRole('region', { name: 'Tài xế xin nhận (2)' }));
+        fireEvent.click(review.getAllByRole('button', { name: 'Duyệt…' })[0]!);
+        const confirm = review.getByRole('button', { name: 'Duyệt & giao chuyến' });
+        expect(confirm).toBeDisabled();
+        fireEvent.change(review.getByLabelText('Xe'), { target: { value: 'v2' } });
+        fireEvent.click(confirm);
+
+        await waitFor(() => expect(approveAssignmentRequest).toHaveBeenCalledWith('t1', 'r1', 'v2'));
+        expect(review.getByText(/Đã xử lý \(1\)/)).toBeInTheDocument();
+      });
+
+      it('declines with an optional reason', async () => {
+        write();
+        board();
+        fleet();
+        asking();
+        renderPage();
+        const panel = await openPanel(/^phân công xe & tài xế$/i);
+
+        const review = within(await panel.findByRole('region', { name: 'Tài xế xin nhận (2)' }));
+        fireEvent.click(review.getAllByRole('button', { name: 'Từ chối…' })[1]!);
+        fireEvent.change(review.getByLabelText('Lý do (không bắt buộc)'), { target: { value: '  Thiếu bằng C  ' } });
+        fireEvent.click(review.getByRole('button', { name: 'Từ chối' }));
+
+        await waitFor(() => expect(rejectAssignmentRequest).toHaveBeenCalledWith('t1', 'r2', 'Thiếu bằng C'));
+      });
+    });
 
     it('shows "not assigned" and no control to a reader', async () => {
       board();

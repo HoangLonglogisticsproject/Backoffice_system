@@ -1,4 +1,4 @@
-import { entryCrewOn } from '../helpers/trip-board-fixture';
+import { entryCrewOn, supersessionOn } from '../helpers/trip-board-fixture';
 import { Pool } from 'pg';
 import { TEST_URL, applyAllMigrations, openTestSchema, poolAsDatabase } from '../helpers/integration-database';
 import type { Database } from '@common/types/database.port';
@@ -76,6 +76,7 @@ describeIfDatabase('Customer locations against real PostgreSQL', () => {
       new TripStatusHistoryRepository(database),
       locations,
       entryCrewOn(database),
+      supersessionOn(database),
     );
     driverView = new DriverTripReadModelRepository(database);
 

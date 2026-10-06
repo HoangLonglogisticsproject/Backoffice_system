@@ -4,6 +4,8 @@ import { IdentityModule } from '../../core/identity/identity.module';
 import { UsersModule } from '../../core/users/users.module';
 import { NotificationModule } from '../notification/notification.module';
 import { ActiveAssignmentGuard } from './api/active-assignment.guard';
+import { AssignmentRequestController } from './api/assignment-request.controller';
+import { DriverOpenBookingController } from './api/driver-open-booking.controller';
 import { ExpenseAssignmentGuard } from './api/expense-assignment.guard';
 import { ReadableAssignmentGuard } from './api/readable-assignment.guard';
 import { DriverPortalController } from './api/driver-portal.controller';
@@ -12,6 +14,10 @@ import { TripCompletionController } from './api/trip-completion.controller';
 import { TripCostController } from './api/trip-cost.controller';
 import { TripScheduleController } from './api/trip-schedule.controller';
 import { VehicleCostController } from './api/vehicle-cost.controller';
+import { AssignmentRequestReviewService } from './application/assignment-request-review.service';
+import { AssignmentRequestSupersession } from './application/assignment-request-supersession';
+import { DispatchCrew } from './application/dispatch-crew';
+import { DriverAssignmentRequestService } from './application/driver-assignment-request.service';
 import { TripBoardService } from './application/trip-board.service';
 import { TripCatalogueService } from './application/trip-catalogue.service';
 import { DriverPortalService } from './application/driver-portal.service';
@@ -40,6 +46,8 @@ import {
   ExecutionEventRepository,
 } from './persistence/trip-execution.repository';
 import { DriverTripReadModelRepository } from './persistence/driver-read-model.repository';
+import { OpenBookingRepository } from './persistence/open-booking.repository';
+import { TripAssignmentRequestRepository } from './persistence/trip-assignment-request.repository';
 import { OperationalBoardRepository } from './persistence/operational-board.repository';
 import { TripBoardCostRepository } from './persistence/trip-board-cost.repository';
 import { TripScheduleRepository } from './persistence/trip-schedule.repository';
@@ -70,6 +78,8 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     DriverPortalController,
     TripCompletionController,
     VehicleCostController,
+    DriverOpenBookingController,
+    AssignmentRequestController,
   ],
   providers: [
     TripScheduleService,
@@ -84,6 +94,10 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     OperationalBoardService,
     VehicleFuelService,
     VehicleCostService,
+    DispatchCrew,
+    AssignmentRequestSupersession,
+    DriverAssignmentRequestService,
+    AssignmentRequestReviewService,
     ActiveAssignmentGuard,
     ExpenseAssignmentGuard,
     ReadableAssignmentGuard,
@@ -103,6 +117,8 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     OperationalBoardRepository,
     VehicleDailyFuelCheckRepository,
     VehicleCostRepository,
+    TripAssignmentRequestRepository,
+    OpenBookingRepository,
   ],
   exports: [
     TripScheduleService,

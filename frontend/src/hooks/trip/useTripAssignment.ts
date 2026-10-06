@@ -11,6 +11,7 @@ import { isApiError } from '@/utils/errors';
 import { notifyApiError, notifyError, notifySuccess } from '@/utils/toast';
 import type { TranslationKey } from '@/types/translate';
 import { tripKeys } from './keys';
+import { requestKeys } from './useAssignmentRequests';
 
 /** The drivers a dispatcher may choose from. Read when the panel opens. */
 export function useEligibleDrivers(enabled: boolean) {
@@ -115,6 +116,8 @@ export function useChangeDriverAssignment() {
       Promise.all([
         client.invalidateQueries({ queryKey: tripKeys.schedules() }),
         client.invalidateQueries({ queryKey: tripKeys.assignments(change.tripId) }),
+        // A direct assignment supersedes every driver's pending ask on the trip (0035).
+        client.invalidateQueries({ queryKey: requestKeys.all }),
       ]),
   });
 }

@@ -1476,3 +1476,42 @@ Nhiên liệu thuộc **xe**, không thuộc chuyến đầu tiên trong ngày (
 * Frontend chỉ phản chiếu: tài xế không thấy nút gửi (kể cả sau khi bị từ chối) khi chưa đủ
   mốc; màn duyệt hiện "Chưa hoàn thành tiến trình" và khoá nút Duyệt.
 * Break-glass `POST /trip-schedules/:id/complete` không đổi — cố ý bỏ qua điều kiện này.
+
+## 28. Booking đang mở — tài xế xin nhận, Điều độ phân công (2026-10-06)
+
+**Request ≠ Assignment.** Tài xế xin nhận một booking đang mở; chỉ Điều độ/SuperAdmin
+(`dispatch.write`) duyệt và **chọn xe** — lúc đó mới có `trip_driver_assignments` (cùng luồng
+với phân công trực tiếp). Không thêm trạng thái Trip. Migration `0035_trip_assignment_requests`.
+
+**Booking đang mở (giai đoạn 1):** Trip `status = 'pending'`, chưa archive, **không có assignment
+active nào**. Danh sách tài xế chỉ hiện từ hôm nay (lịch Asia/Ho_Chi_Minh) trở đi.
+
+| Method | Path | Quyền | Ghi chú |
+|---|---|---|---|
+| `GET` | `/driver/open-bookings` | tài xế (đã đổi mật khẩu) | projection an toàn + `myPendingRequestId` |
+| `GET` | `/driver/assignment-requests` | tài xế | yêu cầu **của chính mình**, mới nhất trước |
+| `POST` | `/driver/open-bookings/:tripId/requests` | tài xế + CSRF | **idempotent**: bấm hai lần/ hai tab → cùng một request (201) · không mở → 422 `details.booking = BOOKING_NOT_OPEN` |
+| `POST` | `/driver/assignment-requests/:requestId/withdraw` | tài xế + CSRF | chỉ khi `pending`; đã xử lý → 409; của người khác → 404 |
+| `GET` | `/assignment-request-queue` | `dispatch.write` | mọi request `pending` (badge "N tài xế xin nhận") |
+| `GET` | `/trip-schedules/:tripId/assignment-requests` | `dispatch.write` | mọi request của trip, kể cả đã xử lý |
+| `POST` | `/trip-schedules/:tripId/assignment-requests/:requestId/approve` | `dispatch.write` + CSRF | body `{ vehicleId }` **bắt buộc** · tạo assignment, request → `approved` + `approvedAssignmentId`, mọi request pending khác → `superseded` |
+| `POST` | `/trip-schedules/:tripId/assignment-requests/:requestId/reject` | `dispatch.write` + CSRF | body `{ reason? }` |
+
+* **Projection an toàn** (`DriverOpenBooking`): `tripId, scheduledOn, scheduledPickupAt,
+  scheduledDeliveryAt, pickup {name, area}, delivery {name, area}, cargoInfo,
+  driverInstructions`. `name` = tên điểm (địa chỉ dòng chữ chỉ khi trip chưa có điểm); `area` =
+  phường/quận/tỉnh. Câu SQL **không chọn** giá, chi phí, khách, liên hệ — architecture test giữ.
+  Sau khi được duyệt, tài xế đọc trip qua đúng DTO assignment hiện có — không mở rộng gì.
+* **Trạng thái request:** `pending → approved | rejected | withdrawn | superseded`, một lần.
+  `supersededBecause`: `trip_assigned` (người khác được nhận / phân công trực tiếp) ·
+  `trip_closed` · `trip_archived`.
+* **Phân công trực tiếp vẫn như cũ** và thắng: phân công một booking đang có request → mọi
+  request `pending` thành `superseded` (`trip_assigned`) trong cùng transaction; archive /
+  đóng tay → `trip_archived` / `trip_closed`. Không còn "đang chờ duyệt" treo.
+* **Thông báo tài xế:** được duyệt → `TRIP_ASSIGNED` (như phân công thường) · bị từ chối →
+  `ASSIGNMENT_REQUEST_REJECTED` (`detail` = lý do) · `ASSIGNMENT_REQUEST_SUPERSEDED` (`detail`
+  = mã lý do ở trên). Điều độ không có thông báo — badge trên Lịch xe.
+* **Khoá:** trip → request → xe/assignment → thông báo; cùng thứ tự với thực thi, nhiên liệu,
+  hoàn tất — hai người duyệt, duyệt vs phân công trực tiếp, rút vs duyệt đều tuần tự trên dòng trip.
+* Sau khi duyệt, #97 (khai nhiên liệu đầu ngày ở mốc đầu tiên) và #98 (đủ bốn mốc mới gửi hoàn
+  tất) chạy **không đổi**.

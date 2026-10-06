@@ -1,5 +1,6 @@
 import { StatusPill } from '@/components/common/StatusPill';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { usePendingRequestCount } from '@/hooks/trip/useAssignmentRequests';
 import type { TripScheduleWithRefs } from '@/types/trip';
 import { CREW_LABELS, URGENCY_LABELS, crewSignal, type Urgency } from './bookingPresentation';
 
@@ -15,6 +16,22 @@ export function CrewPill({ trip }: Readonly<{ trip: TripScheduleWithRefs }>) {
   const { t } = useLanguage();
   const signal = crewSignal(trip);
   return <StatusPill tone={signal === 'assigned' ? 'blue' : 'amber'}>{t(CREW_LABELS[signal])}</StatusPill>;
+}
+
+/**
+ * "N tài xế xin nhận" — drivers asking for this booking (0035). Dispatch only,
+ * and only when somebody is asking; the count comes from one read for the
+ * whole board.
+ */
+export function RequestsPill({ tripId }: Readonly<{ tripId: string }>) {
+  const { t } = useLanguage();
+  const count = usePendingRequestCount(tripId);
+  if (count === 0) return null;
+  return (
+    <StatusPill tone="amber">
+      {count} {t('requestsPill')}
+    </StatusPill>
+  );
 }
 
 export function UrgencyPill({ urgency }: Readonly<{ urgency: Urgency }>) {

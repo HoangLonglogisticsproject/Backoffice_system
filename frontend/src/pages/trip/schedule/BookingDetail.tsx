@@ -13,7 +13,7 @@ import {
   BookingPricingSection,
   BookingRouteSection,
 } from './BookingDetailSections';
-import { CrewPill, UrgencyPill } from './BookingSignals';
+import { CrewPill, RequestsPill, UrgencyPill } from './BookingSignals';
 
 type Props = Readonly<
   {
@@ -75,6 +75,7 @@ function Body({ trip, ...handlers }: Readonly<{ trip: TripBoardRow } & BookingAc
         <div className="flex flex-wrap gap-2">
           <TripStatusBadge status={trip.status} />
           <CrewPill trip={trip} />
+          <RequestsPill tripId={trip.id} />
           <UrgencyPill urgency={urgencyOf(trip, now)} />
         </div>
       </header>

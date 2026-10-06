@@ -1,4 +1,4 @@
-import { entryCrewOn } from '../helpers/trip-board-fixture';
+import { entryCrewOn, supersessionOn } from '../helpers/trip-board-fixture';
 import { Pool } from 'pg';
 import {
   TEST_URL,
@@ -100,6 +100,7 @@ describeIntegration('Trip cost service against real PostgreSQL', () => {
       new TripStatusHistoryRepository(database),
       new TripLocationRepository(database),
       entryCrewOn(database),
+      supersessionOn(database),
     );
     money = new TripCostService(
       database,

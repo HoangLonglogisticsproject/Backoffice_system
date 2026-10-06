@@ -29,6 +29,7 @@ import {
   type TripStatusChange,
 } from '../domain/trip-status-history';
 import { TripEntryCrew, type CrewPair } from './trip-entry-crew';
+import { AssignmentRequestSupersession } from './assignment-request-supersession';
 import {
   TripCustomerRepository,
   TripLocationRepository,
@@ -192,6 +193,7 @@ export class TripScheduleService {
     private readonly history: TripStatusHistoryRepository,
     private readonly locations: TripLocationRepository,
     private readonly crew: TripEntryCrew,
+    private readonly supersession: AssignmentRequestSupersession,
   ) {}
 
   /**
@@ -428,12 +430,23 @@ export class TripScheduleService {
    * Not a delete: B13 forbids the runtime issuing one, and a day's dispatch
    * record is exactly the kind of history that gets asked about months later.
    * The row keeps its author, gains an archiver, and stops appearing in lists.
+   *
+   * ★ UNDER THE TRIP LOCK, AND IT CLOSES THE BOOKING (0035). Lock order is
+   * trip → request, as approval takes it: an approval waiting on this row
+   * finds the trip gone, and every driver still asking for it is told.
    */
   async archive(id: string, archivedBy: string): Promise<TripSchedule> {
-    const archived = await this.trips.archive(id, archivedBy, new Date());
-    // Already archived and never existed answer the same way, on purpose: from
-    // outside, both mean "there is no such row on the board".
-    if (!archived) throw new NotFoundError('Trip not found.');
+    const { archived, told } = await this.db.transaction(async (tx) => {
+      // Already archived and never existed answer the same way, on purpose:
+      // from outside, both mean "there is no such row on the board".
+      const trip = await this.trips.lockActive(id, tx);
+      if (!trip) throw new NotFoundError('Trip not found.');
+      const archived = await this.trips.archive(id, archivedBy, new Date(), tx);
+      if (!archived) throw new Error('Locked trip disappeared while archiving.');
+      const told = await this.supersession.supersede(trip, { by: archivedBy, reason: 'trip_archived' }, tx);
+      return { archived, told };
+    });
+    this.supersession.deliver(told);
     return archived;
   }
 
