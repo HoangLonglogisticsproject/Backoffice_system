@@ -102,11 +102,12 @@ describe('driver-portal HTTP security', () => {
     listMyAssignments: jest.Mock;
     findMyAssignment: jest.Mock;
     listMyFinishedTrips: jest.Mock;
+    workday: jest.Mock;
   };
   let execution: { recordEvent: jest.Mock };
   let money: { declareCost: jest.Mock; editCost: jest.Mock };
   let completion: { submit: jest.Mock };
-  let fuel: { declare: jest.Mock };
+  let fuel: { declare: jest.Mock; recordFill: jest.Mock };
   let assignments: { findActiveById: jest.Mock; findById: jest.Mock };
   let trips: { findById: jest.Mock };
   let readModel: { findForDriver: jest.Mock };
@@ -129,6 +130,7 @@ describe('driver-portal HTTP security', () => {
       listMyAssignments: jest.fn().mockResolvedValue([]),
       listMyFinishedTrips: jest.fn().mockResolvedValue({ trips: [], nextCursor: null }),
       findMyAssignment: jest.fn().mockResolvedValue({ tripId: TRIP, assignment: { id: ASSIGNMENT_A } }),
+      workday: jest.fn().mockResolvedValue({ businessDate: '2026-10-06', vehicles: [] }),
     };
     execution = { recordEvent: jest.fn().mockResolvedValue({ id: 'event-1' }) };
     money = {
@@ -148,6 +150,15 @@ describe('driver-portal HTTP security', () => {
         sourceAssignmentId: ASSIGNMENT_B,
         clientRequestId: 'b-key',
         createdBy: DRIVER_B,
+        createdAt: new Date(),
+      }),
+      recordFill: jest.fn().mockResolvedValue({
+        id: COST,
+        businessDate: '2026-10-06',
+        amount: '300000',
+        liters: null,
+        odometerKm: null,
+        note: null,
         createdAt: new Date(),
       }),
     };
@@ -268,6 +279,7 @@ describe('driver-portal HTTP security', () => {
       ['patch', `/driver/assignments/${assignment}/expenses/${COST}`],
       ['post', `/driver/assignments/${assignment}/completion-requests`],
       ['post', `/driver/assignments/${assignment}/fuel-checks`],
+      ['post', `/driver/assignments/${assignment}/fuel-transactions`],
     ];
 
   /** A body valid enough for every route, so a 422 never masks a 403. */
@@ -302,6 +314,7 @@ describe('driver-portal HTTP security', () => {
       // assignment for a guard to check — and both read addresses, contacts
       // and cargo, which is exactly what these gates exist to withhold.
       ['get', '/driver/history'],
+      ['get', '/driver/workday'],
       ...scopedRoutes(ASSIGNMENT_A),
     ])(
       'refuses %s %s with 401, and reaches no service at all',
@@ -431,8 +444,10 @@ describe('driver-portal HTTP security', () => {
     it.each<Route>([
       ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/execution-events`],
       ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/completion-requests`],
-      // A recorded run never starts, so it owes no daily fuel check.
+      // A recorded run never starts, so it owes no daily fuel check — and its
+      // fuel is a trip expense, so it records no fill on the lorry either.
       ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/fuel-checks`],
+      ['post', `/driver/assignments/${ASSIGNMENT_RECORDED}/fuel-transactions`],
     ])('★ refuses %s %s — reporting, completion and the fuel check stay active-only', async (method, path) => {
       const response = await authed(method, path).send(anyBody);
 
@@ -513,6 +528,14 @@ describe('driver-portal HTTP security', () => {
       expect(response.body.error.code).toBe('PASSWORD_CHANGE_REQUIRED');
       expect(portal.listMyAssignments).not.toHaveBeenCalled();
     });
+
+    it('★ refuses the day too — it reads the same addresses and cargo', async () => {
+      const response = await authed('get', '/driver/workday');
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('PASSWORD_CHANGE_REQUIRED');
+      expect(portal.workday).not.toHaveBeenCalled();
+    });
   });
 
   // ------------------------------------------------------- employee account --
@@ -531,6 +554,7 @@ describe('driver-portal HTTP security', () => {
       // assignment for a guard to check — and both read addresses, contacts
       // and cargo, which is exactly what these gates exist to withhold.
       ['get', '/driver/history'],
+      ['get', '/driver/workday'],
       ...scopedRoutes(ASSIGNMENT_A),
     ])(
       'refuses %s %s with 403 — the mirror of BackofficeOnlyGuard',
@@ -666,6 +690,38 @@ describe('driver-portal HTTP security', () => {
       });
     });
 
+    it('reads their own day from the session, with no parameter to widen it', async () => {
+      await authed('get', '/driver/workday?driverUserId=someone-else').expect(200);
+      expect(portal.workday).toHaveBeenCalledWith(DRIVER_A);
+    });
+
+    it('records a fill against the session user and the route’s assignment', async () => {
+      const response = await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-transactions`)
+        .send({ amount: '300000', liters: '12.5', odometerKm: 120500, note: 'Đổ thêm', clientRequestId: 'fill-1' })
+        .expect(201);
+
+      expect(fuel.recordFill).toHaveBeenCalledWith({
+        assignmentId: ASSIGNMENT_A,
+        fill: { amount: '300000', liters: '12.5', odometerKm: 120500, note: 'Đổ thêm' },
+        clientRequestId: 'fill-1',
+        recordedBy: DRIVER_A,
+      });
+      expect(response.body).toMatchObject({ id: COST, businessDate: '2026-10-06' });
+    });
+
+    it('refuses a fill without its key, without an amount, or with liters that are not a quantity', async () => {
+      for (const body of [
+        { amount: '300000' },
+        { clientRequestId: 'fill-1' },
+        { amount: '0', clientRequestId: 'fill-1' },
+        { amount: '300000', liters: '0', clientRequestId: 'fill-1' },
+        { amount: '300000', odometerKm: -1, clientRequestId: 'fill-1' },
+      ]) {
+        await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-transactions`).send(body).expect(422);
+      }
+      expect(fuel.recordFill).not.toHaveBeenCalled();
+    });
+
     it('refuses a fuel check without its key — a double tap must not become two fills', async () => {
       await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-checks`)
         .send({ outcome: 'no_fuel' })
@@ -705,6 +761,30 @@ describe('driver-portal HTTP security', () => {
       });
       // The standing check here is driver B's: none of its ids — nor its key — reach A.
       expect(response.body).toEqual({ businessDate: '2026-10-04', outcome: 'fuel_added' });
+    });
+
+    it('★ takes no lorry, no day and no trip from the body of a fill', async () => {
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-transactions`)
+        .send({
+          amount: '300000',
+          clientRequestId: 'fill-1',
+          vehicleId: 'someone-elses-lorry',
+          businessDate: '2020-01-01',
+          assignmentId: ASSIGNMENT_B,
+          tripId: TRIP,
+          sourceTripId: TRIP,
+          source: 'backoffice',
+          createdBy: DRIVER_B,
+          category: 'maintenance',
+        })
+        .expect(201);
+
+      expect(fuel.recordFill).toHaveBeenCalledWith({
+        assignmentId: ASSIGNMENT_A,
+        fill: { amount: '300000', liters: null, odometerKm: null, note: null },
+        clientRequestId: 'fill-1',
+        recordedBy: DRIVER_A,
+      });
     });
 
     it('★ driver A holding driver B’s assignment id AND key reaches no service — 403 before any retry', async () => {
