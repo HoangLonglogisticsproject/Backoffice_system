@@ -1224,6 +1224,7 @@ fix arrived as PR #105.
 | 09:48:54 | #105 merged as `ad1585b6b9a23d3aa9637464b7d9e36c0f2971d0` |
 | 09:52:31 | `release` deploys backend `ad1585b`, health OK. **Exposure ends** (about 77 min). The frontend is promoted to Vercel Production in the same job. |
 | 09:54 | Read-only `Production Trip Audit` reports `backend_release = ad1585b6b9a2…` |
+| later, same day | Read-only nginx query as root, window in VPS local time: **0** requests to `/fleet-operations` (§24.5) |
 
 ## 24.3 Fix (#105)
 
@@ -1249,23 +1250,35 @@ needs credentials for each role, and creating test accounts would mutate product
 
 ## 24.5 Access during the exposure window
 
-**Access during the exposure window cannot be determined from available logs.**
+**Two separate facts, never merged into one:**
+
+1. **The authorization exposure is confirmed.** From 08:35:26 to 09:52:31 UTC, any
+   `trip.read` holder could have read the board.
+2. **No access was observed.** No requests to `/fleet-operations` were observed in the available
+   Nginx access logs during the confirmed exposure window.
+
+The second fact does **not** say that nobody accessed the endpoint. It is bounded by what those
+logs can show:
 
 - The backend does not log requests; Nest logs startup and errors only.
-- nginx on the VPS writes `/var/log/nginx/opsystem.access.log`. It records method, path, status
-  and client address, but no user. The restricted `deploy` account cannot read it.
-- Vercel runtime logs are reachable only with the Vercel token held as a GitHub secret, and they
-  carry no user identity either.
+- The nginx log at `/var/log/nginx/opsystem.access.log` records method, path, status and client
+  address, but no user. Only root can read it; the restricted `deploy` account cannot.
+- Only the current and the previous rotated nginx files were searched.
+- Vercel runtime logs (behind the token held as a GitHub secret) were not consulted. They carry no
+  user identity either.
 
-If someone with root wants to bound it, this read-only command counts the hits in the window:
+**The query, run as root on 2026-10-06 (read only).** The VPS logs in its own time zone,
+Asia/Ho_Chi_Minh (UTC+7), so the window is 15:35:26 → 16:52:31 local:
 
 ```
-sudo awk '$4 >= "[06/Oct/2026:08:35:26" && $4 < "[06/Oct/2026:09:52:31" && $7 ~ /fleet-operations/' \
-  /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1
+sudo awk '$4 >= "[06/Oct/2026:15:35:26" && $4 < "[06/Oct/2026:16:52:31" && $7 ~ /\/fleet-operations/' \
+  /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1 2>/dev/null | wc -l
 ```
 
-Zero lines would show that nobody read the board in that window. Any lines would still not
-identify the role: the SuperAdmin and Dispatch read the board legitimately.
+Result: **0**.
+
+A non-zero count would not have identified a role either: the SuperAdmin and Dispatch read the
+board legitimately.
 
 ## 24.6 Lessons
 
