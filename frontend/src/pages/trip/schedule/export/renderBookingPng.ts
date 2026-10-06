@@ -19,7 +19,7 @@ const PAD = 40;
 const CONTENT = WIDTH - PAD * 2;
 const LABEL = 150;
 const SCALE = 2;
-// ponytail: iOS Safari refuses a canvas above ~16.7 M pixels; a very long document drops to 1× instead.
+// ponytail: iOS Safari refuses a canvas above ~16.7 M pixels; a very long document is drawn smaller instead.
 const MAX_PIXELS = 16_000_000;
 
 const INK = '#111827';
@@ -145,11 +145,12 @@ const context2d = (canvas: HTMLCanvasElement): CanvasRenderingContext2D => {
 export async function renderBookingPng(doc: BookingDocument): Promise<Blob> {
   await loadFonts(Object.values(TYPE).map((style) => style.font), textOf(doc));
   const height = layout(context2d(document.createElement('canvas')), doc, false);
-  const scale = WIDTH * SCALE * height * SCALE <= MAX_PIXELS ? SCALE : 1;
+  // 2×, unless that would break the pixel budget — then exactly as large as the budget allows, even below 1×.
+  const scale = Math.min(SCALE, Math.sqrt(MAX_PIXELS / (WIDTH * height)));
 
   const canvas = document.createElement('canvas');
-  canvas.width = WIDTH * scale;
-  canvas.height = height * scale;
+  canvas.width = Math.floor(WIDTH * scale);
+  canvas.height = Math.floor(height * scale);
   const ctx = context2d(canvas);
   ctx.scale(scale, scale);
   ctx.fillStyle = '#ffffff';

@@ -111,9 +111,12 @@ describe('renderBookingPng', () => {
     expect(drawn).toEqual(expect.arrayContaining(['Chưa phân công', 'Nguyễn Văn A', 'Trần Thị Cúc', 'Lê Văn Đông']));
   });
 
-  it('drops to 1× rather than fail when a very long document would exceed what a phone browser draws', async () => {
+  it('★ never exceeds the pixel budget a phone browser draws — below 2× when long, below 1× when huge', async () => {
     await render({ cargoInfo: 'kiện hàng dễ vỡ '.repeat(1200) });
-    expect(sizes[0]!.width).toBe(720);
+    await render({ crew: Array.from({ length: 1000 }, (_, index) => ({ plate: `51H${index}`, driverName: `Tài xế ${index}` })) });
+    for (const { width, height } of sizes) expect(width * height).toBeLessThanOrEqual(16_000_000);
+    expect(sizes[0]!.width).toBeLessThan(1440);
+    expect(sizes[1]!.width).toBeLessThan(720);
   });
 
   it('rejects when the browser cannot encode the PNG', async () => {

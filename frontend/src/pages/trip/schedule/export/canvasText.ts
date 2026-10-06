@@ -7,6 +7,8 @@
 /** Geist, the face the app ships — its Vietnamese subset included (`main.tsx`). */
 export const font = (weight: number, size: number): string => `${weight} ${size}px "Geist Variable", sans-serif`;
 
+type Measure = (value: string) => number;
+
 /**
  * `text` as lines no wider than `maxWidth`. Breaks between words; a single word
  * wider than the line — a long code, a URL — is broken between characters.
@@ -16,30 +18,42 @@ export const font = (weight: number, size: number): string => `${weight} ${size}
  * typed on several lines. NFC first, so a Vietnamese letter and its marks are
  * one code point and a character break never splits them.
  */
-export function wrapText(text: string, maxWidth: number, measure: (value: string) => number): string[] {
+export const wrapText = (text: string, maxWidth: number, measure: Measure): string[] =>
+  text
+    .normalize('NFC')
+    .trim()
+    .split('\n')
+    .flatMap((paragraph) => wrapParagraph(paragraph, maxWidth, measure));
+
+function wrapParagraph(paragraph: string, maxWidth: number, measure: Measure): string[] {
   const lines: string[] = [];
-  for (const paragraph of text.normalize('NFC').trim().split('\n')) {
-    let line = '';
-    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
-      const candidate = line ? `${line} ${word}` : word;
-      if (measure(candidate) <= maxWidth) {
-        line = candidate;
-        continue;
-      }
-      if (line) lines.push(line);
-      line = word;
-      // A lone glyph is never split, so even an impossibly wide one terminates.
-      while (measure(line) > maxWidth && Array.from(line).length > 1) {
-        const chars = Array.from(line);
-        let cut = chars.length - 1;
-        while (cut > 1 && measure(chars.slice(0, cut).join('')) > maxWidth) cut -= 1;
-        lines.push(chars.slice(0, cut).join(''));
-        line = chars.slice(cut).join('');
-      }
+  let line = '';
+  for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (measure(candidate) <= maxWidth) {
+      line = candidate;
+      continue;
     }
-    lines.push(line);
+    if (line) lines.push(line);
+    const pieces = breakWord(word, maxWidth, measure);
+    line = pieces.pop() ?? '';
+    lines.push(...pieces);
   }
-  return lines;
+  return [...lines, line];
+}
+
+/** A word as pieces that fit, cut between characters; the last piece stays open for the next word. */
+function breakWord(word: string, maxWidth: number, measure: Measure): string[] {
+  const pieces: string[] = [];
+  let rest = Array.from(word);
+  // A lone glyph is never split, so even an impossibly wide one terminates.
+  while (rest.length > 1 && measure(rest.join('')) > maxWidth) {
+    let cut = rest.length - 1;
+    while (cut > 1 && measure(rest.slice(0, cut).join('')) > maxWidth) cut -= 1;
+    pieces.push(rest.slice(0, cut).join(''));
+    rest = rest.slice(cut);
+  }
+  return [...pieces, rest.join('')];
 }
 
 /**

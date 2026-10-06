@@ -98,10 +98,10 @@ export function BookingExportDialog({ tripId, onClose }: Readonly<{ tripId: stri
           </p>
         )}
         {!broken && !png && (
-          <div role="status" className="space-y-2">
+          <output className="block">
             <span className="sr-only">{t('bookingExportPreparing')}</span>
             <Skeleton className="h-[28rem] w-full rounded-lg" />
-          </div>
+          </output>
         )}
         {png && (
           <img

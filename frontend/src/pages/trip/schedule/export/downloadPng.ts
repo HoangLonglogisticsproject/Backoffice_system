@@ -16,9 +16,11 @@ export function bookingPngFileName(customerName: string | null, scheduledOn: str
     .replace(/\p{M}/gu, '')
     .replace(/[đĐ]/g, (letter) => (letter === 'đ' ? 'd' : 'D'))
     .replace(/[^A-Za-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/^-|-$/g, '');
   // At most 40 characters, cut after a whole word — never `Thuc-pha`.
-  const reference = folded.length <= 40 ? folded : folded.slice(0, 41).replace(/-[^-]*$/, '').slice(0, 40);
+  const head = folded.slice(0, 41);
+  const lastBreak = head.lastIndexOf('-');
+  const reference = folded.length <= 40 ? folded : head.slice(0, lastBreak > 0 ? lastBreak : 40);
   const day = /^\d{4}-\d{2}-\d{2}$/.test(scheduledOn) ? scheduledOn : 'undated';
   return reference ? `booking-${reference}-${day}.png` : `booking-${day}.png`;
 }
