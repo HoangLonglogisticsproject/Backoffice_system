@@ -23,6 +23,7 @@ import DriverTripsPage from './DriverTripsPage';
  */
 const fetchMyAssignments = vi.fn();
 const fetchMyAssignment = vi.fn();
+const fetchMyWorkday = vi.fn();
 const recordExecutionEvent = vi.fn();
 const declareExpense = vi.fn();
 const editExpense = vi.fn();
@@ -37,6 +38,9 @@ vi.mock('@/api/driverPortal', () => ({
   declareExpense: (...a: unknown[]) => declareExpense(...a),
   editExpense: (...a: unknown[]) => editExpense(...a),
   submitCompletion: (...a: unknown[]) => submitCompletion(...a),
+  // The "Hôm nay" tab reads the workday now; empty unless a case says otherwise.
+  fetchMyWorkday: (...a: unknown[]) => fetchMyWorkday(...a),
+  recordFuelFill: vi.fn(),
 }));
 
 // Only the receipt is observed; `setToastLanguage` and the rest stay real.
@@ -154,13 +158,13 @@ const renderDetail = (path = '/driver/assignments/a1') => {
   };
 };
 
-const renderList = () => {
+const renderList = (path = '/driver') => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   return render(
     <QueryClientProvider client={client}>
       <LanguageProvider>
-        <MemoryRouter initialEntries={['/driver']}>
+        <MemoryRouter initialEntries={[path]}>
           <Routes>
             <Route path="/driver" element={<DriverTripsPage />} />
           </Routes>
@@ -173,6 +177,7 @@ const renderList = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   fetchMyAssignments.mockResolvedValue([]);
+  fetchMyWorkday.mockReset().mockResolvedValue({ businessDate: '2026-08-30', vehicles: [] });
   fetchMyAssignment.mockResolvedValue(trip());
   recordExecutionEvent.mockResolvedValue(event('ARRIVED_PICKUP'));
   declareExpense.mockResolvedValue(cost());
@@ -195,8 +200,12 @@ describe('★ a driver sees only their own trips', () => {
   it('asks for the list with no parameter at all', async () => {
     // The scope IS the session. A parameter here would be something a client
     // could change.
-    fetchMyAssignments.mockResolvedValue([trip()]);
-    renderList();
+    //
+    // Read from the "Sắp tới" tab: "Hôm nay" is the shift panel now and reads a
+    // different endpoint, so the assignments list is only drawn under the other
+    // two tabs.
+    fetchMyAssignments.mockResolvedValue([trip({ scheduledOn: '2026-08-31' })]);
+    renderList('/driver?view=upcoming');
 
     await screen.findByRole('link', { name: /xem chuyến/i });
     expect(fetchMyAssignments).toHaveBeenCalledWith();

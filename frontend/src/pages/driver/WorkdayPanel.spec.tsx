@@ -98,13 +98,24 @@ describe('★ Ca làm việc hôm nay', () => {
     });
     renderPanel();
 
-    expect(await screen.findByRole('heading', { name: 'Ca làm việc hôm nay' })).toBeTruthy();
+    // ★ NO HEADING OF ITS OWN: this panel IS the "Hôm nay" tab now, and a tab
+    // panel is already named by its tab.
     const first = await card('51H-273.14');
     expect(first).toHaveTextContent('Đã khai · Có đổ nhiên liệu');
     expect(first).toHaveTextContent('Kho now → Cảng now');
     expect(first).toHaveTextContent('2/4 · Đang vận chuyển');
     expect(first).toHaveTextContent(/\d{2}:\d{2} · Kho later → Cảng later/);
     expect(within(first).getByRole('link', { name: /Tiếp tục chuyến/ })).toHaveAttribute('href', '/driver/assignments/now');
+
+    // ★ AND EVERY OTHER TURN OF THE DAY IS LISTED AND REACHABLE — the one
+    // already closed included. Showing only the turn in hand and the next made
+    // the tab's own count promise work the screen did not offer.
+    expect(first).toHaveTextContent('Kho done → Cảng done');
+    expect(
+      within(first)
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href')),
+    ).toEqual(['/driver/assignments/now', '/driver/assignments/done', '/driver/assignments/later']);
     expect(await card('51C-999.99')).toHaveTextContent('Đã khai · Không đổ nhiên liệu đầu ca');
   });
 
@@ -172,7 +183,10 @@ describe('★ Ca làm việc hôm nay', () => {
 
     const lorryCard = await card('51H-273.14');
     expect(lorryCard).toHaveTextContent('Đã chạy xong các chuyến hôm nay của xe này.');
-    expect(within(lorryCard).queryByRole('link')).toBeNull();
+    // No "Tiếp tục chuyến" — there is nothing in hand. The closed turn is still
+    // listed and still openable: a finished trip is read-only, not invisible.
+    expect(within(lorryCard).queryByRole('link', { name: /Tiếp tục chuyến/ })).toBeNull();
+    expect(within(lorryCard).getAllByRole('link')).toHaveLength(1);
     // Nothing open to answer the check through, so the fill is what is left.
     expect(within(lorryCard).queryByRole('button', { name: 'Khai nhiên liệu đầu ca' })).toBeNull();
     fireEvent.click(within(lorryCard).getByRole('button', { name: 'Ghi nhận đổ nhiên liệu' }));
@@ -191,15 +205,26 @@ describe('★ Ca làm việc hôm nay', () => {
     expect(within(lorryCard).queryAllByRole('button')).toEqual([]);
   });
 
-  it('says so plainly when there is no work today, and steps aside when the read fails', async () => {
+  it('says so plainly when there is no work today, and offers the way to tomorrow', async () => {
     fetchMyWorkday.mockResolvedValue({ businessDate: '2026-10-06', vehicles: [] });
-    const { unmount } = renderPanel();
-    expect(await screen.findByText('Hôm nay bạn chưa có chuyến nào.')).toBeTruthy();
-    unmount();
+    renderPanel();
 
+    expect(await screen.findByText('Chưa có chuyến nào')).toBeTruthy();
+    expect(screen.getByText('Bạn chưa có chuyến nào hôm nay.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Xem chuyến sắp tới' }));
+    expect(seeUpcoming).toHaveBeenCalled();
+  });
+
+  it('★ SAYS a failed read instead of stepping aside — it is the whole tab now', async () => {
+    // This panel used to return `null` on an error and let the schedule list
+    // below report it. There is no list below any more: silence would read as
+    // "no work today", which is a different and much worse sentence.
     fetchMyWorkday.mockRejectedValue(new ApiError(0, undefined, 'offline'));
-    const { container } = renderPanel();
-    await waitFor(() => expect(container.querySelector('section')).toBeNull());
+    renderPanel();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
+    expect(screen.getByRole('button', { name: 'Thử lại' })).toBeTruthy();
+    expect(screen.queryByText('Bạn chưa có chuyến nào hôm nay.')).toBeNull();
   });
 
   it('picks the turn on the road first, then the first one not started', () => {

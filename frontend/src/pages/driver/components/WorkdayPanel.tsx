@@ -92,7 +92,7 @@ export function WorkdayPanel({ onSeeUpcoming }: Readonly<{ onSeeUpcoming: () => 
       {!loading && !error && lorries.length === 0 ? (
         <DriverEmptyState
           title="driverEmptyTitle"
-          message="driverWorkdayEmpty"
+          message="driverEmptyToday"
           action={{
             label: 'driverEmptySeeUpcoming',
             icon: <CalendarDays aria-hidden />,
@@ -133,8 +133,12 @@ export function WorkdayPanel({ onSeeUpcoming }: Readonly<{ onSeeUpcoming: () => 
 }
 
 function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: FuelAction) => void }>) {
-  const { t, language } = useLanguage();
-  const { current, next } = currentAndNext(lorry.turns);
+  const { t } = useLanguage();
+  const { current } = currentAndNext(lorry.turns);
+  // Everything that is not the turn in hand, in the server's order. A closed
+  // turn stays in the list: "đã chạy xong" is a fact about the day, and hiding
+  // it is what made the old card disagree with the tab's own count.
+  const rest = lorry.turns.filter((turn) => turn !== current);
   const plate = formatPlate(lorry.vehicle.plate);
   // Any of today's turns may carry a fill; the one in hand is the natural provenance.
   const fillThrough = current ?? lorry.turns[lorry.turns.length - 1] ?? null;
@@ -177,13 +181,25 @@ function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: 
           <p className="text-sm text-muted-foreground">{t('driverWorkdayAllDone')}</p>
         )}
 
-        {next ? (
-          <div className="text-sm">
+        {/*
+          ★ EVERY OTHER TURN OF THE DAY, NOT JUST THE NEXT ONE.
+
+          This card used to show the turn in hand and the one after it, and
+          nothing else — fine as a summary above the schedule, wrong now that it
+          IS the "Hôm nay" tab: a driver with four turns would read "Hôm nay (4)"
+          and be shown two. Each row is a link, so none of the day's work is
+          reachable only by counting it.
+        */}
+        {rest.length > 0 ? (
+          <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground">{t('driverWorkdayNext')}</p>
-            <p className="font-medium">
-              {next.scheduledPickupAt ? `${formatTime(next.scheduledPickupAt, language)} · ` : ''}
-              <RouteText turn={next} />
-            </p>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {rest.map((turn) => (
+                <li key={turn.assignment.id}>
+                  <TurnRow turn={turn} />
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
 
@@ -211,6 +227,36 @@ function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: 
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * One of the day's other turns: when, where, and where it stands.
+ *
+ * ★ A LINK, NOT A LINE OF TEXT. The turn in hand has the big button; these have
+ * the same destination in a smaller shape, because a driver whose first trip is
+ * already closed still has to be able to open the second one.
+ */
+function TurnRow({ turn }: Readonly<{ turn: DriverWorkdayTurn }>) {
+  const { t, language } = useLanguage();
+
+  return (
+    <Link
+      to={`/driver/assignments/${encodeURIComponent(turn.assignment.id)}`}
+      state={OPENED_FROM_SCHEDULE}
+      className="flex min-h-14 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium wrap-anywhere">
+          {turn.scheduledPickupAt ? `${formatTime(turn.scheduledPickupAt, language)} · ` : ''}
+          <RouteText turn={turn} />
+        </span>
+        <span className="mt-0.5 block text-xs text-muted-foreground">
+          <span className="tabular-nums">{turn.progress.reached}/4</span> · {t(progressLabel(turn))}
+        </span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+    </Link>
   );
 }
 

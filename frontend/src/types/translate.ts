@@ -559,8 +559,6 @@ const PHRASES = {
   driverFillSubmit: { vi: 'Lưu', en: 'Save' },
 
   // "Ca làm việc hôm nay" — the top of the schedule.
-  driverWorkdayTitle: { vi: 'Ca làm việc hôm nay', en: 'Today’s shift' },
-  driverWorkdayEmpty: { vi: 'Hôm nay bạn chưa có chuyến nào.', en: 'You have no trips today.' },
   driverWorkdayFuel: { vi: 'Nhiên liệu đầu ca', en: 'Start-of-shift fuel' },
   driverWorkdayCurrent: { vi: 'Chuyến hiện tại', en: 'Current trip' },
   driverWorkdayNext: { vi: 'Chuyến tiếp theo', en: 'Next trip' },
