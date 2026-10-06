@@ -26,7 +26,7 @@ type FleetQuery = z.infer<typeof fleetQuerySchema>;
  *
  * ★ THE MONEY IS `cost.read`, DECIDED HERE AND APPLIED IN THE STATEMENT. A
  * reader without it — Dispatch, Sales, Customer Service as the catalogue
- * stands — gets `null` where an amount would be, because the SELECT never
+ * stands — gets `null` where an amount would be, because the query never
  * read one. No permission is widened: Dispatch does not gain `cost.read`.
  */
 @Controller('fleet-operations')
