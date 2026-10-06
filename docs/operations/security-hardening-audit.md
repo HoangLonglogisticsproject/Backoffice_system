@@ -1193,8 +1193,10 @@ global.
 
 # 24. Incident 2026-10-06 — finding 9: the fleet board was readable with `trip.read`
 
-**Severity: LOW.** It was a confidentiality regression between internal staff roles. No amounts
-were exposed, and nothing was reachable anonymously. **Status: fixed and verified in production.**
+**Severity: LOW.** It was an authorization exposure between internal staff roles. No amounts were
+exposed, and nothing was reachable anonymously. **Status: fixed and verified in production.**
+Whether any unauthorized role actually called the endpoint during the window is **unknown**
+(§24.5). This is **not** a confirmed data breach.
 
 ## 24.1 What happened
 
@@ -1224,7 +1226,8 @@ fix arrived as PR #105.
 | 09:48:54 | #105 merged as `ad1585b6b9a23d3aa9637464b7d9e36c0f2971d0` |
 | 09:52:31 | `release` deploys backend `ad1585b`, health OK. **Exposure ends** (about 77 min). The frontend is promoted to Vercel Production in the same job. |
 | 09:54 | Read-only `Production Trip Audit` reports `backend_release = ad1585b6b9a2…` |
-| later, same day | Read-only nginx query as root, window in VPS local time: **0** requests to `/fleet-operations` (§24.5) |
+| later, same day | Read-only nginx query as root returns **0**, with errors suppressed |
+| later, same day | Re-run as root: both log files the query read are **absent** on the host, so the 0 is invalid as evidence (§24.5) |
 
 ## 24.3 Fix (#105)
 
@@ -1250,52 +1253,55 @@ needs credentials for each role, and creating test accounts would mutate product
 
 ## 24.5 Access during the exposure window
 
-**Two separate facts, never merged into one:**
+> Access to /fleet-operations during the confirmed exposure window could not be determined from
+> the available production evidence.
+>
+> The initially expected Nginx access-log paths /var/log/nginx/opsystem.access.log and
+> /var/log/nginx/opsystem.access.log.1 were not present on the production host.
+>
+> An earlier zero-count command suppressed the file-open errors and therefore its result is
+> invalid as evidence of no access.
 
-1. **The authorization exposure is confirmed.** From 08:35:26 to 09:52:31 UTC, any
-   `trip.read` holder could have read the board.
-2. **No access was observed.** No requests to `/fleet-operations` were observed in the available
-   Nginx access logs during the confirmed exposure window.
+**Confirmed:**
 
-The second fact does **not** say that nobody accessed the endpoint. It is bounded by what those
-logs can show:
+- #103 introduced an authorization widening.
+- Sales, Customer Service and Accounting were technically able to receive 200 from
+  `GET /fleet-operations`.
+- The exposure window was approximately 77 minutes: 08:35:26 → 09:52:31 UTC, which is
+  15:35:26 → 16:52:31 Asia/Ho_Chi_Minh.
+- Monetary vehicle-cost fields remained protected (`cost.read`, selected in the query).
+- #105 corrected the endpoint to `dispatch.write`.
+- #105 is deployed, and the deployed SHA matches its merge.
+- The real-role CI authorization matrix passes at that SHA.
 
-- The backend does not log requests; Nest logs startup and errors only.
-- The nginx log at `/var/log/nginx/opsystem.access.log` records method, path, status and client
-  address, but no user. Only root can read it; the restricted `deploy` account cannot.
-- Only the current and the previous rotated nginx files were searched.
-- Vercel runtime logs (behind the token held as a GitHub secret) were not consulted. They carry no
-  user identity either.
+**Unknown:**
 
-**The query, run as root on 2026-10-06 (read only).** The VPS logs in its own time zone,
-Asia/Ho_Chi_Minh (UTC+7), so the window is 15:35:26 → 16:52:31 local:
+- Whether any unauthorized role actually called `/fleet-operations` during the exposure window.
+
+**What was run, and why its result is void.** This command ran as root and printed `0`:
 
 ```
 sudo awk '$4 >= "[06/Oct/2026:15:35:26" && $4 < "[06/Oct/2026:16:52:31" && $7 ~ /\/fleet-operations/' \
   /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1 2>/dev/null | wc -l
 ```
 
-Result: **0**.
+Run again without suppressing errors, `ls` and `awk` both reported that neither file exists.
+The two paths came from `deploy/nginx.conf` in this repository, the `opsystem.hoanglonglti.com`
+site. That configuration does not describe what the production host writes.
 
-The command is recorded **exactly as it was run**. Its `2>/dev/null` discards awk's errors, so
-the run does not by itself show that both files existed and were read. A missing or unreadable
-file would have counted as zero lines.
+**Why the evidence is thin either way:**
 
-**Not yet run.** If coverage needs to be confirmed, this check stops on an unreadable file
-instead of reporting a count. It also prints each file's first and last timestamp, so you can see
-whether the window falls inside what was searched:
+- The backend does not log requests; Nest logs startup and errors only.
+- An nginx access log records method, path, status and client address, but no user. Even a
+  matching line could not have named a role, because the SuperAdmin and Dispatch read the board
+  legitimately.
+- Vercel runtime logs sit behind the token held as a GitHub secret, and were not consulted.
 
-```
-for f in /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1; do
-  sudo test -r "$f" || { echo "unreadable or missing: $f" >&2; exit 1; }
-  printf '%s  %s .. %s\n' "$f" "$(sudo head -n1 "$f" | awk '{print $4}')" "$(sudo tail -n1 "$f" | awk '{print $4}')"
-done
-sudo awk '$4 >= "[06/Oct/2026:15:35:26" && $4 < "[06/Oct/2026:16:52:31" && $7 ~ /\/fleet-operations/' \
-  /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1 | wc -l
-```
-
-A non-zero count would not have identified a role either: the SuperAdmin and Dispatch read the
-board legitimately.
+**A lead, not examined.** The production frontend's edge function calls the committed origin
+`https://bo-api.hoanglonglti.com` (`frontend/api/backend-origin.ts`). The repository's nginx site
+for that hostname, `deploy/nginx-bo-api.conf`, logs to `/var/log/nginx/bo-api.access.log`.
+Whether that file exists on the host, and whether it covers the window, has not been checked.
+Closure of this incident does not depend on it.
 
 ## 24.6 Lessons
 
@@ -1304,3 +1310,8 @@ board legitimately.
   fact the screen adds.
 - **Before pushing a review fix, check that the PR is still open.** A merge deletes the head
   branch. A later push re-creates it with no pull request, and no CI runs.
+- **A count is evidence only if its inputs are proven present.** Confirm each log file exists
+  and covers the window *before* reading a zero, and never suppress the errors that would say
+  otherwise. Here a `2>/dev/null` turned "no such file" into "0 requests".
+- **Repository configuration is not the host.** A log path taken from `deploy/` is a hypothesis
+  until it is checked on the machine.
