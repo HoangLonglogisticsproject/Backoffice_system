@@ -1183,7 +1183,8 @@ const PHRASES = {
   fleetAwaitingApproval: { vi: 'Đã giao · chờ duyệt', en: 'Delivered · awaiting review' },
   fleetCurrent: { vi: 'Hiện tại', en: 'Current' },
   fleetNext: { vi: 'Tiếp theo', en: 'Next' },
-  fleetNoAccess: {
+  fleetNoAccess: { vi: 'Màn hình này dành cho Điều độ.', en: 'This screen is for Dispatch.' },
+  fleetNoAccessTripSchedule: {
     vi: 'Màn hình này dành cho Điều độ. Bạn vẫn xem được Lịch xe.',
     en: 'This screen is for Dispatch. You can still read the trip schedule.',
   },

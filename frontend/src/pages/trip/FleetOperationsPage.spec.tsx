@@ -148,6 +148,15 @@ describe('★ Điều hành xe', () => {
     expect(fetchFleetBoard).not.toHaveBeenCalled();
   });
 
+  it('promises Lịch xe only to someone who can open it', async () => {
+    useSession.mockReturnValue(session([]));
+    renderPage();
+
+    expect(await screen.findByText('Màn hình này dành cho Điều độ.')).toBeTruthy();
+    expect(screen.queryByText(/Lịch xe/)).toBeNull();
+    expect(fetchFleetBoard).not.toHaveBeenCalled();
+  });
+
   it('★ the driver shown is the current turn\'s, and the next turn is the server\'s', async () => {
     useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
     const day = board(false);

@@ -97,7 +97,8 @@ export default function FleetOperationsPage() {
 
   if (!mayRead) {
     return (
-      <PageHeader title={t('fleetOperations')} subtitle={t('fleetNoAccess')} />
+      // Lịch xe is mentioned only to someone who may actually open it.
+      <PageHeader title={t('fleetOperations')} subtitle={t(can('trip.read') ? 'fleetNoAccessTripSchedule' : 'fleetNoAccess')} />
     );
   }
 
