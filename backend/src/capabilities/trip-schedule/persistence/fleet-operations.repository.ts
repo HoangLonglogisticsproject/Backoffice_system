@@ -2,10 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
   dataIssuesOf,
+  focusOf,
   fuelObligationOf,
   progressOf,
   turnStateOf,
-  vehicleStateOf,
   type FleetTurn,
   type FleetVehicleDay,
 } from '../domain/fleet-operations';
@@ -116,6 +116,7 @@ const toTurn = (row: TurnJson): FleetTurn => {
 
 const toVehicleDay = (row: VehicleDayRow): FleetVehicleDay => {
   const turns = row.turns.map(toTurn);
+  const { current, next } = focusOf(turns);
   const drivers = [...new Map(turns.map((turn) => [turn.driver.id, turn.driver])).values()];
   const obligation = fuelObligationOf({
     dailyFuelCheckRequired: row.daily_fuel_check_required,
@@ -130,9 +131,11 @@ const toVehicleDay = (row: VehicleDayRow): FleetVehicleDay => {
       dailyFuelCheckRequired: row.daily_fuel_check_required,
       archived: row.status === 'archived',
     },
-    state: vehicleStateOf(turns),
+    state: current?.state ?? 'unassigned',
     drivers,
     turns,
+    currentAssignmentId: current?.assignmentId ?? null,
+    nextAssignmentId: next?.assignmentId ?? null,
     fuel: {
       obligation,
       check:

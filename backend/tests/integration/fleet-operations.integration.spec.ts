@@ -545,6 +545,118 @@ describeIntegration('Fleet operations and fuel transactions against real Postgre
     });
   });
 
+  // ------------------------------------------ several trips on one lorry --
+
+  /**
+   * ★ ONE LORRY, SEVERAL TRIPS IN A DAY — ONE ROW, ONE STATE, ONE TURN IT
+   * SPEAKS FOR. The state is the current turn's: the first RUNNING, else the
+   * first WAITING, else the last of the day (DONE); no turn is UNASSIGNED. The
+   * driver shown is that turn's driver; "next" is the first other WAITING turn.
+   * Turns are in the board's total order: day, pickup time, assigned at, id.
+   */
+  describe('★ several trips on one lorry — one row, one deterministic state', () => {
+    const rowsFor = async (vehicle: string) =>
+      (await fleet.board({ withMoney: true }, NOW)).vehicles.filter((row) => row.vehicle.id === vehicle);
+    const driverOf = (row: Awaited<ReturnType<typeof dayOf>>) =>
+      row.turns.find((t) => t.assignmentId === row.currentAssignmentId)?.driver.displayName ?? null;
+    const finishedRun = async (vehicle: string, driver = driverA) => {
+      const run = await turn(vehicle, { driver });
+      for (const type of ALL) await milestone(run, type, THIS_MORNING, driver);
+      await finish(run.trip);
+      return run;
+    };
+
+    it('A — trip A finished, trip B waiting → WAITING, speaking for B', async () => {
+      const lorry = await newVehicle();
+      await finishedRun(lorry);
+      const b = await turn(lorry, { driver: driverB });
+
+      const [row, ...others] = await rowsFor(lorry);
+      expect(others).toEqual([]);
+      expect(row).toMatchObject({ state: 'waiting', currentAssignmentId: b.assignment, nextAssignmentId: null });
+      expect(driverOf(row!)).toBe('Tài Xế B');
+    });
+
+    it('B — A finished, B running, C waiting → RUNNING on B, B\'s driver, C next; the fuel unchanged', async () => {
+      const lorry = await newVehicle();
+      const a = await finishedRun(lorry);
+      const b = await turn(lorry, { driver: driverB });
+      await milestone(b, 'ARRIVED_PICKUP', THIS_MORNING, driverB);
+      const c = await turn(lorry);
+      // Declared through an open turn — a finished trip's turn takes no check.
+      await declare(c.assignment, fillOf('400000'));
+      await record(b.assignment, { ...FILL, amount: '250000' }, 'b-fill', driverB);
+
+      const [row, ...others] = await rowsFor(lorry);
+      expect(others).toEqual([]);
+      expect(row!.turns.map((t) => [t.assignmentId, t.state])).toEqual([
+        [a.assignment, 'done'],
+        [b.assignment, 'running'],
+        [c.assignment, 'waiting'],
+      ]);
+      expect(row).toMatchObject({ state: 'running', currentAssignmentId: b.assignment, nextAssignmentId: c.assignment });
+      expect(driverOf(row!)).toBe('Tài Xế B');
+      // Three turns fold into one row and never multiply the fills.
+      expect(row!.fuel).toMatchObject({ fills: 2, totalAmount: '650000.00' });
+      expect(row!.fuel.totalAmount).toBe((await ledgerOf(lorry)).totalAmount);
+    });
+
+    it('C — every turn done (one finished, one with all four milestones awaiting approval) → DONE on the last', async () => {
+      const lorry = await newVehicle();
+      await finishedRun(lorry);
+      const delivered = await turn(lorry, { driver: driverB });
+      for (const type of ALL) await milestone(delivered, type, THIS_MORNING, driverB);
+
+      const [row] = await rowsFor(lorry);
+      expect(row).toMatchObject({ state: 'done', currentAssignmentId: delivered.assignment, nextAssignmentId: null });
+      expect(driverOf(row!)).toBe('Tài Xế B');
+    });
+
+    it('D — no turn that is the day\'s work (only tomorrow\'s, and one ended today) → UNASSIGNED', async () => {
+      const lorry = await newVehicle();
+      await turn(lorry, { day: TOMORROW });
+      const ended = await turn(lorry);
+      await execution.endAssignment(ended.trip, ended.assignment, { by: operator, reason: 'Đổi xe.' });
+
+      const [row] = await rowsFor(lorry);
+      expect(row).toMatchObject({ state: 'unassigned', turns: [], currentAssignmentId: null, nextAssignmentId: null });
+    });
+
+    it('★ the state is the TURN\'s, not the trip\'s: a second lorry on an executing trip is still waiting', async () => {
+      const first = await newVehicle();
+      const second = await newVehicle();
+      const run = await turn(first);
+      const sameTrip = await execution.assign(run.trip, { vehicleId: second, driverUserId: driverB }, operator);
+      await milestone(run, 'ARRIVED_PICKUP', THIS_MORNING);
+      // A turn whose only milestone was withdrawn is waiting again — the trip stays executing.
+      const third = await newVehicle();
+      const withdrawn = await turn(third);
+      await milestone(withdrawn, 'ARRIVED_PICKUP', THIS_MORNING);
+      await sql(`UPDATE trip_execution_events SET voided_at = now(), voided_by = $2, void_reason = 'nhầm' WHERE driver_assignment_id = $1`, [
+        withdrawn.assignment,
+        operator,
+      ]);
+
+      expect((await sql<{ status: string }>(`SELECT status FROM trip_schedules WHERE id = $1`, [run.trip]))[0]!.status).toBe('executing');
+      expect((await dayOf(first)).state).toBe('running');
+      expect(await dayOf(second)).toMatchObject({ state: 'waiting', currentAssignmentId: sameTrip.id });
+      expect((await dayOf(third)).state).toBe('waiting');
+    });
+
+    it('★ ties are broken by the board\'s total order, never by chance: same day, same pickup → first assigned', async () => {
+      const lorry = await newVehicle();
+      const first = await turn(lorry);
+      const second = await turn(lorry, { driver: driverB });
+      const third = await turn(lorry);
+
+      for (let read = 0; read < 3; read += 1) {
+        const [row] = await rowsFor(lorry);
+        expect(row!.turns.map((t) => t.assignmentId)).toEqual([first.assignment, second.assignment, third.assignment]);
+        expect(row).toMatchObject({ state: 'waiting', currentAssignmentId: first.assignment, nextAssignmentId: second.assignment });
+      }
+    });
+  });
+
   // -------------------------------------------------------- the driver day --
 
   describe('★ Ca làm việc hôm nay — the driver\'s own day', () => {

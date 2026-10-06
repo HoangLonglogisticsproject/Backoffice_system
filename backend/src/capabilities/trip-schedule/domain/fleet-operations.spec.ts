@@ -1,5 +1,6 @@
 import {
   dataIssuesOf,
+  focusOf,
   fuelObligationOf,
   progressOf,
   turnStateOf,
@@ -36,6 +37,24 @@ describe('fleet operations — derived, never stored', () => {
     expect(vehicleStateOf([{ state: 'done' }, { state: 'waiting' }])).toBe('waiting');
     expect(vehicleStateOf([{ state: 'done' }])).toBe('done');
     expect(vehicleStateOf([])).toBe('unassigned');
+  });
+
+  it('★ the row speaks for ONE turn: the first running, else the first waiting, else the last done', () => {
+    const t = (id: string, state: 'running' | 'waiting' | 'done') => ({ id, state });
+    // A finished, B waiting → B, nothing after it.
+    expect(focusOf([t('A', 'done'), t('B', 'waiting')])).toEqual({ current: t('B', 'waiting'), next: null });
+    // A finished, B running, C waiting → B, then C.
+    expect(focusOf([t('A', 'done'), t('B', 'running'), t('C', 'waiting')])).toEqual({
+      current: t('B', 'running'),
+      next: t('C', 'waiting'),
+    });
+    // A running AFTER a waiting turn in the day's order still wins; the waiting one is next.
+    expect(focusOf([t('A', 'waiting'), t('B', 'running')])).toEqual({ current: t('B', 'running'), next: t('A', 'waiting') });
+    // Two waiting: the first is current, the second is next — the order decides, never chance.
+    expect(focusOf([t('A', 'waiting'), t('B', 'waiting')])).toEqual({ current: t('A', 'waiting'), next: t('B', 'waiting') });
+    // All done → the last of the day; nothing next.
+    expect(focusOf([t('A', 'done'), t('B', 'done')])).toEqual({ current: t('B', 'done'), next: null });
+    expect(focusOf([])).toEqual({ current: null, next: null });
   });
 
   it('the obligation is the check when answered, owed only with work and the flag', () => {

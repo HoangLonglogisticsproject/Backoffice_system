@@ -20,14 +20,19 @@ type FleetQuery = z.infer<typeof fleetQuerySchema>;
 /**
  * "Điều hành xe" — under ĐIỀU PHỐI, beside Lịch xe.
  *
- * ★ `trip.read`, THE KEY THAT ALREADY SHOWS WHO DRIVES WHICH LORRY. Every
- * fact on this board except the money is already on Lịch xe for the same
- * readers; this is that same information turned to face the lorries.
+ * ★ `dispatch.write` — THE GLOBAL TIER AND THE DISPATCH FUNCTION, NOBODY ELSE.
+ * Not `trip.read`: that key is also Sales', Accounting's and Customer
+ * Service's, and this board tells them what no route told them before — how
+ * each lorry answered its start-of-shift fuel check, who declared it and when,
+ * how many fills it took and which lack liters or an odometer reading. The rest
+ * of the board (plates, crews, milestones) is already theirs on Lịch xe; the
+ * fuel facts are dispatch's work, and the narrowest existing key that says
+ * "dispatch" is the one already guarding `GET /trip-drivers` and the
+ * assignment-request queue. No permission is added and none is widened.
  *
  * ★ THE MONEY IS `cost.read`, DECIDED HERE AND APPLIED IN THE STATEMENT. A
- * reader without it — Dispatch, Sales, Customer Service as the catalogue
- * stands — gets `null` where an amount would be, because the query never
- * read one. No permission is widened: Dispatch does not gain `cost.read`.
+ * dispatcher gets `null` where an amount would be, because the query never
+ * read one. Dispatch does not gain `cost.read`.
  */
 @Controller('fleet-operations')
 export class FleetOperationsController {
@@ -35,7 +40,7 @@ export class FleetOperationsController {
 
   @Get()
   @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
-  @RequirePermission('trip.read')
+  @RequirePermission('dispatch.write')
   async board(
     @Query(new ZodValidationPipe(fleetQuerySchema)) query: FleetQuery,
     @Req() request: Request,

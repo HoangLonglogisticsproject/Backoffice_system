@@ -266,6 +266,17 @@ describe('MainLayout', () => {
       expect(hrefOf('Lịch sử chuyến')).toBe('/dispatch/trip-history');
     });
 
+    it('★ offers "Điều hành xe" to Dispatch only — a trip reader without dispatch.write never sees it', () => {
+      useSession.mockReturnValue({ ...ready('sales', 'MEMBER'), can: (p: string) => p === 'trip.read' });
+      const sales = renderLayout();
+      expect(screen.queryByText('Điều hành xe')).toBeNull();
+      sales.unmount();
+
+      useSession.mockReturnValue({ ...ready('dieudo', 'MEMBER'), can: (p: string) => p === 'trip.read' || p === 'dispatch.write' });
+      renderLayout();
+      expect(hrefOf('Điều hành xe')).toBe('/dispatch/fleet-operations');
+    });
+
     it('★ gives a SUPERADMIN driver management and the request queue, under SYSTEM', () => {
       useSession.mockReturnValue(ready('boss', 'SUPERADMIN'));
       renderLayout();

@@ -48,6 +48,8 @@ const vehicle = (id: string, plate: string, over: Partial<FleetVehicleDay> = {})
   state: 'running',
   drivers: [{ id: 'd1', displayName: 'Tài Xế A' }],
   turns: [turn()],
+  currentAssignmentId: 'a1',
+  nextAssignmentId: null,
   fuel: {
     obligation: 'FUEL_ADDED',
     check: { outcome: 'fuel_added', declaredBy: { id: 'd1', displayName: 'Tài Xế A' }, declaredAt: '2026-10-06T00:30:00.000Z', vehicleCostId: 'c1', amount: '650000.00' },
@@ -70,6 +72,7 @@ const board = (withMoney: boolean): FleetBoard => {
       vehicle('v2', '51C99999', {
         state: 'waiting',
         drivers: [{ id: 'd2', displayName: 'Tài Xế B' }],
+        currentAssignmentId: 'a2',
         turns: [turn({ assignmentId: 'a2', state: 'waiting', progress: { reached: 0, next: 'ARRIVED_PICKUP' }, driver: { id: 'd2', displayName: 'Tài Xế B' }, pickupName: 'Kho Sóng Thần' })],
         fuel: { obligation: 'REQUIRED_MISSING', check: null, fills: 0, totalAmount: money('0.00'), issues: ['FUEL_UNDECLARED'] },
       }),
@@ -77,6 +80,7 @@ const board = (withMoney: boolean): FleetBoard => {
         state: 'unassigned',
         drivers: [],
         turns: [],
+        currentAssignmentId: null,
         fuel: { obligation: 'NOT_REQUIRED', check: null, fills: 0, totalAmount: money('0.00'), issues: [] },
       }),
     ],
@@ -118,7 +122,7 @@ describe('★ Điều hành xe', () => {
   });
 
   it('shows the day in five numbers and one row per lorry, as the server derived it', async () => {
-    useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write', 'cost.read']));
     fetchFleetBoard.mockResolvedValue(board(true));
     renderPage();
 
@@ -134,8 +138,54 @@ describe('★ Điều hành xe', () => {
     expect(fetchFleetBoard).toHaveBeenCalledWith(expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
   });
 
+  it('★ a trip.read holder without dispatch.write (Sales, Accounting, CS) gets no board and asks nothing', async () => {
+    useSession.mockReturnValue(session(['trip.read', 'trip.create']));
+    fetchFleetBoard.mockResolvedValue(board(false));
+    renderPage();
+
+    expect(await screen.findByText('Màn hình này dành cho Điều độ. Bạn vẫn xem được Lịch xe.')).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(fetchFleetBoard).not.toHaveBeenCalled();
+  });
+
+  it('promises Lịch xe only to someone who can open it', async () => {
+    useSession.mockReturnValue(session([]));
+    renderPage();
+
+    expect(await screen.findByText('Màn hình này dành cho Điều độ.')).toBeTruthy();
+    expect(screen.queryByText(/Lịch xe/)).toBeNull();
+    expect(fetchFleetBoard).not.toHaveBeenCalled();
+  });
+
+  it('★ the driver shown is the current turn\'s, and the next turn is the server\'s', async () => {
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
+    const day = board(false);
+    const lorry = day.vehicles[0]!;
+    day.vehicles[0] = {
+      ...lorry,
+      state: 'running',
+      drivers: [{ id: 'd1', displayName: 'Tài Xế A' }, { id: 'd2', displayName: 'Tài Xế B' }],
+      turns: [
+        turn({ assignmentId: 'x1', state: 'done', closed: true, progress: { reached: 4, next: null } }),
+        turn({ assignmentId: 'x2', state: 'running', driver: { id: 'd2', displayName: 'Tài Xế B' }, pickupName: 'Kho Bình Dương' }),
+        turn({ assignmentId: 'x3', state: 'waiting', progress: { reached: 0, next: 'ARRIVED_PICKUP' }, pickupName: 'Cảng Hiệp Phước' }),
+      ],
+      currentAssignmentId: 'x2',
+      nextAssignmentId: 'x3',
+    };
+    fetchFleetBoard.mockResolvedValue(day);
+    renderPage();
+
+    const row = await rowOf(/51H/);
+    const cells = row.querySelectorAll('td');
+    expect(cells[2]).toHaveTextContent('Tài Xế B');
+    expect(cells[2]).not.toHaveTextContent('Tài Xế A');
+    expect(cells[3]).toHaveTextContent('Kho Bình Dương → KCN Tân Tạo');
+    expect(cells[3]).toHaveTextContent('Tiếp theo: Cảng Hiệp Phước → KCN Tân Tạo');
+  });
+
   it('★ shows no amount the server did not send — and says why', async () => {
-    useSession.mockReturnValue(session(['trip.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
     fetchFleetBoard.mockResolvedValue(board(false));
     renderPage();
 
@@ -146,7 +196,7 @@ describe('★ Điều hành xe', () => {
   });
 
   it('filters by a summary card, by state, by driver and by a search that ignores Vietnamese marks', async () => {
-    useSession.mockReturnValue(session(['trip.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
     fetchFleetBoard.mockResolvedValue(board(false));
     renderPage();
     const plates = async () => {
@@ -168,7 +218,7 @@ describe('★ Điều hành xe', () => {
   });
 
   it('★ opens a lorry: the check and the day\'s fills kept apart, the declaration\'s fill marked', async () => {
-    useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write', 'cost.read']));
     fetchFleetBoard.mockResolvedValue(board(true));
     renderPage();
 
@@ -188,7 +238,7 @@ describe('★ Điều hành xe', () => {
   });
 
   it('★ without cost.read: no "Chi phí" tab, no ledger read, the fills counted only', async () => {
-    useSession.mockReturnValue(session(['trip.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
     fetchFleetBoard.mockResolvedValue(board(false));
     renderPage();
 
@@ -205,13 +255,13 @@ describe('★ Điều hành xe', () => {
     const client = newClient();
     const moneyCached = () =>
       client.getQueryCache().findAll({ queryKey: ['trip', 'fleet'] }).some((query) => holdsFleetMoney(query.queryKey));
-    useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write', 'cost.read']));
     fetchFleetBoard.mockImplementation(async () => board(useSession().can('cost.read')));
     const view = render(page(client));
     expect(await rowOf(/51H/)).toHaveTextContent(/950[.,]000/);
     expect(moneyCached()).toBe(true);
 
-    useSession.mockReturnValue(session(['trip.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
     view.rerender(page(client));
 
     await waitFor(() => expect(moneyCached()).toBe(false));
@@ -219,7 +269,7 @@ describe('★ Điều hành xe', () => {
   });
 
   it('lists the lorry\'s runs of the day with progress in words', async () => {
-    useSession.mockReturnValue(session(['trip.read']));
+    useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
     fetchFleetBoard.mockResolvedValue(board(false));
     renderPage();
 
