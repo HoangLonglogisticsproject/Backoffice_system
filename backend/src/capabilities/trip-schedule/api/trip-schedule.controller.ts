@@ -381,6 +381,26 @@ const boardFilterSchema = z.object({
    */
   sort: z.enum(TRIP_BOARD_SORTS).default(DEFAULT_TRIP_BOARD_ORDER.sort),
   direction: z.enum(SORT_DIRECTIONS).default(DEFAULT_TRIP_BOARD_ORDER.direction),
+  /**
+   * `?customer=viễn` — the board narrowed to the customers whose name contains
+   * this, case-insensitively. Absent means every customer, so a caller that has
+   * never heard of it reads exactly the board it read before.
+   *
+   * ★ TRIMMED, AND EMPTY IS ABSENT. A box the dispatcher cleared sends
+   * `?customer=`, which must mean "no filter" rather than "a customer whose
+   * name contains the empty string" — the same rows, but through a predicate
+   * and a search parameter nothing needs.
+   *
+   * ★ BOUNDED AT 100. A name is short; the cap is what stops a megabyte of
+   * query string reaching a `LIKE`.
+   */
+  customer: z
+    .string()
+    .trim()
+    .max(100)
+    .transform((value) => (value === '' ? null : value))
+    .nullable()
+    .default(null),
 });
 
 /**

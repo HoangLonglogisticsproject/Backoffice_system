@@ -94,10 +94,66 @@ export const LIFECYCLE_PREDICATE: Record<TripLifecycle, string> = {
 export interface BoardFilter {
   assignment: TripAssignmentFilter;
   lifecycle: TripLifecycle;
+  /**
+   * Free text matched against the CUSTOMER's name. `null` means every customer,
+   * which is what a caller that never heard of this filter sends.
+   */
+  customer: string | null;
 }
 
-const filterSql = ({ assignment, lifecycle }: BoardFilter): string =>
-  `${ASSIGNMENT_PREDICATE[assignment]} ${LIFECYCLE_PREDICATE[lifecycle]}`;
+/**
+ * What a typed `%` means: a per cent sign.
+ *
+ * ★ `LIKE` HAS TWO WILDCARDS AND A USER TYPING ONE MEANS THE CHARACTER. Without
+ * this, searching `%` matches every customer and searching `_` matches every
+ * one-letter difference — a filter that silently does the opposite of what the
+ * box says. The backslash is escaped FIRST, or escaping the other two would
+ * then be undone by their own escape character.
+ */
+export const escapeLikePattern = (value: string): string =>
+  value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+
+/**
+ * The customer search, as a predicate on the trip row.
+ *
+ * ★ `EXISTS`, NOT A JOIN CONDITION, so ONE definition serves both the page and
+ * the count. `listPage` already LEFT JOINs the customer and could have said
+ * `c.name ILIKE …`; `countInRange` joins nothing. Two spellings of one filter
+ * is how a page and its total come to describe different sets — the very thing
+ * `countInRange` carries a warning about.
+ *
+ * ★ AND THE VALUE IS A PARAMETER. Nothing a user typed is ever concatenated
+ * into this string; `$n` is bound by `pg`.
+ *
+ * ⚠ CASE-INSENSITIVE, NOT ACCENT-INSENSITIVE. "VIỄN ĐẠT" is not found by typing
+ * "vien dat": that needs `unaccent`, an extension no migration installs. Said
+ * here because the difference is invisible until a dispatcher tries it.
+ */
+const customerSql = (parameter: number): string => `
+          AND EXISTS (
+                SELECT 1 FROM trip_customers searched
+                 WHERE searched.id = t.customer_id
+                   AND searched.name ILIKE $${parameter}
+              )`;
+
+/**
+ * The filter as SQL plus the values it binds, numbered from `firstParameter`.
+ *
+ * Returns the parameters rather than taking a mutable list, so a caller cannot
+ * add the fragment and forget the value — the two arrive together or not at all.
+ */
+const filterSql = (
+  { assignment, lifecycle, customer }: BoardFilter,
+  firstParameter: number,
+): { sql: string; params: string[] } => {
+  const shared = `${ASSIGNMENT_PREDICATE[assignment]} ${LIFECYCLE_PREDICATE[lifecycle]}`;
+  if (customer === null) return { sql: shared, params: [] };
+
+  return {
+    sql: `${shared} ${customerSql(firstParameter)}`,
+    params: [`%${escapeLikePattern(customer)}%`],
+  };
+};
 
 /** One element of the `assignments` JSON array the read below aggregates. */
 interface AssignmentJson {
@@ -395,15 +451,17 @@ export class TripScheduleRepository {
     offset: number,
     executor: DatabaseQuery = this.db,
   ): Promise<{ items: TripScheduleWithRefs[]; total: number }> {
+    // The search binds as `$5`, after the four this statement already numbers.
+    const narrowed = filterSql(filter, 5);
     const rows = await executor.query<TripJoinedRow>(
       `${tripsWithRefs('COUNT(*) OVER() AS total_count, ')}
          WHERE t.archived_at IS NULL
            AND t.scheduled_on >= $1::date
            AND t.scheduled_on <= $2::date
-           ${filterSql(filter)}
+           ${narrowed.sql}
          ${orderBySql(order)}
          LIMIT $3 OFFSET $4`,
-      [range.from, range.to, limit, offset],
+      [range.from, range.to, limit, offset, ...narrowed.params],
     );
 
     // An empty page carries no row and therefore no count. That is not the same
@@ -430,14 +488,17 @@ export class TripScheduleRepository {
     filter: BoardFilter,
     executor: DatabaseQuery = this.db,
   ): Promise<number> {
+    // Two bound already, so the search is `$3` here — a different number from
+    // `listPage`'s, which is exactly why `filterSql` is told where to start.
+    const narrowed = filterSql(filter, 3);
     const rows = await executor.query<{ total: string }>(
       `SELECT COUNT(*) AS total
          FROM trip_schedules t
         WHERE t.archived_at IS NULL
           AND t.scheduled_on >= $1::date
           AND t.scheduled_on <= $2::date
-          ${filterSql(filter)}`,
-      [range.from, range.to],
+          ${narrowed.sql}`,
+      [range.from, range.to, ...narrowed.params],
     );
     return Number(rows[0]?.total ?? 0);
   }

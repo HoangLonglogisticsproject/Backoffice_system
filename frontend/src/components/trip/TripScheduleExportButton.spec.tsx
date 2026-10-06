@@ -61,10 +61,10 @@ const HEAD = ['trip.read', 'trip.price.read'];
 const DISPATCHER = ['trip.read'];
 const vi_ = (key: Parameters<typeof translate>[1]) => translate('vi', key);
 
-const renderButton = (lifecycle?: 'operational' | 'history') =>
+const renderButton = (lifecycle?: 'operational' | 'history', customer?: string) =>
   render(
     <LanguageProvider>
-      <TripScheduleExportButton range={RANGE} lifecycle={lifecycle} />
+      <TripScheduleExportButton range={RANGE} lifecycle={lifecycle} customer={customer} />
     </LanguageProvider>,
   );
 
@@ -89,7 +89,21 @@ describe('TripScheduleExportButton', () => {
     fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
 
     await waitFor(() =>
-      expect(fetchAllTripSchedules).toHaveBeenCalledWith({ ...RANGE, assignment: 'all', lifecycle: 'operational' }),
+      expect(fetchAllTripSchedules).toHaveBeenCalledWith({ ...RANGE, assignment: 'all', lifecycle: 'operational', customer: '' }),
+    );
+  });
+
+  it('★ the file follows the customer search the board is narrowed by', async () => {
+    // A dispatcher who filtered to one customer and pressed "Xuất Excel" is
+    // asking for THAT customer's month. A file quietly holding every customer
+    // would be read as the filtered one — the same trap as exporting the page
+    // instead of the range, one filter further along.
+    renderButton('operational', 'viễn');
+
+    fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
+
+    await waitFor(() =>
+      expect(fetchAllTripSchedules).toHaveBeenCalledWith(expect.objectContaining({ customer: 'viễn' })),
     );
   });
 
@@ -99,7 +113,7 @@ describe('TripScheduleExportButton', () => {
     fireEvent.click(screen.getByRole('button', { name: vi_('exportExcel') }));
 
     await waitFor(() =>
-      expect(fetchAllTripSchedules).toHaveBeenCalledWith({ ...RANGE, assignment: 'all', lifecycle: 'history' }),
+      expect(fetchAllTripSchedules).toHaveBeenCalledWith({ ...RANGE, assignment: 'all', lifecycle: 'history', customer: '' }),
     );
     await waitFor(() =>
       expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'history' })),
