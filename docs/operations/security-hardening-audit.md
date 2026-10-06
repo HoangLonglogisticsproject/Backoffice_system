@@ -1188,3 +1188,130 @@ Cloudflare, request the VPS directly and confirm the connection is refused.
 variable is simply ignored, and the app falls back to trusting nobody, which is the safe
 direction. It must be replaced with `TRUSTED_PROXIES` before launch or the throttle will be
 global.
+
+---
+
+# 24. Incident 2026-10-06 — finding 9: the fleet board was readable with `trip.read`
+
+**Severity: LOW.** It was an authorization exposure between internal staff roles. No amounts were
+exposed, and nothing was reachable anonymously. **Status: fixed and verified in production.**
+Whether any unauthorized role actually called the endpoint during the window is **unknown**
+(§24.5). This is **not** a confirmed data breach.
+
+## 24.1 What happened
+
+PR #103 ("Điều hành xe", `GET /fleet-operations`) gated the board on `trip.read`. That
+permission is held by every booking function: Sales, Accounting, Customer Service and Dispatch.
+The board told those roles things that no route had ever told them:
+
+- each lorry's start-of-shift fuel answer, who declared it, and when;
+- how many fuel transactions the lorry took that day;
+- which of those transactions lack liters or an odometer reading.
+
+Every other fact on the board was already readable to them on Lịch xe: plates, crews,
+milestones and trip state. Amounts were never exposed. They are selected only under `cost.read`
+(global tier), and the query returns `NULL` otherwise. The frontend menu of #103 also offered
+the screen to every `trip.read` holder.
+
+#103 was merged and released while its final security review was still running, so the review's
+fix arrived as PR #105.
+
+## 24.2 Timeline (UTC; Asia/Ho_Chi_Minh is +7)
+
+| Time | Event |
+|---|---|
+| 08:31 | #103 merged as `6ae3391` |
+| 08:35:26 | `release` deploys backend `6ae3391`, health OK. **Exposure starts.** |
+| 08:46 | Review fix committed (`a44a46e`): the gate is too broad, proven on the real API (a Sales member reads the board, 200) |
+| 09:48:54 | #105 merged as `ad1585b6b9a23d3aa9637464b7d9e36c0f2971d0` |
+| 09:52:31 | `release` deploys backend `ad1585b`, health OK. **Exposure ends** (about 77 min). The frontend is promoted to Vercel Production in the same job. |
+| 09:54 | Read-only `Production Trip Audit` reports `backend_release = ad1585b6b9a2…` |
+| later, same day | Read-only nginx query as root returns **0**, with errors suppressed |
+| later, same day | Re-run as root: both log files the query read are **absent** on the host, so the 0 is invalid as evidence (§24.5) |
+
+## 24.3 Fix (#105)
+
+- `GET /fleet-operations` now requires **`dispatch.write`**. That is the global tier plus the
+  dispatch function, head or member. It is the existing boundary for dispatch reads, also used by
+  `GET /trip-drivers` and the assignment-request queue.
+- No permission was added or widened. Amounts remain `cost.read`.
+- The menu offers the screen only with `dispatch.write`. A direct URL shows a Dispatch-only state
+  and never calls the route.
+
+## 24.4 Verification after release
+
+| Check | Result |
+|---|---|
+| Deployed backend identity | `backend_release = ad1585b6b9a2…` = #105 merge SHA (read-only audit workflow) |
+| Production, unauthenticated / forged session | 401 |
+| Role matrix at the deployed SHA, real backend + real PostgreSQL, real department users (CI `integration` job on main) | SuperAdmin 200 with money; Dispatch head/member 200 with **no** amounts; Sales, CS, Accounting heads/members, a unit with no function, and drivers → 403. 173/173 |
+| Same matrix with the old `trip.read` gate | Sales, CS and Accounting get 200: the regression reproduced |
+| Live production frontend (Chromium, every `/api` call intercepted) | Menu shown only to SuperAdmin/Dispatch. Sales, Accounting and no-function users make 0 calls to `/fleet-operations` and see the Dispatch-only state. Dispatch sees no amounts. 15/15 |
+
+**Not verified directly in production:** the per-role 200/403 on real production accounts. That
+needs credentials for each role, and creating test accounts would mutate production data.
+
+## 24.5 Access during the exposure window
+
+> Access to /fleet-operations during the confirmed exposure window could not be determined from
+> the available production evidence.
+>
+> The initially expected Nginx access-log paths /var/log/nginx/opsystem.access.log and
+> /var/log/nginx/opsystem.access.log.1 were not present on the production host.
+>
+> An earlier zero-count command suppressed the file-open errors and therefore its result is
+> invalid as evidence of no access.
+
+**Confirmed:**
+
+- #103 introduced an authorization widening.
+- Sales, Customer Service and Accounting were technically able to receive 200 from
+  `GET /fleet-operations`.
+- The exposure window was approximately 77 minutes: 08:35:26 → 09:52:31 UTC, which is
+  15:35:26 → 16:52:31 Asia/Ho_Chi_Minh.
+- Monetary vehicle-cost fields remained protected (`cost.read`, selected in the query).
+- #105 corrected the endpoint to `dispatch.write`.
+- #105 is deployed, and the deployed SHA matches its merge.
+- The real-role CI authorization matrix passes at that SHA.
+
+**Unknown:**
+
+- Whether any unauthorized role actually called `/fleet-operations` during the exposure window.
+
+**What was run, and why its result is void.** This command ran as root and printed `0`:
+
+```
+sudo awk '$4 >= "[06/Oct/2026:15:35:26" && $4 < "[06/Oct/2026:16:52:31" && $7 ~ /\/fleet-operations/' \
+  /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1 2>/dev/null | wc -l
+```
+
+Run again without suppressing errors, `ls` and `awk` both reported that neither file exists.
+The two paths came from `deploy/nginx.conf` in this repository, the `opsystem.hoanglonglti.com`
+site. That configuration does not describe what the production host writes.
+
+**Why the evidence is thin either way:**
+
+- The backend does not log requests; Nest logs startup and errors only.
+- An nginx access log records method, path, status and client address, but no user. Even a
+  matching line could not have named a role, because the SuperAdmin and Dispatch read the board
+  legitimately.
+- Vercel runtime logs sit behind the token held as a GitHub secret, and were not consulted.
+
+**A lead, not examined.** The production frontend's edge function calls the committed origin
+`https://bo-api.hoanglonglti.com` (`frontend/api/backend-origin.ts`). The repository's nginx site
+for that hostname, `deploy/nginx-bo-api.conf`, logs to `/var/log/nginx/bo-api.access.log`.
+Whether that file exists on the host, and whether it covers the window, has not been checked.
+Closure of this incident does not depend on it.
+
+## 24.6 Lessons
+
+- **An authorization review compares each new response field with what each role could already
+  read.** A permission that is right for the trip data on a screen can still be wrong for a new
+  fact the screen adds.
+- **Before pushing a review fix, check that the PR is still open.** A merge deletes the head
+  branch. A later push re-creates it with no pull request, and no CI runs.
+- **A count is evidence only if its inputs are proven present.** Confirm each log file exists
+  and covers the window *before* reading a zero, and never suppress the errors that would say
+  otherwise. Here a `2>/dev/null` turned "no such file" into "0 requests".
+- **Repository configuration is not the host.** A log path taken from `deploy/` is a hypothesis
+  until it is checked on the machine.
