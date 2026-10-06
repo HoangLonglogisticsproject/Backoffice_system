@@ -20,12 +20,16 @@ import { formatPlate } from '@/utils/format';
 import { formatCalendarDay } from '@/utils/format/datetime';
 import { formatMoney } from '@/utils/format/money';
 import { FleetVehicleModal } from './components/FleetVehicleModal';
-import { FUEL_LABEL, FUEL_TONE, ISSUE_LABEL, STATE_LABEL, STATE_TONE, turnInFocus } from './components/fleetLabels';
+import { focusOf, FUEL_LABEL, FUEL_TONE, ISSUE_LABEL, STATE_LABEL, STATE_TONE } from './components/fleetLabels';
 
 /**
  * "Điều hành xe" — under ĐIỀU PHỐI, one row per lorry for the chosen business
  * day: is it running, waiting or idle, who drives it, and has it answered its
  * beginning-of-shift fuel check.
+ *
+ * ★ DISPATCH'S SCREEN: `dispatch.write`, as the route behind it. Sales,
+ * Accounting and Customer Service read Lịch xe (`trip.read`) but not this
+ * board; the menu does not offer it to them and the server refuses it.
  *
  * ★ THE SERVER DERIVES EVERY STATE, IN ONE STATEMENT. This screen only filters
  * what came back. ponytail: the filters are client-side over the day's rows —
@@ -64,13 +68,14 @@ export default function FleetOperationsPage() {
   const [day, setDay] = useState(today);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [openId, setOpenId] = useState<string | null>(null);
+  const mayRead = can('dispatch.write');
   const withMoney = can('cost.read');
   const queryClient = useQueryClient();
 
   const board = useQuery({
     queryKey: tripKeys.fleet(day, withMoney),
     queryFn: () => fetchFleetBoard(day),
-    enabled: day !== '',
+    enabled: mayRead && day !== '',
     // The board moves as drivers tap; a minute old is still "now" for a dispatcher.
     refetchInterval: 60_000,
   });
@@ -90,7 +95,11 @@ export default function FleetOperationsPage() {
     queryClient.removeQueries({ queryKey: [...tripKeys.all, 'money'] });
   }, [withMoney, queryClient]);
 
-  if (!can('trip.read')) return null;
+  if (!mayRead) {
+    return (
+      <PageHeader title={t('fleetOperations')} subtitle={t('fleetNoAccess')} />
+    );
+  }
 
   const set = (patch: Partial<Filters>) => setFilters((current) => ({ ...current, ...patch }));
   const cards: Array<{ key: string; label: TranslationKey; value: number | undefined; active: boolean; apply: Partial<Filters> }> = [
@@ -248,7 +257,7 @@ function FilterSelect({
 
 function FleetRow({ row, onOpen }: Readonly<{ row: FleetVehicleDay; onOpen: () => void }>) {
   const { t } = useLanguage();
-  const focus = turnInFocus(row.turns);
+  const { current: focus, next } = focusOf(row);
   const plate = formatPlate(row.vehicle.plate);
   return (
     <TableRow>
@@ -259,17 +268,26 @@ function FleetRow({ row, onOpen }: Readonly<{ row: FleetVehicleDay; onOpen: () =
       <TableCell>
         <StatusPill tone={STATE_TONE[row.state]}>{t(STATE_LABEL[row.state])}</StatusPill>
       </TableCell>
-      <TableCell className="max-w-40 text-sm whitespace-normal">{row.drivers.map((driver) => driver.displayName).join(', ') || '—'}</TableCell>
+      {/* The driver of the turn the row speaks for — never a list that could name somebody else's run. */}
+      <TableCell className="max-w-40 text-sm whitespace-normal">
+        {focus?.driver.displayName ?? '—'}
+        {row.drivers.length > 1 ? <span className="block text-xs text-gray-500">+{row.drivers.length - 1}</span> : null}
+      </TableCell>
       <TableCell className="max-w-64 text-sm whitespace-normal">
         {focus ? (
           <>
             <span className="line-clamp-1">
               {focus.pickupName ?? '—'} → {focus.deliveryName ?? '—'}
             </span>
-            <span className="text-xs text-gray-500 tabular-nums">
+            <span className="block text-xs text-gray-500 tabular-nums">
               {focus.progress.reached}/4
               {row.turns.length > 1 ? ` · ${row.turns.length} ${t('fleetTurns')}` : ''}
             </span>
+            {next ? (
+              <span className="block text-xs text-gray-500">
+                {t('fleetNext')}: {next.pickupName ?? '—'} → {next.deliveryName ?? '—'}
+              </span>
+            ) : null}
           </>
         ) : (
           '—'

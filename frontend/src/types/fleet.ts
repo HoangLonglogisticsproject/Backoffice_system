@@ -34,8 +34,16 @@ export interface FleetVehicleDay {
     archived: boolean;
   };
   state: FleetVehicleState;
+  /** Everybody who drives the lorry that day. */
   drivers: UserSummary[];
   turns: FleetTurn[];
+  /**
+   * The turn the row speaks for and the one after it — the server's one rule
+   * (first running, else first waiting, else the last done). The lorry's state
+   * is that turn's state; the driver shown is that turn's driver.
+   */
+  currentAssignmentId: string | null;
+  nextAssignmentId: string | null;
   fuel: {
     obligation: FuelObligation;
     check: {

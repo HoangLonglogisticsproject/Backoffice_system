@@ -1181,6 +1181,12 @@ const PHRASES = {
   fleetFillsNone: { vi: 'Không có giao dịch nhiên liệu trong ngày.', en: 'No fuel transactions that day.' },
   fleetNoTurns: { vi: 'Không có chuyến trong ngày.', en: 'No runs that day.' },
   fleetAwaitingApproval: { vi: 'Đã giao · chờ duyệt', en: 'Delivered · awaiting review' },
+  fleetCurrent: { vi: 'Hiện tại', en: 'Current' },
+  fleetNext: { vi: 'Tiếp theo', en: 'Next' },
+  fleetNoAccess: {
+    vi: 'Màn hình này dành cho Điều độ. Bạn vẫn xem được Lịch xe.',
+    en: 'This screen is for Dispatch. You can still read the trip schedule.',
+  },
 
 
   // Actions shared by both dispatch screens.

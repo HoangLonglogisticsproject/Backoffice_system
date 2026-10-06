@@ -41,6 +41,13 @@ export const progressOf = (reached: readonly ExecutionEventType[]): TurnProgress
  *   waiting   not started
  *   done      the trip is finished, or every milestone is in (waiting on the
  *             office's approval is paperwork — the lorry is free)
+ *
+ * ★ READ FROM THE TURN'S OWN LIVE MILESTONES, NEVER FROM THE TRIP'S STATUS.
+ * `executing` is the TRIP's word: it is set by the first milestone of ANY
+ * lorry on the trip, and a withdrawn milestone never moves it back. So a
+ * second lorry not yet started on an executing trip is waiting, and a turn
+ * whose only milestone was withdrawn is waiting again. "Every milestone is
+ * in" is `executionComplete` — the rule completion itself asks (#98).
  */
 export type TurnState = 'running' | 'waiting' | 'done';
 
@@ -49,15 +56,32 @@ export const turnStateOf = (turn: { closed: boolean; progress: TurnProgress }): 
   return turn.progress.reached === 0 ? 'waiting' : 'running';
 };
 
-/** Where a lorry stands on the day: its busiest turn, or no turn at all. */
+/** Where a lorry stands on the day. */
 export const FLEET_VEHICLE_STATES = ['running', 'waiting', 'done', 'unassigned'] as const;
 export type FleetVehicleState = (typeof FLEET_VEHICLE_STATES)[number];
 
-export const vehicleStateOf = (turns: ReadonlyArray<{ state: TurnState }>): FleetVehicleState => {
-  if (turns.some((turn) => turn.state === 'running')) return 'running';
-  if (turns.some((turn) => turn.state === 'waiting')) return 'waiting';
-  return turns.length > 0 ? 'done' : 'unassigned';
+/**
+ * ★ WHICH TURN A LORRY'S ROW SPEAKS FOR, AND WHICH COMES NEXT — ONE RULE.
+ *
+ * `turns` arrive in the board's total order (scheduled day, pickup time,
+ * assigned at, id). The current turn is the first RUNNING one; else the first
+ * WAITING one; else the last of the day (all done). The next turn is the first
+ * WAITING one that is not the current turn. The lorry's state IS the current
+ * turn's state — so RUNNING beats WAITING beats DONE, and no turn at all is
+ * UNASSIGNED — and the driver shown is that turn's driver.
+ */
+export const focusOf = <T extends { state: TurnState }>(turns: readonly T[]): { current: T | null; next: T | null } => {
+  const current =
+    turns.find((turn) => turn.state === 'running') ??
+    turns.find((turn) => turn.state === 'waiting') ??
+    turns[turns.length - 1] ??
+    null;
+  const next = turns.find((turn) => turn !== current && turn.state === 'waiting') ?? null;
+  return { current, next };
 };
+
+export const vehicleStateOf = (turns: ReadonlyArray<{ state: TurnState }>): FleetVehicleState =>
+  focusOf(turns).current?.state ?? 'unassigned';
 
 /**
  * ★ THE OBLIGATION, NOT THE MONEY (concept A). Whether the lorry owed its
@@ -138,8 +162,12 @@ export interface FleetVehicleDay {
     archived: boolean;
   };
   state: FleetVehicleState;
+  /** Everybody who drives the lorry that day — the current turn's driver is `turns[current].driver`. */
   drivers: UserSummary[];
   turns: FleetTurn[];
+  /** The turn the row speaks for, and the one after it (`focusOf`). `null` when there is none. */
+  currentAssignmentId: string | null;
+  nextAssignmentId: string | null;
   fuel: {
     obligation: FuelObligation;
     /** The beginning-of-shift check, when answered. `vehicleCostId` is the fill it names. */
