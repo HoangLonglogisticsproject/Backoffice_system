@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, Fuel, Truck } from 'lucide-react';
+import { CalendarDays, ChevronRight, Fuel, Truck } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DriverEmptyState } from '@/components/driver/DriverEmptyState';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useMyWorkday, useWorkdayFuel } from '@/hooks/driver';
 import type { DriverWorkday, DriverWorkdayTurn, FuelObligation } from '@/types/driver';
@@ -13,9 +14,10 @@ import { currentAndNext, OPENED_FROM_SCHEDULE } from '@/utils/driverSchedule';
 import { formatPlate } from '@/utils/format';
 import { formatTime } from '@/utils/format/datetime';
 import { DailyFuelDialog } from './DailyFuelDialog';
+import { DriverLoadError } from './DriverLoadError';
 
 /**
- * "Ca làm việc hôm nay" — the top of the driver's screen: each lorry they drive
+ * "Hôm nay" — the tab a driver opens on: each lorry they drive
  * today, its fuel answer, the trip they are on and the one after it.
  *
  * ★ EVERYTHING HERE IS THE SERVER'S ANSWER. Which turns are today's work, how
@@ -62,30 +64,46 @@ const progressLabel = (turn: DriverWorkdayTurn): TranslationKey => {
 
 type FuelAction = { kind: 'check' | 'fill'; lorry: Lorry; assignmentId: string };
 
-export function WorkdayPanel() {
-  const { t } = useLanguage();
-  const { workday, loading, error } = useMyWorkday();
+export function WorkdayPanel({ onSeeUpcoming }: Readonly<{ onSeeUpcoming: () => void }>) {
+  // Nothing in this component body needs a translation any more — the empty
+  // state and the cards each ask for their own.
+  const { workday, loading, error, reload } = useMyWorkday();
   const { declareCheck, recordFill } = useWorkdayFuel();
   const [action, setAction] = useState<FuelAction | null>(null);
 
-  // A failed read leaves the schedule below to say so: it asks the same server
-  // and owns the retry. The panel simply steps aside.
-  if (error) return null;
+  const lorries = workday?.vehicles ?? [];
 
   return (
-    <section aria-labelledby="workday-title" className="space-y-2">
-      <h2 id="workday-title" className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        {t('driverWorkdayTitle')}
-      </h2>
-      {loading || !workday ? <Skeleton className="h-40 w-full rounded-xl" /> : null}
-      {workday?.vehicles.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-sm text-muted-foreground">
-          {t('driverWorkdayEmpty')}
-        </p>
+    <section className="space-y-3">
+      {/*
+        ★ NO HEADING OF ITS OWN ANY MORE. This used to be a card above the tabs
+        titled "Ca làm việc hôm nay"; it IS the "Hôm nay" tab now, and the tab is
+        what names it — a `tabpanel` is already labelled by its tab, so a second
+        heading would say the same thing twice to a screen reader.
+      */}
+      {loading && !workday ? <Skeleton className="h-40 w-full rounded-xl" /> : null}
+
+      {/* ★ THE ERROR IS SHOWN, NOT SWALLOWED. The panel used to return `null`
+          and let the schedule list below report the failure — it is the whole
+          tab now, so a silent `null` would read as "no work today", which is a
+          different and much worse sentence than "could not load". */}
+      {error ? <DriverLoadError error={error} onRetry={reload} /> : null}
+
+      {!loading && !error && lorries.length === 0 ? (
+        <DriverEmptyState
+          title="driverEmptyTitle"
+          message="driverWorkdayEmpty"
+          action={{
+            label: 'driverEmptySeeUpcoming',
+            icon: <CalendarDays aria-hidden />,
+            onClick: onSeeUpcoming,
+          }}
+        />
       ) : null}
-      {workday && workday.vehicles.length > 0 ? (
+
+      {lorries.length > 0 ? (
         <ul className="space-y-3">
-          {workday.vehicles.map((lorry) => (
+          {lorries.map((lorry) => (
             <li key={lorry.vehicle.id}>
               <LorryCard lorry={lorry} onFuel={setAction} />
             </li>

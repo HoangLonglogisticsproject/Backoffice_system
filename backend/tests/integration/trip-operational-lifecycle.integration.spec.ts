@@ -236,6 +236,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
   });
 
   beforeEach(async () => {
+    // ★ THE RECORDED SIGNALS ARE EMPTIED WITH THE TABLES, and for the same
+    // reason. `emitted` is built once in `beforeAll`, so without this every
+    // case would assert against every signal the file has ever produced —
+    // which is how "exactly one signal reached this driver" became "674".
+    emitted = [];
+
     // TRUNCATE, not DELETE: 0017's `deny_delete` refuses a row-level DELETE on
     // every historical table, which is exactly what it is for.
     await pool.query(
@@ -1651,7 +1657,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         [trip],
       ) as Promise<Record<string, unknown>[]>;
 
-    it('★ persists the reading, the verdict and the distance — and a SERVER actual_at', async () => {
+    it('★ persists the reading with NO verdict — and a SERVER actual_at', async () => {
       const { trip, assignment } = await locatedTrip();
       // The handset's clock is a year behind. Neither of its stamps may
       // become the pickup's time.
@@ -1666,8 +1672,12 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(row['latitude']).toBe(SCSC.latitude);
       expect(row['longitude']).toBe(SCSC.longitude);
       expect(row['accuracy_m']).toBe(12);
-      expect(row['geofence_passed']).toBe(true);
-      expect(row['distance_m']).toBe(0);
+      // ★ EVIDENCE WITHOUT A VERDICT, AND 0019's CHECK PERMITS EXACTLY THAT
+      // SHAPE (DL-118): a position may be stored with no distance beside it,
+      // and this row proves PostgreSQL accepts the combination rather than the
+      // application merely intending it.
+      expect(row['geofence_passed']).toBeNull();
+      expect(row['distance_m']).toBeNull();
       expect(row['driver_assignment_id']).toBe(assignment);
       expect(row['location_captured_at']).toEqual(new Date(sentAt.getTime() - 30_000));
       expect(row['device_reported_at']).toEqual(sentAt);
@@ -1677,59 +1687,90 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect(actualAt).toBeLessThanOrEqual(Date.now() + 1000);
 
       expect(event.location).toEqual(fresh(sentAt));
-      expect(event.geofencePassed).toBe(true);
-      expect(event.distanceM).toBe(0);
+      expect(event.geofencePassed).toBeNull();
+      expect(event.distanceM).toBeNull();
     });
 
-    it('refuses a reading outside the radius, and writes no row', async () => {
+    /**
+     * ★ THE FOUR REFUSALS THAT ARE NOT REFUSALS ANY MORE (DL-118).
+     *
+     * Each of these used to be a `ValidationError` with a `location` code. The
+     * geofence is off, so every one of them is now an ordinary confirmation
+     * that WRITES — and that is the whole point of listing them one by one
+     * rather than deleting them: a reading from the wrong side of town, a
+     * district-wide accuracy, a quarter-hour-old fix and a trip with no
+     * coordinates at all are the four cases a reviewer would ask about, and
+     * each is answered here against a real database.
+     *
+     * The rule itself is still whole and still tested in `trip-location.spec`.
+     */
+    it('★ accepts a reading from the wrong side of town — nothing measures it', async () => {
       const { trip, assignment } = await locatedTrip();
       const sentAt = new Date();
+      // ~1.1 km north of the pickup: comfortably outside the 300 m radius the
+      // rule still defines.
+      const far = fresh(sentAt, { latitude: SCSC.latitude + 0.01 });
 
-      const failure = await confirm(assignment, fresh(sentAt, { latitude: SCSC.latitude + 0.01 }), sentAt).catch(
-        (error: unknown) => error,
-      );
-
-      expect(failure).toBeInstanceOf(ValidationError);
-      expect((failure as ValidationError).details).toEqual({ location: 'OUTSIDE_GEOFENCE' });
-      expect(await confirmations(trip)).toHaveLength(0);
-    });
-
-    it('refuses a reading too loose to place the lorry', async () => {
-      const { trip, assignment } = await locatedTrip();
-      const sentAt = new Date();
-
-      await expect(confirm(assignment, fresh(sentAt, { accuracyM: 500 }), sentAt)).rejects.toMatchObject({
-        details: { location: 'ACCURACY_INSUFFICIENT' },
+      await expect(confirm(assignment, far, sentAt)).resolves.toMatchObject({
+        geofencePassed: null,
+        distanceM: null,
       });
-      expect(await confirmations(trip)).toHaveLength(0);
+
+      const [row] = (await confirmations(trip)) as [Record<string, unknown>];
+      expect(row['latitude']).toBe(far.latitude);
+      expect(row['geofence_passed']).toBeNull();
     });
 
-    it('refuses a fix older than the freshness window', async () => {
+    it('accepts a reading too loose to place the lorry, and keeps the accuracy it claimed', async () => {
+      const { trip, assignment } = await locatedTrip();
+      const sentAt = new Date();
+
+      await confirm(assignment, fresh(sentAt, { accuracyM: 500 }), sentAt);
+
+      const [row] = (await confirmations(trip)) as [Record<string, unknown>];
+      // Kept as the handset stated it, so a later reader can judge the reading
+      // even though nothing judged it at the time.
+      expect(row['accuracy_m']).toBe(500);
+      expect(row['geofence_passed']).toBeNull();
+    });
+
+    it('accepts a fix older than the freshness window', async () => {
       const { trip, assignment } = await locatedTrip();
       const sentAt = new Date();
       const stale = { ...fresh(sentAt), capturedAt: new Date(sentAt.getTime() - 15 * 60_000) };
 
-      await expect(confirm(assignment, stale, sentAt)).rejects.toMatchObject({
-        details: { location: 'LOCATION_STALE' },
-      });
+      await confirm(assignment, stale, sentAt);
+
+      const [row] = (await confirmations(trip)) as [Record<string, unknown>];
+      expect(row['location_captured_at']).toEqual(stale.capturedAt);
+      expect(row['geofence_passed']).toBeNull();
     });
 
-    it('refuses a confirmation with no reading at all', async () => {
+    it('★ accepts a confirmation with no reading at all — the tap IS the milestone', async () => {
       const { trip, assignment } = await locatedTrip();
 
-      await expect(confirm(assignment, null, new Date())).rejects.toMatchObject({
-        details: { location: 'LOCATION_REQUIRED' },
-      });
+      await confirm(assignment, null, new Date());
+
+      const [row] = (await confirmations(trip)) as [Record<string, unknown>];
+      // All six location columns NULL together: 0019's CHECK refuses any half
+      // of a reading, so this row also proves the "no evidence" shape is legal.
+      expect(row['latitude']).toBeNull();
+      expect(row['longitude']).toBeNull();
+      expect(row['accuracy_m']).toBeNull();
+      expect(row['location_captured_at']).toBeNull();
+      expect(row['geofence_passed']).toBeNull();
+      expect(row['distance_m']).toBeNull();
     });
 
-    it('★ refuses a trip whose pickup has no coordinates yet', async () => {
+    it('★ accepts a trip whose pickup has no coordinates yet — GAP-14 no longer blocks a driver', async () => {
+      // The warehouses Operations has still to locate used to make this
+      // confirmation impossible. Nothing measures against them now.
       const { trip, assignment } = await unlocatedTrip();
       const sentAt = new Date();
 
-      await expect(confirm(assignment, fresh(sentAt), sentAt)).rejects.toMatchObject({
-        details: { location: 'DESTINATION_MISSING' },
-      });
-      expect(await confirmations(trip)).toHaveLength(0);
+      await confirm(assignment, fresh(sentAt), sentAt);
+
+      expect(await confirmations(trip)).toHaveLength(1);
     });
 
     it('★ answers a double-tap and a retry with the ONE row it wrote', async () => {
@@ -2054,7 +2095,10 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       expect((await notesFor(driverB)).map((n) => n.type)).toEqual(['TRIP_ASSIGNED']);
       await execution.recordEvent({ assignmentId: replacement.id, type: 'ARRIVED_PICKUP', clientEventId: 'b-arrive', recordedBy: driverB });
       const confirmed = await execution.recordEvent({ assignmentId: replacement.id, type: 'PICKUP_CONFIRMED', deviceReportedAt: sentAt, location: fix, clientEventId: 'b-pickup', recordedBy: driverB });
-      expect(confirmed.geofencePassed).toBe(true);
+      // The reading is kept; nothing measures it (DL-118). What this case is
+      // really about is the LORRY: the event must carry the replacement's.
+      expect(confirmed.location).toEqual(fix);
+      expect(confirmed.geofencePassed).toBeNull();
       expect(confirmed.vehicleId).toBe(replacement.vehicleId);
     });
 

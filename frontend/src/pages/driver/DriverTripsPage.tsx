@@ -4,7 +4,7 @@ import { CalendarDays, FileText, Truck, type LucideIcon } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DriverEmptyState } from '@/components/driver/DriverEmptyState';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useMyAssignments } from '@/hooks/driver';
+import { useMyAssignments, useMyWorkday } from '@/hooks/driver';
 import { useBusinessToday } from '@/hooks/useBusinessToday';
 import { isScheduleView, scheduleOf, SCHEDULE_VIEWS, type ScheduleDay, type ScheduleView } from '@/utils/driverSchedule';
 import { isFinalRefusal } from '@/utils/driverErrors';
@@ -149,8 +149,6 @@ export default function DriverTripsPage() {
         <p className="text-sm text-muted-foreground">{formatCalendarWeekday(today, language)}</p>
       </header>
 
-      <WorkdayPanel />
-
       <Tabs value={section} onValueChange={open}>
         <TabsList aria-label={t('driverSchedule')} className={SECTION_TAB.list}>
           {SECTIONS.map((option) => {
@@ -185,6 +183,27 @@ function MyTrips({ today }: Readonly<{ today: string }>) {
   const [params, setParams] = useSearchParams();
   const { assignments, loading, error, reload } = useMyAssignments();
 
+  /**
+   * ★ "HÔM NAY" IS A DIFFERENT QUESTION FROM THE OTHER TWO TABS, AND SO IT IS A
+   * DIFFERENT SOURCE.
+   *
+   * `GET /driver/assignments` answers "what is still to do": it excludes a
+   * FINISHED trip by construction (`LIFECYCLE_PREDICATE.operational`). That is
+   * right for "Sắp tới" and for "Chưa đóng" — and wrong for today, where a turn
+   * the driver finished an hour ago is the main thing they want to see. Counting
+   * today from that list is what produced "Hôm nay (0)" sitting under a card
+   * that said the day's trips were done.
+   *
+   * `GET /driver/workday` answers "what is your shift today", finished turns
+   * included, with the lorry's fuel obligation beside each. That is the tab.
+   *
+   * ⚠ SO TWO ADJACENT TABS READ TWO ENDPOINTS, deliberately. Anything that makes
+   * them agree by filtering on the client would have to re-derive "is this trip
+   * finished", which is the server's to decide and already is.
+   */
+  const { workday } = useMyWorkday();
+  const todayCount = (workday?.vehicles ?? []).reduce((total, lorry) => total + lorry.turns.length, 0);
+
   const requested = params.get('view');
   const view: ScheduleView = isScheduleView(requested) ? requested : 'today';
   const schedule = useMemo(() => scheduleOf(assignments, today), [assignments, today]);
@@ -201,6 +220,12 @@ function MyTrips({ today }: Readonly<{ today: string }>) {
     setParams(next === 'today' ? {} : { view: next }, { replace: true });
   };
 
+  // Each tab waits for ITS OWN read before it claims a number. A tab that shows
+  // "(0)" because the other endpoint has not answered yet is worse than a tab
+  // that shows no number at all for a moment.
+  const countReady = (option: ScheduleView): boolean =>
+    option === 'today' ? Boolean(workday) : settled;
+
   return (
     <Tabs value={view} onValueChange={show}>
       <TabsList aria-label={t('driverDaysLabel')} className={VIEW_TAB.list}>
@@ -215,17 +240,27 @@ function MyTrips({ today }: Readonly<{ today: string }>) {
                 A bare number beside a label reads as part of the label — "Hôm
                 nay 2" can be a date — and the brackets are what make it a
                 tally, to a reader and to a screen reader alike. */}
-            {settled ? (
+            {countReady(option) ? (
               <>
                 {' '}
-                <span className="text-xs tabular-nums">({countOf(schedule[option])})</span>
+                <span className="text-xs tabular-nums">
+                  ({option === 'today' ? todayCount : countOf(schedule[option])})
+                </span>
               </>
             ) : null}
           </TabsTrigger>
         ))}
       </TabsList>
 
-      {SCHEDULE_VIEWS.map((option) => (
+      {/* ★ TODAY IS THE SHIFT PANEL — the lorries, their fuel, the turn in hand
+          and the one after it. It owns its own loading, error and empty states
+          because it reads its own endpoint. */}
+      <TabsContent value="today">
+        <WorkdayPanel onSeeUpcoming={() => show('upcoming')} />
+      </TabsContent>
+
+      {/* The other two are days of the schedule, from the assignments list. */}
+      {SCHEDULE_VIEWS.filter((option) => option !== 'today').map((option) => (
         <TabsContent key={option} value={option}>
           {loading ? <ScheduleSkeleton /> : null}
           {error ? <DriverLoadError error={error} onRetry={reload} /> : null}

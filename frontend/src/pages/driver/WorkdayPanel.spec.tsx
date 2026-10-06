@@ -11,6 +11,7 @@ import { WorkdayPanel } from './components/WorkdayPanel';
 const fetchMyWorkday = vi.fn();
 const declareDailyFuel = vi.fn();
 const recordFuelFill = vi.fn();
+const seeUpcoming = vi.fn();
 
 vi.mock('@/api/driverPortal', () => ({
   fetchMyWorkday: (...a: unknown[]) => fetchMyWorkday(...a),
@@ -57,7 +58,7 @@ const renderPanel = () =>
       <LanguageProvider>
         <MemoryRouter initialEntries={['/driver']}>
           <Routes>
-            <Route path="/driver" element={<WorkdayPanel />} />
+            <Route path="/driver" element={<WorkdayPanel onSeeUpcoming={seeUpcoming} />} />
             <Route path="/driver/assignments/:id" element={<p>trip screen</p>} />
           </Routes>
         </MemoryRouter>
