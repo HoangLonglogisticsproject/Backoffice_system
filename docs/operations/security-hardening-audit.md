@@ -1220,8 +1220,8 @@ fix arrived as PR #105.
 |---|---|
 | 08:31 | #103 merged as `6ae3391` |
 | 08:35:26 | `release` deploys backend `6ae3391`, health OK. **Exposure starts.** |
-| ~09:00 | Review finds the gate too broad and proves it on the real API: a Sales member reads the board (200) |
-| 09:4x | #105 merged as `ad1585b6b9a23d3aa9637464b7d9e36c0f2971d0` |
+| 08:46 | Review fix committed (`a44a46e`): the gate is too broad, proven on the real API (a Sales member reads the board, 200) |
+| 09:48:54 | #105 merged as `ad1585b6b9a23d3aa9637464b7d9e36c0f2971d0` |
 | 09:52:31 | `release` deploys backend `ad1585b`, health OK. **Exposure ends** (about 77 min). The frontend is promoted to Vercel Production in the same job. |
 | 09:54 | Read-only `Production Trip Audit` reports `backend_release = ad1585b6b9a2…` |
 
