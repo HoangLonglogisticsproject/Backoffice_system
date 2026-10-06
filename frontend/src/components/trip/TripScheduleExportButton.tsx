@@ -27,6 +27,16 @@ import { notifyApiError, notifyError, notifySuccess } from '@/utils/toast';
  * Lịch sử chuyến exports Lịch sử chuyến — `lifecycle` goes to the same
  * export route, so each file holds exactly the rows its screen lists.
  *
+ * ★ AND THE CUSTOMER SEARCH GOES WITH IT, for the same reason the range does.
+ * A dispatcher who narrowed the board to one customer and pressed "Xuất Excel"
+ * is asking for THAT customer's month. A file quietly holding every customer
+ * would be read as the filtered one and acted on — the same trap as exporting
+ * the page instead of the range, one filter further along.
+ *
+ * ⚠ IT IS THE APPLIED SEARCH, NOT THE BOX. A name half typed and never
+ * submitted narrows nothing on screen, and must narrow nothing in the file
+ * either — the two have to describe one set.
+ *
  * ★ NO SPINNER OVER THE TABLE, ONLY IN THE BUTTON. The board behind stays
  * usable while a long range downloads; the one control that must not be pressed
  * twice is this one, and it disables itself.
@@ -34,7 +44,13 @@ import { notifyApiError, notifyError, notifySuccess } from '@/utils/toast';
 export function TripScheduleExportButton({
   range,
   lifecycle = 'operational',
-}: Readonly<{ range: { from: string; to: string }; lifecycle?: TripLifecycle }>) {
+  customer = '',
+}: Readonly<{
+  range: { from: string; to: string };
+  lifecycle?: TripLifecycle;
+  /** The search the board is narrowed by. Empty = every customer. */
+  customer?: string;
+}>) {
   const { t, language } = useLanguage();
   const { can } = useSession();
   const [running, setRunning] = useState(false);
@@ -44,7 +60,7 @@ export function TripScheduleExportButton({
     try {
       // `assignment` is pinned to the whole board rather than passed in — see
       // the note above about which rows this file is understood to contain.
-      const trips = await fetchAllTripSchedules({ ...range, assignment: 'all', lifecycle });
+      const trips = await fetchAllTripSchedules({ ...range, assignment: 'all', lifecycle, customer });
 
       // An empty range is not a failure, and it must not produce a file. A
       // workbook with a heading row and nothing under it looks exactly like a

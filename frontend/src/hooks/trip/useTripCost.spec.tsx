@@ -26,11 +26,12 @@ const boardPage = (costs: boolean) => [
     lifecycle: 'operational',
     sort: 'executionDate',
     direction: 'desc',
+  customer: '',
     costs,
   }),
   { page: 1, limit: 20 },
 ];
-const BADGE = tripKeys.unassignedCount({ from: '2026-09-01', to: '2026-09-30' });
+const BADGE = tripKeys.unassignedCount({ from: '2026-09-01', to: '2026-09-30', customer: '' });
 const PAGE = { items: [], page: 1, limit: 20, total: 0, totalPages: 0 };
 
 /**

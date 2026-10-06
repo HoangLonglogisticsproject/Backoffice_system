@@ -11,6 +11,7 @@ const QUERY: TripBoardQuery = {
   lifecycle: 'operational',
   sort: 'executionDate',
   direction: 'desc',
+  customer: null,
 };
 
 const pageOf = (...ids: string[]) => ({

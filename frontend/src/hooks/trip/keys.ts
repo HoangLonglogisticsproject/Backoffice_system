@@ -11,6 +11,12 @@ export interface TripBoardListFilter extends TripBoardOrder {
   assignment: TripAssignmentFilter;
   /** Lịch xe or Lịch sử chuyến — two lists, two totals, two cache entries. */
   lifecycle: TripLifecycle;
+  /**
+   * The customer search, as typed. Part of the IDENTITY of the list: narrowing
+   * it is a different list with a different total, so sharing a key would serve
+   * one customer's page under another's search.
+   */
+  customer: string;
   costs: boolean;
 }
 
@@ -59,8 +65,8 @@ export const tripKeys = {
    * whole prefix, so the badge cannot go on claiming work that has just been
    * handed out.
    */
-  unassignedCount: (range: { from: string; to: string }) =>
-    [...tripKeys.schedules(), 'unassigned-count', range] as const,
+  unassignedCount: (scope: { from: string; to: string; customer: string }) =>
+    [...tripKeys.schedules(), 'unassigned-count', scope] as const,
 
   /**
    * Everything money-related for ONE trip.

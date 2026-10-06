@@ -9,6 +9,7 @@ const FILTER: TripBoardListFilter = {
   lifecycle: 'history',
   sort: 'lastUpdated',
   direction: 'asc',
+  customer: '',
   costs: true,
 };
 
@@ -21,6 +22,7 @@ describe('boardListRequest', () => {
       lifecycle: 'history',
       sort: 'lastUpdated',
       direction: 'asc',
+  customer: '',
       page: 3,
       limit: 50,
     });
@@ -58,7 +60,17 @@ describe('unassignedCountRequest', () => {
       limit: 1,
       assignment: 'unassigned',
       lifecycle: 'operational',
+      // ★ THE BADGE CARRIES THE SEARCH TOO. A number counting every other
+      // customer's uncrewed trips, beside a list showing none of them,
+      // describes a board nobody is looking at.
+      customer: '',
     });
+  });
+
+  it('★ narrows the badge by the same search as the list', () => {
+    const request = unassignedCountRequest({ ...FILTER, customer: 'viễn' });
+
+    expect(request).toMatchObject({ customer: 'viễn', assignment: 'unassigned' });
   });
 });
 

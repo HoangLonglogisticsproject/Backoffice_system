@@ -1280,6 +1280,21 @@ const PHRASES = {
   colDate: { vi: 'Ngày', en: 'Date' },
   colVehicle: { vi: 'Xe', en: 'Vehicle' },
   colCustomer: { vi: 'Khách hàng', en: 'Customer' },
+  /**
+   * ★ THE PLACEHOLDER SAYS WHAT THE BOX DOES, not what to do with it. "Tìm theo
+   * tên khách hàng" tells a dispatcher it matches part of a name — the one
+   * thing that is not obvious from an empty field beside a label reading
+   * "Khách hàng", which could as easily be a dropdown.
+   */
+  tripCustomerSearchHint: { vi: 'Tìm theo tên khách hàng…', en: 'Search by customer name…' },
+  /**
+   * ⚠ NOT "Khách hàng". The trip FORM already labels a field that, and a second
+   * control with the same accessible name on the same screen is one a test — and
+   * a screen reader — cannot tell from the other.
+   */
+  tripCustomerSearchLabel: { vi: 'Tìm khách hàng', en: 'Find customer' },
+  tripCustomerSearch: { vi: 'Tìm', en: 'Search' },
+  tripCustomerSearchClear: { vi: 'Bỏ lọc', en: 'Clear' },
   colCargo: { vi: 'Hàng hoá', en: 'Cargo' },
   colPickup: { vi: 'Điểm lấy hàng', en: 'Pickup' },
   colDelivery: { vi: 'Điểm giao hàng', en: 'Delivery' },

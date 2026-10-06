@@ -9,6 +9,7 @@ const list = (costs: boolean) =>
     lifecycle: 'operational',
     sort: 'executionDate',
     direction: 'desc',
+  customer: '',
     costs,
   });
 
@@ -22,7 +23,7 @@ describe('holdsTripCosts', () => {
   });
 
   it('leaves the tab badge and the per-trip money keys to their own rules', () => {
-    expect(holdsTripCosts(tripKeys.unassignedCount({ from: '2026-08-01', to: '2026-08-31' }))).toBe(false);
+    expect(holdsTripCosts(tripKeys.unassignedCount({ from: '2026-08-01', to: '2026-08-31', customer: '' }))).toBe(false);
     expect(holdsTripCosts(tripKeys.costSummary('t1'))).toBe(false);
   });
 });

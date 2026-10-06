@@ -156,6 +156,18 @@ export interface TripBoardQuery extends DateRangePageQuery, TripBoardOrder {
   assignment: TripAssignmentFilter;
   /** Lịch xe or Lịch sử chuyến — the same trips, split at `finished`. */
   lifecycle: TripLifecycle;
+  /**
+   * Narrows to customers whose name contains this. `null` — and ABSENT — mean
+   * every customer.
+   *
+   * ★ OPTIONAL, THOUGH THE ROUTE ALWAYS SUPPLIES IT. `boardQuerySchema` gives it
+   * a default of `null`, so nothing arriving over HTTP can omit it. Making the
+   * TYPE required as well would say something the field does not mean: "no
+   * filter" is this query's resting state, and every in-process caller that
+   * wants the whole board — the fixtures, the fleet view, the export — would
+   * have to spell out `customer: null` to ask for nothing.
+   */
+  customer?: string | null;
 }
 
 /** The fields a patch may CLEAR with `null` — everything but the day, the status and the intent. */
@@ -212,7 +224,17 @@ export class TripScheduleService {
    */
   async list(query: TripBoardQuery): Promise<OffsetPage<TripScheduleWithRefs>> {
     const range = { from: query.from, to: query.to };
-    const filter = { assignment: query.assignment, lifecycle: query.lifecycle };
+    // ★ THE SAME FILTER OBJECT REACHES BOTH READS BELOW. The page and the count
+    // that recovers a stale page number must describe one set; building the
+    // second from a subset of the query is how "20 of 137" gets printed over
+    // four rows.
+    const filter = {
+      assignment: query.assignment,
+      lifecycle: query.lifecycle,
+      // Absent and `null` are one thing here: no filter. Resolved once, so the
+      // repository is never handed `undefined` to interpret.
+      customer: query.customer ?? null,
+    };
     const offset = (query.page - 1) * query.limit;
 
     const { items, total } = await this.trips.listPage(

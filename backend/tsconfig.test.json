@@ -1,0 +1,16 @@
+{
+  // The compiler's view of the WHOLE repository — source and its tests.
+  //
+  // ★ WHY THIS FILE EXISTS. `tsconfig.json` includes `src/**/*.ts` and nothing
+  // else, because that is what `nest build` compiles. The consequence is that
+  // `tsc --noEmit -p tsconfig.json` passes while `tests/` does not compile at
+  // all — and the first thing to notice is `ts-jest`, at the end of a CI run,
+  // reporting a suite that "failed to run". That happened three times in one
+  // day: a removed method, a renamed field, a widened type.
+  //
+  // So this is the typecheck to run before pushing: `npm run typecheck:tests`.
+  // It emits nothing and builds nothing; it only answers the question the build
+  // config cannot, which is whether the tests still agree with the code.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}
