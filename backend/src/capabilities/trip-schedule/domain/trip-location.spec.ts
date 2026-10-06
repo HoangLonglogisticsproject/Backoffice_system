@@ -1,5 +1,9 @@
 import {
+  GEOFENCED_MILESTONES,
+  LOCATION_REFUSALS,
+  LOCATION_REJECTIONS,
   MILESTONE_LOCATION_POLICY,
+  geofencedPointOf,
   checkMilestoneLocation,
   distanceMeters,
   isCoordinates,
@@ -202,5 +206,89 @@ describe('checkMilestoneLocation', () => {
     const away = north(SCSC, 2_000);
     const verdict = checkMilestoneLocation(SCSC, fix({ ...away, accuracyM: 900 }), NOW);
     expect(verdict).toMatchObject({ reason: 'ACCURACY_INSUFFICIENT', distanceM: null });
+  });
+});
+
+/**
+ * ★ THE WIRING, KEPT ALIVE BY ITS OWN TESTS.
+ *
+ * `recordEvent` used to hold this inline. DL-118 turned the check off, which
+ * made that code provably unreachable — so it moved here, where the rule it
+ * wires already lives and where a test can still exercise it. These cases are
+ * what stop it rotting into something that no longer works the day it is
+ * switched back on.
+ */
+describe('which point a milestone is measured against', () => {
+  const TRIP = {
+    pickupLatitude: 10.8188,
+    pickupLongitude: 106.6564,
+    deliveryLatitude: 10.7769,
+    deliveryLongitude: 106.7009,
+  };
+
+  /** What the list would hold with the check switched back on. */
+  const BOTH_CONFIRMATIONS = ['PICKUP_CONFIRMED', 'DELIVERY_CONFIRMED'] as const;
+
+  it('★ asks about nothing while the list is empty — the shipped state (DL-118)', () => {
+    expect(GEOFENCED_MILESTONES).toEqual([]);
+
+    for (const type of ['ARRIVED_PICKUP', 'PICKUP_CONFIRMED', 'ARRIVED_DELIVERY', 'DELIVERY_CONFIRMED']) {
+      expect(geofencedPointOf(TRIP, type)).toBeUndefined();
+    }
+  });
+
+  it('★ measures each END against its OWN point — the two are different places', () => {
+    // Confirming a delivery against the PICKUP's point was a real bug once.
+    expect(geofencedPointOf(TRIP, 'PICKUP_CONFIRMED', BOTH_CONFIRMATIONS)).toEqual({
+      latitude: 10.8188,
+      longitude: 106.6564,
+    });
+    expect(geofencedPointOf(TRIP, 'DELIVERY_CONFIRMED', BOTH_CONFIRMATIONS)).toEqual({
+      latitude: 10.7769,
+      longitude: 106.7009,
+    });
+  });
+
+  it('★ never measures an ARRIVAL, whatever the list says', () => {
+    // Arriving is what the driver says on the way in; the check belongs to the
+    // confirmation that follows. Listing an arrival cannot turn that on.
+    const everything = ['ARRIVED_PICKUP', 'PICKUP_CONFIRMED', 'ARRIVED_DELIVERY', 'DELIVERY_CONFIRMED'];
+
+    expect(geofencedPointOf(TRIP, 'ARRIVED_PICKUP', everything)).toBeUndefined();
+    expect(geofencedPointOf(TRIP, 'ARRIVED_DELIVERY', everything)).toBeUndefined();
+  });
+
+  it('★ answers `null`, not `undefined`, for a point Operations has not entered', () => {
+    // The difference carries the whole meaning: `undefined` is "not checked
+    // here", `null` is "checked, and the office owes a coordinate" — which is
+    // refused as DESTINATION_MISSING rather than passed over in silence.
+    const unlocated = { ...TRIP, pickupLatitude: null, pickupLongitude: null };
+
+    expect(geofencedPointOf(unlocated, 'PICKUP_CONFIRMED', BOTH_CONFIRMATIONS)).toBeNull();
+    expect(geofencedPointOf(unlocated, 'DELIVERY_CONFIRMED', BOTH_CONFIRMATIONS)).not.toBeNull();
+  });
+
+  it('treats half a point as no point at all', () => {
+    const half = { ...TRIP, pickupLongitude: null };
+    expect(geofencedPointOf(half, 'PICKUP_CONFIRMED', BOTH_CONFIRMATIONS)).toBeNull();
+  });
+});
+
+describe('what a refusal says', () => {
+  it('★ has a sentence for every rejection the rule can produce — none can be silent', () => {
+    // A code with no sentence reaches a driver as an empty message, and the one
+    // thing a refusal must do is say what to try next.
+    expect(Object.keys(LOCATION_REFUSALS).sort()).toEqual([...LOCATION_REJECTIONS].sort());
+    for (const sentence of Object.values(LOCATION_REFUSALS)) {
+      expect(sentence.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('★ never quotes the radius, the distance or the accuracy ceiling', () => {
+    // Telling somebody they are 412 m outside a 300 m fence is telling them how
+    // far to move to defeat it. The sentence says where to go, not by how much.
+    for (const sentence of Object.values(LOCATION_REFUSALS)) {
+      expect(sentence).not.toMatch(/\d/);
+    }
   });
 });

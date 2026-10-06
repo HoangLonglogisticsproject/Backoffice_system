@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, FileText, Truck, type LucideIcon } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -268,14 +268,13 @@ function ScheduleDays({
      * Nothing already driven → there is no action, and a button here would only
      * be a button for its own sake.
      */
-    const action =
-      view === 'today'
-        ? { label: 'driverEmptySeeUpcoming' as const, icon: <CalendarDays aria-hidden />, onClick: onSeeUpcoming }
-        : view === 'upcoming'
-          ? { label: 'driverEmptySeeOpen' as const, icon: <Truck aria-hidden />, onClick: onSeeOpenBookings }
-          : undefined;
+    const WAY_OUT = {
+      today: { label: 'driverEmptySeeUpcoming' as const, icon: <CalendarDays aria-hidden />, onClick: onSeeUpcoming },
+      upcoming: { label: 'driverEmptySeeOpen' as const, icon: <Truck aria-hidden />, onClick: onSeeOpenBookings },
+      past: undefined,
+    } satisfies Record<ScheduleView, { label: TranslationKey; icon: ReactNode; onClick: () => void } | undefined>;
 
-    return <DriverEmptyState title="driverEmptyTitle" message={EMPTY[view]} action={action} />;
+    return <DriverEmptyState title="driverEmptyTitle" message={EMPTY[view]} action={WAY_OUT[view]} />;
   }
 
   return (

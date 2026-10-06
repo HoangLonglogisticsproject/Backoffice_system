@@ -43,7 +43,7 @@ import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedul
 import { EXECUTION_EVENT_TYPES } from '../../src/capabilities/trip-schedule/domain/trip-execution';
 import { VehicleDailyFuelCheckRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-fuel-check.repository';
 import { NotificationService } from '../../src/capabilities/notification/application/notification.service';
-import { NotificationStream } from '../../src/capabilities/notification/application/notification-stream';
+import { NotificationStream, roomOf } from '../../src/capabilities/notification/application/notification-stream';
 import { NotificationRepository } from '../../src/capabilities/notification/persistence/notification.repository';
 import { NotFoundError } from '@common/errors/domain.error';
 import { LegacyConfirmedNormalization } from '../../src/capabilities/trip-schedule/application/legacy-confirmed-normalization';
@@ -97,6 +97,17 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
   let eventRows: ExecutionEventRepository;
   let notificationRows: NotificationRepository;
   let stream: NotificationStream;
+  /**
+   * What the gateway WOULD have put on the wire.
+   *
+   * ★ THE TRANSPORT IS RECORDED RATHER THAN RUN. These cases are about the ROW
+   * and about who the signal is addressed to; whether socket.io really delivers
+   * a room emit is socket.io's business and is checked by hand against a real
+   * browser before a deploy. Recording keeps the assertion on the part this
+   * codebase owns: the room name is derived from the recipient the SERVICE
+   * chose, never from anything a client said.
+   */
+  let emitted: Array<{ room: string; signal: Record<string, unknown> }>;
 
   let operator: string;
   let driverA: string;
@@ -170,6 +181,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
     const users = new UserRepository(database);
     notificationRows = new NotificationRepository(database);
     stream = new NotificationStream();
+    emitted = [];
+    stream.attach({
+      emitToRoom: (room, signal) =>
+        void emitted.push({ room, signal: signal as unknown as Record<string, unknown> }),
+    });
     const notifications = new NotificationService(notificationRows, stream);
     execution = new TripExecutionService(
       database,
@@ -1899,14 +1915,13 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
    */
   describe('★ assignment, and what the driver is told', () => {
     const notesFor = (userId: string) => notificationRows.listForUser(userId);
-    /** The business signals only. A heartbeat is a keep-alive, not a fact. */
-    const signalsOf = (events: readonly unknown[]) =>
-      events.filter((event) => (event as { type?: string }).type === 'notification');
+    /** What was addressed to one person's room — the only way anything reaches them. */
+    const signalsFor = (userId: string) =>
+      emitted.filter((item) => item.room === roomOf(userId)).map((item) => item.signal);
 
     it('★ writes TRIP_ASSIGNED for the driver in the same transaction as the assignment, naming the lorry', async () => {
       const trip = await newTrip();
-      const heard: unknown[] = [];
-      const subscription = stream.subscribe(driverA).subscribe((event) => heard.push(event));
+      stream.register(driverA, 'socket-a');
 
       const assignment = await assignTo(trip, driverA, await newVehicle('51D-10001'));
 
@@ -1923,11 +1938,11 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
         readAt: null,
       });
       // And the phone heard exactly that row, as a signal, after commit.
-      expect(signalsOf(heard)).toEqual([
-        { type: 'notification', data: expect.objectContaining({ id: notes[0]!.id, type: 'TRIP_ASSIGNED', tripId: trip }) },
+      expect(signalsFor(driverA)).toEqual([
+        expect.objectContaining({ id: notes[0]!.id, type: 'TRIP_ASSIGNED', tripId: trip }),
       ]);
       expect(assignment.driverUserId).toBe(driverA);
-      subscription.unsubscribe();
+      stream.release(driverA, 'socket-a');
     });
 
     it('★ a retried dispatch of the same lorry is refused AND leaves one notification', async () => {
@@ -2139,37 +2154,37 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       });
     });
 
-    describe('the live stream', () => {
-      it('★ reaches only the recipient, on every connection they hold', async () => {
-        const a1: unknown[] = [];
-        const a2: unknown[] = [];
-        const b: unknown[] = [];
-        const subs = [
-          stream.subscribe(driverA).subscribe((e) => a1.push(e)),
-          stream.subscribe(driverA).subscribe((e) => a2.push(e)),
-          stream.subscribe(driverB).subscribe((e) => b.push(e)),
-        ];
+    describe('the live channel', () => {
+      it('★ is addressed to the recipient’s room and to nobody else’s', async () => {
+        // A phone and a tablet signed in as the same driver are two connections
+        // in ONE room — which is why this emits once and both hear it, and why
+        // driver B's room is never written to at all.
+        stream.register(driverA, 'phone');
+        stream.register(driverA, 'tablet');
+        stream.register(driverB, 'desk');
         const trip = await newTrip();
 
         await assignTo(trip, driverA);
 
-        expect(signalsOf(a1)).toHaveLength(1);
-        expect(signalsOf(a2)).toHaveLength(1);
-        expect(signalsOf(b)).toHaveLength(0);
-        for (const s of subs) s.unsubscribe();
+        expect(signalsFor(driverA)).toHaveLength(1);
+        expect(signalsFor(driverB)).toHaveLength(0);
+        expect(stream.connections(driverA)).toBe(2);
+
+        stream.release(driverA, 'phone');
+        stream.release(driverA, 'tablet');
+        stream.release(driverB, 'desk');
         expect(stream.connections(driverA)).toBe(0);
       });
 
       it('carries ids and a type only — never the trip', async () => {
-        const heard: { data: Record<string, unknown> }[] = [];
-        const sub = stream.subscribe(driverA).subscribe((e) => heard.push(e as never));
+        stream.register(driverA, 'phone');
         const trip = await newTrip();
 
         await assignTo(trip, driverA);
 
-        const [signal] = signalsOf(heard) as { data: Record<string, unknown> }[];
-        expect(Object.keys(signal!.data).sort()).toEqual(['createdAt', 'id', 'tripId', 'type']);
-        sub.unsubscribe();
+        const [signal] = signalsFor(driverA);
+        expect(Object.keys(signal!).sort()).toEqual(['createdAt', 'id', 'tripId', 'type']);
+        stream.release(driverA, 'phone');
       });
     });
   });

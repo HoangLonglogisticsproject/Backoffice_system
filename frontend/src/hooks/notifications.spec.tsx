@@ -225,7 +225,7 @@ describe('useNotificationStream', () => {
         </QueryClientProvider>,
       );
 
-      expect(FakeSocket.instances.length).toBe(before);
+      expect(FakeSocket.instances).toHaveLength(before);
       expect(FakeSocket.instances[0]?.closed).toBe(false);
     });
   });
