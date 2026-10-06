@@ -20,7 +20,8 @@ export function bookingPngFileName(customerName: string | null, scheduledOn: str
   // At most 40 characters, cut after a whole word — never `Thuc-pha`.
   const head = folded.slice(0, 41);
   const lastBreak = head.lastIndexOf('-');
-  const reference = folded.length <= 40 ? folded : head.slice(0, lastBreak > 0 ? lastBreak : 40);
+  const cut = lastBreak > 0 ? lastBreak : 40;
+  const reference = folded.length <= 40 ? folded : head.slice(0, cut);
   const day = /^\d{4}-\d{2}-\d{2}$/.test(scheduledOn) ? scheduledOn : 'undated';
   return reference ? `booking-${reference}-${day}.png` : `booking-${day}.png`;
 }
