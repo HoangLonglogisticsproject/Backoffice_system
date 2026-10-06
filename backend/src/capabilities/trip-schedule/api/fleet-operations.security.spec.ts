@@ -20,11 +20,12 @@ import { FleetOperationsController } from './fleet-operations.controller';
 /**
  * "Điều hành xe" over HTTP.
  *
- * ★ THE POLICY THIS FILE PINS. Reading the board is `trip.read` — whoever
- * already sees who drives which lorry on Lịch xe. The money on it is
- * `cost.read`, which only the global tier holds: Dispatch, Sales, Accounting
- * and Customer Service read the board without a single amount, and nothing
- * here grants any of them `cost.read`.
+ * ★ THE POLICY THIS FILE PINS. Reading the board is `dispatch.write`: the
+ * global tier and the dispatch function, head or member. Sales, Accounting and
+ * Customer Service hold `trip.read` and still read Lịch xe — but not this
+ * board, whose fuel facts no route ever showed them. The money on it is
+ * `cost.read`, which only the global tier holds, so a dispatcher reads the
+ * board without a single amount.
  */
 describe('fleet operations HTTP security', () => {
   const TOKEN = 'a-session-token-value';
@@ -92,21 +93,33 @@ describe('fleet operations HTTP security', () => {
     expect(fleet.board).toHaveBeenCalledWith({ day: undefined, withMoney: true });
   });
 
-  it.each(['dispatch', 'sales', 'accounting', 'customer_service'] as const)(
-    '★ the %s function reads the board, member or head, WITHOUT the money',
+  it('★ the dispatch function reads the board, member or head, WITHOUT the money', async () => {
+    for (const ctx of [
+      asContext({ memberOf: ['d1'], functions: ['dispatch'] }),
+      asContext({ memberOf: ['d1'], headOf: ['d1'], functions: ['dispatch'] }),
+    ]) {
+      context = ctx;
+      await read().expect(200);
+      expect(fleet.board).toHaveBeenLastCalledWith({ day: undefined, withMoney: false });
+    }
+  });
+
+  it.each(['sales', 'accounting', 'customer_service'] as const)(
+    '★ refuses the %s function, member or head — trip.read is not this board',
     async (fn: DepartmentFunction) => {
       for (const ctx of [
         asContext({ memberOf: ['d1'], functions: [fn] }),
         asContext({ memberOf: ['d1'], headOf: ['d1'], functions: [fn] }),
       ]) {
         context = ctx;
-        await read().expect(200);
-        expect(fleet.board).toHaveBeenLastCalledWith({ day: undefined, withMoney: false });
+        const response = await read();
+        expect([fn, response.status, response.body.error?.code]).toEqual([fn, 403, 'FORBIDDEN']);
       }
+      expect(fleet.board).not.toHaveBeenCalled();
     },
   );
 
-  it('refuses a department with no booking function, and a driver account outright', async () => {
+  it('refuses a department with no function, and a driver account outright', async () => {
     context = asContext({ memberOf: ['d1'], headOf: ['d1'], functions: [] });
     expect((await read()).status).toBe(403);
     accountType = 'driver';

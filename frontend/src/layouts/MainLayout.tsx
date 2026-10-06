@@ -233,11 +233,16 @@ export default function MainLayout() {
                 icon={Truck}
                 label={t('tripSchedule')}
               />
-              <NavItem
-                to="/dispatch/fleet-operations"
-                icon={Gauge}
-                label={t('fleetOperations')}
-              />
+              {/* ★ GATED NARROWER, as the route is: `dispatch.write` (global or
+                  the dispatch function). Its fuel facts are dispatch's work,
+                  not every `trip.read` holder's; the server decides regardless. */}
+              {can('dispatch.write') && (
+                <NavItem
+                  to="/dispatch/fleet-operations"
+                  icon={Gauge}
+                  label={t('fleetOperations')}
+                />
+              )}
               <NavItem
                 to="/dispatch/trip-history"
                 icon={History}

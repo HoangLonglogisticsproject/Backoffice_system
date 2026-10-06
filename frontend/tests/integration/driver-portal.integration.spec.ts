@@ -28,6 +28,9 @@ const TEMPORARY_A = fixturePassword('temporary-a');
 const CHOSEN_A = fixturePassword('chosen-a');
 const TEMPORARY_B = fixturePassword('temporary-b');
 const CHOSEN_B = fixturePassword('chosen-b');
+/** Office staff for the fleet board's role matrix — their own pair, distinct from the drivers'. */
+const TEMPORARY_STAFF = fixturePassword('temporary-staff');
+const CHOSEN_STAFF = fixturePassword('chosen-staff');
 
 /**
  * The Driver Portal's read and write paths, against a REAL backend and a REAL
@@ -1205,7 +1208,7 @@ describe('driver portal (D1) against the real API', () => {
       expect(keysOf(board.data.summary)).toEqual(['fuelMissing', 'running', 'total', 'unassigned', 'waiting']);
 
       const row = board.data.vehicles.find((entry: { vehicle: { id: string } }) => entry.vehicle.id === fuelVehicle);
-      expect(keysOf(row)).toEqual(['drivers', 'fuel', 'state', 'turns', 'vehicle']);
+      expect(keysOf(row)).toEqual(['currentAssignmentId', 'drivers', 'fuel', 'nextAssignmentId', 'state', 'turns', 'vehicle']);
       expect(keysOf(row.fuel)).toEqual(['check', 'fills', 'issues', 'obligation', 'totalAmount']);
       expect(row).toMatchObject({
         state: 'running',
@@ -1217,6 +1220,70 @@ describe('driver portal (D1) against the real API', () => {
       // A driver is not a reader of the board at all.
       expect((await driverA.get('/fleet-operations')).status).toBe(403);
       expect((await boss.get('/fleet-operations', { params: { date: 'today' } })).status).toBe(422);
+    });
+
+    /**
+     * ★ WHO MAY READ THE BOARD — real departments with real functions, real
+     * heads and members, real sign-ins: the authorization the server loads
+     * from PostgreSQL, not a mocked context. `dispatch.write` (global or the
+     * dispatch function); never Sales, Accounting or Customer Service — who
+     * still read Lịch xe — and never a unit with no function.
+     */
+    describe('★ Điều hành xe — who may read it, against the real API', () => {
+      const staff: Record<string, Client> = {};
+
+      const department = async (fn: string | null) => {
+        const created = await boss.post('/departments', { slug: `fleet-${fn ?? 'none'}-${unique}`, name: `Fleet ${fn ?? 'none'} ${unique}`, function: fn });
+        expect(created.status).toBe(201);
+        return created.data.id as string;
+      };
+      const employee = async (label: string, departmentId: string, head: boolean) => {
+        const email = `fleet-${label}-${unique}@hoanglonglti.com`;
+        const created = await boss.post('/users', { displayName: `Fleet ${label} ${unique}`, email, initialPassword: TEMPORARY_STAFF, departmentId });
+        expect(created.status).toBe(201);
+        if (head) expect((await boss.post(`/departments/${departmentId}/head`, { userId: created.data.id })).status).toBe(201);
+        const setup = makeClient();
+        expect((await login(setup, email, TEMPORARY_STAFF)).status).toBe(200);
+        expect((await setup.post('/auth/password', { currentPassword: TEMPORARY_STAFF, newPassword: CHOSEN_STAFF })).status).toBe(204);
+        const client = makeClient();
+        expect((await login(client, email, CHOSEN_STAFF)).status).toBe(200);
+        staff[label] = client;
+      };
+
+      beforeAll(async () => {
+        for (const fn of ['dispatch', 'sales', 'customer_service', 'accounting', null] as const) {
+          const unit = await department(fn);
+          const name = fn ?? 'none';
+          await employee(`${name}-head`, unit, true);
+          await employee(`${name}-member`, unit, false);
+        }
+      });
+
+      it.each(['dispatch-head', 'dispatch-member'])('★ %s reads the board — every fact but the money', async (label) => {
+        const board = await staff[label]!.get('/fleet-operations');
+        expect(board.status).toBe(200);
+        expect(board.data.withMoney).toBe(false);
+        const row = board.data.vehicles.find((entry: { vehicle: { id: string } }) => entry.vehicle.id === fuelVehicle);
+        expect(row.fuel).toMatchObject({ obligation: 'FUEL_ADDED', fills: 2, totalAmount: null, check: { outcome: 'fuel_added', amount: null } });
+        expect(JSON.stringify(board.data)).not.toMatch(/1250000|1550000|300000\.00/);
+        // ★ And no new money route: the lorry's ledger stays cost.read.
+        expect((await staff[label]!.get(`/trip-vehicles/${fuelVehicle}/costs`)).status).toBe(403);
+      });
+
+      it.each([
+        'sales-head', 'sales-member', 'customer_service-head', 'customer_service-member',
+        'accounting-head', 'accounting-member', 'none-head', 'none-member',
+      ])('★ %s is refused the board (403) — whatever they read on Lịch xe', async (label) => {
+        const board = await staff[label]!.get('/fleet-operations');
+        expect([label, board.status, toApiError(board.status, board.data).code]).toEqual([label, 403, 'FORBIDDEN']);
+      });
+
+      it('★ the boundary is the board, not the trips: the booking functions still read Lịch xe; a unit with none does not', async () => {
+        for (const label of ['sales-member', 'customer_service-member', 'accounting-member', 'dispatch-member']) {
+          expect([label, (await staff[label]!.get('/trip-schedules')).status]).toEqual([label, 200]);
+        }
+        expect((await staff['none-member']!.get('/trip-schedules')).status).toBe(403);
+      });
     });
   });
   describe('★ open bookings — the driver asks, Dispatch assigns (0035)', () => {

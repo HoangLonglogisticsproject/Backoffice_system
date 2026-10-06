@@ -1,6 +1,6 @@
 import type { StatusTone } from '@/components/common/StatusPill';
 import type { FuelObligation } from '@/types/driver';
-import type { FleetDataIssue, FleetTurn, FleetVehicleState } from '@/types/fleet';
+import type { FleetDataIssue, FleetTurn, FleetVehicleDay, FleetVehicleState } from '@/types/fleet';
 import type { TranslationKey } from '@/types/translate';
 
 /** The words and tones "Điều hành xe" and its lorry detail share. */
@@ -39,9 +39,8 @@ export const ISSUE_LABEL: Record<FleetDataIssue, TranslationKey> = {
   ODOMETER_MISSING: 'fleetIssueOdometer',
 };
 
-/** The turn a dispatcher asks about first: on the road, else the next to start, else the last done. */
-export const turnInFocus = (turns: readonly FleetTurn[]): FleetTurn | null =>
-  turns.find((turn) => turn.state === 'running') ??
-  turns.find((turn) => turn.state === 'waiting') ??
-  turns[turns.length - 1] ??
-  null;
+/** The turns the server chose for the row: the one it speaks for, and the next. */
+export const focusOf = (row: FleetVehicleDay): { current: FleetTurn | null; next: FleetTurn | null } => ({
+  current: row.turns.find((turn) => turn.assignmentId === row.currentAssignmentId) ?? null,
+  next: row.turns.find((turn) => turn.assignmentId === row.nextAssignmentId) ?? null,
+});

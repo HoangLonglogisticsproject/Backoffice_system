@@ -1568,14 +1568,25 @@ và quyền ghi giao dịch nhiên liệu. Lượt `ended` không bao giờ là 
 
 ### 29.3 `GET /fleet-operations?date=YYYY-MM-DD` — "Điều hành xe"
 
-* Guard: Auth → BackofficeOnly → `PermissionGuard` + **`trip.read`** (cùng người đọc Lịch xe).
+* Guard: Auth → BackofficeOnly → `PermissionGuard` + **`dispatch.write`** (cấp toàn cục hoặc
+  phòng chức năng Điều độ — trưởng phòng hay thành viên). **Không phải `trip.read`:** Kinh doanh,
+  Kế toán, CSKH đọc Lịch xe nhưng chưa từng có route nào cho họ thấy câu trả lời nhiên liệu đầu ca
+  (ai khai, lúc nào), số giao dịch dầu hay cờ thiếu lít/công-tơ-mét — nên họ nhận **403** ở đây.
+  Biển số, tài xế, mốc, trạng thái chuyến trên bảng thì Điều độ vốn đã đọc được qua `trip.read`.
 * `{ businessDate, withMoney, summary: { total, running, waiting, unassigned, fuelMissing },
   vehicles: [FleetVehicleDay] }`; một dòng mỗi xe (xe đang dùng, cộng xe đã lưu trữ nếu ngày đó có
   chạy / có dầu / có check). `date` mặc định hôm nay; ngày không hợp lệ → 422.
-* `FleetVehicleDay = { vehicle, state: running|waiting|done|unassigned, drivers, turns, fuel: {
-  obligation, check: { outcome, declaredBy, declaredAt, vehicleCostId, amount } | null, fills,
-  totalAmount, issues } }`. Trạng thái **suy ra**, không lưu: lượt `running` = có 1–3 mốc trên
-  chuyến chưa xong; `waiting` = chưa mốc nào; `done` = chuyến xong hoặc đủ 4 mốc.
+* `FleetVehicleDay = { vehicle, state: running|waiting|done|unassigned, drivers, turns,
+  currentAssignmentId, nextAssignmentId, fuel: { obligation, check: { outcome, declaredBy,
+  declaredAt, vehicleCostId, amount } | null, fills, totalAmount, issues } }`. Trạng thái **suy ra**,
+  không lưu, **theo từng lượt** (mốc còn hiệu lực của chính lượt đó — không theo `status` của chuyến,
+  vì `executing` là của cả chuyến và không lùi khi huỷ mốc): `running` = 1–3 mốc trên chuyến chưa
+  xong; `waiting` = chưa mốc nào; `done` = chuyến xong hoặc đủ 4 mốc (`executionComplete`).
+* **Nhiều chuyến trên một xe — một dòng, một trạng thái** (`focusOf`). Lượt theo thứ tự toàn phần
+  (ngày, giờ lấy, lúc phân công, id). **Lượt hiện tại** = lượt `running` đầu tiên; không có thì
+  `waiting` đầu tiên; không có thì lượt cuối ngày. Trạng thái xe = trạng thái lượt hiện tại
+  (RUNNING > WAITING > DONE; không lượt nào → UNASSIGNED); **tài xế hiện tại** = tài xế của lượt đó;
+  **lượt tiếp theo** = lượt `waiting` đầu tiên khác lượt hiện tại. `drivers` = mọi tài xế trong ngày.
 * **Tiền theo quyền, quyết định trong SELECT:** không có `cost.read` → `check.amount` và
   `fuel.totalAmount` là `null` (không được đọc). `fills` (số giao dịch) và `issues` không phải tiền.
   Điều độ / Kinh doanh / CSKH / Kế toán **không** được cấp thêm `cost.read`.

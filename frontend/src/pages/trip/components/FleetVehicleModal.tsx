@@ -69,7 +69,7 @@ export function FleetVehicleModal({
           <Overview row={row} />
         </TabsContent>
         <TabsContent value="schedule">
-          <Schedule turns={row.turns} />
+          <Schedule row={row} />
         </TabsContent>
         <TabsContent value="fuel">
           <FuelPanel day={day} row={row} canReadCosts={canReadCosts} />
@@ -127,8 +127,9 @@ function Overview({ row }: Readonly<{ row: FleetVehicleDay }>) {
   );
 }
 
-function Schedule({ turns }: Readonly<{ turns: FleetTurn[] }>) {
+function Schedule({ row }: Readonly<{ row: FleetVehicleDay }>) {
   const { t, language } = useLanguage();
+  const turns = row.turns;
   if (turns.length === 0) return <p className="py-6 text-center text-sm text-gray-500">{t('fleetNoTurns')}</p>;
   return (
     <ol className="divide-y divide-gray-100 rounded-lg border border-gray-100">
@@ -144,6 +145,10 @@ function Schedule({ turns }: Readonly<{ turns: FleetTurn[] }>) {
             </p>
           </div>
           <p className="text-sm whitespace-nowrap">
+            {turn.assignmentId === row.currentAssignmentId ? (
+              <StatusPill tone="blue">{t('fleetCurrent')}</StatusPill>
+            ) : null}
+            {turn.assignmentId === row.nextAssignmentId ? <StatusPill tone="gray">{t('fleetNext')}</StatusPill> : null}{' '}
             <span className="font-semibold tabular-nums">{turn.progress.reached}/4</span> · {t(progressLabel(turn))}
           </p>
         </li>
