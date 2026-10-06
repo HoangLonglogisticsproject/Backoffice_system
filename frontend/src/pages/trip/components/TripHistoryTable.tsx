@@ -25,7 +25,8 @@ import { Leg, Prose, Unset } from './TripCells';
  * none flattened into the trip). ★ NO STATUS AND NO PHÂN CÔNG COLUMN: every row
  * is "Đã xác nhận", and no pair here is still being worked. Actions and
  * permissions are the board's: accounting still prices a finished trip, and the
- * cost dialog is the trip's detail.
+ * cost dialog is the trip's detail. "Tải booking PNG" is on every row — a read,
+ * for everyone who can see the list — so the actions column always shows.
  */
 export function TripHistoryTable({
   rows,
@@ -33,12 +34,14 @@ export function TripHistoryTable({
   onEdit,
   onArchive,
   onCost,
+  onExport,
 }: Readonly<{
   rows: readonly TripBoardRow[];
   firstRowNumber: number;
   onEdit: (trip: TripBoardRow) => void;
   onArchive: (trip: TripBoardRow) => void;
   onCost: (tripId: string) => void;
+  onExport: (tripId: string) => void;
 }>) {
   const { t, language } = useLanguage();
   const { can } = useSession();
@@ -46,7 +49,6 @@ export function TripHistoryTable({
   const canViewCost = can('cost.read');
   const canManage = can('trip.write');
   const mayEdit = canManage || can('trip.price.write');
-  const hasActions = mayEdit || canViewCost;
 
   const head = (key: TranslationKey, right = false) => (
     <TableHead className={`${right ? 'text-right ' : ''}font-semibold text-gray-600`}>{t(key)}</TableHead>
@@ -67,7 +69,7 @@ export function TripHistoryTable({
           {mayPrice && head('colSellPrice', true)}
           {mayPrice && head('colPurchasePrice', true)}
           {head('colCreatedBy')}
-          {hasActions && head('colActions')}
+          {head('colActions')}
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -99,21 +101,22 @@ export function TripHistoryTable({
             {mayPrice && <MoneyCell value={trip.sellPrice} strong />}
             {mayPrice && <MoneyCell value={trip.purchasePrice} />}
             <TableCell className="whitespace-nowrap text-gray-600">{trip.createdByUser.displayName}</TableCell>
-            {hasActions && (
-              <TableCell>
-                <div className="flex items-center gap-1">
-                  {mayEdit && (
-                    <IconButton label={t('edit')} onClick={() => onEdit(trip)} icon={<Pencil className="h-3.5 w-3.5" />} />
-                  )}
-                  {canManage && (
-                    <IconButton label={t('archive')} onClick={() => onArchive(trip)} icon={<Archive className="h-3.5 w-3.5" />} />
-                  )}
-                  {canViewCost && (
-                    <IconButton label={t('tripCost')} onClick={() => onCost(trip.id)} icon={<Wallet className="h-3.5 w-3.5" />} />
-                  )}
-                </div>
-              </TableCell>
-            )}
+            <TableCell>
+              <div className="flex items-center gap-1">
+                <Button type="button" variant="outline" size="sm" className="h-8 text-gray-700" onClick={() => onExport(trip.id)}>
+                  {t('bookingExportAction')}
+                </Button>
+                {mayEdit && (
+                  <IconButton label={t('edit')} onClick={() => onEdit(trip)} icon={<Pencil className="h-3.5 w-3.5" />} />
+                )}
+                {canManage && (
+                  <IconButton label={t('archive')} onClick={() => onArchive(trip)} icon={<Archive className="h-3.5 w-3.5" />} />
+                )}
+                {canViewCost && (
+                  <IconButton label={t('tripCost')} onClick={() => onCost(trip.id)} icon={<Wallet className="h-3.5 w-3.5" />} />
+                )}
+              </div>
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>

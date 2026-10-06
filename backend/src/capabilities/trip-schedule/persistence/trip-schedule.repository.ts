@@ -285,8 +285,9 @@ const RETURNING_TRIP = `RETURNING ${tripColumns('')}`;
  * (`TripEntryCrew`), so no driver portal or operational board treats
  * a finished run as work; `finished` + the entry's own mark is what tells them
  * apart from a turn somebody ended by hand. A trusted constant, not input.
+ * Shared with the booking export, so the PNG lists the board's crew exactly.
  */
-const IS_CREW = `(a.state = 'active'
+export const IS_CREW = `(a.state = 'active'
                    OR (t.status = 'finished' AND a.state = 'ended'
                        AND a.end_reason = '${HISTORICAL_ENTRY_REASON}'))`;
 

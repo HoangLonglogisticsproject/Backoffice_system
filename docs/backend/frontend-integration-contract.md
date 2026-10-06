@@ -1607,3 +1607,32 @@ và quyền ghi giao dịch nhiên liệu. Lượt `ended` không bao giờ là 
   nào*: không nhà cung cấp, không hoá đơn, không trạng thái thanh toán. Khi cần AP, đó là một
   capability riêng đọc sổ này, không phải cột thêm vào đây.
 * **Không P&L.** Dầu theo xe vẫn không vào tổng chuyến (§26).
+
+## 30. Phiếu booking (PNG) — một tài liệu cố định, an toàn để gửi ra ngoài (2026-10-07)
+
+`GET /trip-schedules/:tripId/booking-export` — dữ liệu cho nút **"Tải booking PNG"**. Ảnh được
+**vẽ trong trình duyệt** (Canvas 2D), không lưu file, không upload, không gọi dịch vụ ngoài; route chỉ
+đọc — không ghi DB, không audit, không đổi chuyến.
+
+* Guard: Auth → BackofficeOnly → `PermissionGuard` + **`trip.read`** — đúng quyền của chi tiết chuyến;
+  **không quyền mới**. Tài xế → 403. Chuyến không tồn tại hoặc đã archive → 404 (như
+  `GET /trip-schedules/:id`); chuyến `finished` (Lịch sử chuyến) xuất được.
+* ★ **Một hợp đồng cho mọi người đọc.** SuperAdmin, Điều độ, Kinh doanh, CSKH, Kế toán nhận **cùng
+  một** body cho cùng một chuyến. Không redact theo quyền vì không có gì để redact: projection là
+  **allowlist trong SELECT** (`persistence/booking-export.repository.ts`), không phải DTO Backoffice bị
+  ẩn bớt field.
+* **200** `{ scheduledOn, scheduledPickupAt, scheduledDeliveryAt, pickup: { name, address, contact },
+  delivery: { name, address, contact }, customerName, cargoInfo, driverInstructions,
+  crew: [{ plate, driverName }] }` — `crew` là crew của board (`IS_CREW`), cũ nhất trước, 0..N.
+* **Không bao giờ có** (không phải `null` — không có key): giá bán, giá mua, biên lợi nhuận, chi phí
+  chuyến, thuê xe ngoài, chi phí xe, nhiên liệu; `note` (ghi chú nội bộ — §5.2 hợp đồng Driver Portal);
+  `status` ("Đã xác nhận" ở đây nghĩa là *đã xong*, trên phiếu booking sẽ bị đọc thành *đã đặt*); id
+  nội bộ; người tạo / archive / đóng.
+* **Liên hệ:** liên hệ lấy hàng / giao hàng **có** — dữ liệu thực hiện đã được chấp nhận rời văn phòng
+  (DL-68). Liên hệ khách hàng: không tồn tại (`trip_customers` chỉ có tên và ghi chú nội bộ). Số điện
+  thoại tài xế: không được lưu ở đâu cả.
+* **Ghi chú:** chỉ `driverInstructions` ("Ghi chú vận hành" trên phiếu) — trường duy nhất an toàn theo
+  cấu trúc (0017). ⚠ Hiện **chưa có màn hình nào ghi** trường này, nên trên dữ liệu hiện tại nó luôn trống.
+* Không có mã booking: chuyến chưa có mã người dùng; tên file là `booking-<khách hàng>-<ngày lấy hàng>.png`.
+
+---

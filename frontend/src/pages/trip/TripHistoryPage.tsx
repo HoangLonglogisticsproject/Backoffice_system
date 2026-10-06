@@ -16,6 +16,7 @@ import { TripCostModal } from './components/TripCostModal';
 import { TripFormModal } from './components/TripFormModal';
 import { TripHistoryTable } from './components/TripHistoryTable';
 import { TripRangeFilters } from './components/TripRangeFilters';
+import { BookingExportDialog } from './schedule/export/BookingExportDialog';
 
 /**
  * Lịch sử chuyến — the trips that ran AND were closed.
@@ -39,6 +40,7 @@ export default function TripHistoryPage() {
   const [editing, setEditing] = useState<TripScheduleWithRefs | null>(null);
   const [archiving, setArchiving] = useState<TripScheduleWithRefs | null>(null);
   const [costFor, setCostFor] = useState<string | null>(null);
+  const [exportFor, setExportFor] = useState<string | null>(null);
 
   const trips = useTripSchedules('history');
   const catalogue = useTripCatalogue();
@@ -83,6 +85,7 @@ export default function TripHistoryPage() {
             onEdit={openForm}
             onArchive={setArchiving}
             onCost={setCostFor}
+            onExport={setExportFor}
           />
 
           {!trips.loading && trips.items.length === 0 && !trips.error && (
@@ -128,6 +131,7 @@ export default function TripHistoryPage() {
         onCatalogueChanged={catalogue.reload}
       />
       <TripCostModal tripId={costFor} onClose={() => setCostFor(null)} />
+      {exportFor && <BookingExportDialog tripId={exportFor} onClose={() => setExportFor(null)} />}
       <ArchiveTripDialog trip={archiving} onClose={() => setArchiving(null)} onArchived={trips.reload} />
     </div>
   );

@@ -20,12 +20,18 @@ export interface BookingActionHandlers {
  * a trip — which of the office's actions appear is `bookingActions`, so the list
  * and this panel can never disagree. Each one opens its own dialog, which waits
  * for the server.
+ *
+ * ★ PLUS ONE READ, ALWAYS: "Tải booking PNG" — whoever sees the trip may export
+ * it, so it is not one of `bookingActions` and does not depend on the status.
  */
-export function BookingDetailActions({ trip, ...handlers }: Readonly<{ trip: TripBoardRow } & BookingActionHandlers>) {
+export function BookingDetailActions({
+  trip,
+  onExport,
+  ...handlers
+}: Readonly<{ trip: TripBoardRow; onExport: (tripId: string) => void } & BookingActionHandlers>) {
   const { t } = useLanguage();
   const { can } = useSession();
   const actions = bookingActions(trip, can);
-  if (actions.length === 0) return null;
 
   const run: Record<BookingAction, () => void> = {
     assign: () => handlers.onAssign(trip.id),
@@ -50,6 +56,9 @@ export function BookingDetailActions({ trip, ...handlers }: Readonly<{ trip: Tri
           {t(ACTION_LABELS[action])}
         </Button>
       ))}
+      <Button type="button" variant="outline" size="lg" onClick={() => onExport(trip.id)}>
+        {t('bookingExportAction')}
+      </Button>
     </div>
   );
 }

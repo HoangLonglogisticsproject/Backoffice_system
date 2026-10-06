@@ -171,6 +171,23 @@ describe('★ the open-booking projection — decided in the SELECT (0035)', () 
   });
 });
 
+describe('★ the booking export — one external-safe document, decided in the SELECT', () => {
+  it('never reads money, the internal notes, the status or the bookkeeping — so no mapper can leak one', async () => {
+    const body = code(await read('persistence', 'booking-export.repository.ts'));
+    for (const forbidden of [
+      /sell_price/, /purchase_price/, /trip_costs/, /vehicle_costs/, /trip_outsource_hires/, /margin/,
+      /\bnote\b/, /\bstatus\b/, /closed_/, /created_by/, /archived_by/, /phone/, /\*\s*FROM/i, /\bt\.\*/,
+    ]) {
+      expect([String(forbidden), forbidden.test(body)]).toEqual([String(forbidden), false]);
+    }
+  });
+
+  it('asks nothing about the caller — the same document for every reader', async () => {
+    const body = code(await read('api', 'booking-export.controller.ts'));
+    expect(body).not.toMatch(/authorizationOf|@Req\(|redact|canSee/);
+  });
+});
+
 describe('trip_status_history — no bypass', () => {
   it('is written only through the repository built for it', async () => {
     for (const folder of ['api', 'application', 'domain']) {
