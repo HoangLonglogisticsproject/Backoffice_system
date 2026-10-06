@@ -103,6 +103,49 @@ export type DailyFuelDeclaration =
   | { outcome: 'fuel_added'; amount: string; liters: string | null; odometerKm: number | null; note: string | null }
   | { outcome: 'no_fuel' };
 
+/** What a driver records about a fill after the day's check — the readings only. */
+export interface VehicleFuelFill {
+  amount: string;
+  liters: string | null;
+  odometerKm: number | null;
+  note: string | null;
+}
+
+/**
+ * ★ A FILL AFTER THE DAY'S CHECK — "Ghi nhận đổ nhiên liệu". One more row of
+ * the lorry's ledger (concept C), never a trip cost, never a second check, and
+ * it leaves the check alone: "Không đổ nhiên liệu đầu ca" then a fill at noon
+ * is two true facts.
+ *
+ * What its author is told back: their own row, as they typed it. Never the
+ * day's total, never another driver's fill.
+ */
+export interface DriverFuelTransaction extends VehicleFuelFill {
+  id: string;
+  businessDate: string;
+  createdAt: Date;
+}
+
+/** The `details` code on the 422 that refuses a fill on a lorry that was not the driver's work today. */
+export const NOT_OPERATED_TODAY = 'NOT_OPERATED_TODAY';
+
+/**
+ * Is a stored fill the one this request describes? Amounts and liters compare
+ * as numbers, so "700000" retried is "700000.00" stored.
+ *
+ * ponytail: `Number` is exact here — `NUMERIC(14,2)` and `NUMERIC(10,2)` hold at
+ * most 14 significant digits, and two decimals that short never share a double.
+ */
+export const sameFill = (stored: VehicleFuelFill, asked: VehicleFuelFill): boolean => {
+  const sameDecimal = (a: string | null, b: string | null) => (a === null || b === null ? a === b : Number(a) === Number(b));
+  return (
+    sameDecimal(stored.amount, asked.amount) &&
+    sameDecimal(stored.liters, asked.liters) &&
+    stored.odometerKm === asked.odometerKm &&
+    (stored.note ?? null) === (asked.note ?? null)
+  );
+};
+
 /**
  * ★ THE POLICY, SAID ONCE. Is this lorry's fuel declared daily on the lorry?
  * The flag, and nothing else: not `ownership` (unclassified everywhere, 0013),

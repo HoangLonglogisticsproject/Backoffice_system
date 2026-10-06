@@ -67,7 +67,7 @@ type CatalogueRowData = {
   display: string;
   note: string | null;
   status: string;
-  /** Vehicles only: "Khai nhiên liệu đầu ngày" — a real flag, never the note. */
+  /** Vehicles only: "Khai nhiên liệu đầu ca" — a real flag, never the note. */
   dailyFuelCheckRequired?: boolean;
 };
 
@@ -643,7 +643,7 @@ function CatalogueFormModal({
 }
 
 /**
- * "Khai nhiên liệu đầu ngày" — [ Bắt buộc / Không áp dụng ]. Two radios, so the
+ * "Khai nhiên liệu đầu ca" — [ Bắt buộc / Không áp dụng ]. Two radios, so the
  * choice is one tap and the state is never the note (0034). A hired lorry is
  * refused it by the server, which the form says in words.
  */

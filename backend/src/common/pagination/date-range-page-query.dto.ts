@@ -72,7 +72,7 @@ const isRealIsoDate = (value: string): boolean => {
   );
 };
 
-const isoDate = z
+export const isoDate = z
   // The empty string is what a client sends when it forwards a cleared filter
   // input without checking. Treated as absent, exactly as `cursor` is.
   .preprocess(

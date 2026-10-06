@@ -1,4 +1,4 @@
-import type { DriverTrip } from '@/types/driver';
+import type { DriverTrip, DriverWorkdayTurn } from '@/types/driver';
 
 /**
  * The driver's work schedule, as pure functions over the assignment list.
@@ -95,3 +95,13 @@ export const OPENED_FROM_SCHEDULE = { from: 'schedule' } as const;
 
 export const wasOpenedFromSchedule = (state: unknown): boolean =>
   typeof state === 'object' && state !== null && 'from' in state && state.from === OPENED_FROM_SCHEDULE.from;
+
+/** The turn on the road (started, not closed) first; else the first one not yet started. */
+export const currentAndNext = (
+  turns: readonly DriverWorkdayTurn[],
+): { current: DriverWorkdayTurn | null; next: DriverWorkdayTurn | null } => {
+  const open = turns.filter((turn) => !turn.closed);
+  const current = open.find((turn) => turn.progress.reached > 0) ?? open[0] ?? null;
+  const next = open.find((turn) => turn !== current && turn.progress.reached === 0) ?? null;
+  return { current, next };
+};

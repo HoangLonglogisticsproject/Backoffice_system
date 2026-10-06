@@ -125,7 +125,7 @@ function Fact({ label, children }: Readonly<{ label: string; children: ReactNode
  * The range opens on the business month and is the server's query, not a
  * filter over a page — the total is the server's sum of the whole range.
  */
-function VehicleCostsPanel({ vehicleId }: Readonly<{ vehicleId: string }>) {
+export function VehicleCostsPanel({ vehicleId }: Readonly<{ vehicleId: string }>) {
   const { t } = useLanguage();
   const [range, setRange] = useState(currentMonthRange);
   // A half-typed day is '' — nothing is asked until both ends are days, in order.

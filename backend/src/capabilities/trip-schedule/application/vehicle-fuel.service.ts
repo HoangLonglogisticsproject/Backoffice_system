@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { ConflictError, ForbiddenError, NotFoundError } from '../../../common/errors/domain.error';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
   dailyFuelDate,
   needsDailyFuelCheck,
+  NOT_OPERATED_TODAY,
+  sameFill,
   type DailyFuelCheck,
   type DailyFuelDeclaration,
+  type DriverFuelTransaction,
+  type VehicleFuelFill,
 } from '../domain/vehicle-fuel';
+import { FleetOperationsRepository } from '../persistence/fleet-operations.repository';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
 import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
@@ -48,6 +53,7 @@ export class VehicleFuelService {
     private readonly vehicles: TripVehicleRepository,
     private readonly checks: VehicleDailyFuelCheckRepository,
     private readonly costs: VehicleCostRepository,
+    private readonly fleet: FleetOperationsRepository,
   ) {}
 
   /** `serverNow` is the server's clock at the request; tests pin it, nothing else passes one. */
@@ -83,6 +89,105 @@ export class VehicleFuelService {
 
       return this.claim(input, { trip: trip.id, assignment: assignment.id, vehicle: assignment.vehicleId }, serverNow, tx);
     });
+  }
+
+  /**
+   * ★ A FILL AFTER THE DAY'S CHECK — "Ghi nhận đổ nhiên liệu": one more row of
+   * the lorry's ledger (0034's `vehicle_costs`, source `driver_portal`). Not the
+   * trip-expense path, not a trip cost, not a check: today's check — answered,
+   * missing or "Không đổ nhiên liệu đầu ca" — is not read and not touched.
+   *
+   * ★ WHO MAY: the turn's driver, when the turn is their work TODAY
+   * (`turnWorksOn` — scheduled today, still open from before, or with a live
+   * milestone today). So the driver who closed today's run and fuels on the
+   * way home may; the one whose run ended after midnight may on the new day;
+   * a turn for tomorrow, or one finished last week, may not (422
+   * `NOT_OPERATED_TODAY`). The lorry, the day and the provenance are the
+   * server's, exactly as for the check.
+   *
+   * ★ THE KEY: the same key with the same fill is the same row back, on any
+   * day; the same key with a different fill, another turn, or a declaration's
+   * key is a 409; a new key is a new fill — a lorry's day holds as many as were
+   * bought. Lock order as `declare`: trip → assignment → lorry.
+   */
+  async recordFill(
+    input: { assignmentId: string; fill: VehicleFuelFill; clientRequestId: string; recordedBy: string },
+    serverNow = new Date(),
+  ): Promise<DriverFuelTransaction> {
+    const named = await this.assignments.findById(input.assignmentId);
+    if (!named) throw new NotFoundError('Assignment not found.');
+    if (named.driverUserId !== input.recordedBy) throw notTheirs();
+    const lorry = named.vehicleId;
+    if (!lorry) throw new ConflictError('That assignment names no lorry.');
+
+    const already = await this.replay(lorry, input);
+    if (already) return already;
+
+    return this.db.transaction(async (tx) => {
+      const trip = await this.trips.lockActive(named.tripId, tx);
+      if (!trip) throw new NotFoundError('Trip not found.');
+
+      const twin = await this.replay(lorry, input, tx);
+      if (twin) return twin;
+
+      const assignment = await this.assignments.lockActiveById(input.assignmentId, tx);
+      if (!assignment?.vehicleId) throw new ConflictError('That assignment is no longer active.');
+      if (assignment.driverUserId !== input.recordedBy) throw notTheirs();
+      if (!needsDailyFuelCheck(await this.vehicles.findForShare(assignment.vehicleId, tx))) {
+        throw new ConflictError('That lorry has no daily fuel check.');
+      }
+
+      const businessDate = dailyFuelDate(serverNow);
+      if (!(await this.fleet.worksToday(assignment.id, input.recordedBy, businessDate, tx))) {
+        throw new ValidationError('That lorry is not on your work today.', { fuelTransaction: NOT_OPERATED_TODAY });
+      }
+
+      const id = randomUUID();
+      const createdAt = await this.costs.insert(
+        {
+          id,
+          vehicleId: assignment.vehicleId,
+          businessDate,
+          category: 'fuel',
+          ...input.fill,
+          source: 'driver_portal',
+          sourceTripId: trip.id,
+          sourceAssignmentId: assignment.id,
+          clientRequestId: input.clientRequestId,
+          createdBy: input.recordedBy,
+        },
+        tx,
+      );
+      return { id, businessDate, ...input.fill, createdAt };
+    });
+  }
+
+  /** What a key already on the lorry means for this fill — its own row back, a 409, or nothing yet. */
+  private async replay(
+    lorry: string,
+    input: { assignmentId: string; fill: VehicleFuelFill; clientRequestId: string; recordedBy: string },
+    executor?: DatabaseQuery,
+  ): Promise<DriverFuelTransaction | null> {
+    // A check's key is a declaration's — its fill shares it — never this fill's.
+    if (await this.checks.findByClientRequest(lorry, input.clientRequestId, executor)) {
+      throw new ConflictError(KEY_REUSED);
+    }
+    const stored = await this.costs.findByClientRequest(lorry, input.clientRequestId, executor);
+    if (!stored) return null;
+    const same =
+      stored.sourceAssignmentId === input.assignmentId &&
+      stored.createdBy === input.recordedBy &&
+      sameFill(stored, input.fill);
+    if (!same) throw new ConflictError(KEY_REUSED);
+    return {
+      id: stored.id,
+      businessDate: stored.businessDate,
+      amount: stored.amount,
+      liters: stored.liters,
+      odometerKm: stored.odometerKm,
+      note: stored.note,
+      createdAt: stored.createdAt,
+    };
   }
 
   /** Takes the lorry's day, writing the fill after the check that names it — or reads the winner. */

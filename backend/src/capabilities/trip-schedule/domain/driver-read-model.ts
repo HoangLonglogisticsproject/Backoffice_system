@@ -3,6 +3,7 @@ import type {
   ExecutionEvent,
   ExpenseAccountability,
 } from './trip-execution';
+import type { FuelObligation, TurnProgress } from './fleet-operations';
 import type { TripCost } from './trip-cost';
 import type { Coordinates } from './trip-location';
 
@@ -194,4 +195,32 @@ export interface DriverTripDetail extends DriverTrip {
    * (`fuelDeclaredOnVehicle`, the one rule both read).
    */
   fuelOnVehicle: boolean;
+}
+
+/** One turn of the driver's day: the trip as on every card, how far it has got, and whether it is finished. */
+export interface DriverWorkdayTurn extends DriverTrip {
+  closed: boolean;
+  progress: TurnProgress;
+}
+
+/**
+ * ★ "CA LÀM VIỆC HÔM NAY" — the driver's lorries today, each with its turns.
+ *
+ * Today is the server's business day; a turn is on it by the same rule that
+ * lets the driver record a fill (`turnWorksOn`). Several lorries a day is
+ * normal, so the day is grouped by lorry.
+ *
+ * ★ THE FUEL IS THE OBLIGATION AND ITS ANSWER, NEVER AN AMOUNT. Who answered,
+ * what the fill cost and what the day's fills add up to are the lorry's money
+ * — the office's, not the handset's.
+ */
+export interface DriverWorkday {
+  businessDate: string;
+  vehicles: Array<{
+    vehicle: { id: string; plate: string };
+    fuel: FuelObligation;
+    /** The lorry's fuel is declared on it — so a fill may be recorded on it today. */
+    fuelOnVehicle: boolean;
+    turns: DriverWorkdayTurn[];
+  }>;
 }

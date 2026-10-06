@@ -431,8 +431,8 @@ describe('★ driver write routes — resource scope', () => {
     const controller = code(await read('api', 'driver-portal.controller.ts'));
     const params = [...controller.matchAll(/@Param\('assignmentId', UuidParam\)/g)];
 
-    // Five writes (event, expense, correction, fuel check, completion) plus the detail read.
-    expect(params).toHaveLength(6);
+    // Six writes (event, expense, correction, fuel check, fuel fill, completion) plus the detail read.
+    expect(params).toHaveLength(7);
     expect(controller).not.toMatch(/body\.(assignmentId|tripId)/);
   });
 

@@ -34,6 +34,7 @@ import {
 } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../../src/capabilities/trip-schedule/persistence/trip-status-history.repository';
+import { FleetOperationsRepository } from '../../src/capabilities/trip-schedule/persistence/fleet-operations.repository';
 import { VehicleCostRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-cost.repository';
 import { VehicleDailyFuelCheckRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-fuel-check.repository';
 import { NotificationService } from '../../src/capabilities/notification/application/notification.service';
@@ -124,7 +125,7 @@ describeIntegration('Vehicle daily fuel against real PostgreSQL', () => {
       vehicles,
       requests,
     );
-    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, vehicleCosts);
+    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, vehicleCosts, new FleetOperationsRepository(database));
     ledger = new VehicleCostService(vehicles, vehicleCosts);
     catalogue = new TripCatalogueService(vehicles, new TripCustomerRepository(database), new TripLocationRepository(database));
     totals = new TripCostTotalsRepository(database);

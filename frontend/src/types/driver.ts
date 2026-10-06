@@ -214,7 +214,7 @@ export interface DriverTripDetail extends DriverTrip {
 export type DailyFuelOutcome = 'fuel_added' | 'no_fuel';
 
 /**
- * "Khai báo nhiên liệu đầu ngày". ★ No lorry and no day: both are the server's
+ * "Khai nhiên liệu đầu ca". ★ No lorry and no day: both are the server's
  * (the assignment's lorry, today in Asia/Ho_Chi_Minh). Amounts and liters are
  * decimal STRINGS for the reason `DeclareExpenseInput.amount` gives.
  */
@@ -233,4 +233,60 @@ export type DailyFuelDeclarationInput =
 export interface DailyFuelCheck {
   businessDate: string;
   outcome: DailyFuelOutcome;
+}
+
+/**
+ * Where the lorry's beginning-of-shift check stands today — the obligation and
+ * its answer, never an amount. The server's word, never re-derived here.
+ */
+export type FuelObligation = 'NOT_REQUIRED' | 'REQUIRED_MISSING' | 'FUEL_ADDED' | 'NO_FUEL';
+
+/** How far a turn has got: live milestones 0..4, and the first one still owed. */
+export interface TurnProgress {
+  reached: number;
+  next: ExecutionEventType | null;
+}
+
+export interface DriverWorkdayTurn extends DriverTrip {
+  /** The trip is finished — the turn is a record now. */
+  closed: boolean;
+  progress: TurnProgress;
+}
+
+/**
+ * "Ca làm việc hôm nay" — the driver's lorries today, each with its turns.
+ * Today is the server's business day; several lorries a day is normal.
+ */
+export interface DriverWorkday {
+  businessDate: string;
+  vehicles: Array<{
+    vehicle: { id: string; plate: string };
+    fuel: FuelObligation;
+    /** The lorry's fuel is declared on it, so a fill may be recorded on it. */
+    fuelOnVehicle: boolean;
+    turns: DriverWorkdayTurn[];
+  }>;
+}
+
+/**
+ * "Ghi nhận đổ nhiên liệu" — a fill after the day's check. ★ No lorry and no
+ * day: the turn names the lorry, the server's clock names the day.
+ */
+export interface FuelFillInput {
+  amount: string;
+  liters: string | null;
+  odometerKm: number | null;
+  note: string | null;
+  clientRequestId: string;
+}
+
+/** The driver's own fill, as recorded. Never the day's total. */
+export interface DriverFuelTransaction {
+  id: string;
+  businessDate: string;
+  amount: string;
+  liters: string | null;
+  odometerKm: number | null;
+  note: string | null;
+  createdAt: string;
 }

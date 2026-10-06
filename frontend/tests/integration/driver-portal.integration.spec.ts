@@ -1142,6 +1142,82 @@ describe('driver portal (D1) against the real API', () => {
       // A driver reads no money, the lorry's included.
       expect((await driverA.get(`/trip-vehicles/${fuelVehicle}/costs`)).status).toBe(403);
     });
+
+    // ----------------------------- a fill after the check (fleet operations) --
+
+    const FILL_AFTER = `fill-${unique}`;
+    const fillBody = { amount: '300000.00', liters: '12.50', odometerKm: 182400, note: null, clientRequestId: FILL_AFTER };
+
+    it('★ records a fill after the check: one more ledger row, the check untouched, only the driver’s own row back', async () => {
+      const filled = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, {
+        ...fillBody,
+        // None of these is the body's to say; each is stripped.
+        vehicleId: randomUUID(),
+        businessDate: '2020-01-01',
+        sourceTripId: randomUUID(),
+        source: 'backoffice',
+      });
+      expect(filled.status).toBe(201);
+      expect(keysOf(filled.data)).toEqual(sorted(['id', 'businessDate', 'amount', 'liters', 'odometerKm', 'note', 'createdAt']));
+      expect(filled.data).toMatchObject({ businessDate: todayAsCalendarDay(), amount: '300000.00', liters: '12.50', odometerKm: 182400 });
+
+      // The same key and fill is the same row; the same key with another fill is a 409.
+      const retried = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, fillBody);
+      expect([retried.status, retried.data.id]).toEqual([201, filled.data.id]);
+      expect((await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, { ...fillBody, amount: '310000.00' })).status).toBe(409);
+      // The declaration's key is never a fill's.
+      expect((await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, { ...fillBody, clientRequestId: FILL_KEY })).status).toBe(409);
+      // Another driver holding the turn id is refused at the door.
+      expect((await driverB.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, { ...fillBody, clientRequestId: `b-${unique}` })).status).toBe(403);
+
+      const day = todayAsCalendarDay();
+      const ledger = await boss.get(`/trip-vehicles/${fuelVehicle}/costs`, { params: { from: day, to: day } });
+      expect(ledger.data).toMatchObject({ total: 2, totalAmount: '1550000.00' });
+      // No trip line was written: the trip's total is still the toll alone.
+      expect((await boss.get(`/trip-schedules/${fuelTrip}/cost-summary`)).data.combined).toBe('120000.00');
+    });
+
+    it('★ Ca làm việc hôm nay — the lorry, its fuel answer and the turn, exact keys, no money', async () => {
+      const response = await driverA.get('/driver/workday');
+      expect(response.status).toBe(200);
+      expect(keysOf(response.data)).toEqual(['businessDate', 'vehicles']);
+      expect(response.data.businessDate).toBe(todayAsCalendarDay());
+      const lorry = response.data.vehicles.find((entry: { vehicle: { id: string } }) => entry.vehicle.id === fuelVehicle);
+      expect(keysOf(lorry)).toEqual(['fuel', 'fuelOnVehicle', 'turns', 'vehicle']);
+      expect(lorry).toMatchObject({ fuel: 'FUEL_ADDED', fuelOnVehicle: true });
+      expect(keysOf(lorry.vehicle)).toEqual(['id', 'plate']);
+      const [turn] = lorry.turns;
+      expect(keysOf(turn)).toEqual(sorted([...DRIVER_TRIP_KEYS, 'closed', 'progress']));
+      expect(turn).toMatchObject({ assignment: { id: fuelTurn }, closed: false, progress: { reached: 1, next: 'PICKUP_CONFIRMED' } });
+      expect(JSON.stringify(response.data)).not.toMatch(/1250000|300000|amount|sellPrice|purchasePrice/);
+      // Only the caller's own turns: driver B, on another trip of the same lorry, never sees A's turn.
+      const theirs = await driverB.get('/driver/workday');
+      const theirTurns = theirs.data.vehicles.flatMap((entry: { turns: Array<{ assignment: { id: string } }> }) => entry.turns);
+      expect(theirTurns.map((entry: { assignment: { id: string } }) => entry.assignment.id)).not.toContain(fuelTurn);
+    });
+
+    it('★ Điều hành xe — the SuperAdmin reads the money, and it reconciles to the đồng with "Chi phí xe"', async () => {
+      const day = todayAsCalendarDay();
+      const board = await boss.get('/fleet-operations', { params: { date: day } });
+      expect(board.status).toBe(200);
+      expect(keysOf(board.data)).toEqual(['businessDate', 'summary', 'vehicles', 'withMoney']);
+      expect(board.data).toMatchObject({ businessDate: day, withMoney: true });
+      expect(keysOf(board.data.summary)).toEqual(['fuelMissing', 'running', 'total', 'unassigned', 'waiting']);
+
+      const row = board.data.vehicles.find((entry: { vehicle: { id: string } }) => entry.vehicle.id === fuelVehicle);
+      expect(keysOf(row)).toEqual(['drivers', 'fuel', 'state', 'turns', 'vehicle']);
+      expect(keysOf(row.fuel)).toEqual(['check', 'fills', 'issues', 'obligation', 'totalAmount']);
+      expect(row).toMatchObject({
+        state: 'running',
+        fuel: { obligation: 'FUEL_ADDED', fills: 2, totalAmount: '1550000.00', issues: [], check: { outcome: 'fuel_added', amount: '1250000.00' } },
+      });
+      const ledger = await boss.get(`/trip-vehicles/${fuelVehicle}/costs`, { params: { from: day, to: day } });
+      expect(row.fuel.totalAmount).toBe(ledger.data.totalAmount);
+
+      // A driver is not a reader of the board at all.
+      expect((await driverA.get('/fleet-operations')).status).toBe(403);
+      expect((await boss.get('/fleet-operations', { params: { date: 'today' } })).status).toBe(422);
+    });
   });
   describe('★ open bookings — the driver asks, Dispatch assigns (0035)', () => {
     /** Exactly what a driver may see of a booking that is not theirs. */

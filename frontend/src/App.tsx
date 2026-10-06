@@ -50,6 +50,7 @@ const TripMasterDataPage = lazy(() => import('./pages/trip/TripMasterDataPage'))
 // open the map and by nobody else.
 const LocationCataloguePage = lazy(() => import('./pages/trip/LocationCataloguePage'))
 const CompletionReviewPage = lazy(() => import('./pages/trip/CompletionReviewPage'))
+const FleetOperationsPage = lazy(() => import('./pages/trip/FleetOperationsPage'))
 
 const NoAccessPage = lazy(() => import('./pages/system/NoAccessPage'))
 const PlaceholderPage = lazy(() => import('./pages/system/PlaceholderPage'))
@@ -154,6 +155,7 @@ function App() {
           <Route path="/dispatch/trip-schedule" element={<TripSchedulePage />} />
           {/* The same trips, once finished — a projection, not a second store. */}
           <Route path="/dispatch/trip-history" element={<TripHistoryPage />} />
+          <Route path="/dispatch/fleet-operations" element={<FleetOperationsPage />} />
           <Route path="/dispatch/master-data" element={<TripMasterDataPage />} />
           {/* Every place, shared and customer-owned. The customer's own door into
               the same table stays on the master data screen. */}

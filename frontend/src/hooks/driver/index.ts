@@ -11,7 +11,9 @@ import {
   fetchMyAssignment,
   fetchMyAssignments,
   fetchMyHistory,
+  fetchMyWorkday,
   recordExecutionEvent,
+  recordFuelFill,
   submitCompletion,
   type DeclareExpenseInput,
   type RecordEventInput,
@@ -21,7 +23,9 @@ import type {
   DriverHistoryCursor,
   DriverTrip,
   DriverTripDetail,
+  DriverWorkday,
   ExpenseDeclaration,
+  FuelFillInput,
 } from '@/types/driver';
 import type { TripCostCategory } from '@/types/tripCost';
 import { isFinalRefusal } from '@/utils/driverErrors';
@@ -51,6 +55,13 @@ export const driverKeys = {
   all: ['driver'] as const,
   assignments: () => [...driverKeys.all, 'assignments'] as const,
   assignment: (assignmentId: string) => [...driverKeys.assignments(), assignmentId] as const,
+  /**
+   * ★ UNDER `assignments()`, ON PURPOSE. Every write a driver makes moves the
+   * day — a milestone, a completion, a check — and every write already
+   * invalidates `assignments()`; nesting the day there keeps it current with no
+   * mutation having to remember it.
+   */
+  workday: () => [...driverKeys.assignments(), 'workday'] as const,
   /**
    * ★ NOT UNDER `assignments()`. Finishing a trip removes it from the live list
    * and adds it to this one, and every mutation invalidates `assignments()` —
@@ -100,6 +111,60 @@ export function useMyAssignments(): {
     error: asApiError(query.error),
     reload: () => void query.refetch(),
   };
+}
+
+/** "Ca làm việc hôm nay" — the session driver's lorries today, each with its turns. */
+export function useMyWorkday(): {
+  workday: DriverWorkday | null;
+  loading: boolean;
+  error: ApiError | null;
+  reload: () => void;
+} {
+  const query = useQuery({
+    queryKey: driverKeys.workday(),
+    queryFn: () => fetchMyWorkday(),
+    staleTime: 30_000,
+    // Offline fails as "no connection" rather than parking — see the list.
+    networkMode: 'always',
+    retry: (failureCount, error) => !isFinalRefusal(error) && failureCount < 2,
+  });
+
+  return {
+    workday: query.data ?? null,
+    loading: query.isLoading,
+    error: asApiError(query.error),
+    reload: () => void query.refetch(),
+  };
+}
+
+/**
+ * The day's two fuel writes, from the board: the beginning-of-shift check and a
+ * fill after it. ★ THE TURN IS NAMED AT THE CALL, not the hook — one day spans
+ * several lorries, and each card writes through its own turn.
+ */
+export function useWorkdayFuel() {
+  const client = useQueryClient();
+  const refresh = () => client.invalidateQueries({ queryKey: driverKeys.workday() });
+
+  const declareCheck = useMutation({
+    mutationFn: ({ assignmentId, input }: { assignmentId: string; input: DailyFuelDeclarationInput }) =>
+      declareDailyFuel(assignmentId, input),
+    onSuccess: () => {
+      notifySuccess('toastFuelDeclared');
+      return refresh();
+    },
+  });
+
+  const recordFill = useMutation({
+    mutationFn: ({ assignmentId, input }: { assignmentId: string; input: FuelFillInput }) =>
+      recordFuelFill(assignmentId, input),
+    onSuccess: () => {
+      notifySuccess('toastFuelFillRecorded');
+      return refresh();
+    },
+  });
+
+  return { declareCheck, recordFill };
 }
 
 /**

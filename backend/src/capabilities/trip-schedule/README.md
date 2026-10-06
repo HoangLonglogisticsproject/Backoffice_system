@@ -373,6 +373,25 @@ gọi `AssignmentRequestSupersession` trong cùng transaction: không còn reque
   lọt một request vào booking vừa được phân công.
 * Contract: `docs/backend/frontend-integration-contract.md` §28; làm rõ hợp đồng Driver Portal §4.1.
 
+## Điều hành xe và giao dịch nhiên liệu trong ngày (2026-10-06)
+
+Không migration. **Ba khái niệm, không trộn:** nghĩa vụ đầu ca (`vehicle_daily_fuel_checks`, suy ra
+`NOT_REQUIRED/REQUIRED_MISSING/FUEL_ADDED/NO_FUEL`), khoản dầu của khai báo (check → `vehicle_cost_id`),
+và sổ nhiên liệu trong ngày (`vehicle_costs`, 0..N/xe/ngày).
+
+* **"Việc của ngày D", nói một lần** — `turnWorksOn` (`persistence/fleet-operations.repository.ts`):
+  lượt active, có xe, chuyến chưa archive, và (xếp ngày D · hoặc D là hôm nay và chuyến cũ chưa xong ·
+  hoặc có mốc còn hiệu lực trong ngày D theo Asia/Ho_Chi_Minh). Dùng cho bảng Điều hành xe, ca của
+  tài xế, và quyền ghi giao dịch nhiên liệu.
+* **Giao dịch sau khai báo** — `VehicleFuelService.recordFill`: khoá trip → assignment → xe (FOR SHARE),
+  hỏi `worksToday` dưới khoá, ghi một dòng `vehicle_costs`. Không đụng check, không `trip_costs`.
+  Key: cùng key + cùng nội dung → cùng dòng; khác → 409 (`KEY_REUSED`); key của check → 409.
+* **Bảng đội xe** — `FleetOperationsRepository.days`: một câu; lượt (kèm mốc gộp qua LATERAL) gộp theo xe,
+  giao dịch gộp theo xe, check và khoản của nó nối bằng khoá chính. Tiền chỉ được SELECT khi có `cost.read`.
+* **Một luật "còn hiệu lực"** — `liveVehicleCost` dùng chung với "Chi phí xe", nên hai màn hình khớp tới đồng.
+* **Không AP, không P&L** — sổ chi phí xe không biết nhà cung cấp, hoá đơn hay thanh toán.
+* Contract: `docs/backend/frontend-integration-contract.md` §29.
+
 ## Những gì cố ý KHÔNG có
 
 **Khối CHI PHÍ.** Bảng tính có nhóm cột thứ hai (DẦU · CẦU TRẠM · PHÍ KHO · BỐC
@@ -412,4 +431,7 @@ application/dispatch-eligibility.ts  xe còn dùng · tài xế còn hoạt đ�
 domain/legacy-confirmed.ts           phân loại confirmed cũ: ELIGIBLE / CONFLICT_* / SKIPPED_ARCHIVED
 application/legacy-confirmed-normalization.ts  dry run + apply theo từng id đã duyệt
 cli/normalize-legacy-confirmed.cli.ts  CLI (mặc định dry run); scripts/legacy-confirmed-dry-run.sql cho production
+domain/fleet-operations.ts           trạng thái suy ra của xe/lượt, nghĩa vụ nhiên liệu, cờ dữ liệu
+persistence/fleet-operations.repository.ts  turnWorksOn · worksToday · bảng đội xe một câu
+application/fleet-operations.service.ts     GET /fleet-operations (trip.read; tiền với cost.read)
 ```

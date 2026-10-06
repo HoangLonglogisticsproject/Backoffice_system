@@ -326,7 +326,7 @@ export interface TripVehicle {
   note: string | null;
   status: CatalogueStatus;
   /**
-   * "Khai nhiên liệu đầu ngày": its driver declares its fuel once per business
+   * "Khai nhiên liệu đầu ca": its driver declares its fuel once per business
    * day, before the day's first milestone — never as a trip expense. A real
    * flag, never the note; off unless an administrator turns it on.
    */

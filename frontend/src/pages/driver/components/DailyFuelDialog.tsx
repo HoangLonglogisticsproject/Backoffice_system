@@ -6,6 +6,7 @@ import { Modal } from '@/components/ui/modal';
 import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
 import type { DailyFuelDeclarationInput, DailyFuelOutcome } from '@/types/driver';
+import type { TranslationKey } from '@/types/translate';
 import { cn } from '@/utils/cn';
 import { newRequestId } from '@/utils/driverDraft';
 import { driverErrorKey } from '@/utils/driverErrors';
@@ -17,9 +18,19 @@ const LITERS = /^\d{1,8}(\.\d{1,2})?$/;
 const ODOMETER = /^\d{1,10}$/;
 const litersOf = (text: string): string => text.trim().replace(',', '.');
 
+/** The words each mode is told in. A fill asks no question: it is always fuel added. */
+const COPY: Record<'check' | 'fill', { title: TranslationKey; intro: TranslationKey; submit: TranslationKey; start: DailyFuelOutcome | null }> = {
+  check: { title: 'driverFuelTitle', intro: 'driverFuelIntro', submit: 'driverFuelSubmit', start: null },
+  fill: { title: 'driverFillTitle', intro: 'driverFillIntro', submit: 'driverFillSubmit', start: 'fuel_added' },
+};
+
 /**
- * "Khai báo nhiên liệu đầu ngày" — opened when the server holds the day's first
- * milestone for the lorry's fuel check (`FUEL_DECLARATION_REQUIRED`).
+ * "Khai nhiên liệu đầu ca" — opened when the server holds the day's first
+ * milestone for the lorry's fuel check (`FUEL_DECLARATION_REQUIRED`), or from
+ * "Ca làm việc hôm nay".
+ *
+ * ★ `mode="fill"` IS "Ghi nhận đổ nhiên liệu": the same readings, no question —
+ * a fill after the check is always a fill, and the check's answer stays.
  *
  * ★ THE LORRY AND THE DAY ARE SHOWN, NEVER SENT. The server takes both from the
  * assignment and its own clock; the day here is the handset's reading of the
@@ -27,15 +38,17 @@ const litersOf = (text: string): string => text.trim().replace(',', '.');
  *
  * ★ ONE KEY PER OPENING. A retry after a dropped connection reuses it, so the
  * fill is written once; the parent mounts a fresh dialog each time it asks.
- * "No fuel today" sends no amount — there is no 0-đồng cost to invent.
+ * "Không đổ nhiên liệu đầu ca" sends no amount — there is no 0-đồng cost to invent.
  */
 export function DailyFuelDialog({
+  mode = 'check',
   plate,
   saving,
   onSubmit,
   onDeclared,
   onClose,
 }: Readonly<{
+  mode?: 'check' | 'fill';
   plate: string | null;
   saving: boolean;
   /** Rejects with the server's refusal; the dialog stays open and says why. */
@@ -46,7 +59,8 @@ export function DailyFuelDialog({
   const { t, language } = useLanguage();
   const id = useId();
   const [clientRequestId] = useState(newRequestId);
-  const [outcome, setOutcome] = useState<DailyFuelOutcome | null>(null);
+  const copy = COPY[mode];
+  const [outcome, setOutcome] = useState<DailyFuelOutcome | null>(copy.start);
   const [amount, setAmount] = useState('');
   const [liters, setLiters] = useState('');
   const [odometer, setOdometer] = useState('');
@@ -93,7 +107,7 @@ export function DailyFuelDialog({
     <Modal
       isOpen
       onClose={onClose}
-      title={t('driverFuelTitle')}
+      title={t(copy.title)}
       footer={
         <>
           <Button variant="ghost" size="lg" className="h-11" onClick={onClose} disabled={saving}>
@@ -101,13 +115,13 @@ export function DailyFuelDialog({
           </Button>
           <Button size="lg" className="h-11 flex-1" disabled={!ready || saving} onClick={() => void submit()}>
             {saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
-            {t('driverFuelSubmit')}
+            {t(copy.submit)}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">{t('driverFuelIntro')}</p>
+        <p className="text-sm text-muted-foreground">{t(copy.intro)}</p>
         <dl className="grid grid-cols-2 gap-3 rounded-lg bg-muted/50 p-3 text-sm">
           <div>
             <dt className="text-xs text-muted-foreground">{t('driverFuelVehicle')}</dt>
@@ -119,27 +133,29 @@ export function DailyFuelDialog({
           </div>
         </dl>
 
-        <fieldset className="space-y-2">
-          <legend className="mb-1.5 text-xs font-medium text-muted-foreground">{t('driverFuelOutcome')}</legend>
-          {(['fuel_added', 'no_fuel'] as const).map((option) => (
-            <label
-              key={option}
-              className={cn(
-                'flex h-12 cursor-pointer items-center gap-3 rounded-lg border px-3 text-sm font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
-                outcome === option ? 'border-primary bg-primary/5' : 'border-border',
-              )}
-            >
-              <input
-                type="radio"
-                name={`${id}-outcome`}
-                className="size-4 accent-primary"
-                checked={outcome === option}
-                onChange={() => setOutcome(option)}
-              />
-              {t(option === 'fuel_added' ? 'driverFuelAdded' : 'driverFuelNone')}
-            </label>
-          ))}
-        </fieldset>
+        {mode === 'check' ? (
+          <fieldset className="space-y-2">
+            <legend className="mb-1.5 text-xs font-medium text-muted-foreground">{t('driverFuelOutcome')}</legend>
+            {(['fuel_added', 'no_fuel'] as const).map((option) => (
+              <label
+                key={option}
+                className={cn(
+                  'flex h-12 cursor-pointer items-center gap-3 rounded-lg border px-3 text-sm font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
+                  outcome === option ? 'border-primary bg-primary/5' : 'border-border',
+                )}
+              >
+                <input
+                  type="radio"
+                  name={`${id}-outcome`}
+                  className="size-4 accent-primary"
+                  checked={outcome === option}
+                  onChange={() => setOutcome(option)}
+                />
+                {t(option === 'fuel_added' ? 'driverFuelAdded' : 'driverFuelNone')}
+              </label>
+            ))}
+          </fieldset>
+        ) : null}
 
         {outcome === 'fuel_added' ? (
           <div className="space-y-3">

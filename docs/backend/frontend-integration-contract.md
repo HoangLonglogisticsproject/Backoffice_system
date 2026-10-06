@@ -1412,12 +1412,16 @@ nằm ở `GET /driver/history`, mở chi tiết `closed: true` **và** `expense
 * Chuyến `finished` bình thường (duyệt hoàn tất / break-glass) vẫn **chỉ xem**:
   `expensesOpen: false`, khai → 409.
 
-## 26. Nhiên liệu đầu ngày theo xe (2026-10-04)
+## 26. Nhiên liệu đầu ca theo xe (2026-10-04)
 
 Nhiên liệu thuộc **xe**, không thuộc chuyến đầu tiên trong ngày (migration `0034`).
 
 * **Policy trên xe:** `TripVehicle.dailyFuelCheckRequired: boolean` ("Khai nhiên liệu
-  đầu ngày" trong Danh mục xe & khách). `POST /trip-vehicles` / `PATCH /trip-vehicles/:id`
+  đầu ca" trong Danh mục xe & khách).
+
+> **Từ ngữ (2026-10-06):** `no_fuel` hiển thị là **"Không đổ nhiên liệu đầu ca"** — không bao
+> giờ "Không đổ nhiên liệu hôm nay". Check là câu trả lời **đầu ca**; đổ thêm trong ngày là
+> giao dịch riêng (§29) và không làm câu trả lời đó sai. Enum DB giữ nguyên `no_fuel`. `POST /trip-vehicles` / `PATCH /trip-vehicles/:id`
   nhận `dailyFuelCheckRequired`; mặc định `false`. Xe `ownership = 'outsourced'` không bật
   được → 422 `details.dailyFuelCheckRequired = OUTSOURCED_VEHICLE`. Không đọc từ ghi chú.
 * **Gate ở mốc đầu tiên của lượt.** `POST /driver/assignments/:id/execution-events` khi lượt
@@ -1513,5 +1517,82 @@ active nào**. Danh sách tài xế chỉ hiện từ hôm nay (lịch Asia/Ho_C
   = mã lý do ở trên). Điều độ không có thông báo — badge trên Lịch xe.
 * **Khoá:** trip → request → xe/assignment → thông báo; cùng thứ tự với thực thi, nhiên liệu,
   hoàn tất — hai người duyệt, duyệt vs phân công trực tiếp, rút vs duyệt đều tuần tự trên dòng trip.
-* Sau khi duyệt, #97 (khai nhiên liệu đầu ngày ở mốc đầu tiên) và #98 (đủ bốn mốc mới gửi hoàn
+* Sau khi duyệt, #97 (khai nhiên liệu đầu ca ở mốc đầu tiên) và #98 (đủ bốn mốc mới gửi hoàn
   tất) chạy **không đổi**.
+
+## 29. Điều hành xe, giao dịch nhiên liệu trong ngày, ca làm việc của tài xế (2026-10-06)
+
+Không có migration. Ba khái niệm tách biệt, không trộn:
+
+| | Là gì | Ở đâu |
+|---|---|---|
+| **A. Nghĩa vụ đầu ca** | `NOT_REQUIRED` · `REQUIRED_MISSING` · `FUEL_ADDED` · `NO_FUEL` | `vehicle_daily_fuel_checks` (1/xe/ngày) — suy ra, không lưu trạng thái |
+| **B. Khoản dầu của khai báo** | khoản `vehicle_costs` mà check `fuel_added` trỏ tới | `check.vehicleCostId` |
+| **C. Sổ nhiên liệu trong ngày** | mọi dòng `vehicle_costs(category='fuel')` còn hiệu lực — 0..N/xe/ngày | sổ chi phí xe |
+
+**"Ngày"** = ngày Asia/Ho_Chi_Minh theo đồng hồ server. **Một lượt là việc của ngày D** khi lượt
+`active`, có xe, chuyến chưa archive, và: chuyến xếp ngày D; **hoặc** D là hôm nay và chuyến xếp
+trước đó nhưng chưa `finished` (chạy qua đêm, trễ); **hoặc** lượt có mốc còn hiệu lực mà
+`actual_at` rơi vào ngày D. Một luật duy nhất (`turnWorksOn`) cho bảng Điều hành xe, ca của tài xế,
+và quyền ghi giao dịch nhiên liệu. Lượt `ended` không bao giờ là việc (chỉ kết thúc được trước mốc
+đầu tiên, hoặc là chuyến nhập cũ — dầu của chuyến nhập cũ là chi phí chuyến).
+
+### 29.1 `POST /driver/assignments/:assignmentId/fuel-transactions` — "Ghi nhận đổ nhiên liệu"
+
+* Guard: Auth → CSRF → DriverOnly → `ActiveAssignmentGuard`. Duyệt hoàn tất **không** kết thúc
+  lượt, nên tài xế vừa chạy xong chuyến hôm nay vẫn ghi được (đổ dầu trên đường về).
+* Body: `{ amount, liters?, odometerKm?, note?, clientRequestId }` — `clientRequestId` **bắt buộc**.
+  Không có xe, ngày, chuyến, nguồn: server lấy xe từ assignment, ngày từ đồng hồ, nguồn
+  `driver_portal`, provenance là chính assignment; gửi kèm bị bỏ.
+* Ghi **một dòng** `vehicle_costs` (category `fuel`). Không tạo `trip_costs`, không tạo check thứ
+  hai, **không đổi check hôm nay** (kể cả `no_fuel`), không kích hoạt lại gate #97.
+* **201** `{ id, businessDate, amount, liters, odometerKm, note, createdAt }` — chỉ dòng của chính
+  tài xế, không tổng ngày, không dòng của người khác.
+* **422 `details.fuelTransaction = NOT_OPERATED_TODAY`** — lượt không phải việc của tài xế hôm nay
+  (chuyến ngày mai, chuyến đã xong hôm qua không có mốc hôm nay, mốc đã huỷ không tính).
+* **409** — lượt không còn active, xe không có policy khai nhiên liệu trên xe, hoặc key bị dùng lại.
+* **Idempotency** (key duy nhất theo xe): cùng key + cùng nội dung (số so theo giá trị: `700000` =
+  `700000.00`) → **cùng dòng**, kể cả retry qua nửa đêm; cùng key + nội dung khác / lượt khác /
+  tài xế khác / key của một check → **409**; key khác → dòng mới (đổ bao nhiêu lần cũng được).
+* 403 cho lượt của người khác / không tồn tại / ended — cùng một câu trả lời.
+
+### 29.2 `GET /driver/workday` — "Ca làm việc hôm nay"
+
+* Guard: Auth → DriverOnly → `ProvisionedAccountGuard`. Không tham số — phạm vi là session.
+* `{ businessDate, vehicles: [{ vehicle: { id, plate }, fuel: FuelObligation, fuelOnVehicle,
+  turns: [DriverTrip + { closed, progress: { reached: 0..4, next: ExecutionEventType | null } }] }] }`
+  — nhóm theo xe (một tài xế có thể chạy nhiều xe), xe theo biển số, lượt theo lịch.
+* Nhiên liệu chỉ là **câu trả lời** (A); không số tiền nào (không join sổ chi phí).
+* UI: "Tiếp tục chuyến" mở đúng luồng chuyến hiện có; "Khai nhiên liệu đầu ca" khi check còn nợ và
+  còn lượt mở; "Ghi nhận đổ nhiên liệu" khi đã khai (hoặc không còn lượt mở để khai qua).
+
+### 29.3 `GET /fleet-operations?date=YYYY-MM-DD` — "Điều hành xe"
+
+* Guard: Auth → BackofficeOnly → `PermissionGuard` + **`trip.read`** (cùng người đọc Lịch xe).
+* `{ businessDate, withMoney, summary: { total, running, waiting, unassigned, fuelMissing },
+  vehicles: [FleetVehicleDay] }`; một dòng mỗi xe (xe đang dùng, cộng xe đã lưu trữ nếu ngày đó có
+  chạy / có dầu / có check). `date` mặc định hôm nay; ngày không hợp lệ → 422.
+* `FleetVehicleDay = { vehicle, state: running|waiting|done|unassigned, drivers, turns, fuel: {
+  obligation, check: { outcome, declaredBy, declaredAt, vehicleCostId, amount } | null, fills,
+  totalAmount, issues } }`. Trạng thái **suy ra**, không lưu: lượt `running` = có 1–3 mốc trên
+  chuyến chưa xong; `waiting` = chưa mốc nào; `done` = chuyến xong hoặc đủ 4 mốc.
+* **Tiền theo quyền, quyết định trong SELECT:** không có `cost.read` → `check.amount` và
+  `fuel.totalAmount` là `null` (không được đọc). `fills` (số giao dịch) và `issues` không phải tiền.
+  Điều độ / Kinh doanh / CSKH / Kế toán **không** được cấp thêm `cost.read`.
+* **`issues`** (chỉ cờ xác định được): `FUEL_UNDECLARED` (Chưa khai), `LITERS_MISSING` (Thiếu số
+  lít), `ODOMETER_MISSING` (Thiếu công-tơ-mét).
+* **Đối soát:** `fuel.totalAmount` của một xe một ngày **bằng đúng** `totalAmount` của
+  `GET /trip-vehicles/:id/costs?from=D&to=D` — cùng dòng, cùng luật "còn hiệu lực"
+  (`liveVehicleCost`).
+* **Hiệu năng:** một câu SQL cho cả đội xe; mỗi quan hệ một-nhiều (lượt, mốc, giao dịch) được gộp
+  riêng rồi nối 1–1 theo xe — không nhân dòng, không `DISTINCT` chữa cháy.
+* UI chi tiết xe: tab Tổng quan · Lịch chạy · Nhiên liệu (KHAI NHIÊN LIỆU ĐẦU CA tách khỏi GIAO
+  DỊCH NHIÊN LIỆU TRONG NGÀY; giao dịch đọc qua `GET /trip-vehicles/:id/costs` của chính ngày đó, chỉ
+  với `cost.read`) · Chi phí (sổ chi phí xe hiện có, `cost.read`).
+
+### 29.4 Ranh giới
+
+* **Không có công nợ phải trả (AP).** Sổ chi phí xe ghi *đã đổ bao nhiêu*, không ghi *nợ ai, trả khi
+  nào*: không nhà cung cấp, không hoá đơn, không trạng thái thanh toán. Khi cần AP, đó là một
+  capability riêng đọc sổ này, không phải cột thêm vào đây.
+* **Không P&L.** Dầu theo xe vẫn không vào tổng chuyến (§26).

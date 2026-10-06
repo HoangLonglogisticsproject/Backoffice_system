@@ -1223,6 +1223,13 @@ thích theo ngữ cảnh · chấm điểm rủi ro · tương quan nhiều ngu�
 
 ## 13. Operations & Accounting
 
+> ✅ **[LÀM RÕ 2026-10-06 — Điều hành xe]** Operations **đọc** trạng thái xe trong ngày
+> ("Điều hành xe", `trip.read` — cùng người đọc Lịch xe) và câu trả lời nhiên liệu đầu ca. Số tiền
+> nhiên liệu vẫn chỉ hiện với `cost.read`; không quyền nào dưới đây được cấp thêm. Tài xế ghi được
+> **giao dịch nhiên liệu trong ngày** cho xe mình thực sự chạy hôm nay — một dòng sổ chi phí *xe*,
+> không phải chi phí chuyến, và không đổi câu trả lời "Không đổ nhiên liệu đầu ca"
+> (`docs/backend/frontend-integration-contract.md` §29).
+
 ### Operations / Điều độ
 
 **[CONFIRMED]** Operations phân công Driver vào Trip.
