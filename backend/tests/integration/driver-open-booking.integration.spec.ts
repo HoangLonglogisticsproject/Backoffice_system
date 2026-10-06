@@ -217,6 +217,38 @@ describeIntegration('Driver open bookings — real PostgreSQL', () => {
       await expect(asks.request(trip, driverA)).rejects.toMatchObject(NOT_OPEN);
     });
 
+    /**
+     * ★ "EXECUTING WITH NOBODY ON IT" IS A REAL STATE, so openness asks for
+     * `pending`, not "not finished". Two ways it arises today, both here:
+     * the canonical services (a turn's only milestone withdrawn, the turn then
+     * ended — withdrawal moves the trip back to nothing), and a row the retired
+     * `PATCH /trip-schedules/:id/status` set by hand before 2026-10-02.
+     */
+    it('★ an executing trip with zero active turns is never an open booking — however it got there', async () => {
+      // Through the services: started, its milestone withdrawn, its turn ended.
+      const started = await newTrip();
+      const turn = await execution.assign(started, { vehicleId: await newVehicle(), driverUserId: driverB }, operator);
+      const arrival = await report(turn.id, 'ARRIVED_PICKUP', driverB);
+      await execution.voidEvent(started, arrival.id, { by: operator, reason: 'Báo nhầm chuyến.' });
+      await execution.endAssignment(started, turn.id, { by: operator, reason: 'Đổi kế hoạch.' });
+      // As the retired status route could leave it: executing, nobody ever on it.
+      const legacy = await newTrip();
+      await sql(`UPDATE trip_schedules SET status = 'executing' WHERE id = $1`, [legacy]);
+
+      for (const trip of [started, legacy]) {
+        const [row] = await sql<{ status: string; active: number }>(
+          `SELECT status, (SELECT count(*)::int FROM trip_driver_assignments a WHERE a.trip_id = t.id AND a.state = 'active') AS active
+             FROM trip_schedules t WHERE t.id = $1`,
+          [trip],
+        );
+        expect(row).toEqual({ status: 'executing', active: 0 });
+        await expect(asks.request(trip, driverA)).rejects.toMatchObject(NOT_OPEN);
+      }
+      expect(await openFor(driverA)).toEqual([]);
+      expect(await statesOn(started)).toEqual([]);
+      expect(await statesOn(legacy)).toEqual([]);
+    });
+
     it('a booking whose day has passed is not offered', async () => {
       const trip = await newTrip();
       await sql(`UPDATE trip_schedules SET scheduled_on = $2 WHERE id = $1`, [trip, day(-1)]);
