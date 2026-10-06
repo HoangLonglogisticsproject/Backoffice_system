@@ -9,6 +9,7 @@
     "dev": "nest start --watch",
     "start:prod": "node dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "test": "jest",
     "test:watch": "jest --watch",
     "check": "bash scripts/check-boundaries.sh",
