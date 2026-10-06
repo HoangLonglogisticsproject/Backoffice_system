@@ -11,6 +11,7 @@ import type { TranslationKey } from '@/types/translate';
 import { AssignmentCard, AssignmentCardSkeleton } from './components/AssignmentCard';
 import { DriverLoadError } from './components/DriverLoadError';
 import { MyRequestsSection, OpenBookingsSection } from './components/OpenBookingSections';
+import { WorkdayPanel } from './components/WorkdayPanel';
 
 /**
  * The driver's work schedule — "which trips do I drive today?"
@@ -24,6 +25,9 @@ import { MyRequestsSection, OpenBookingsSection } from './components/OpenBooking
  * ★ THE VIEW IS IN THE URL (`?view=upcoming`), so going back from a trip lands
  * on the tab the driver left, and today — the common case — is the bare
  * `/driver`.
+ *
+ * ★ "CA LÀM VIỆC HÔM NAY" LEADS: the lorries of the day, their fuel answer,
+ * the trip in hand with "Tiếp tục chuyến", and the next one (`WorkdayPanel`).
  *
  * ★ THREE SECTIONS, AND ONLY THE FIRST IS THE DRIVER'S WORK (0035). "Chuyến
  * của tôi" is their assignments, split by day as before; "Booking đang mở" and
@@ -75,6 +79,8 @@ export default function DriverTripsPage() {
         <h1 className="text-xl font-semibold">{t('driverSchedule')}</h1>
         <p className="text-sm text-muted-foreground">{formatCalendarWeekday(today, language)}</p>
       </header>
+
+      <WorkdayPanel />
 
       <Tabs value={section} onValueChange={open}>
         <TabsList aria-label={t('driverSchedule')} className="h-auto min-h-12 w-full p-0.5">

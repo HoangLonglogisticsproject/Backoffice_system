@@ -1820,7 +1820,7 @@ describe('★ the day’s first milestone, held for the lorry’s daily fuel che
     new ApiError(422, 'VALIDATION_FAILED', 'This lorry needs its daily fuel check.', {
       dailyFuelCheck: 'FUEL_DECLARATION_REQUIRED',
     });
-  const fuelDialog = () => screen.findByRole('dialog', { name: 'Khai báo nhiên liệu đầu ngày' });
+  const fuelDialog = () => screen.findByRole('dialog', { name: 'Khai nhiên liệu đầu ca' });
   const arrive = async () => fireEvent.click(await screen.findByRole('button', { name: 'Tôi đã đến điểm lấy hàng' }));
 
   it('asks for the declaration — the lorry and the day read-only — instead of showing an error', async () => {
@@ -1840,7 +1840,7 @@ describe('★ the day’s first milestone, held for the lorry’s daily fuel che
     await arrive();
     const dialog = await fuelDialog();
 
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu hôm nay' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu đầu ca' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' }));
 
     await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalledTimes(2));
@@ -1899,7 +1899,7 @@ describe('★ the day’s first milestone, held for the lorry’s daily fuel che
     await arrive();
     const dialog = await fuelDialog();
 
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu hôm nay' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu đầu ca' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' }));
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(/không có kết nối/i);
@@ -1913,7 +1913,7 @@ describe('★ the day’s first milestone, held for the lorry’s daily fuel che
     await arrive();
     const dialog = await fuelDialog();
 
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu hôm nay' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Không đổ nhiên liệu đầu ca' }));
     const save = within(dialog).getByRole('button', { name: 'Lưu và tiếp tục' });
     fireEvent.click(save);
     await within(dialog).findByRole('alert');

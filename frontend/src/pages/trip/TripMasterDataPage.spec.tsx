@@ -624,12 +624,12 @@ describe('TripMasterDataPage', () => {
     });
   });
 
-  describe('★ "Khai nhiên liệu đầu ngày" — a real flag on the lorry, never the note', () => {
+  describe('★ "Khai nhiên liệu đầu ca" — a real flag on the lorry, never the note', () => {
     it('shows each lorry’s policy in the list', async () => {
       fetchTripVehicles.mockResolvedValue([vehicle({ dailyFuelCheckRequired: true })]);
       renderPage();
 
-      expect(await screen.findByRole('columnheader', { name: 'Khai nhiên liệu đầu ngày' })).toBeTruthy();
+      expect(await screen.findByRole('columnheader', { name: 'Khai nhiên liệu đầu ca' })).toBeTruthy();
       expect(await screen.findByRole('cell', { name: 'Bắt buộc' })).toBeTruthy();
     });
 
@@ -726,7 +726,7 @@ describe('TripMasterDataPage', () => {
 
       const open = await screen.findByRole('button', { name: 'Xem chi tiết 51D-65233' });
       expect(screen.queryByRole('table')).toBeNull();
-      expect(open.closest('li')).toHaveTextContent('Khai nhiên liệu đầu ngày: Bắt buộc');
+      expect(open.closest('li')).toHaveTextContent('Khai nhiên liệu đầu ca: Bắt buộc');
 
       fireEvent.click(open);
       expect(await screen.findByRole('tab', { name: 'Tổng quan' })).toBeInTheDocument();

@@ -55,6 +55,8 @@ const validationKey = (details: Readonly<Record<string, string>> | undefined): T
   if (details?.['execution'] === 'EXECUTION_INCOMPLETE') return 'driverErrExecutionIncomplete';
   // An ask on a booking somebody else got, or that closed (0035).
   if (details?.['booking'] === 'BOOKING_NOT_OPEN') return 'driverErrBookingNotOpen';
+  // A fill on a lorry that is not the driver's work today.
+  if (details?.['fuelTransaction'] === 'NOT_OPERATED_TODAY') return 'driverErrNotOperatedToday';
   const rejection = details?.['location'];
   return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
 };

@@ -488,21 +488,23 @@ const PHRASES = {
     en: 'Report every pickup and delivery step before you submit the trip for completion.',
   },
   driverErrFuelOnVehicle: {
-    vi: 'Dầu của xe này được khai mỗi ngày ở bước khai nhiên liệu đầu ngày, không khai vào chi phí chuyến.',
-    en: 'This lorry’s fuel is declared once a day in the daily fuel check, not as a trip expense.',
+    vi: 'Nhiên liệu của xe này khai trên xe — khai đầu ca hoặc "Ghi nhận đổ nhiên liệu" — không khai vào chi phí chuyến.',
+    en: 'This lorry’s fuel is recorded on the lorry — at the start of the shift or as "Record a fill" — not as a trip expense.',
   },
 
-  // The lorry's daily fuel check — asked before the day's first milestone.
-  driverFuelTitle: { vi: 'Khai báo nhiên liệu đầu ngày', en: 'Daily fuel check' },
+  // The lorry's beginning-of-shift fuel check — asked before the day's first
+  // milestone. ★ "ĐẦU CA", NEVER "HÔM NAY": a fill later the same day is
+  // recorded on its own ("Ghi nhận đổ nhiên liệu") and leaves this answer true.
+  driverFuelTitle: { vi: 'Khai nhiên liệu đầu ca', en: 'Start-of-shift fuel check' },
   driverFuelIntro: {
-    vi: 'Xe này cần khai nhiên liệu một lần mỗi ngày trước chuyến đầu tiên.',
-    en: 'This lorry needs its fuel declared once a day, before its first run.',
+    vi: 'Xe này cần khai nhiên liệu một lần mỗi ngày, đầu ca, trước chuyến đầu tiên.',
+    en: 'This lorry needs its fuel declared once a day, at the start of the shift, before its first run.',
   },
   driverFuelVehicle: { vi: 'Xe', en: 'Lorry' },
   driverFuelDay: { vi: 'Ngày', en: 'Day' },
-  driverFuelOutcome: { vi: 'Hôm nay xe có đổ nhiên liệu không?', en: 'Was the lorry fuelled today?' },
+  driverFuelOutcome: { vi: 'Đầu ca, xe có đổ nhiên liệu không?', en: 'Was the lorry fuelled at the start of the shift?' },
   driverFuelAdded: { vi: 'Có đổ nhiên liệu', en: 'Fuel added' },
-  driverFuelNone: { vi: 'Không đổ nhiên liệu hôm nay', en: 'No fuel today' },
+  driverFuelNone: { vi: 'Không đổ nhiên liệu đầu ca', en: 'No fuel at the start of the shift' },
   driverFuelAmount: { vi: 'Số tiền *', en: 'Amount *' },
   driverFuelLiters: { vi: 'Số lít (không bắt buộc)', en: 'Liters (optional)' },
   driverFuelOdometer: { vi: 'Số km trên đồng hồ (không bắt buộc)', en: 'Odometer, km (optional)' },
@@ -510,6 +512,34 @@ const PHRASES = {
   driverFuelLitersInvalid: { vi: 'Số lít phải lớn hơn 0, tối đa 2 chữ số thập phân.', en: 'Liters must be above 0, with at most 2 decimals.' },
   driverFuelOdometerInvalid: { vi: 'Số km phải là số nguyên.', en: 'The odometer must be a whole number.' },
   driverFuelSubmit: { vi: 'Lưu và tiếp tục', en: 'Save and continue' },
+  // A fill after the check — one more row of the lorry's ledger, never a change to the check.
+  driverFillTitle: { vi: 'Ghi nhận đổ nhiên liệu', en: 'Record a fill' },
+  driverFillIntro: {
+    vi: 'Ghi lại một lần đổ nhiên liệu trong ngày. Phần khai nhiên liệu đầu ca giữ nguyên.',
+    en: 'Records one fill during the day. The start-of-shift answer stays as it is.',
+  },
+  driverFillSubmit: { vi: 'Lưu', en: 'Save' },
+
+  // "Ca làm việc hôm nay" — the top of the schedule.
+  driverWorkdayTitle: { vi: 'Ca làm việc hôm nay', en: 'Today’s shift' },
+  driverWorkdayEmpty: { vi: 'Hôm nay bạn chưa có chuyến nào.', en: 'You have no trips today.' },
+  driverWorkdayFuel: { vi: 'Nhiên liệu đầu ca', en: 'Start-of-shift fuel' },
+  driverWorkdayCurrent: { vi: 'Chuyến hiện tại', en: 'Current trip' },
+  driverWorkdayNext: { vi: 'Chuyến tiếp theo', en: 'Next trip' },
+  driverWorkdayContinue: { vi: 'Tiếp tục chuyến', en: 'Continue trip' },
+  driverWorkdayAllDone: { vi: 'Đã chạy xong các chuyến hôm nay của xe này.', en: 'Every trip of this lorry today is done.' },
+  driverWorkdayDeclare: { vi: 'Khai nhiên liệu đầu ca', en: 'Declare start-of-shift fuel' },
+  driverWorkdayRecordFill: { vi: 'Ghi nhận đổ nhiên liệu', en: 'Record a fill' },
+  driverProgressNotStarted: { vi: 'Chưa bắt đầu', en: 'Not started' },
+  driverErrNotOperatedToday: {
+    vi: 'Xe này không thuộc ca làm việc hôm nay của bạn.',
+    en: 'This lorry is not part of your shift today.',
+  },
+  // The four answers of the beginning-of-shift check, as the driver and the office read them.
+  fuelObligationNotRequired: { vi: 'Không yêu cầu', en: 'Not required' },
+  fuelObligationMissing: { vi: 'Chưa khai', en: 'Not declared' },
+  fuelObligationAdded: { vi: 'Đã khai · Có đổ nhiên liệu', en: 'Declared · Fuel added' },
+  fuelObligationNone: { vi: 'Đã khai · Không đổ nhiên liệu đầu ca', en: 'Declared · No fuel at the start of the shift' },
 
   driverCompletion: { vi: 'Hoàn tất chuyến', en: 'Completing the trip' },
   driverSubmitCompletion: { vi: 'Gửi hoàn tất chuyến', en: 'Submit for completion' },
@@ -1096,6 +1126,7 @@ const PHRASES = {
   },
   tripMasterData: { vi: 'Danh mục xe & khách', en: 'Vehicles & customers' },
 
+
   // Actions shared by both dispatch screens.
   save: { vi: 'Lưu', en: 'Save' },
   saving: { vi: 'Đang lưu…', en: 'Saving…' },
@@ -1555,15 +1586,15 @@ const PHRASES = {
   customerNamePlaceholder: { vi: 'Nhập tên khách hàng', en: 'Enter the customer name' },
   noteOptional: { vi: 'Ghi chú (không bắt buộc)', en: 'Note (optional)' },
   // A lorry's daily fuel policy — a real flag on the vehicle, never the note.
-  fuelPolicyLabel: { vi: 'Khai nhiên liệu đầu ngày', en: 'Daily fuel check' },
+  fuelPolicyLabel: { vi: 'Khai nhiên liệu đầu ca', en: 'Start-of-shift fuel check' },
   fuelPolicyRequired: { vi: 'Bắt buộc', en: 'Required' },
   fuelPolicyNotApplicable: { vi: 'Không áp dụng', en: 'Not applicable' },
   fuelPolicyHint: {
-    vi: 'Bắt buộc: tài xế khai nhiên liệu một lần mỗi ngày trước chuyến đầu tiên của xe.',
+    vi: 'Bắt buộc: tài xế khai nhiên liệu đầu ca, một lần mỗi ngày, trước chuyến đầu tiên của xe.',
     en: 'Required: the driver declares the lorry’s fuel once a day, before its first run.',
   },
   fuelPolicyOutsourced: {
-    vi: 'Xe thuê ngoài đã gồm nhiên liệu trong giá thuê, không áp dụng khai nhiên liệu đầu ngày.',
+    vi: 'Xe thuê ngoài đã gồm nhiên liệu trong giá thuê, không áp dụng khai nhiên liệu đầu ca.',
     en: 'A hired lorry’s fuel is inside the carrier’s price, so it has no daily fuel check.',
   },
   showArchived: { vi: 'Hiện cả mục đã lưu trữ', en: 'Show archived' },
@@ -1723,6 +1754,7 @@ const PHRASES = {
   toastRequestRejected: { vi: 'Đã từ chối yêu cầu', en: 'Request declined' },
   toastExpenseDeclared: { vi: 'Đã khai chi phí', en: 'Expense declared' },
   toastFuelDeclared: { vi: 'Đã khai nhiên liệu', en: 'Fuel declared' },
+  toastFuelFillRecorded: { vi: 'Đã ghi nhận đổ nhiên liệu', en: 'Fill recorded' },
   toastExpenseCorrected: { vi: 'Đã sửa khoản chi phí', en: 'Expense corrected' },
   toastCompletionSubmitted: {
     vi: 'Đã gửi hoàn tất — chờ văn phòng duyệt',
