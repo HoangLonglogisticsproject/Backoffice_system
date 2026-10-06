@@ -6,6 +6,7 @@ import { Modal } from '@/components/ui/modal';
 import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
 import type { DailyFuelDeclarationInput, DailyFuelOutcome } from '@/types/driver';
+import type { TranslationKey } from '@/types/translate';
 import { cn } from '@/utils/cn';
 import { newRequestId } from '@/utils/driverDraft';
 import { driverErrorKey } from '@/utils/driverErrors';
@@ -16,6 +17,12 @@ import { formatCalendarWeekday, todayAsCalendarDay } from '@/utils/format/dateti
 const LITERS = /^\d{1,8}(\.\d{1,2})?$/;
 const ODOMETER = /^\d{1,10}$/;
 const litersOf = (text: string): string => text.trim().replace(',', '.');
+
+/** The words each mode is told in. A fill asks no question: it is always fuel added. */
+const COPY: Record<'check' | 'fill', { title: TranslationKey; intro: TranslationKey; submit: TranslationKey; start: DailyFuelOutcome | null }> = {
+  check: { title: 'driverFuelTitle', intro: 'driverFuelIntro', submit: 'driverFuelSubmit', start: null },
+  fill: { title: 'driverFillTitle', intro: 'driverFillIntro', submit: 'driverFillSubmit', start: 'fuel_added' },
+};
 
 /**
  * "Khai nhiên liệu đầu ca" — opened when the server holds the day's first
@@ -52,7 +59,8 @@ export function DailyFuelDialog({
   const { t, language } = useLanguage();
   const id = useId();
   const [clientRequestId] = useState(newRequestId);
-  const [outcome, setOutcome] = useState<DailyFuelOutcome | null>(mode === 'fill' ? 'fuel_added' : null);
+  const copy = COPY[mode];
+  const [outcome, setOutcome] = useState<DailyFuelOutcome | null>(copy.start);
   const [amount, setAmount] = useState('');
   const [liters, setLiters] = useState('');
   const [odometer, setOdometer] = useState('');
@@ -99,7 +107,7 @@ export function DailyFuelDialog({
     <Modal
       isOpen
       onClose={onClose}
-      title={t(mode === 'fill' ? 'driverFillTitle' : 'driverFuelTitle')}
+      title={t(copy.title)}
       footer={
         <>
           <Button variant="ghost" size="lg" className="h-11" onClick={onClose} disabled={saving}>
@@ -107,13 +115,13 @@ export function DailyFuelDialog({
           </Button>
           <Button size="lg" className="h-11 flex-1" disabled={!ready || saving} onClick={() => void submit()}>
             {saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
-            {t(mode === 'fill' ? 'driverFillSubmit' : 'driverFuelSubmit')}
+            {t(copy.submit)}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">{t(mode === 'fill' ? 'driverFillIntro' : 'driverFuelIntro')}</p>
+        <p className="text-sm text-muted-foreground">{t(copy.intro)}</p>
         <dl className="grid grid-cols-2 gap-3 rounded-lg bg-muted/50 p-3 text-sm">
           <div>
             <dt className="text-xs text-muted-foreground">{t('driverFuelVehicle')}</dt>

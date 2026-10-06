@@ -171,7 +171,7 @@ export async function declareExpense(
  * parameter — the session is the scope, as for the assignment list.
  */
 export async function fetchMyWorkday(): Promise<DriverWorkday> {
-  const { data } = await httpClient.get<DriverWorkday>('/driver/workday');
+  const { data } = await httpClient.get<DriverWorkday>('/driver/workday', { timeout: READ_TIMEOUT_MS });
   return data;
 }
 

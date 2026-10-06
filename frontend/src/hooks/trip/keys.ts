@@ -86,8 +86,13 @@ export const tripKeys = {
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,
 
-  /** "Điều hành xe" for one business day. */
-  fleet: (day: string) => [...tripKeys.all, 'fleet', day] as const,
+  /**
+   * "Điều hành xe" for one business day. ★ `withMoney` partitions the cache as
+   * `costs` does for the board: a day read with `cost.read` carries amounts, and
+   * is never the entry served once that permission is gone.
+   */
+  fleets: () => [...tripKeys.all, 'fleet'] as const,
+  fleet: (day: string, withMoney: boolean) => [...tripKeys.fleets(), { day, withMoney }] as const,
 
   /**
    * One trip's dispatch history — every turn, active and ended. Its own root
@@ -122,6 +127,12 @@ export const tripKeys = {
  * lists fetched with `cost.read` are exactly the `scheduleList` keys whose
  * filter says `costs: true`.
  */
+export const holdsFleetMoney = (queryKey: readonly unknown[]): boolean => {
+  const [root, list, filter] = queryKey;
+  if (root !== tripKeys.all[0] || list !== 'fleet') return false;
+  return typeof filter === 'object' && filter !== null && 'withMoney' in filter && filter.withMoney === true;
+};
+
 export const holdsTripCosts = (queryKey: readonly unknown[]): boolean => {
   const [root, list, filter] = queryKey;
   if (root !== tripKeys.all[0] || list !== 'schedules') return false;

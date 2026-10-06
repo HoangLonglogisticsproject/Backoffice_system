@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Search } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { StatusPill } from '@/components/common/StatusPill';
@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { fetchFleetBoard } from '@/api/fleetOperations';
-import { tripKeys } from '@/hooks/trip/keys';
+import { holdsFleetMoney, tripKeys } from '@/hooks/trip/keys';
 import { useBusinessToday } from '@/hooks/useBusinessToday';
 import type { FuelObligation } from '@/types/driver';
 import type { FleetVehicleDay, FleetVehicleState } from '@/types/fleet';
@@ -64,9 +64,11 @@ export default function FleetOperationsPage() {
   const [day, setDay] = useState(today);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [openId, setOpenId] = useState<string | null>(null);
+  const withMoney = can('cost.read');
+  const queryClient = useQueryClient();
 
   const board = useQuery({
-    queryKey: tripKeys.fleet(day),
+    queryKey: tripKeys.fleet(day, withMoney),
     queryFn: () => fetchFleetBoard(day),
     enabled: day !== '',
     // The board moves as drivers tap; a minute old is still "now" for a dispatcher.
@@ -79,6 +81,14 @@ export default function FleetOperationsPage() {
     return [...all.values()].sort((a, b) => a.displayName.localeCompare(b.displayName, 'vi'));
   }, [data]);
   const open = data?.vehicles.find((row) => row.vehicle.id === openId) ?? null;
+
+  // ★ THE MONEY DOES NOT OUTLIVE THE PERMISSION — as `useTripCost`: days read
+  // with amounts, and the lorries' ledgers, are dropped, not refetched.
+  useEffect(() => {
+    if (withMoney) return;
+    queryClient.removeQueries({ queryKey: tripKeys.fleets(), predicate: (query) => holdsFleetMoney(query.queryKey) });
+    queryClient.removeQueries({ queryKey: [...tripKeys.all, 'money'] });
+  }, [withMoney, queryClient]);
 
   if (!can('trip.read')) return null;
 
@@ -204,7 +214,7 @@ export default function FleetOperationsPage() {
       ) : null}
 
       {open && data ? (
-        <FleetVehicleModal day={data} row={open} canReadCosts={can('cost.read')} onClose={() => setOpenId(null)} />
+        <FleetVehicleModal day={data} row={open} canReadCosts={withMoney} onClose={() => setOpenId(null)} />
       ) : null}
     </div>
   );

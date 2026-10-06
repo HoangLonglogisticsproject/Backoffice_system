@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { holdsFleetMoney } from '@/hooks/trip/keys';
 import type { FleetBoard, FleetTurn, FleetVehicleDay } from '@/types/fleet';
 import FleetOperationsPage from './FleetOperationsPage';
 
@@ -82,16 +83,17 @@ const board = (withMoney: boolean): FleetBoard => {
   };
 };
 
-const renderPage = () =>
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <LanguageProvider>
-        <MemoryRouter>
-          <FleetOperationsPage />
-        </MemoryRouter>
-      </LanguageProvider>
-    </QueryClientProvider>,
-  );
+const page = (client: QueryClient) => (
+  <QueryClientProvider client={client}>
+    <LanguageProvider>
+      <MemoryRouter>
+        <FleetOperationsPage />
+      </MemoryRouter>
+    </LanguageProvider>
+  </QueryClientProvider>
+);
+const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const renderPage = () => render(page(newClient()));
 
 const rowOf = async (plate: RegExp) => {
   const table = await screen.findByRole('table', { name: /Điều hành xe/ });
@@ -197,6 +199,23 @@ describe('★ Điều hành xe', () => {
     const fills = await within(dialog).findByRole('region', { name: 'Giao dịch nhiên liệu trong ngày' });
     expect(fills).toHaveTextContent('2 giao dịch');
     await waitFor(() => expect(fetchVehicleCosts).not.toHaveBeenCalled());
+  });
+
+  it('★ drops every day read with money once cost.read is gone — never served again', async () => {
+    const client = newClient();
+    const moneyCached = () =>
+      client.getQueryCache().findAll({ queryKey: ['trip', 'fleet'] }).some((query) => holdsFleetMoney(query.queryKey));
+    useSession.mockReturnValue(session(['trip.read', 'cost.read']));
+    fetchFleetBoard.mockImplementation(async () => board(useSession().can('cost.read')));
+    const view = render(page(client));
+    expect(await rowOf(/51H/)).toHaveTextContent(/950[.,]000/);
+    expect(moneyCached()).toBe(true);
+
+    useSession.mockReturnValue(session(['trip.read']));
+    view.rerender(page(client));
+
+    await waitFor(() => expect(moneyCached()).toBe(false));
+    await waitFor(async () => expect(await rowOf(/51H/)).not.toHaveTextContent(/950[.,]000/));
   });
 
   it('lists the lorry\'s runs of the day with progress in words', async () => {
