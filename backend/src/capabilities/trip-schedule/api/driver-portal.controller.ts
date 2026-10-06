@@ -17,6 +17,7 @@ import type {
   DriverHistoryPage,
   DriverTrip,
   DriverTripDetail,
+  DriverWorkday,
 } from '../domain/driver-read-model';
 import type { TripCost } from '../domain/trip-cost';
 import {
@@ -31,6 +32,7 @@ import {
   isRecordableLiters,
   type DailyFuelDeclaration,
   type DriverDailyFuelCheck,
+  type DriverFuelTransaction,
 } from '../domain/vehicle-fuel';
 import { ActiveAssignmentGuard } from './active-assignment.guard';
 import { ExpenseAssignmentGuard } from './expense-assignment.guard';
@@ -152,22 +154,30 @@ const declareExpenseSchema = z.object({
  */
 const clientRequestId = z.string().trim().min(1).max(200);
 
+const fill = {
+  amount,
+  liters: z
+    .string()
+    .trim()
+    .refine(isRecordableLiters, 'Expected a positive number of liters, e.g. "45.50".')
+    .nullable()
+    .optional(),
+  odometerKm: z.number().int().min(0).max(2_147_483_647).nullable().optional(),
+  note,
+  clientRequestId,
+};
+
 const declareFuelCheckSchema = z.discriminatedUnion('outcome', [
-  z.object({
-    outcome: z.literal('fuel_added'),
-    amount,
-    liters: z
-      .string()
-      .trim()
-      .refine(isRecordableLiters, 'Expected a positive number of liters, e.g. "45.50".')
-      .nullable()
-      .optional(),
-    odometerKm: z.number().int().min(0).max(2_147_483_647).nullable().optional(),
-    note,
-    clientRequestId,
-  }),
+  z.object({ outcome: z.literal('fuel_added'), ...fill }),
   z.object({ outcome: z.literal('no_fuel'), clientRequestId }),
 ]);
+
+/**
+ * A fill after the day's check (`recordFuelFill`). The same readings as a
+ * "Có đổ nhiên liệu" check and the same rule: no lorry, no day, no trip — the
+ * server's. The key is required: a double tap must not become two fills.
+ */
+const recordFuelFillSchema = z.object(fill);
 
 /**
  * The patch.
@@ -225,6 +235,7 @@ type DeclareExpenseBody = z.infer<typeof declareExpenseSchema>;
 type EditExpenseBody = z.infer<typeof editExpenseSchema>;
 type SubmitCompletionBody = z.infer<typeof submitCompletionSchema>;
 type DeclareFuelCheckBody = z.infer<typeof declareFuelCheckSchema>;
+type RecordFuelFillBody = z.infer<typeof recordFuelFillSchema>;
 
 /** The body's declaration, with the optional readings made explicit. */
 const declarationOf = (body: DeclareFuelCheckBody): DailyFuelDeclaration =>
@@ -287,6 +298,17 @@ export class DriverPortalController {
    * resume; the query filters on the session's driver id regardless, so a
    * forged cursor moves somebody's own window and nothing else.
    */
+  /**
+   * "Ca làm việc hôm nay" — the driver's lorries today, their fuel answer and
+   * their turns. Scoped by the session like the list above: no parameter, so
+   * nothing a caller sends can widen it.
+   */
+  @Get('workday')
+  @UseGuards(AuthGuard, DriverOnlyGuard, ProvisionedAccountGuard)
+  async myWorkday(@CurrentUser() actor: SessionUser): Promise<DriverWorkday> {
+    return this.portal.workday(actor.id);
+  }
+
   @Get('history')
   @UseGuards(AuthGuard, DriverOnlyGuard, ProvisionedAccountGuard)
   async listMyHistory(
@@ -392,7 +414,7 @@ export class DriverPortalController {
   // ------------------------------------------------------------ fuel check ----
 
   /**
-   * Answers the lorry's daily fuel check — "Khai báo nhiên liệu đầu ngày".
+   * Answers the lorry's daily fuel check — "Khai nhiên liệu đầu ca".
    *
    * ★ `ActiveAssignmentGuard`: only a live turn starts, so only a live turn
    * owes the check. A turn recorded after the run never starts and never asks.
@@ -413,6 +435,37 @@ export class DriverPortalController {
       declaredBy: actor.id,
     });
     return forDriver(check);
+  }
+
+  /**
+   * Records a fill after the day's check — "Ghi nhận đổ nhiên liệu" — on the
+   * turn's lorry, as one more row of its ledger (`VehicleFuelService.recordFill`).
+   *
+   * ★ `ActiveAssignmentGuard` DOES NOT REFUSE THE DRIVER WHO FINISHED TODAY:
+   * approval never ends a turn, so the turn of a closed trip is still active
+   * and still theirs. What it refuses is an ended turn — ended before its first
+   * milestone, or a run recorded after the fact — which never ran on a day
+   * this route can fill. Whether the turn is the driver's work TODAY is the
+   * service's question, asked under the trip lock.
+   */
+  @Post('assignments/:assignmentId/fuel-transactions')
+  @UseGuards(AuthGuard, CsrfGuard, DriverOnlyGuard, ActiveAssignmentGuard)
+  async recordFuelFill(
+    @Param('assignmentId', UuidParam) assignmentId: string,
+    @Body(new ZodValidationPipe(recordFuelFillSchema)) body: RecordFuelFillBody,
+    @CurrentUser() actor: SessionUser,
+  ): Promise<DriverFuelTransaction> {
+    return this.fuel.recordFill({
+      assignmentId,
+      fill: {
+        amount: body.amount,
+        liters: body.liters ?? null,
+        odometerKm: body.odometerKm ?? null,
+        note: body.note || null,
+      },
+      clientRequestId: body.clientRequestId,
+      recordedBy: actor.id,
+    });
   }
 
   // ------------------------------------------------------------ completion ----

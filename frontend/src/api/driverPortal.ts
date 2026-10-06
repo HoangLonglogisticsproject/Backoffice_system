@@ -3,6 +3,9 @@ import type {
   CompletionRequest,
   DailyFuelCheck,
   DailyFuelDeclarationInput,
+  DriverFuelTransaction,
+  DriverWorkday,
+  FuelFillInput,
   DriverHistoryCursor,
   DriverHistoryPage,
   DriverTrip,
@@ -163,6 +166,27 @@ export async function declareExpense(
   input: DeclareExpenseInput,
 ): Promise<TripCost> {
   const { data } = await httpClient.post<TripCost>(`${assignmentPath(assignmentId)}/expenses`, input);
+  return data;
+}
+
+/**
+ * "Ca làm việc hôm nay": the caller's lorries today and their turns. No
+ * parameter — the session is the scope, as for the assignment list.
+ */
+export async function fetchMyWorkday(): Promise<DriverWorkday> {
+  const { data } = await httpClient.get<DriverWorkday>('/driver/workday', { timeout: READ_TIMEOUT_MS });
+  return data;
+}
+
+/**
+ * Records a fill after the day's check, on the turn's lorry. The day's check is
+ * not touched: "Không đổ nhiên liệu đầu ca" then a fill at noon are both true.
+ */
+export async function recordFuelFill(assignmentId: string, input: FuelFillInput): Promise<DriverFuelTransaction> {
+  const { data } = await httpClient.post<DriverFuelTransaction>(
+    `${assignmentPath(assignmentId)}/fuel-transactions`,
+    input,
+  );
   return data;
 }
 

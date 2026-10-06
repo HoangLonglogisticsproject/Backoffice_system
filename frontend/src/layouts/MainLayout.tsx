@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ClipboardList,
   FileText,
+  Gauge,
   History,
   Inbox,
   LayoutDashboard,
@@ -231,6 +232,11 @@ export default function MainLayout() {
                 to="/dispatch/trip-schedule"
                 icon={Truck}
                 label={t('tripSchedule')}
+              />
+              <NavItem
+                to="/dispatch/fleet-operations"
+                icon={Gauge}
+                label={t('fleetOperations')}
               />
               <NavItem
                 to="/dispatch/trip-history"

@@ -5,9 +5,11 @@ import type {
   DriverHistoryQuery,
   DriverTrip,
   DriverTripDetail,
+  DriverWorkday,
 } from '../domain/driver-read-model';
+import { fuelObligationOf, progressOf } from '../domain/fleet-operations';
 import { accountabilityOf, driverExpensesOpen } from '../domain/trip-execution';
-import { fuelDeclaredOnVehicle } from '../domain/vehicle-fuel';
+import { dailyFuelDate, fuelDeclaredOnVehicle } from '../domain/vehicle-fuel';
 import { DriverTripReadModelRepository } from '../persistence/driver-read-model.repository';
 import { TripCostRepository } from '../persistence/trip-cost.repository';
 import {
@@ -43,6 +45,29 @@ export class DriverPortalService {
   /** The assignments this driver holds right now — one per lorry. */
   async listMyAssignments(driverUserId: string): Promise<DriverTrip[]> {
     return this.trips.listForDriver(driverUserId);
+  }
+
+  /** "Ca làm việc hôm nay": the driver's lorries today, in plate order, each with its turns. */
+  async workday(driverUserId: string, serverNow = new Date()): Promise<DriverWorkday> {
+    const businessDate = dailyFuelDate(serverNow);
+    const vehicles = new Map<string, DriverWorkday['vehicles'][number]>();
+    for (const row of await this.trips.listWorkday(driverUserId, businessDate)) {
+      const { closed, reached, dailyFuelCheckRequired, checkOutcome, ...trip } = row;
+      // Cannot be null: a turn is work only with a lorry (`turnWorksOn`).
+      if (!trip.vehicle) continue;
+      let lorry = vehicles.get(trip.vehicle.id);
+      if (!lorry) {
+        lorry = {
+          vehicle: trip.vehicle,
+          fuel: fuelObligationOf({ dailyFuelCheckRequired, checkOutcome, hasWork: true }),
+          fuelOnVehicle: dailyFuelCheckRequired,
+          turns: [],
+        };
+        vehicles.set(trip.vehicle.id, lorry);
+      }
+      lorry.turns.push({ ...trip, closed, progress: progressOf(reached) });
+    }
+    return { businessDate, vehicles: [...vehicles.values()] };
   }
 
   /**

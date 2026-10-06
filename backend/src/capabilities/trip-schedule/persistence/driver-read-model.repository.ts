@@ -1,10 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { DriverTrip } from '../domain/driver-read-model';
-import { driverExpenseScope, type DriverExpenseScope } from '../domain/trip-execution';
+import { driverExpenseScope, type DriverExpenseScope, type ExecutionEventType } from '../domain/trip-execution';
 import type { TripStatus } from '../domain/trip-schedule';
 import { HISTORICAL_ENTRY_REASON } from '../domain/trip-status-history';
 import type { Coordinates } from '../domain/trip-location';
+import type { DailyFuelOutcome } from '../domain/vehicle-fuel';
+import { REACHED_MILESTONES, turnWorksOn } from './fleet-operations.repository';
 import { LIFECYCLE_PREDICATE } from './trip-schedule.repository';
 
 /**
@@ -302,5 +304,58 @@ export class DriverTripReadModelRepository {
       // trip expense here (0034). Like the scope, a decision input — not sent.
       dailyFuelCheckRequired: row.daily_fuel_check_required,
     };
+  }
+
+  /**
+   * ★ THE DRIVER'S DAY — "Ca làm việc hôm nay": their turns that are work
+   * today (`turnWorksOn`, the same rule that lets them record a fill), each
+   * with the milestones it has reached and its lorry's fuel answer for today.
+   *
+   * The fuel answer is the OUTCOME only (0034's check row, never its fill):
+   * no ledger table is joined, so no amount exists here. One statement; the
+   * milestones are folded per turn, the check is a primary-key join.
+   */
+  async listWorkday(
+    driverUserId: string,
+    today: string,
+  ): Promise<
+    Array<
+      DriverTrip & {
+        closed: boolean;
+        reached: ExecutionEventType[];
+        dailyFuelCheckRequired: boolean;
+        checkOutcome: DailyFuelOutcome | null;
+      }
+    >
+  > {
+    const rows = await this.db.query<
+      DriverTripRow & {
+        closed: boolean;
+        reached: ExecutionEventType[];
+        daily_fuel_check_required: boolean;
+        check_outcome: DailyFuelOutcome | null;
+      }
+    >(
+      `SELECT ${DRIVER_TRIP_COLUMNS},
+              t.status = 'finished' AS closed,
+              COALESCE(r.reached, '{}') AS reached,
+              v.daily_fuel_check_required,
+              chk.outcome AS check_outcome
+       ${FROM_ASSIGNMENT}
+       ${REACHED_MILESTONES}
+         LEFT JOIN vehicle_daily_fuel_checks chk
+                ON chk.vehicle_id = a.vehicle_id AND chk.business_date = $2::date
+        WHERE a.driver_user_id = $1
+          AND ${turnWorksOn('$2', '$2')}
+        ORDER BY v.plate_key, v.id, t.scheduled_on, t.pickup_at NULLS LAST, a.assigned_at, a.id`,
+      [driverUserId, today],
+    );
+    return rows.map((row) => ({
+      ...toDriverTrip(row),
+      closed: row.closed,
+      reached: row.reached,
+      dailyFuelCheckRequired: row.daily_fuel_check_required,
+      checkOutcome: row.check_outcome,
+    }));
   }
 }

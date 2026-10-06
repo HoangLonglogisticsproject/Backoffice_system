@@ -55,7 +55,7 @@ const plate = z.string().trim().min(1).max(50);
 const customerName = z.string().trim().min(1).max(200);
 const note = z.string().trim().max(2000).nullable();
 
-/** "Khai nhiên liệu đầu ngày": a real boolean, never the note (0034). */
+/** "Khai nhiên liệu đầu ca": a real boolean, never the note (0034). */
 const dailyFuelCheckRequired = z.boolean();
 
 const createVehicleSchema = z.object({

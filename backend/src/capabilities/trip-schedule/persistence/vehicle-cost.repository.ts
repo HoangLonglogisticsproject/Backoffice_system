@@ -1,7 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { ConflictError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { TripCostSource } from '../domain/trip-execution';
-import type { VehicleCost, VehicleCostCategory } from '../domain/vehicle-fuel';
+import type { VehicleCost, VehicleCostCategory, VehicleFuelFill } from '../domain/vehicle-fuel';
+import { KEY_REUSED } from './vehicle-fuel-check.repository';
 
 /**
  * A lorry's cost ledger, as SQL (0034).
@@ -12,6 +14,19 @@ import type { VehicleCost, VehicleCostCategory } from '../domain/vehicle-fuel';
  * ★ `::text` ON EVERY DECIMAL, as `trip-cost.repository.ts` does and for its
  * reason: no `setTypeParser` anywhere in the process can turn them into floats.
  */
+
+/**
+ * ★ WHICH ROWS OF THE LEDGER COUNT, SAID ONCE: the ones never voided. The
+ * lorry's "Chi phí xe" and the fleet board both sum through this, so the two
+ * cannot disagree about a day's fuel.
+ */
+export const liveVehicleCost = (alias: string): string => `${alias}.voided_at IS NULL`;
+
+/** A key the ledger already holds — a different write reusing it, refused as itself. */
+const isKeyCollision = (error: unknown): boolean => {
+  const failure = error as { code?: unknown; constraint?: unknown } | null;
+  return failure?.code === '23505' && failure.constraint === 'uq_vehicle_cost_client_request';
+};
 
 interface VehicleCostRow {
   id: string;
@@ -70,8 +85,13 @@ export class VehicleCostRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * Writes one fill. The id is the caller's: a daily check names it before
-   * this row exists, which is why that foreign key is deferred (0034).
+   * Writes one fill and returns when it was written. The id is the caller's: a
+   * daily check names it before this row exists, which is why that foreign key
+   * is deferred (0034).
+   *
+   * ★ A KEY ALREADY ON THE LORRY'S LEDGER IS A 409, NEVER A RAW UNIQUE
+   * VIOLATION — a fill under a declaration's key, or the reverse, is a caller
+   * reusing an id for a different write.
    */
   async insert(
     input: {
@@ -90,28 +110,81 @@ export class VehicleCostRepository {
       createdBy: string;
     },
     executor: DatabaseQuery,
-  ): Promise<void> {
-    await executor.query(
-      `INSERT INTO vehicle_costs
-         (id, vehicle_id, business_date, category, amount, liters, odometer_km, note,
-          source, source_trip_id, source_assignment_id, client_request_id, created_by)
-       VALUES ($1, $2, $3::date, $4, $5::numeric, $6::numeric, $7, $8, $9, $10, $11, $12, $13)`,
-      [
-        input.id,
-        input.vehicleId,
-        input.businessDate,
-        input.category,
-        input.amount,
-        input.liters,
-        input.odometerKm,
-        input.note,
-        input.source,
-        input.sourceTripId,
-        input.sourceAssignmentId,
-        input.clientRequestId,
-        input.createdBy,
-      ],
+  ): Promise<Date> {
+    try {
+      const rows = await executor.query<{ created_at: Date }>(
+        `INSERT INTO vehicle_costs
+           (id, vehicle_id, business_date, category, amount, liters, odometer_km, note,
+            source, source_trip_id, source_assignment_id, client_request_id, created_by)
+         VALUES ($1, $2, $3::date, $4, $5::numeric, $6::numeric, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING created_at`,
+        [
+          input.id,
+          input.vehicleId,
+          input.businessDate,
+          input.category,
+          input.amount,
+          input.liters,
+          input.odometerKm,
+          input.note,
+          input.source,
+          input.sourceTripId,
+          input.sourceAssignmentId,
+          input.clientRequestId,
+          input.createdBy,
+        ],
+      );
+      if (!rows[0]) throw new Error('An inserted vehicle cost returned no row.');
+      return rows[0].created_at;
+    } catch (error) {
+      if (isKeyCollision(error)) throw new ConflictError(KEY_REUSED);
+      throw error;
+    }
+  }
+
+  /**
+   * The fill a retried request already wrote under this key, if any — on any
+   * day — with what is needed to tell the retry from a reuse of the key.
+   */
+  async findByClientRequest(
+    vehicleId: string,
+    clientRequestId: string,
+    executor: DatabaseQuery = this.db,
+  ): Promise<
+    | (VehicleFuelFill & { id: string; businessDate: string; sourceAssignmentId: string | null; createdBy: string; createdAt: Date })
+    | null
+  > {
+    const rows = await executor.query<{
+      id: string;
+      business_date: string;
+      amount: string;
+      liters: string | null;
+      odometer_km: number | null;
+      note: string | null;
+      source_assignment_id: string | null;
+      created_by: string;
+      created_at: Date;
+    }>(
+      `SELECT id, business_date::text AS business_date, amount::text AS amount, liters::text AS liters,
+              odometer_km, note, source_assignment_id, created_by, created_at
+         FROM vehicle_costs
+        WHERE vehicle_id = $1 AND client_request_id = $2`,
+      [vehicleId, clientRequestId],
     );
+    const row = rows[0];
+    return row
+      ? {
+          id: row.id,
+          businessDate: row.business_date,
+          amount: row.amount,
+          liters: row.liters,
+          odometerKm: row.odometer_km,
+          note: row.note,
+          sourceAssignmentId: row.source_assignment_id,
+          createdBy: row.created_by,
+          createdAt: row.created_at,
+        }
+      : null;
   }
 
   /**
@@ -142,7 +215,7 @@ export class VehicleCostRepository {
            LEFT JOIN trip_customers sc ON sc.id = st.customer_id
           WHERE c.vehicle_id = $1
             AND c.business_date BETWEEN $2::date AND $3::date
-            AND c.voided_at IS NULL
+            AND ${liveVehicleCost('c')}
             AND ($4::text IS NULL OR c.category = $4)
        ), totals AS (
          SELECT COUNT(*)::int AS row_count,
