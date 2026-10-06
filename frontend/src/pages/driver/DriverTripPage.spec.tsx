@@ -1431,29 +1431,17 @@ describe('the expense panel tells the driver where they stand', () => {
 });
 
 /**
- * ★ CONFIRMING A PICKUP ASKS THE PHONE, SENDS THE READING, AND LETS THE
- * SERVER DECIDE. Every case below pins one side of that: what the screen sends
- * (a reading, never a verdict), what it does when the phone cannot answer
- * (nothing — no request), and how it words each refusal the server can give.
+ * ★ A MILESTONE IS A BUTTON, AND THE SCREEN ASKS THE PHONE FOR NOTHING.
+ *
+ * The GPS check these cases used to pin is off — on the server
+ * (`GEOFENCED_MILESTONES`) and here. Contract §11 keeps GPS [FUTURE], so what
+ * is pinned now is the opposite of what was pinned before: the phone is never
+ * asked, no `location` is sent, and no state of the trip's coordinates can make
+ * the button unpressable. `driverLocation.spec.ts` still covers the capture
+ * helper itself, kept whole for the day the check returns.
  */
-describe('★ confirming a pickup with the phone’s location', () => {
-  const FIX = {
-    coords: { latitude: 10.8188, longitude: 106.6564, accuracy: 12 },
-    timestamp: new Date('2026-08-30T02:30:55.000Z').getTime(),
-  };
-
+describe('★ confirming a pickup is the tap alone', () => {
   const geolocation = { getCurrentPosition: vi.fn() };
-
-  const phoneSays = (position: typeof FIX) =>
-    geolocation.getCurrentPosition.mockImplementation((ok: PositionCallback) =>
-      ok(position as unknown as GeolocationPosition),
-    );
-
-  const phoneFails = (code: number) =>
-    geolocation.getCurrentPosition.mockImplementation(
-      (_ok: PositionCallback, fail?: PositionErrorCallback) =>
-        fail?.({ code } as GeolocationPositionError),
-    );
 
   const arrived = () => fetchMyAssignment.mockResolvedValue(trip({ events: [event('ARRIVED_PICKUP')] }));
 
@@ -1461,7 +1449,14 @@ describe('★ confirming a pickup with the phone’s location', () => {
     fireEvent.click(await screen.findByRole('button', { name: /đã lấy hàng xong/i }));
 
   beforeEach(() => {
-    geolocation.getCurrentPosition.mockReset();
+    // Present and answering, so a screen that asked would succeed — which is
+    // what makes "never called" below mean something.
+    geolocation.getCurrentPosition.mockReset().mockImplementation((ok: PositionCallback) =>
+      ok({
+        coords: { latitude: 10.8188, longitude: 106.6564, accuracy: 12 },
+        timestamp: new Date('2026-08-30T02:30:55.000Z').getTime(),
+      } as unknown as GeolocationPosition),
+    );
     Object.defineProperty(globalThis.navigator, 'geolocation', {
       value: geolocation,
       configurable: true,
@@ -1469,16 +1464,8 @@ describe('★ confirming a pickup with the phone’s location', () => {
     recordExecutionEvent.mockResolvedValue(event('PICKUP_CONFIRMED'));
   });
 
-  it('says the check is coming before the tap', async () => {
+  it('★ sends the milestone with no position, and never asks the phone for one', async () => {
     arrived();
-    renderDetail();
-
-    expect(await screen.findByText(/dùng vị trí GPS/i)).toBeInTheDocument();
-  });
-
-  it('★ sends the reading as the phone gave it — and no verdict of its own', async () => {
-    arrived();
-    phoneSays(FIX);
     renderDetail();
 
     await confirm();
@@ -1487,173 +1474,53 @@ describe('★ confirming a pickup with the phone’s location', () => {
     const [assignmentId, body] = recordExecutionEvent.mock.calls[0] as [string, Record<string, unknown>];
     expect(assignmentId).toBe('a1');
     expect(body.type).toBe('PICKUP_CONFIRMED');
-    expect(body.location).toEqual({
-      latitude: 10.8188,
-      longitude: 106.6564,
-      accuracyM: 12,
-      capturedAt: '2026-08-30T02:30:55.000Z',
-    });
-    // The browser is a sensor. It does not say whether it is inside.
+    expect(body).not.toHaveProperty('location');
     expect(body).not.toHaveProperty('geofencePassed');
     expect(body).not.toHaveProperty('distanceM');
+    // The server still stamps the business time; the handset's clock is diagnostic.
     expect(body).not.toHaveProperty('actualAt');
-    expect(Object.keys(body.location as object)).not.toContain('isInside');
+    expect(body.deviceReportedAt).toEqual(expect.any(String));
+    expect(geolocation.getCurrentPosition).not.toHaveBeenCalled();
   });
 
-  it('★ asks for a FRESH fix, never a cached one', async () => {
+  it('★ says nothing about GPS above the button', async () => {
     arrived();
-    phoneSays(FIX);
     renderDetail();
 
-    await confirm();
-    await waitFor(() => expect(geolocation.getCurrentPosition).toHaveBeenCalled());
-
-    const [, , options] = geolocation.getCurrentPosition.mock.calls[0] as [
-      unknown,
-      unknown,
-      PositionOptions,
-    ];
-    expect(options.maximumAge).toBe(0);
-    expect(options.enableHighAccuracy).toBe(true);
+    expect(await screen.findByRole('button', { name: /đã lấy hàng xong/i })).toBeEnabled();
+    expect(screen.queryByText(/dùng vị trí GPS/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/chưa có toạ độ/i)).not.toBeInTheDocument();
   });
 
-  it('shows that it is locating while the phone thinks', async () => {
-    arrived();
-    // Never answers: the button stays in its locating state.
-    geolocation.getCurrentPosition.mockImplementation(() => undefined);
+  it('★ confirms even when the pickup point has no coordinates — the office’s backlog is not the driver’s', async () => {
+    // GAP-14 (the warehouses nobody has located yet) used to disable this
+    // button. Nothing measures against those coordinates now.
+    fetchMyAssignment.mockResolvedValue(
+      trip({ events: [event('ARRIVED_PICKUP')], pickupLocation: null }),
+    );
     renderDetail();
 
-    await confirm();
+    const button = await screen.findByRole('button', { name: /đã lấy hàng xong/i });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
 
-    expect(await screen.findByRole('button', { name: /đang xác định vị trí/i })).toBeDisabled();
-    expect(recordExecutionEvent).not.toHaveBeenCalled();
+    await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalled());
+    expect(screen.queryByText(/chưa có toạ độ/i)).not.toBeInTheDocument();
   });
 
-  it('★ makes NO request when permission is denied, and says what to enable', async () => {
-    arrived();
-    phoneFails(1);
-    renderDetail();
-
-    await confirm();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/bật quyền vị trí/i);
-    expect(recordExecutionEvent).not.toHaveBeenCalled();
-    // The button is back, so the driver can retry once they have.
-    expect(screen.getByRole('button', { name: /đã lấy hàng xong/i })).toBeEnabled();
-  });
-
-  it('names a phone that cannot get a fix', async () => {
-    arrived();
-    phoneFails(2);
-    renderDetail();
-
-    await confirm();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/không lấy được vị trí/i);
-    expect(recordExecutionEvent).not.toHaveBeenCalled();
-  });
-
-  it('names a fix that took too long', async () => {
-    arrived();
-    phoneFails(3);
-    renderDetail();
-
-    await confirm();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/quá lâu/i);
-  });
-
-  it('names a browser with no geolocation at all', async () => {
+  it('★ works on a browser with no geolocation at all', async () => {
     arrived();
     Object.defineProperty(globalThis.navigator, 'geolocation', { value: undefined, configurable: true });
     renderDetail();
 
     await confirm();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/không hỗ trợ định vị/i);
-    expect(recordExecutionEvent).not.toHaveBeenCalled();
-  });
-
-  it('★ words "outside the geofence" as where to go, with no distance and no radius', async () => {
-    arrived();
-    phoneSays(FIX);
-    recordExecutionEvent.mockRejectedValue(
-      new ApiError(422, 'VALIDATION_FAILED', 'That position is not at the pickup point.', {
-        location: 'OUTSIDE_GEOFENCE',
-      }),
-    );
-    renderDetail();
-
-    await confirm();
-
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/chưa ở đúng điểm/i);
-    expect(alert.textContent).not.toMatch(/\d+\s*m\b|mét|radius|bán kính/i);
-  });
-
-  it('tells the driver to move to open sky on a poor reading', async () => {
-    arrived();
-    phoneSays(FIX);
-    recordExecutionEvent.mockRejectedValue(
-      new ApiError(422, 'VALIDATION_FAILED', 'Not sure enough.', { location: 'ACCURACY_INSUFFICIENT' }),
-    );
-    renderDetail();
-
-    await confirm();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/chưa đủ chính xác/i);
-  });
-
-  it('tells the driver to retry on a stale fix', async () => {
-    arrived();
-    phoneSays(FIX);
-    recordExecutionEvent.mockRejectedValue(
-      new ApiError(422, 'VALIDATION_FAILED', 'Too old.', { location: 'LOCATION_STALE' }),
-    );
-    renderDetail();
-
-    await confirm();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/vị trí đã cũ/i);
-  });
-
-  it('★ says it is the office’s problem when the pickup point has no coordinates, and offers no tap', async () => {
-    fetchMyAssignment.mockResolvedValue(
-      trip({ events: [event('ARRIVED_PICKUP')], pickupLocation: null }),
-    );
-    phoneSays(FIX);
-    renderDetail();
-
-    // Said before any tap…
-    expect(await screen.findByText(/chưa có toạ độ/i)).toBeInTheDocument();
-
-    // …and the button cannot be tapped: the server refuses this without
-    // exception, so asking the phone and sending a request would only teach
-    // the driver to retry something that cannot succeed.
-    const button = screen.getByRole('button', { name: /đã lấy hàng xong/i });
-    expect(button).toBeDisabled();
-    fireEvent.click(button);
-
-    expect(geolocation.getCurrentPosition).not.toHaveBeenCalled();
-    expect(recordExecutionEvent).not.toHaveBeenCalled();
-  });
-
-  it('words the server’s "no coordinates" refusal the same way — the office cleared them after the screen loaded', async () => {
-    arrived();
-    phoneSays(FIX);
-    recordExecutionEvent.mockRejectedValue(
-      new ApiError(422, 'VALIDATION_FAILED', 'No coordinates.', { location: 'DESTINATION_MISSING' }),
-    );
-    renderDetail();
-
-    await confirm();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/liên hệ điều độ/i);
+    await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalled());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('keeps a plain validation failure worded generically', async () => {
     arrived();
-    phoneSays(FIX);
     recordExecutionEvent.mockRejectedValue(
       new ApiError(422, 'VALIDATION_FAILED', 'Request failed validation.', { clientEventId: 'x' }),
     );
@@ -1666,7 +1533,6 @@ describe('★ confirming a pickup with the phone’s location', () => {
 
   it('falls back to the generic message on a server fault, with no internals', async () => {
     arrived();
-    phoneSays(FIX);
     recordExecutionEvent.mockRejectedValue(new ApiError(500, undefined, 'boom'));
     renderDetail();
 
@@ -1677,8 +1543,7 @@ describe('★ confirming a pickup with the phone’s location', () => {
     expect(alert.textContent).not.toMatch(/boom/);
   });
 
-  it('does not ask the phone for an ARRIVAL — only the confirmation is geofenced', async () => {
-    phoneSays(FIX);
+  it('does not ask the phone for an ARRIVAL either', async () => {
     renderDetail();
 
     fireEvent.click(await screen.findByRole('button', { name: /đã đến điểm lấy hàng/i }));
@@ -1691,62 +1556,40 @@ describe('★ confirming a pickup with the phone’s location', () => {
 });
 
 /**
- * ★ THE DELIVERY IS CONFIRMED THE SAME WAY THE PICKUP IS: the phone is asked,
- * the reading is sent, the server measures it against the DELIVERY point.
+ * ★ AND THE DELIVERY ENDS THE SAME WAY — kept as its own suite because the
+ * delivery is the end that would be measured against the DELIVERY point if the
+ * check ever returns, and confirming it against the pickup's point was a real
+ * bug once.
  */
-describe('★ confirming a delivery with the phone’s location', () => {
-  const FIX = {
-    coords: { latitude: 10.7769, longitude: 106.7009, accuracy: 9 },
-    timestamp: new Date('2026-08-30T09:30:55.000Z').getTime(),
-  };
+describe('★ confirming a delivery is the tap alone', () => {
   const geolocation = { getCurrentPosition: vi.fn() };
 
   const atDelivery = () =>
     fetchMyAssignment.mockResolvedValue(
       trip({
         events: [event('ARRIVED_PICKUP'), event('PICKUP_CONFIRMED'), event('ARRIVED_DELIVERY')],
-        deliveryLocation: { latitude: 10.7769, longitude: 106.7009 },
+        deliveryLocation: null,
       }),
     );
 
   beforeEach(() => {
-    geolocation.getCurrentPosition.mockReset().mockImplementation((ok: PositionCallback) =>
-      ok(FIX as unknown as GeolocationPosition),
-    );
+    geolocation.getCurrentPosition.mockReset();
     Object.defineProperty(globalThis.navigator, 'geolocation', { value: geolocation, configurable: true });
     recordExecutionEvent.mockResolvedValue(event('DELIVERY_CONFIRMED'));
   });
 
-  it('★ asks the phone and sends the reading with DELIVERY_CONFIRMED', async () => {
+  it('★ sends DELIVERY_CONFIRMED with no position, even with no delivery coordinates', async () => {
     atDelivery();
     renderDetail();
 
-    expect(await screen.findByText(/dùng vị trí GPS/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /đã giao hàng xong/i }));
+    const button = await screen.findByRole('button', { name: /đã giao hàng xong/i });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
     await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalled());
 
     const [, body] = recordExecutionEvent.mock.calls[0] as [string, Record<string, unknown>];
     expect(body.type).toBe('DELIVERY_CONFIRMED');
-    expect(body.location).toEqual({
-      latitude: 10.7769,
-      longitude: 106.7009,
-      accuracyM: 9,
-      capturedAt: '2026-08-30T09:30:55.000Z',
-    });
-    expect(body).not.toHaveProperty('geofencePassed');
-  });
-
-  it('★ offers no tap while the delivery point has no coordinates', async () => {
-    fetchMyAssignment.mockResolvedValue(
-      trip({
-        events: [event('ARRIVED_PICKUP'), event('PICKUP_CONFIRMED'), event('ARRIVED_DELIVERY')],
-        deliveryLocation: null,
-      }),
-    );
-    renderDetail();
-
-    expect(await screen.findByText(/chưa có toạ độ/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /đã giao hàng xong/i })).toBeDisabled();
+    expect(body).not.toHaveProperty('location');
     expect(geolocation.getCurrentPosition).not.toHaveBeenCalled();
   });
 
@@ -1760,18 +1603,6 @@ describe('★ confirming a delivery with the phone’s location', () => {
     await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalled());
 
     expect(geolocation.getCurrentPosition).not.toHaveBeenCalled();
-  });
-
-  it('words a delivery refused outside the geofence as where to go', async () => {
-    atDelivery();
-    recordExecutionEvent.mockRejectedValue(
-      new ApiError(422, 'VALIDATION_FAILED', 'Not there.', { location: 'OUTSIDE_GEOFENCE' }),
-    );
-    renderDetail();
-
-    fireEvent.click(await screen.findByRole('button', { name: /đã giao hàng xong/i }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/chưa ở đúng điểm/i);
   });
 });
 

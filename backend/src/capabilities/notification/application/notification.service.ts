@@ -1,5 +1,4 @@
-import { Injectable, type MessageEvent } from '@nestjs/common';
-import type { Observable } from 'rxjs';
+import { Injectable } from '@nestjs/common';
 import { NotFoundError } from '../../../common/errors/domain.error';
 import type { DatabaseQuery } from '../../../common/types/database.port';
 import { signalOf, type Notification, type NotificationInput } from '../domain/notification';
@@ -61,8 +60,4 @@ export class NotificationService {
     return read;
   }
 
-  /** The caller's own live stream. Who the caller is came from the session. */
-  streamFor(userId: string): Observable<MessageEvent> {
-    return this.stream.subscribe(userId);
-  }
 }

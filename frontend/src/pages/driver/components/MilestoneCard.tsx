@@ -58,11 +58,9 @@ interface Props {
   now: Date;
   onReport: (type: ExecutionEventType) => void;
   reporting: boolean;
-  /** The phone is being asked where it is. The button says so instead of spinning mutely. */
-  locating?: boolean;
 }
 
-export function MilestoneCard({ end, trip, now, onReport, reporting, locating = false }: Readonly<Props>) {
+export function MilestoneCard({ end, trip, now, onReport, reporting }: Readonly<Props>) {
   const { t, language } = useLanguage();
 
   const steps = executionSteps(trip).filter((step) => EVENTS_OF[end].includes(step.type));
@@ -74,7 +72,6 @@ export function MilestoneCard({ end, trip, now, onReport, reporting, locating = 
   const address = end === 'pickup' ? trip.pickupAddress : trip.deliveryAddress;
   const contact = end === 'pickup' ? trip.pickupContact : trip.deliveryContact;
   const scheduledAt = end === 'pickup' ? trip.scheduledPickupAt : trip.scheduledDeliveryAt;
-  const located = end === 'pickup' ? trip.pickupLocation !== null : trip.deliveryLocation !== null;
 
   return (
     <Card className={cn(live && 'ring-primary/60', !live && !done && 'opacity-80')}>
@@ -103,13 +100,7 @@ export function MilestoneCard({ end, trip, now, onReport, reporting, locating = 
 
       {live && next ? (
         <CardFooter className="flex-col items-stretch gap-3">
-          <NextAction
-            next={next}
-            located={located}
-            reporting={reporting}
-            locating={locating}
-            onReport={onReport}
-          />
+          <NextAction next={next} reporting={reporting} onReport={onReport} />
         </CardFooter>
       ) : null}
 
@@ -185,64 +176,42 @@ function StepRow({ step, now }: Readonly<{ step: ExecutionStep; now: Date }>) {
   );
 }
 
-/** The two confirmations are geofenced; the two arrivals are not. */
-const isGeofenced = (type: ExecutionEventType): boolean =>
-  type === 'PICKUP_CONFIRMED' || type === 'DELIVERY_CONFIRMED';
-
 /**
- * The one button, and what is said above it.
+ * The one button.
  *
- * ★ THE LOCATION CHECK IS ANNOUNCED BEFORE THE TAP, at both ends of the trip.
- * A permission prompt that appears with no warning gets refused; and a point
- * the office has not located yet is the office's problem — said here, and the
- * button is DISABLED for it, because the server refuses that confirmation
- * without exception and a driver retrying a button that cannot succeed learns
- * nothing.
+ * ★ THE TAP IS THE MILESTONE. Nothing is asked of the phone and nothing is
+ * announced above the button: there is no permission prompt to warn about, no
+ * fix to wait for, and no point the office has yet to locate that could make
+ * this unpressable. The driver is standing at the gate; the button says so.
+ *
+ * ⚠ AND THE BUTTON IS NEVER DISABLED FOR SOMETHING THE DRIVER CANNOT FIX. It
+ * greys out while a request is in flight, and for nothing else. The GPS check
+ * that used to disable it (contract §11, now [FUTURE] again) is off on the
+ * server — `GEOFENCED_MILESTONES` — so a screen that refused the tap would be
+ * refusing something the server would accept.
  */
 function NextAction({
   next,
-  located,
   reporting,
-  locating,
   onReport,
 }: Readonly<{
   next: ExecutionEventType;
-  /** Whether the point this milestone is measured against has coordinates. */
-  located: boolean;
   reporting: boolean;
-  locating: boolean;
   onReport: (type: ExecutionEventType) => void;
 }>) {
   const { t } = useLanguage();
 
-  const geofenced = isGeofenced(next);
-  const unlocated = geofenced && !located;
-  const busy = reporting || locating;
-
   return (
-    <>
-      {geofenced ? (
-        <p
-          className={cn(
-            'flex items-start gap-1.5 rounded-lg px-3 py-2 text-xs',
-            unlocated ? 'bg-destructive/5 font-medium text-destructive' : 'bg-muted/60 text-muted-foreground',
-          )}
-        >
-          <MapPin className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          {t(unlocated ? 'driverPickupNoCoordinates' : 'driverPickupNeedsLocation')}
-        </p>
-      ) : null}
-      <Button
-        size="lg"
-        // Full width and tall: this is the primary action of the whole
-        // screen and it is pressed with a thumb, outdoors.
-        className="h-12 w-full text-base"
-        disabled={busy || unlocated}
-        onClick={() => onReport(next)}
-      >
-        {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
-        {locating ? t('driverLocating') : t(ACTION_LABEL[next])}
-      </Button>
-    </>
+    <Button
+      size="lg"
+      // Full width and tall: this is the primary action of the whole
+      // screen and it is pressed with a thumb, outdoors.
+      className="h-12 w-full text-base"
+      disabled={reporting}
+      onClick={() => onReport(next)}
+    >
+      {reporting ? <Loader2 className="animate-spin" aria-hidden /> : null}
+      {t(ACTION_LABEL[next])}
+    </Button>
   );
 }

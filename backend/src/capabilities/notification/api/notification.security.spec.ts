@@ -78,9 +78,11 @@ describe('notification HTTP security', () => {
       .set('X-Requested-With', 'XMLHttpRequest');
 
   describe('without authentication', () => {
+    // ⚠ `/notifications/stream` is deliberately NOT in this list any more: it
+    // is not a route, so it answers 404 rather than 401. Its own cases are in
+    // "the retired SSE route" below.
     it.each([
       ['get', '/notifications'],
-      ['get', '/notifications/stream'],
       ['post', `/notifications/${NOTE}/read`],
     ] as const)('refuses %s %s with 401', async (method, path) => {
       const response = await request(app.getHttpServer())[method](path).set('X-Requested-With', 'XMLHttpRequest');
@@ -139,47 +141,28 @@ describe('notification HTTP security', () => {
     });
   });
 
-  describe('the stream', () => {
-    /**
-     * Called as the router would after `AuthGuard`, rather than over a
-     * socket that never ends: the handler takes the SESSION user and a
-     * response, and nothing else — there is no parameter through which a
-     * caller could name another channel, which is the property.
-     */
-    it('★ subscribes the SESSION user, so a caller cannot name another channel', () => {
-      const controller = app.get(NotificationController);
-      const setHeader = jest.fn();
-
-      const events = controller.stream(
-        { id: ME, displayName: 'Tài Xế', status: 'active', accountType: 'driver' },
-        { setHeader } as never,
-      );
-      const subscription = events.subscribe();
-
-      expect(stream.connections(ME)).toBe(1);
-      expect(stream.connections('somebody-else')).toBe(0);
-      // nginx must pass each event through rather than buffer the response.
-      expect(setHeader).toHaveBeenCalledWith('X-Accel-Buffering', 'no');
-
-      subscription.unsubscribe();
-      expect(stream.connections(ME)).toBe(0);
-    });
-
-    it('★ answers 429 with a Retry-After once the account holds its ceiling, registering nothing', async () => {
-      const held = stream.subscribe(ME).subscribe();
-
+  /**
+   * ★ THE LIVE CHANNEL IS NOT AN HTTP ROUTE ANY MORE (CEO 2026-10-06).
+   *
+   * It was `GET /notifications/stream`, server-sent events behind `AuthGuard`.
+   * The transport is a WebSocket now and authenticates its own handshake in
+   * `NotificationGateway`. These two cases exist so the removal is deliberate
+   * and stays removed: if somebody re-adds an HTTP streaming route here, there
+   * will be TWO authentication paths onto the same signal and only one of them
+   * will be the one anybody reviews.
+   */
+  describe('the retired SSE route', () => {
+    it('★ is gone — and gone for an authenticated caller too, not merely refused', async () => {
       const response = await authed('get', '/notifications/stream');
 
-      expect(response.status).toBe(429);
-      expect(response.body.error.code).toBe('TOO_MANY_CONNECTIONS');
-      expect(Number(response.headers['retry-after'])).toBeGreaterThan(0);
-      expect(stream.connections(ME)).toBe(1);
-      held.unsubscribe();
+      expect(response.status).toBe(404);
+      // Nothing was registered on the way to that 404.
+      expect(stream.connections(ME)).toBe(0);
     });
 
-    it('is refused without a session, like every other route', async () => {
-      await request(app.getHttpServer()).get('/notifications/stream').expect(401);
-      expect(stream.connections(ME)).toBe(0);
+    it('registers no connection for an anonymous caller either', async () => {
+      await request(app.getHttpServer()).get('/notifications/stream').expect(404);
+      expect(stream.totalConnections()).toBe(0);
     });
   });
 });

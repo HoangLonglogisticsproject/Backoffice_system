@@ -21,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
+import { CompletionBell } from '@/components/common/CompletionBell';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useMyDepartments } from '@/hooks/useMyDepartments';
@@ -111,6 +112,11 @@ export default function MainLayout() {
       brand={t('backofficeSystem')}
       headerActions={
         <>
+          {/* ★ ONLY FOR SOMEBODY WHO CAN ACT ON IT. A bell that rings about
+              completions for an account that may not decide them is a bell with
+              nowhere to go — and the one screen it leads to would 403. */}
+          {can('trip.complete.review') && <CompletionBell />}
+
           <Select value={language} onValueChange={(value) => setLanguage(value as 'vi' | 'en')}>
             <SelectTrigger
               aria-label={t('languageLabel')}

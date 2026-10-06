@@ -106,7 +106,7 @@ const event = (type: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const renderPage = () => {
+const renderPage = (path = '/dispatch/completion-review') => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -114,7 +114,7 @@ const renderPage = () => {
   return render(
     <QueryClientProvider client={client}>
       <LanguageProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={[path]}>
           <CompletionReviewPage />
         </MemoryRouter>
       </LanguageProvider>
@@ -654,5 +654,74 @@ describe('★ location evidence', () => {
     await openReview();
 
     expect(screen.getAllByText('Xác minh vị trí')).toHaveLength(2);
+  });
+});
+
+/**
+ * ★ ARRIVING FROM A NOTIFICATION (0036).
+ *
+ * The bell names a TRIP, because that is all `notifications` stores (0020: a
+ * type, a trip id and a day — no money, no free text, and no assignment id).
+ * The decision is about a LORRY (ADR-0004). These cases pin what the screen does
+ * with that gap, and the middle one is the whole reason the gap matters.
+ */
+describe('★ opened at one trip, by a notification', () => {
+  const linkTo = (tripId: string) => `/dispatch/completion-review?trip=${tripId}`;
+
+  it('★ opens the review straight away when exactly one lorry is waiting', async () => {
+    fetchCompletionReviewQueue.mockResolvedValue([row()]);
+    renderPage(linkTo(TRIP));
+
+    // The modal, without anybody having found the row and pressed anything.
+    expect(await screen.findByText(/tiến trình tài xế báo/i)).toBeInTheDocument();
+  });
+
+  it('★ opens NOTHING when the trip has two lorries waiting — and says to pick', async () => {
+    // One trip, two turns, two pending requests. The notification cannot say
+    // which, so choosing for the reviewer would be guessing about whose money
+    // is being approved.
+    fetchCompletionReviewQueue.mockResolvedValue([
+      row(),
+      row({ assignmentId: 'a2', completionRequestId: 'r2', vehicle: { id: 'v2', plate: '51D-99999' } }),
+    ]);
+    renderPage(linkTo(TRIP));
+
+    expect(await screen.findByText(/chọn đúng xe/i)).toBeInTheDocument();
+    expect(screen.queryByText(/tiến trình tài xế báo/i)).not.toBeInTheDocument();
+    // Both rows are still offered, and neither was decided for anybody.
+    expect(screen.getAllByRole('button', { name: /xem hồ sơ/i })).toHaveLength(2);
+  });
+
+  it('says the trip was already decided when it is no longer in the queue', async () => {
+    // A real race: somebody else approved it between the signal and the click.
+    fetchCompletionReviewQueue.mockResolvedValue([]);
+    renderPage(linkTo(TRIP));
+
+    expect(await screen.findByText(/đã được xử lý/i)).toBeInTheDocument();
+    expect(screen.queryByText(/tiến trình tài xế báo/i)).not.toBeInTheDocument();
+  });
+
+  it('★ consumes the parameter, so closing the review does not reopen it', async () => {
+    fetchCompletionReviewQueue.mockResolvedValue([row()]);
+    renderPage(linkTo(TRIP));
+    await screen.findByText(/tiến trình tài xế báo/i);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /đóng|close/i })[0]);
+
+    await waitFor(() => expect(screen.queryByText(/tiến trình tài xế báo/i)).not.toBeInTheDocument());
+    // And it stays shut: the queue refetches whenever a signal arrives, and
+    // without the parameter being consumed that refetch would reopen the modal
+    // under a reviewer who had just closed it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText(/tiến trình tài xế báo/i)).not.toBeInTheDocument();
+  });
+
+  it('opens nothing at all without the parameter — the plain queue is the plain queue', async () => {
+    fetchCompletionReviewQueue.mockResolvedValue([row()]);
+    renderPage();
+
+    await screen.findByRole('button', { name: /xem hồ sơ/i });
+    expect(screen.queryByText(/tiến trình tài xế báo/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/đã được xử lý/i)).not.toBeInTheDocument();
   });
 });

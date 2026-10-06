@@ -246,9 +246,22 @@ const PHRASES = {
     vi: 'Yêu cầu này vừa được xử lý hoặc booking đã có xe. Danh sách đã được cập nhật.',
     en: 'This request was just decided, or the booking already has a lorry. The list is up to date.',
   },
+  /**
+   * ★ A HEADLINE AND A LINE, NOT ONE SENTENCE TWICE. The title names WHAT is
+   * empty; the line under it says which emptiness this is. The three lines
+   * below are unchanged — a driver has read them for months and the tests pin
+   * them word for word.
+   */
+  driverEmptyTitle: { vi: 'Chưa có chuyến nào', en: 'No trips yet' },
   driverEmptyToday: { vi: 'Bạn chưa có chuyến nào hôm nay.', en: 'You have no trips today.' },
   driverEmptyUpcoming: { vi: 'Chưa có lịch sắp tới.', en: 'Nothing is scheduled yet.' },
   driverEmptyPast: { vi: 'Chưa có chuyến nào đã qua.', en: 'No earlier trips.' },
+  /** The one useful step out of an empty day: look at tomorrow. */
+  driverEmptySeeUpcoming: { vi: 'Xem chuyến sắp tới', en: 'See upcoming trips' },
+  /** And out of an empty week: ask for work (0035). */
+  driverEmptySeeOpen: { vi: 'Xem booking đang mở', en: 'See open bookings' },
+  openBookingEmptyTitle: { vi: 'Chưa có booking nào', en: 'No open bookings' },
+  requestEmptyTitle: { vi: 'Chưa có yêu cầu nào', en: 'No requests yet' },
   driverViewTrip: { vi: 'Xem chuyến', en: 'View trip' },
   driverNoPickupTime: { vi: 'Chưa có giờ lấy hàng', en: 'No pickup time yet' },
   driverTripDetail: { vi: 'Chi tiết chuyến', en: 'Trip details' },
@@ -391,6 +404,31 @@ const PHRASES = {
   notifCompletionApproved: { vi: 'Chuyến đã được duyệt hoàn tất', en: 'Trip completion approved' },
   notifRequestRejected: { vi: 'Yêu cầu nhận chuyến bị từ chối', en: 'Your request for a trip was declined' },
   notifRequestSuperseded: { vi: 'Booking bạn xin nhận không còn mở', en: 'A booking you asked for is no longer open' },
+  /**
+   * ★ READ IN THE BACKOFFICE, NOT IN THE PORTAL (0036) — the bell's label and
+   * the one sentence the reviewer sees. Worded as the WORK, not as the event:
+   * what a reviewer needs from a bell is what to do next.
+   */
+  notifCompletionSubmitted: {
+    vi: 'Tài xế đã gửi hoàn tất chuyến — chờ duyệt',
+    en: 'A driver has sent a trip for completion — waiting for your decision',
+  },
+  /** The bell's panel: what it is, and the way out of it. */
+  notifPanelTitle: { vi: 'Thông báo', en: 'Notifications' },
+  notifPanelSeeQueue: { vi: 'Mở hàng đợi duyệt', en: 'Open the review queue' },
+  /**
+   * ★ WHAT A DEEP LINK FINDS, OR DOES NOT. Both are real outcomes of opening a
+   * notification minutes after it arrived, and both have to be said rather than
+   * shown as an empty screen.
+   */
+  reviewTripAlreadyDecided: {
+    vi: 'Chuyến này đã được xử lý — không còn trong hàng đợi.',
+    en: 'This trip has already been decided — it is no longer in the queue.',
+  },
+  reviewPickWhichLorry: {
+    vi: 'Chuyến này có nhiều lượt xe đang chờ duyệt. Chọn đúng xe bên dưới.',
+    en: 'This trip has more than one lorry waiting. Pick the right one below.',
+  },
 
   // ---------------------------------------------- driver assignment (board) --
   colDriver: { vi: 'Tài xế', en: 'Driver' },

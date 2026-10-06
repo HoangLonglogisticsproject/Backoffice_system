@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
@@ -27,6 +27,18 @@ vi.mock('@/api/driverPortal', () => ({
   declareExpense: vi.fn(),
   editExpense: vi.fn(),
   submitCompletion: vi.fn(),
+}));
+
+/**
+ * Open bookings have their own screen and their own spec (`OpenBookings.spec`).
+ * Here they exist only as the place an empty week sends the driver, so the
+ * module is stubbed to "nothing open" rather than left to reach the network.
+ */
+vi.mock('@/api/openBooking', () => ({
+  fetchOpenBookings: () => Promise.resolve([]),
+  fetchMyAssignmentRequests: () => Promise.resolve([]),
+  requestOpenBooking: vi.fn(),
+  withdrawAssignmentRequest: vi.fn(),
 }));
 
 /** 10:00 on 30 August in Hồ Chí Minh — the business day every fixture is on. */
@@ -247,7 +259,7 @@ describe('★ the work schedule', () => {
     // ★ The business day (Asia/Ho_Chi_Minh), named — not the handset's.
     expect(screen.getByText('Chủ Nhật, 30/08/2026')).toBeInTheDocument();
     expect(tab('Hôm nay')).toHaveAttribute('aria-selected', 'true');
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 1');
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (1)');
 
     // ★ THE CARD NAMES THE ASSIGNMENT, NEVER THE TRIP (ADR-0004).
     expect(linkOf(card)).toHaveAttribute('href', '/driver/assignments/a1');
@@ -289,7 +301,7 @@ describe('★ the work schedule', () => {
     renderAt('/driver');
 
     expect(hrefs((await todayCards()).map(linkOf))).toEqual(['/driver/assignments/a1', '/driver/assignments/a2']);
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 2');
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (2)');
     expect(screen.getByRole('link', { name: /51D-65233/ })).toHaveAttribute('href', '/driver/assignments/a1');
     expect(screen.getByRole('link', { name: /51D-00002/ })).toHaveAttribute('href', '/driver/assignments/a2');
   });
@@ -341,7 +353,7 @@ describe('★ the work schedule', () => {
     renderAt('/driver');
 
     expect(hrefs((await todayCards()).map(linkOf))).toEqual(['/driver/assignments/a1']);
-    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới 2');
+    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (2)');
     fireEvent.click(tab('Sắp tới'));
 
     const nextDay = await screen.findByRole('region', { name: 'Thứ Hai, 31/08/2026' });
@@ -390,20 +402,73 @@ describe('★ the work schedule', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
+  /**
+   * ★ AN EMPTY DAY IS A DESIGNED SCREEN, NOT A BLANK ONE. The illustration says
+   * the page loaded; the heading says what is empty; the button says what to do
+   * next. These cases pin the three, and that the picture stays out of the
+   * accessibility tree — a driver using a screen reader must hear the words, not
+   * a description of a cartoon lorry.
+   */
+  describe('★ nothing to drive', () => {
+    it('draws the illustration, the headline, the line and one way out', async () => {
+      renderAt('/driver');
+
+      expect(await screen.findByText('Chưa có chuyến nào')).toBeInTheDocument();
+      expect(screen.getByText('Bạn chưa có chuyến nào hôm nay.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Xem chuyến sắp tới' })).toBeInTheDocument();
+    });
+
+    it('★ the picture is decoration: no role, no name, nothing to hear', async () => {
+      const { container } = renderAt('/driver');
+      await screen.findByText('Chưa có chuyến nào');
+
+      expect(screen.queryByRole('img')).toBeNull();
+      const picture = container.querySelector('img');
+      expect(picture).not.toBeNull();
+      expect(picture).toHaveAttribute('alt', '');
+    });
+
+    it('★ the way out of today is tomorrow — and it lands on the tab, not a new page', async () => {
+      renderAt('/driver');
+      fireEvent.click(await screen.findByRole('button', { name: 'Xem chuyến sắp tới' }));
+
+      await waitFor(() => expect(tab('Sắp tới')).toHaveAttribute('aria-selected', 'true'));
+      expect(screen.getByTestId('location')).toHaveTextContent(/^\/driver\?view=upcoming$/);
+    });
+
+    it('★ the way out of an empty week is to ask for work (0035), not another day', async () => {
+      renderAt('/driver?view=upcoming');
+      fireEvent.click(await screen.findByRole('button', { name: 'Xem booking đang mở' }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('tab', { name: /booking đang mở/i })).toHaveAttribute('aria-selected', 'true'),
+      );
+      // The day view is left behind: open bookings are not a day of the schedule.
+      expect(screen.getByTestId('location')).toHaveTextContent(/^\/driver\?section=open$/);
+    });
+
+    it('offers no action out of the past, because there is nothing to do about it', async () => {
+      renderAt('/driver?view=past');
+
+      expect(await screen.findByText('Chưa có chuyến nào đã qua.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /xem chuyến sắp tới|xem booking/i })).toBeNull();
+    });
+  });
+
   it('★ each tab says how many assignments it holds — to a screen reader too', async () => {
     fetchMyAssignments.mockResolvedValue([trip(), turn('a2'), turn('a-next', { scheduledOn: '2026-08-31' })]);
     renderAt('/driver');
     await todayCards();
 
     expect(dayTabs().getAllByRole('tab').map((option) => option.textContent)).toEqual([
-      'Hôm nay 2',
-      'Sắp tới 1',
-      'Chuyến đã chạy 0',
+      'Hôm nay (2)',
+      'Sắp tới (1)',
+      'Chuyến đã chạy (0)',
     ]);
     // The count is part of the name a screen reader announces, as a separate word.
-    expect(screen.getByRole('tab', { name: 'Hôm nay 2' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Sắp tới 1' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Chuyến đã chạy 0' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Hôm nay (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Sắp tới (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Chuyến đã chạy (0)' })).toBeInTheDocument();
   });
 
   it('selecting a tab rewrites the URL in place, and today is the bare /driver', async () => {
@@ -478,7 +543,7 @@ describe('★ the work schedule', () => {
     // The same card, still mounted, still saying where to go.
     expect(card).toBeInTheDocument();
     expect(within(card).getByText('Kho HCM')).toBeInTheDocument();
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 1');
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (1)');
     // Read first: the warning comes before the cards it qualifies.
     expect(alert.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -529,7 +594,7 @@ describe('★ the work schedule', () => {
 
     expect(await screen.findByText('Bạn chưa có chuyến nào hôm nay.')).toBeInTheDocument();
     expect(screen.getByText('Chủ Nhật, 30/08/2026')).toBeInTheDocument();
-    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới 1');
+    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (1)');
 
     // 00:01 on 31/08, and the phone is unlocked.
     vi.setSystemTime(new Date('2026-08-30T17:01:00.000Z'));
@@ -539,8 +604,8 @@ describe('★ the work schedule', () => {
 
     expect(screen.getByText('Thứ Hai, 31/08/2026')).toBeInTheDocument();
     expect(hrefs((await todayCards()).map(linkOf))).toEqual(['/driver/assignments/a-next']);
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 1');
-    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới 0');
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (1)');
+    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (0)');
   });
 
   it('★ back from a trip lands on the tab the driver left', async () => {

@@ -32,7 +32,7 @@ const fetchNotifications = vi.fn();
 vi.mock('@/api/notifications', () => ({
   fetchNotifications: (...a: unknown[]) => fetchNotifications(...a),
   markNotificationRead: vi.fn(),
-  notificationStreamUrl: () => '/notifications/stream',
+  notificationSocketTarget: () => ({ origin: '', path: '/socket.io' }),
 }));
 vi.mock('@/api/driverPortal', () => ({
   fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),

@@ -7,6 +7,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/app.config';
 import { DomainErrorFilter } from './common/http/domain-error.filter';
+import { SessionIoAdapter } from './infrastructure/websocket/session-io.adapter';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
@@ -90,6 +91,16 @@ async function bootstrap(): Promise<void> {
    * what "trust nobody" means.
    */
   app.set('trust proxy', config.trustedProxies.length > 0 ? [...config.trustedProxies] : false);
+
+  /**
+   * The realtime channel (0036, CEO 2026-10-06).
+   *
+   * ★ REGISTERED AFTER `enableCors`, AND IT IS A SEPARATE ALLOWLIST ON PURPOSE.
+   * `enableCors` governs Express; socket.io runs its own HTTP handling for the
+   * handshake and does not inherit it. Both are fed the SAME `config.corsOrigins`,
+   * so there is one list in the environment and no way for the two to drift.
+   */
+  app.useWebSocketAdapter(new SessionIoAdapter(app, origins));
 
   app.useGlobalFilters(new DomainErrorFilter());
 

@@ -11,7 +11,7 @@ export class TooManyConnectionsError extends DomainError {
 }
 
 /**
- * What a driver is told.
+ * What a person is told — a driver, almost always, and the reviewer once (0036).
  *
  * ★ A ROW FIRST, A SIGNAL SECOND. The notification is written inside the
  * transaction of the business change that caused it, and only then pushed to
@@ -45,6 +45,17 @@ export const NOTIFICATION_TYPES = [
    * the fixed word 0035 stores (`trip_assigned` · `trip_closed` · `trip_archived`).
    */
   'ASSIGNMENT_REQUEST_SUPERSEDED',
+  /**
+   * ★ THE ONE TYPE ADDRESSED TO THE OFFICE, NOT TO THE ROAD (0036). A driver
+   * has finished a turn and asked for it to be closed; the person who holds
+   * `trip.complete.review` has to decide. Every other type above tells a
+   * driver something; this one tells the reviewer that there is something to
+   * review, so a completion no longer waits for somebody to open the queue.
+   *
+   * There is deliberately no `COMPLETION_WITHDRAWN` beside it: a driver cannot
+   * take a pending request back (the lifecycle has no such action).
+   */
+  'COMPLETION_SUBMITTED',
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -98,6 +109,8 @@ export const signalOf = (notification: Notification): NotificationSignal => ({
 export const eventKeys = {
   assigned: (assignmentId: string) => `assignment:${assignmentId}:assigned`,
   unassigned: (assignmentId: string) => `assignment:${assignmentId}:ended`,
+  /** To the reviewer, from the request the driver just created (0036). */
+  completionSubmitted: (requestId: string) => `completion:${requestId}:submitted`,
   completionRejected: (requestId: string) => `completion:${requestId}:rejected`,
   completionApproved: (requestId: string) => `completion:${requestId}:approved`,
   requestRejected: (requestId: string) => `assignment-request:${requestId}:rejected`,

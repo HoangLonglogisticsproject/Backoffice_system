@@ -16,6 +16,14 @@ import { DispatchCrew } from './dispatch-crew';
 const noAsks = () => ({ supersede: jest.fn().mockResolvedValue([]), deliver: jest.fn() });
 
 /**
+ * The one active global assignment — who a submitted completion is reported to
+ * (0036). `null` is a deployment mid-handover, which some cases below pin.
+ */
+const reviewer = (userId: string | null = BOSS) => ({
+  findActiveSuperAdmin: jest.fn().mockResolvedValue(userId === null ? null : { id: 'ra-1', userId }),
+});
+
+/**
  * The operational lifecycle, without a database.
  *
  * ★ WHAT THIS CAN AND CANNOT PROVE. It proves the ORDER and the CONDITIONS: that
@@ -97,7 +105,11 @@ const told = () => ({
 });
 
 describe('completion', () => {
-  const build = (over: Record<string, unknown> = {}) => {
+  /**
+   * `over` replaces trip-repository behaviour; `reviewerUserId` is who holds
+   * global authority while the case runs — `null` for none at all.
+   */
+  const build = (over: Record<string, unknown> = {}, reviewerUserId: string | null = BOSS) => {
     const trips = {
       lockActive: jest.fn().mockResolvedValue(openTrip()),
       updateStatus: jest.fn().mockResolvedValue(openTrip({ status: 'finished' })),
@@ -131,6 +143,8 @@ describe('completion', () => {
     // THIS assignment's live readings: a complete execution unless a case says otherwise.
     const events = { listByAssignment: jest.fn().mockResolvedValue(FULL_JOURNEY) };
 
+    const roles = reviewer(reviewerUserId);
+
     const service = new TripCompletionService(
       database(),
       trips as never,
@@ -141,9 +155,10 @@ describe('completion', () => {
       notifications as never,
       events as never,
       noAsks() as never,
+      roles as never,
     );
 
-    return { service, trips, assignments, requests, costs, history, notifications, events };
+    return { service, trips, assignments, requests, costs, history, notifications, events, roles };
   };
 
   describe('submit', () => {
@@ -160,6 +175,62 @@ describe('completion', () => {
         TX,
       );
       expect(costs.lockForAssignment).toHaveBeenCalledWith(ASSIGNMENT, DRIVER, expect.any(Date), TX);
+    });
+
+    it('★ tells the reviewer, inside the transaction, keyed by the request (0036)', async () => {
+      // Nobody watches the review queue all day. The row goes in beside the
+      // request so a submit that rolls back tells nobody, and the key is the
+      // request's so a retried submit rings once.
+      const { service, notifications, roles } = build();
+
+      await service.submit(ASSIGNMENT, DRIVER, 'expenses');
+
+      expect(roles.findActiveSuperAdmin).toHaveBeenCalledWith(TX);
+      expect(notifications.record).toHaveBeenCalledWith(
+        {
+          recipientUserId: BOSS,
+          type: 'COMPLETION_SUBMITTED',
+          tripId: TRIP,
+          tripScheduledOn: '2026-08-30',
+          eventKey: `completion:${REQUEST}:submitted`,
+        },
+        TX,
+      );
+      // Delivered after the commit, never from inside it.
+      expect(notifications.deliver).toHaveBeenCalledWith([expect.objectContaining({ id: 'note' })]);
+    });
+
+    it('★ carries no figure and no reason to the reviewer — the queue holds those', async () => {
+      const { service, notifications } = build();
+
+      await service.submit(ASSIGNMENT, DRIVER, 'expenses');
+
+      const [input] = notifications.record.mock.calls[0] as [Record<string, unknown>];
+      expect(input).not.toHaveProperty('detail');
+      expect(Object.keys(input)).not.toContain('expenseDeclaration');
+    });
+
+    it('still records the request when there is no active SuperAdmin to tell', async () => {
+      // Mid-handover: revoke-then-grant in one transaction (0004) has a moment
+      // with nobody global. The driver's turn must not fail for it, and the
+      // queue shows the request regardless — it was never built on a notification.
+      const { service, requests, notifications } = build({}, null);
+
+      await service.submit(ASSIGNMENT, DRIVER, 'expenses');
+
+      expect(requests.submit).toHaveBeenCalled();
+      expect(notifications.record).not.toHaveBeenCalled();
+      expect(notifications.deliver).toHaveBeenCalledWith([null]);
+    });
+
+    it('tells nobody when the submit is refused', async () => {
+      const { service, requests, notifications } = build();
+      requests.lockPendingByAssignment.mockResolvedValue(pendingRequest());
+
+      await expect(service.submit(ASSIGNMENT, DRIVER, 'expenses')).rejects.toThrow(ConflictError);
+
+      expect(notifications.record).not.toHaveBeenCalled();
+      expect(notifications.deliver).not.toHaveBeenCalled();
     });
 
     it('refuses a second request while one is waiting on this assignment', async () => {
@@ -909,12 +980,17 @@ describe('execution events', () => {
   });
 
   /**
-   * ★ THE GEOFENCE IS THE SERVICE'S DECISION, MADE FROM THE TRIP'S OWN POINT.
+   * ★ CONFIRMING A PICKUP IS A BUTTON, AND NOT A POSITION.
    *
-   * The reading comes from the client; the verdict never does. Every case here
-   * hands the service a reading and asserts what it WROTE — `geofencePassed`
-   * and `distanceM` are computed inside the transaction, and a refusal writes
-   * nothing at all.
+   * `GEOFENCED_MILESTONES` is empty, so the service asks the geofence about
+   * nothing: a confirmation needs no reading, needs no coordinates on the trip,
+   * and reaches no verdict. The driver's tap IS the milestone.
+   *
+   * ★ WHAT IS PINNED HERE IS THAT THE CHECK IS OFF, NOT THAT IT IS GONE. The
+   * rule itself — radius, accuracy ceiling, freshness window, distance — is
+   * still whole and still tested in `trip-location.spec.ts`, for the day the
+   * list is filled in again (contract §11 [FUTURE]). What a reading sent anyway
+   * gets is storage, never a verdict: nothing measured it.
    */
   describe('confirming a pickup', () => {
     /** Tân Sơn Nhất cargo, roughly. */
@@ -944,28 +1020,56 @@ describe('execution events', () => {
       recordedBy: DRIVER,
     };
 
-    const rejected = async (
-      service: TripExecutionService,
-      input: Parameters<TripExecutionService['recordEvent']>[0],
-      reason: string,
-    ) => {
-      const failure = await service.recordEvent(input).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(ValidationError);
-      expect((failure as ValidationError).details).toEqual({ location: reason });
-    };
+    it('★ records the confirmation from the tap alone — no reading, no verdict', async () => {
+      const { service, events } = located();
 
-    it('★ writes the verdict and the distance it computed, beside the reading', async () => {
+      await service.recordEvent(confirming);
+
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'PICKUP_CONFIRMED',
+          location: null,
+          geofencePassed: null,
+          distanceM: null,
+        }),
+        TX,
+      );
+    });
+
+    it('★ records it even when the trip has no coordinates (GAP-14 no longer blocks a driver)', async () => {
+      // The warehouse coordinates Operations has still to collect used to make
+      // this confirmation impossible. Nothing measures against them now, so
+      // their absence is not the driver's problem.
+      const { service, events } = located({ pickupLatitude: null, pickupLongitude: null });
+
+      await service.recordEvent(confirming);
+
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'PICKUP_CONFIRMED', geofencePassed: null }),
+        TX,
+      );
+    });
+
+    it('★ keeps a reading sent anyway as evidence, and still reaches no verdict on it', async () => {
       const { service, events } = located();
 
       await service.recordEvent({ ...confirming, location: goodFix });
 
       expect(events.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'PICKUP_CONFIRMED',
-          location: goodFix,
-          geofencePassed: true,
-          distanceM: 0,
-        }),
+        expect.objectContaining({ location: goodFix, geofencePassed: null, distanceM: null }),
+        TX,
+      );
+    });
+
+    it('★ accepts a reading from the wrong side of town — nothing is measuring it', async () => {
+      // ~1.1 km north of the pickup. A refusal here would mean the check is on.
+      const { service, events } = located();
+      const far = { ...goodFix, latitude: goodFix.latitude + 0.01 };
+
+      await service.recordEvent({ ...confirming, location: far });
+
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ location: far, geofencePassed: null }),
         TX,
       );
     });
@@ -984,59 +1088,19 @@ describe('execution events', () => {
       expect(written.deviceReportedAt).toEqual(SENT_AT);
     });
 
-    it('refuses a confirmation with no reading, and writes nothing', async () => {
+    it('★ keeps an old fix too, since no freshness window applies to it any more', async () => {
       const { service, events } = located();
-
-      await rejected(service, confirming, 'LOCATION_REQUIRED');
-      expect(events.record).not.toHaveBeenCalled();
-    });
-
-    it('★ refuses when the trip has no pickup coordinates — the office’s problem, named as such', async () => {
-      const { service, events } = located({ pickupLatitude: null, pickupLongitude: null });
-
-      await rejected(service, { ...confirming, location: goodFix }, 'DESTINATION_MISSING');
-      expect(events.record).not.toHaveBeenCalled();
-    });
-
-    it('refuses a reading outside the radius', async () => {
-      const { service, events } = located();
-      // ~1.1 km north.
-      const far = { ...goodFix, latitude: goodFix.latitude + 0.01 };
-
-      await rejected(service, { ...confirming, location: far }, 'OUTSIDE_GEOFENCE');
-      expect(events.record).not.toHaveBeenCalled();
-    });
-
-    it('refuses a reading too loose to place the lorry', async () => {
-      const { service } = located();
-      await rejected(
-        service,
-        { ...confirming, location: { ...goodFix, accuracyM: 750 } },
-        'ACCURACY_INSUFFICIENT',
-      );
-    });
-
-    it('refuses a fix older than the freshness window', async () => {
-      const { service } = located();
       const old = { ...goodFix, capturedAt: new Date(SENT_AT.getTime() - 10 * 60_000) };
-      await rejected(service, { ...confirming, location: old }, 'LOCATION_STALE');
-    });
 
-    it('★ ages the fix against the handset’s own send time, so a wrong clock cancels out', async () => {
-      // Both stamps five years behind; five seconds apart. Fresh.
-      const { service, events } = located();
-      const sentAt = new Date('2021-01-01T00:00:00Z');
-      const fix = { ...goodFix, capturedAt: new Date(sentAt.getTime() - 5_000) };
-
-      await service.recordEvent({ ...confirming, deviceReportedAt: sentAt, location: fix });
+      await service.recordEvent({ ...confirming, location: old });
 
       expect(events.record).toHaveBeenCalledWith(
-        expect.objectContaining({ geofencePassed: true }),
+        expect.objectContaining({ location: old, geofencePassed: null }),
         TX,
       );
     });
 
-    it('answers a retry with the event already written, BEFORE any location check', async () => {
+    it('answers a retry with the event already written', async () => {
       // A retry after a timeout carries no new reading and must not need one:
       // the pickup already happened.
       const { service, events } = located();
@@ -1048,7 +1112,7 @@ describe('execution events', () => {
       expect(events.record).not.toHaveBeenCalled();
     });
 
-    it('still checks ownership before location, so the refusal is the right one', async () => {
+    it('still checks ownership, so the refusal is the right one', async () => {
       const { service, assignments } = located();
       assignments.lockActiveById.mockResolvedValue({ ...activeAssignment, driverUserId: OTHER });
 
@@ -1846,7 +1910,15 @@ describe('★ assignment eligibility and what the driver is told', () => {
   });
 });
 
-describe('★ confirming a delivery is geofenced against the DELIVERY point', () => {
+/**
+ * ★ AND THE DELIVERY IS CONFIRMED THE SAME WAY THE PICKUP IS: by the tap.
+ *
+ * Kept as its own suite because the delivery END is the one that would be
+ * measured against the DELIVERY point if the check were ever switched back on —
+ * confirming against the pickup's point was a real bug once, and these cases are
+ * where its return would be caught.
+ */
+describe('★ confirming a delivery takes no position either', () => {
   const DELIVERY = { deliveryLatitude: 10.7769, deliveryLongitude: 106.7009 };
   const SENT_AT = new Date('2026-08-30T09:31:00Z');
   const atDelivery = {
@@ -1904,47 +1976,46 @@ describe('★ confirming a delivery is geofenced against the DELIVERY point', ()
     recordedBy: DRIVER,
   };
 
-  it('passes at the delivery point and writes the verdict', async () => {
+  it('★ records the confirmation from the tap, with no reading and no verdict', async () => {
     const { service, events } = build();
 
-    await service.recordEvent({ ...delivering, location: atDelivery });
+    await service.recordEvent(delivering);
 
     expect(events.record).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'DELIVERY_CONFIRMED', geofencePassed: true, distanceM: 0 }),
+      expect.objectContaining({
+        type: 'DELIVERY_CONFIRMED',
+        location: null,
+        geofencePassed: null,
+        distanceM: null,
+      }),
       TX,
     );
   });
 
-  it('★ refuses a reading at the PICKUP point — the two ends are different places', async () => {
+  it('★ does not refuse a reading taken at the PICKUP point — nothing compares the two ends', async () => {
     const { service, events } = build();
     const atPickup = { ...atDelivery, latitude: 10.8188, longitude: 106.6564 };
 
-    const failure = await service
-      .recordEvent({ ...delivering, location: atPickup })
-      .catch((error: unknown) => error);
+    await service.recordEvent({ ...delivering, location: atPickup });
 
-    expect(failure).toBeInstanceOf(ValidationError);
-    expect((failure as ValidationError).details).toEqual({ location: 'OUTSIDE_GEOFENCE' });
-    expect(events.record).not.toHaveBeenCalled();
+    expect(events.record).toHaveBeenCalledWith(
+      expect.objectContaining({ location: atPickup, geofencePassed: null }),
+      TX,
+    );
   });
 
-  it('refuses when the trip has no delivery coordinates yet', async () => {
-    const { service } = build({ deliveryLatitude: null, deliveryLongitude: null });
+  it('records the confirmation when the trip has no delivery coordinates yet', async () => {
+    const { service, events } = build({ deliveryLatitude: null, deliveryLongitude: null });
 
-    const failure = await service
-      .recordEvent({ ...delivering, location: atDelivery })
-      .catch((error: unknown) => error);
+    await service.recordEvent(delivering);
 
-    expect((failure as ValidationError).details).toEqual({ location: 'DESTINATION_MISSING' });
+    expect(events.record).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DELIVERY_CONFIRMED', geofencePassed: null }),
+      TX,
+    );
   });
 
-  it('refuses a delivery confirmation with no reading', async () => {
-    const { service } = build();
-    const failure = await service.recordEvent(delivering).catch((error: unknown) => error);
-    expect((failure as ValidationError).details).toEqual({ location: 'LOCATION_REQUIRED' });
-  });
-
-  it('still refuses a delivery before the pickup was confirmed ON THIS ASSIGNMENT, before any location check', async () => {
+  it('still refuses a delivery before the pickup was confirmed ON THIS ASSIGNMENT', async () => {
     // Assignment B's pickup confirmation is not this assignment's.
     const { service, events } = build();
     events.listByAssignment.mockResolvedValue([{ type: 'ARRIVED_PICKUP' }]);
@@ -1954,7 +2025,7 @@ describe('★ confirming a delivery is geofenced against the DELIVERY point', ()
     );
   });
 
-  it('does not geofence the arrival at delivery', async () => {
+  it('reaches no verdict on the arrival at delivery either', async () => {
     const { service, events } = build();
     events.listByAssignment.mockResolvedValue([{ type: 'ARRIVED_PICKUP' }, { type: 'PICKUP_CONFIRMED' }]);
 
@@ -2005,6 +2076,7 @@ describe('★ a completion decision is told to the person who asked', () => {
       notifications as never,
       { listByAssignment: jest.fn().mockResolvedValue(FULL_JOURNEY) } as never,
       noAsks() as never,
+      reviewer() as never,
     );
     return { service, assignments, requests, notifications };
   };

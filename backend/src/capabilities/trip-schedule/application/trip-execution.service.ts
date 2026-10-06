@@ -313,11 +313,12 @@ export class TripExecutionService {
     /** The handset's own clock. Diagnostic only. */
     deviceReportedAt?: Date | null;
     /**
-     * Where the handset said it was. REQUIRED for PICKUP_CONFIRMED, where the
-     * server measures it against the trip's pickup point; kept as evidence on
-     * any other milestone that carries one. Never a verdict — the route's DTO
-     * has no field for `geofencePassed` or a distance, so a client cannot send
-     * one, and this input type has none either.
+     * Where the handset said it was — OPTIONAL on every milestone today, and
+     * sent by nothing: the geofence is off (`GEOFENCED_MILESTONES`), so no
+     * milestone requires a reading. One that arrives anyway is kept as evidence
+     * beside the event, with no verdict, because nothing measured it. Never a
+     * verdict from the client either — the route's DTO has no field for
+     * `geofencePassed` or a distance, and this input type has none.
      */
     location?: LocationEvidence | null;
     clientEventId: string;
@@ -473,12 +474,16 @@ export class TripExecutionService {
         tx,
       );
 
-      // ★ THE GEOFENCE IS DECIDED HERE, UNDER THE LOCK, FROM THE TRIP'S OWN
-      // COORDINATES. The browser sent a reading; it did not send a verdict, and
-      // could not have — see the DTO. What the trip says its pickup or delivery
-      // point is was read a moment ago under `FOR UPDATE`, so Operations
-      // correcting the point mid-request cannot make this measure against a
-      // stale one. The same rule, the same radius, at both ends of the trip.
+      // ★ THE GEOFENCE WOULD BE DECIDED HERE, UNDER THE LOCK, FROM THE TRIP'S
+      // OWN COORDINATES — and today it is asked about no milestone at all:
+      // `GEOFENCED_MILESTONES` is empty, so `destination` is `undefined` every
+      // time and this block does nothing but fall through. The driver's tap is
+      // the milestone. The code stays because the decision is "not yet", not
+      // "never" (contract §11 [FUTURE]), and because it is the ONLY place a
+      // verdict may be reached: the browser sends a reading, never a verdict,
+      // and could not — see the DTO. The point it would measure against was
+      // read a moment ago under `FOR UPDATE`, so Operations correcting it
+      // mid-request could not make this measure against a stale one.
       //
       // ⚠ IDENTITY ASSURANCE AT DELIVERY IS THE SESSION, THE ASSIGNMENT AND
       // THE POSITION — and nothing more today. There is no reference photo, no
@@ -671,17 +676,42 @@ const pointOf = (latitude: number | null, longitude: number | null): Coordinates
   latitude !== null && longitude !== null ? { latitude, longitude } : null;
 
 /**
+ * ★ WHICH MILESTONES THE GEOFENCE IS ASKED ABOUT — AND TODAY THERE ARE NONE.
+ *
+ * Contract §11 lists GPS / geofencing as [FUTURE] and asks only that the
+ * extension point exist. It was built ahead of that, and the business has now
+ * said: not yet. A driver standing at a gate presses the button and that IS the
+ * milestone — no permission prompt, no fix to wait for, no refusal they cannot
+ * act on, and no dependency on GAP-14 (the warehouse coordinates Operations
+ * still has to collect).
+ *
+ * ★ TURNED OFF AT ONE LINE, NOT TORN OUT. Everything the check needs is still
+ * here and still tested: `checkMilestoneLocation` and its thresholds
+ * (`trip-location.ts`), the four nullable evidence columns (0019), the trip's
+ * own coordinates, and the refusal sentences below. Putting the two
+ * confirmations back in this list is the whole of re-enabling it, so an empty
+ * list is a DECISION with a date rather than an unfinished feature.
+ *
+ * ⚠ AND A READING IS STILL KEPT IF ONE ARRIVES. The DTO still accepts
+ * `location`, so a caller that sends evidence has it stored beside the event —
+ * with no verdict, because nothing measured it. The portal sends none today.
+ */
+const GEOFENCED_MILESTONES: readonly ExecutionEventType[] = [];
+
+/**
  * Which point a milestone is measured against.
  *
- * `undefined` for the two ARRIVALS, which are not geofenced: arriving is what
- * the driver says on the way in, and the check happens at the confirmation
- * that follows. `null` for a confirmation whose point Operations has not
- * entered yet — refused, and named as the office's problem.
+ * `undefined` for a milestone that is not geofenced — every one of them while
+ * `GEOFENCED_MILESTONES` is empty, and the two ARRIVALS regardless: arriving is
+ * what the driver says on the way in. `null` for a geofenced confirmation whose
+ * point Operations has not entered yet — refused, and named as the office's
+ * problem.
  */
 const geofencedPointOf = (
   trip: TripSchedule,
   type: ExecutionEventType,
 ): Coordinates | null | undefined => {
+  if (!GEOFENCED_MILESTONES.includes(type)) return undefined;
   if (type === 'PICKUP_CONFIRMED') return pointOf(trip.pickupLatitude, trip.pickupLongitude);
   if (type === 'DELIVERY_CONFIRMED') return pointOf(trip.deliveryLatitude, trip.deliveryLongitude);
   return undefined;

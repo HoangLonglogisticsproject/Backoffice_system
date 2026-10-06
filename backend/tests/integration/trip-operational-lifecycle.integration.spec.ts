@@ -11,6 +11,7 @@ import {
 } from '../helpers/integration-database';
 import type { Database, DatabaseQuery } from '@common/types/database.port';
 import { ConflictError, ForbiddenError, ValidationError } from '@common/errors/domain.error';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { TripCompletionService } from '../../src/capabilities/trip-schedule/application/trip-completion.service';
 import { TripCostService } from '../../src/capabilities/trip-schedule/application/trip-cost.service';
@@ -203,6 +204,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       notifications,
       events,
       supersessionOn(database),
+      new AuthorizationRepository(database),
     );
     operations = new OperationalBoardService(new OperationalBoardRepository(database));
 

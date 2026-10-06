@@ -20,6 +20,7 @@ import { TripScheduleRepository } from '../persistence/trip-schedule.repository'
 import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
 import { COMPLETION_APPROVED_REASON, MANUAL_COMPLETION_REASON } from '../domain/trip-status-history';
 import { NotificationService } from '../../notification/application/notification.service';
+import { AuthorizationRepository } from '../../../core/authorization/persistence/authorization.repository';
 import { closeTrip } from './trip-closure';
 import { AssignmentRequestSupersession } from './assignment-request-supersession';
 import { eventKeys } from '../../notification/domain/notification';
@@ -54,6 +55,13 @@ export class TripCompletionService {
     private readonly notifications: NotificationService,
     private readonly events: ExecutionEventRepository,
     private readonly supersession: AssignmentRequestSupersession,
+    /**
+     * ★ READ-ONLY, AND FOR EXACTLY ONE QUESTION: who holds global authority
+     * right now, so the submit below can tell them. Nothing here grants,
+     * revokes or checks a permission — the routes do that, and the guard on
+     * `trip.complete.review` is what decides who may approve.
+     */
+    private readonly roles: AuthorizationRepository,
   ) {}
 
   /** What `closeTrip` writes through — this service's own repositories. */
@@ -70,6 +78,10 @@ export class TripCompletionService {
    * that no longer exists. Locking is TEMPORARY: a rejection reopens every
    * line. And it is THIS turn's lines only: another driver's lorry on the same
    * trip keeps typing (ADR-0004).
+   *
+   * ★ AND IT TELLS THE REVIEWER, IN THE SAME TRANSACTION (0036). The queue is
+   * still the authority on what is waiting — this is how somebody learns there
+   * is something in it without watching the screen.
    *
    * ★ ONLY OVER A COMPLETE EXECUTION (contract §10.5, DL-59). Every milestone
    * of the sequence must have a live reading on THIS assignment — another
@@ -89,7 +101,7 @@ export class TripCompletionService {
     const named = await this.assignments.findActiveById(assignmentId);
     if (!named) throw new NotFoundError('Assignment not found.');
 
-    return this.db.transaction(async (tx) => {
+    const { request, told } = await this.db.transaction(async (tx) => {
       const trip = await this.lockOpenTrip(named.tripId, tx);
 
       const assignment = await this.assignments.lockActiveById(assignmentId, tx);
@@ -137,8 +149,45 @@ export class TripCompletionService {
 
       await this.costs.lockForAssignment(assignment.id, submittedBy, new Date(), tx);
 
-      return request;
+      // ★ AND THE REVIEWER IS TOLD, IN THIS TRANSACTION (0036). A completion
+      // that nobody is told about waits for somebody to open the review queue,
+      // which is how a finished trip stays open for a day. The row is written
+      // beside the request it is about, so a submit that rolls back tells
+      // nobody, and `completion:<id>:submitted` makes a retried submit ring
+      // once.
+      //
+      // ★ TO WHOEVER HOLDS THE AUTHORITY, ASKED AT THE MOMENT OF WRITING —
+      // never a configured address and never "the admin" as a constant. The
+      // deciding key is `trip.complete.review`, which is `'global'`, and 0004
+      // keeps at most ONE active SUPERADMIN (`uq_single_active_superadmin`); so
+      // the active global assignment IS the recipient, read under this
+      // transaction. A deployment mid-handover has none, and then there is
+      // nobody to tell — the request still stands and the queue still shows it,
+      // because the queue was never built on a notification.
+      const reviewer = await this.roles.findActiveSuperAdmin(tx);
+      const told = reviewer
+        ? await this.notifications.record(
+            {
+              recipientUserId: reviewer.userId,
+              type: 'COMPLETION_SUBMITTED',
+              tripId: trip.id,
+              tripScheduledOn: trip.scheduledOn,
+              // No reason, no figure: what there is to review is on the review
+              // screen, read live under permission (0020 — nothing commercial
+              // goes near this table).
+              eventKey: eventKeys.completionSubmitted(request.id),
+            },
+            tx,
+          )
+        : null;
+
+      return { request, told };
     });
+
+    // After commit, for the reason `NotificationService` documents: the bell
+    // must never ring for a row the reviewer cannot yet read.
+    this.notifications.deliver([told]);
+    return request;
   }
 
   /**
