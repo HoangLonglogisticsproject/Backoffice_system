@@ -86,6 +86,9 @@ export const tripKeys = {
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,
 
+  /** "Điều hành xe" for one business day. */
+  fleet: (day: string) => [...tripKeys.all, 'fleet', day] as const,
+
   /**
    * One trip's dispatch history — every turn, active and ended. Its own root
    * rather than a child of `schedules()`: the panel reads it while the board
