@@ -1277,6 +1277,23 @@ sudo awk '$4 >= "[06/Oct/2026:15:35:26" && $4 < "[06/Oct/2026:16:52:31" && $7 ~ 
 
 Result: **0**.
 
+The command is recorded **exactly as it was run**. Its `2>/dev/null` discards awk's errors, so
+the run does not by itself show that both files existed and were read. A missing or unreadable
+file would have counted as zero lines.
+
+**Not yet run.** If coverage needs to be confirmed, this check stops on an unreadable file
+instead of reporting a count. It also prints each file's first and last timestamp, so you can see
+whether the window falls inside what was searched:
+
+```
+for f in /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1; do
+  sudo test -r "$f" || { echo "unreadable or missing: $f" >&2; exit 1; }
+  printf '%s  %s .. %s\n' "$f" "$(sudo head -n1 "$f" | awk '{print $4}')" "$(sudo tail -n1 "$f" | awk '{print $4}')"
+done
+sudo awk '$4 >= "[06/Oct/2026:15:35:26" && $4 < "[06/Oct/2026:16:52:31" && $7 ~ /\/fleet-operations/' \
+  /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1 | wc -l
+```
+
 A non-zero count would not have identified a role either: the SuperAdmin and Dispatch read the
 board legitimately.
 
