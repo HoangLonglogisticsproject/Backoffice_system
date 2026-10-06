@@ -1188,3 +1188,89 @@ Cloudflare, request the VPS directly and confirm the connection is refused.
 variable is simply ignored, and the app falls back to trusting nobody, which is the safe
 direction. It must be replaced with `TRUSTED_PROXIES` before launch or the throttle will be
 global.
+
+---
+
+# 24. Incident 2026-10-06 — finding 9: the fleet board was readable with `trip.read`
+
+**Severity: LOW.** It was a confidentiality regression between internal staff roles. No amounts
+were exposed, and nothing was reachable anonymously. **Status: fixed and verified in production.**
+
+## 24.1 What happened
+
+PR #103 ("Điều hành xe", `GET /fleet-operations`) gated the board on `trip.read`. That
+permission is held by every booking function: Sales, Accounting, Customer Service and Dispatch.
+The board told those roles things that no route had ever told them:
+
+- each lorry's start-of-shift fuel answer, who declared it, and when;
+- how many fuel transactions the lorry took that day;
+- which of those transactions lack liters or an odometer reading.
+
+Every other fact on the board was already readable to them on Lịch xe: plates, crews,
+milestones and trip state. Amounts were never exposed. They are selected only under `cost.read`
+(global tier), and the query returns `NULL` otherwise. The frontend menu of #103 also offered
+the screen to every `trip.read` holder.
+
+#103 was merged and released while its final security review was still running, so the review's
+fix arrived as PR #105.
+
+## 24.2 Timeline (UTC; Asia/Ho_Chi_Minh is +7)
+
+| Time | Event |
+|---|---|
+| 08:31 | #103 merged as `6ae3391` |
+| 08:35:26 | `release` deploys backend `6ae3391`, health OK. **Exposure starts.** |
+| ~09:00 | Review finds the gate too broad and proves it on the real API: a Sales member reads the board (200) |
+| 09:4x | #105 merged as `ad1585b6b9a23d3aa9637464b7d9e36c0f2971d0` |
+| 09:52:31 | `release` deploys backend `ad1585b`, health OK. **Exposure ends** (about 77 min). The frontend is promoted to Vercel Production in the same job. |
+| 09:54 | Read-only `Production Trip Audit` reports `backend_release = ad1585b6b9a2…` |
+
+## 24.3 Fix (#105)
+
+- `GET /fleet-operations` now requires **`dispatch.write`**. That is the global tier plus the
+  dispatch function, head or member. It is the existing boundary for dispatch reads, also used by
+  `GET /trip-drivers` and the assignment-request queue.
+- No permission was added or widened. Amounts remain `cost.read`.
+- The menu offers the screen only with `dispatch.write`. A direct URL shows a Dispatch-only state
+  and never calls the route.
+
+## 24.4 Verification after release
+
+| Check | Result |
+|---|---|
+| Deployed backend identity | `backend_release = ad1585b6b9a2…` = #105 merge SHA (read-only audit workflow) |
+| Production, unauthenticated / forged session | 401 |
+| Role matrix at the deployed SHA, real backend + real PostgreSQL, real department users (CI `integration` job on main) | SuperAdmin 200 with money; Dispatch head/member 200 with **no** amounts; Sales, CS, Accounting heads/members, a unit with no function, and drivers → 403. 173/173 |
+| Same matrix with the old `trip.read` gate | Sales, CS and Accounting get 200: the regression reproduced |
+| Live production frontend (Chromium, every `/api` call intercepted) | Menu shown only to SuperAdmin/Dispatch. Sales, Accounting and no-function users make 0 calls to `/fleet-operations` and see the Dispatch-only state. Dispatch sees no amounts. 15/15 |
+
+**Not verified directly in production:** the per-role 200/403 on real production accounts. That
+needs credentials for each role, and creating test accounts would mutate production data.
+
+## 24.5 Access during the exposure window
+
+**Access during the exposure window cannot be determined from available logs.**
+
+- The backend does not log requests; Nest logs startup and errors only.
+- nginx on the VPS writes `/var/log/nginx/opsystem.access.log`. It records method, path, status
+  and client address, but no user. The restricted `deploy` account cannot read it.
+- Vercel runtime logs are reachable only with the Vercel token held as a GitHub secret, and they
+  carry no user identity either.
+
+If someone with root wants to bound it, this read-only command counts the hits in the window:
+
+```
+sudo awk '$4 >= "[06/Oct/2026:08:35:26" && $4 < "[06/Oct/2026:09:52:31" && $7 ~ /fleet-operations/' \
+  /var/log/nginx/opsystem.access.log /var/log/nginx/opsystem.access.log.1
+```
+
+Zero lines would show that nobody read the board in that window. Any lines would still not
+identify the role: the SuperAdmin and Dispatch read the board legitimately.
+
+## 24.6 Lessons
+
+- **An authorization review compares each new response field with what each role could already
+  read.** A permission that is right for the trip data on a screen can still be wrong for a new
+  fact the screen adds.
+- **Before pushing a review fix, check that the PR is still open.** A merge deletes the head
+  branch. A later push re-creates it with no pull request, and no CI runs.
