@@ -102,7 +102,8 @@ describe('BookingExportDialog', () => {
     open();
     await screen.findByRole('img');
     fireEvent.click(screen.getByRole('button', { name: 'Tải ảnh PNG' }));
-    expect(downloadPng).toHaveBeenCalledWith(PNG, 'booking-KAPV-2026-10-06.png');
+    // The pickup hour (09:00Z = 16:00 in Hồ Chí Minh) and the export's own second.
+    expect(downloadPng).toHaveBeenCalledWith(PNG, expect.stringMatching(/^booking-KAPV-2026-10-06-1600-xuat-\d{6}\.png$/));
   });
 
   it('★ closing revokes the preview URL and drops the dialog; reopening reads the trip afresh', async () => {

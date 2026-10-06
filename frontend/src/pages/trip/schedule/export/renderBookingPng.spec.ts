@@ -111,12 +111,15 @@ describe('renderBookingPng', () => {
     expect(drawn).toEqual(expect.arrayContaining(['Chưa phân công', 'Nguyễn Văn A', 'Trần Thị Cúc', 'Lê Văn Đông']));
   });
 
-  it('★ never exceeds the pixel budget a phone browser draws — below 2× when long, below 1× when huge', async () => {
+  it('★ trades 2× for less to fit a phone browser`s pixel budget — but never below the 1× readability floor', async () => {
     await render({ cargoInfo: 'kiện hàng dễ vỡ '.repeat(1200) });
-    await render({ crew: Array.from({ length: 1000 }, (_, index) => ({ plate: `51H${index}`, driverName: `Tài xế ${index}` })) });
-    for (const { width, height } of sizes) expect(width * height).toBeLessThanOrEqual(16_000_000);
     expect(sizes[0]!.width).toBeLessThan(1440);
-    expect(sizes[1]!.width).toBeLessThan(720);
+    expect(sizes[0]!.width * sizes[0]!.height).toBeLessThanOrEqual(16_000_000);
+
+    // Past the budget even at 1×, the image grows taller at 1× — text is never shrunk below its size.
+    await render({ crew: Array.from({ length: 1000 }, (_, index) => ({ plate: `51H${index}`, driverName: `Tài xế ${index}` })) });
+    expect(sizes[1]!.width).toBe(720);
+    expect(calls).toContain('scale:1');
   });
 
   it('rejects when the browser cannot encode the PNG', async () => {

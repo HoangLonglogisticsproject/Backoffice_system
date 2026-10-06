@@ -19,8 +19,17 @@ const PAD = 40;
 const CONTENT = WIDTH - PAD * 2;
 const LABEL = 150;
 const SCALE = 2;
-// ponytail: iOS Safari refuses a canvas above ~16.7 M pixels; a very long document is drawn smaller instead.
+// ponytail: iOS Safari refuses a canvas above ~16.7 M pixels; a long document trades 2× for less, never below 1×.
 const MAX_PIXELS = 16_000_000;
+/**
+ * ★ THE READABILITY FLOOR. The PNG is never drawn below 1×, so its smallest
+ * text (the 12 px labels and footer) is at least 12 real pixels high and the
+ * body 15. Past the budget the image grows taller at 1× rather than shrinking;
+ * reaching that needs ~22 000 px of content — far beyond every trip field's
+ * 4 000-character cap — and a browser that cannot allocate it says so in the
+ * dialog instead of handing out unreadable text.
+ */
+const MIN_SCALE = 1;
 
 const INK = '#111827';
 const MUTED = '#6b7280';
@@ -145,8 +154,8 @@ const context2d = (canvas: HTMLCanvasElement): CanvasRenderingContext2D => {
 export async function renderBookingPng(doc: BookingDocument): Promise<Blob> {
   await loadFonts(Object.values(TYPE).map((style) => style.font), textOf(doc));
   const height = layout(context2d(document.createElement('canvas')), doc, false);
-  // 2×, unless that would break the pixel budget — then exactly as large as the budget allows, even below 1×.
-  const scale = Math.min(SCALE, Math.sqrt(MAX_PIXELS / (WIDTH * height)));
+  // 2×, or as large as the pixel budget allows — but never below the readability floor.
+  const scale = Math.max(MIN_SCALE, Math.min(SCALE, Math.sqrt(MAX_PIXELS / (WIDTH * height))));
 
   const canvas = document.createElement('canvas');
   canvas.width = Math.floor(WIDTH * scale);

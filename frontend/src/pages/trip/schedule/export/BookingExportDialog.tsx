@@ -15,6 +15,8 @@ interface Png {
   blob: Blob;
   /** For the preview `<img>` only; revoked when the dialog closes or the image is redrawn. */
   url: string;
+  /** The "Ngày xuất" drawn on it — the file name carries the same instant. */
+  exportedAt: Date;
 }
 
 /**
@@ -31,11 +33,12 @@ function useBookingPng(booking: BookingExport | undefined): { png: Png | null; f
     if (!booking) return;
     let live = true;
     let url: string | null = null;
-    renderBookingPng(bookingDocument(booking, new Date())).then(
+    const exportedAt = new Date();
+    renderBookingPng(bookingDocument(booking, exportedAt)).then(
       (blob) => {
         if (!live) return;
         url = URL.createObjectURL(blob);
-        setPng({ blob, url });
+        setPng({ blob, url, exportedAt });
       },
       () => live && setFailed(true),
     );
@@ -82,7 +85,7 @@ export function BookingExportDialog({ tripId, onClose }: Readonly<{ tripId: stri
             type="button"
             size="lg"
             disabled={!png}
-            onClick={() => png && booking.data && downloadPng(png.blob, bookingPngFileName(booking.data.customerName, booking.data.scheduledOn))}
+            onClick={() => png && booking.data && downloadPng(png.blob, bookingPngFileName(booking.data, png.exportedAt))}
             className="bg-blue-600 text-white hover:bg-blue-700"
           >
             {t('bookingExportDownload')}

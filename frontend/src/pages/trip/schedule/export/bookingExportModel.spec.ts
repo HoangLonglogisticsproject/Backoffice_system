@@ -28,43 +28,47 @@ const section = (doc: BookingDocument, heading: string): DocumentBlock[] =>
   doc.sections.find((candidate) => candidate.heading === heading)!.blocks;
 
 describe('bookingDocument', () => {
-  it('★ one fixed template: the same headings and rows for any trip, in this order', () => {
-    const doc = bookingDocument(booking(), EXPORTED_AT);
+  it('★ one fixed template, in this order — the operational note only when somebody wrote one', () => {
+    const doc = bookingDocument(booking({ driverInstructions: 'Gọi trước 30 phút' }), EXPORTED_AT);
     expect([doc.brand, doc.title]).toEqual(['HOÀNG LONG LOGISTICS', 'PHIẾU BOOKING']);
     expect(doc.sections.map((part) => part.heading)).toEqual(['Thời gian', 'Lộ trình', 'Khách hàng & hàng hóa', 'Xe & tài xế']);
-
-    const empty = bookingDocument(
-      booking({ customerName: null, cargoInfo: null, scheduledDeliveryAt: null, crew: [] }),
-      EXPORTED_AT,
-    );
-    expect(empty.sections.map((part) => part.blocks.length)).toEqual([2, 2, 3, 1]);
-    expect(section(empty, 'Khách hàng & hàng hóa')).toEqual([
-      { kind: 'field', label: 'Khách hàng', value: '—' },
-      { kind: 'field', label: 'Hàng hóa', value: '—' },
-      { kind: 'field', label: 'Ghi chú vận hành', value: '—' },
+    expect(section(doc, 'Khách hàng & hàng hóa')).toEqual([
+      { kind: 'field', label: 'Khách hàng', value: 'KAPV' },
+      { kind: 'field', label: 'Hàng hóa', value: '24 kiện · 1.2 tấn · 6 CBM' },
+      { kind: 'field', label: 'Ghi chú vận hành', value: 'Gọi trước 30 phút' },
     ]);
+    // Today nothing writes it: no "Ghi chú vận hành: —" row on a document sent outside.
+    const today = section(bookingDocument(booking(), EXPORTED_AT), 'Khách hàng & hàng hóa');
+    expect(today.map((block) => block.kind === 'field' && block.label)).toEqual(['Khách hàng', 'Hàng hóa']);
   });
 
-  it('★ times on the business clock, with the weekday; an unbooked hour or delivery is said, not invented', () => {
+  it('★ prints no empty placeholder: absent optional rows go, an emptied section goes — what the booking IS stays', () => {
+    const bare = bookingDocument(
+      booking({ customerName: null, cargoInfo: '  ', scheduledPickupAt: null, scheduledDeliveryAt: null, crew: [] }),
+      EXPORTED_AT,
+    );
+    expect(bare.sections.map((part) => part.heading)).toEqual(['Thời gian', 'Lộ trình', 'Xe & tài xế']);
+    expect(section(bare, 'Thời gian')).toEqual([{ kind: 'field', label: 'Lấy hàng', value: 'Thứ Ba, 06/10/2026' }]);
+    expect(section(bare, 'Xe & tài xế')).toEqual([{ kind: 'empty', text: 'Chưa phân công' }]);
+    // No value that is only a placeholder dash (the contact's own "—" is data).
+    expect(JSON.stringify(bare.sections)).not.toContain('"—"');
+  });
+
+  it('★ times on the business clock, with the weekday; no hour or delivery is invented', () => {
     expect(section(bookingDocument(booking(), EXPORTED_AT), 'Thời gian')).toEqual([
       { kind: 'field', label: 'Lấy hàng', value: 'Thứ Ba, 06/10/2026 · 16:00' },
       { kind: 'field', label: 'Giao hàng', value: 'Thứ Tư, 07/10/2026 · 10:00' },
     ]);
-    const unbooked = bookingDocument(booking({ scheduledPickupAt: null, scheduledDeliveryAt: null }), EXPORTED_AT);
-    expect(section(unbooked, 'Thời gian')).toEqual([
-      { kind: 'field', label: 'Lấy hàng', value: 'Thứ Ba, 06/10/2026 · chưa có giờ' },
-      { kind: 'field', label: 'Giao hàng', value: 'Chưa xác định' },
-    ]);
   });
 
-  it('each end: the place, the whole address as typed, the contact; nothing at all reads "—"', () => {
+  it('each end: the place, the whole address as typed, the contact; an end with nothing on file still says so', () => {
     const route = section(bookingDocument(booking(), EXPORTED_AT), 'Lộ trình');
     expect(route).toEqual([
       { kind: 'stop', label: 'Điểm lấy hàng', name: 'Kho Củ Chi', lines: [LONG_ADDRESS, 'Liên hệ: Anh Tuấn — 0909 123 456'] },
       { kind: 'stop', label: 'Điểm giao hàng', name: null, lines: ['12 Nguyễn Huệ\nPhường Sài Gòn'] },
     ]);
     const blank = bookingDocument(booking({ delivery: { name: null, address: ' ', contact: null } }), EXPORTED_AT);
-    expect(section(blank, 'Lộ trình')[1]).toEqual({ kind: 'stop', label: 'Điểm giao hàng', name: null, lines: ['—'] });
+    expect(section(blank, 'Lộ trình')[1]).toEqual({ kind: 'stop', label: 'Điểm giao hàng', name: null, lines: ['Chưa xác định'] });
   });
 
   it('★ 0..N crew: "Chưa phân công", one pair, or EVERY pair — formatted plates, never truncated', () => {
@@ -84,7 +88,7 @@ describe('bookingDocument', () => {
     expect(section(three, 'Xe & tài xế')).toEqual([
       { kind: 'crew', plate: '51H-27314', driver: 'Nguyễn Văn A' },
       { kind: 'crew', plate: '51D-65233', driver: 'Trần Thị Cúc' },
-      { kind: 'crew', plate: '—', driver: 'Lê Văn Đông' },
+      { kind: 'crew', plate: 'Chưa có xe', driver: 'Lê Văn Đông' },
     ]);
   });
 

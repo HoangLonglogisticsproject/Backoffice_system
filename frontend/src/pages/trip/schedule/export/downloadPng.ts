@@ -1,17 +1,31 @@
+import type { BookingExport } from '@/types/bookingExport';
+import { businessClockOf } from '@/utils/format/datetime';
+
 /**
  * Saving the booking PNG — the browser's own download, nothing uploaded.
  */
 
 /**
- * `booking-<reference>-YYYY-MM-DD.png` — the customer stands in for the
- * reference (a trip has no user-facing booking code), the day is the pickup day.
+ * `booking-<customer>-<pickup day>-<pickup HHmm>-xuat-<export HHmmss>.png`, e.g.
+ * `booking-KAPV-2026-10-06-1600-xuat-153012.png` — `-<HHmm>` only once an hour
+ * is booked, `<customer>` only when there is one.
+ *
+ * ★ READABLE, AND ONE NAME PER EXPORT. A trip has no user-facing
+ * code and its id is internal, so the name is what a person reads on the
+ * booking: the customer, the pickup day and hour. One customer may book several
+ * lorries for the same hour, and the browser cannot see the download folder —
+ * so the export's own second is always appended: the "Ngày xuất" the document
+ * prints, on the same Hồ Chí Minh clock.
  *
  * ★ SAFE ON EVERY FILESYSTEM: diacritics folded (`Đông Á` → `Dong-A`), anything
- * but letters and digits collapsed to one hyphen, length capped. No internal id
- * ever appears. A trip with no customer is just `booking-<day>.png`.
+ * but letters and digits collapsed to one hyphen, the customer capped after a
+ * whole word. No internal id ever appears.
  */
-export function bookingPngFileName(customerName: string | null, scheduledOn: string): string {
-  const folded = (customerName ?? '')
+export function bookingPngFileName(
+  booking: Pick<BookingExport, 'customerName' | 'scheduledOn' | 'scheduledPickupAt'>,
+  exportedAt: Date,
+): string {
+  const folded = (booking.customerName ?? '')
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
     .replace(/[đĐ]/g, (letter) => (letter === 'đ' ? 'd' : 'D'))
@@ -21,10 +35,17 @@ export function bookingPngFileName(customerName: string | null, scheduledOn: str
   const head = folded.slice(0, 41);
   const lastBreak = head.lastIndexOf('-');
   const cut = lastBreak > 0 ? lastBreak : 40;
-  const reference = folded.length <= 40 ? folded : head.slice(0, cut);
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(scheduledOn) ? scheduledOn : 'undated';
-  return reference ? `booking-${reference}-${day}.png` : `booking-${day}.png`;
+  const customer = folded.length <= 40 ? folded : head.slice(0, cut);
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(booking.scheduledOn) ? booking.scheduledOn : 'undated';
+  const hour = booking.scheduledPickupAt && businessClockOf(booking.scheduledPickupAt).split(':').join('');
+  return `${['booking', customer, day, hour, 'xuat', businessSecondOf(exportedAt)].filter(Boolean).join('-')}.png`;
 }
+
+/** `HHmmss` on the business clock — fixed +07:00, as `businessInstant` (Vietnam keeps no daylight saving). */
+const businessSecondOf = (at: Date): string => {
+  const local = new Date(at.getTime() + 7 * 3_600_000).toISOString();
+  return local.slice(11, 13) + local.slice(14, 16) + local.slice(17, 19);
+};
 
 /**
  * Downloads `blob` — the SAME blob the preview shows — as `fileName`.
