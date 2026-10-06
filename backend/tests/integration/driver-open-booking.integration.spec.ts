@@ -9,6 +9,7 @@ import {
 } from '../helpers/integration-database';
 import type { Database } from '@common/types/database.port';
 import { businessToday } from '@common/pagination/date-range-page-query.dto';
+import { AuthorizationRepository } from '@core/authorization/persistence/authorization.repository';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { AssignmentRequestReviewService } from '../../src/capabilities/trip-schedule/application/assignment-request-review.service';
 import { DriverAssignmentRequestService } from '../../src/capabilities/trip-schedule/application/driver-assignment-request.service';
@@ -100,7 +101,7 @@ describeIntegration('Driver open bookings — real PostgreSQL', () => {
     execution = new TripExecutionService(database, trips, assignments, events, new TripVehicleRepository(database),
       users, notifications, completions, history, new VehicleDailyFuelCheckRepository(database), dispatchCrewOn(database));
     completion = new TripCompletionService(database, trips, assignments, completions, new TripCostRepository(database),
-      history, notifications, events, supersessionOn(database));
+      history, notifications, events, supersessionOn(database), new AuthorizationRepository(database));
     asks = new DriverAssignmentRequestService(database, trips, bookings, requests, users);
     review = new AssignmentRequestReviewService(database, trips, bookings, requests, dispatchCrewOn(database), notifications);
     portal = new DriverPortalService(new DriverTripReadModelRepository(database), events, new TripCostRepository(database), completions);

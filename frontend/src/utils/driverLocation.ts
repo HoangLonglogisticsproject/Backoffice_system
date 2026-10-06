@@ -3,6 +3,13 @@ import type { LocationEvidence } from '@/types/driver';
 /**
  * One fresh reading from the handset, or a named reason there is none.
  *
+ * ⚠ NOTHING CALLS THIS TODAY, AND THAT IS A DECISION RATHER THAN A LEFTOVER.
+ * The milestone buttons send no position: the geofence is off on the server
+ * (`GEOFENCED_MILESTONES` in `trip-execution.service.ts`), and contract §11
+ * keeps GPS [FUTURE]. This module and its spec are kept WHOLE so switching the
+ * check back on is wiring, not rewriting — `DriverTripPage` calling it again on
+ * the two confirmations is the frontend half of that.
+ *
  * ★ THE BROWSER IS A SENSOR, NOT A JUDGE. This asks the Geolocation API where
  * the phone is and hands the answer to the server exactly as given — position,
  * the phone's own accuracy estimate, the phone's own timestamp. It computes no

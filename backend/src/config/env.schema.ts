@@ -187,17 +187,21 @@ export const envSchema = z.object({
    * How many live notification streams (server-sent events) one account may
    * hold, and how many the whole process may hold.
    *
-   * Every open stream is a socket, a Subject and a heartbeat timer for as
-   * long as the tab lives. Without a ceiling one session — or one script
-   * holding a stolen cookie — could open connections until the process ran
-   * out of descriptors, which is CWE-400. The per-user default covers a phone,
-   * a tablet and a couple of stray tabs; the process default is far above
-   * anything a fleet's worth of drivers opens and far below what one Node
-   * process can hold. Beyond either, the request is answered 429 with a
-   * Retry-After, and nothing is registered for it.
+   * Every open connection is a socket held for as long as the tab lives.
+   * Without a ceiling one session — or one script holding a stolen cookie —
+   * could open connections until the process ran out of descriptors, which is
+   * CWE-400. The per-user default covers a phone, a tablet and a couple of
+   * stray tabs; the process default is far above anything a fleet's worth of
+   * drivers opens and far below what one Node process can hold. Beyond either,
+   * the handshake is dropped and nothing is registered for it.
+   *
+   * ⚠ RENAMED FROM `SSE_MAX_CONNECTIONS*` WHEN THE TRANSPORT BECAME A WEBSOCKET
+   * (CEO 2026-10-06). The old names are NOT read any more — a deployment that
+   * set them gets the defaults above and no warning, which is why they were
+   * renamed rather than left to describe a protocol the system no longer speaks.
    */
-  SSE_MAX_CONNECTIONS_PER_USER: z.coerce.number().int().min(1).default(5),
-  SSE_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(1000),
+  REALTIME_MAX_CONNECTIONS_PER_USER: z.coerce.number().int().min(1).default(5),
+  REALTIME_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(1000),
 
   /**
    * Where Vietnam's administrative units are read from, for the location

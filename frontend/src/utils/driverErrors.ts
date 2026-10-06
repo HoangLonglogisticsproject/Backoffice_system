@@ -61,6 +61,13 @@ const validationKey = (details: Readonly<Record<string, string>> | undefined): T
   return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
 };
 
+/**
+ * ⚠ UNREACHABLE WHILE THE GEOFENCE IS OFF (DL-118), AND KEPT ANYWAY. The server
+ * cannot send any of these codes today because it measures nothing — but a
+ * driver facing one needs a sentence to act on, and the day the check returns is
+ * not the day to rediscover six of them. The map is cheap; a silent
+ * `driverErrValidation` in a lorry cab is not.
+ */
 const LOCATION_REJECTION_KEYS: Record<string, TranslationKey> = {
   DESTINATION_MISSING: 'driverErrDestinationMissing',
   LOCATION_REQUIRED: 'driverErrLocationRequired',

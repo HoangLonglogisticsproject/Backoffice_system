@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, Fuel, Truck } from 'lucide-react';
+import { CalendarDays, ChevronRight, Fuel, Truck } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DriverEmptyState } from '@/components/driver/DriverEmptyState';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useMyWorkday, useWorkdayFuel } from '@/hooks/driver';
 import type { DriverWorkday, DriverWorkdayTurn, FuelObligation } from '@/types/driver';
@@ -13,9 +14,10 @@ import { currentAndNext, OPENED_FROM_SCHEDULE } from '@/utils/driverSchedule';
 import { formatPlate } from '@/utils/format';
 import { formatTime } from '@/utils/format/datetime';
 import { DailyFuelDialog } from './DailyFuelDialog';
+import { DriverLoadError } from './DriverLoadError';
 
 /**
- * "Ca làm việc hôm nay" — the top of the driver's screen: each lorry they drive
+ * "Hôm nay" — the tab a driver opens on: each lorry they drive
  * today, its fuel answer, the trip they are on and the one after it.
  *
  * ★ EVERYTHING HERE IS THE SERVER'S ANSWER. Which turns are today's work, how
@@ -62,30 +64,46 @@ const progressLabel = (turn: DriverWorkdayTurn): TranslationKey => {
 
 type FuelAction = { kind: 'check' | 'fill'; lorry: Lorry; assignmentId: string };
 
-export function WorkdayPanel() {
-  const { t } = useLanguage();
-  const { workday, loading, error } = useMyWorkday();
+export function WorkdayPanel({ onSeeUpcoming }: Readonly<{ onSeeUpcoming: () => void }>) {
+  // Nothing in this component body needs a translation any more — the empty
+  // state and the cards each ask for their own.
+  const { workday, loading, error, reload } = useMyWorkday();
   const { declareCheck, recordFill } = useWorkdayFuel();
   const [action, setAction] = useState<FuelAction | null>(null);
 
-  // A failed read leaves the schedule below to say so: it asks the same server
-  // and owns the retry. The panel simply steps aside.
-  if (error) return null;
+  const lorries = workday?.vehicles ?? [];
 
   return (
-    <section aria-labelledby="workday-title" className="space-y-2">
-      <h2 id="workday-title" className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        {t('driverWorkdayTitle')}
-      </h2>
-      {loading || !workday ? <Skeleton className="h-40 w-full rounded-xl" /> : null}
-      {workday?.vehicles.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-sm text-muted-foreground">
-          {t('driverWorkdayEmpty')}
-        </p>
+    <section className="space-y-3">
+      {/*
+        ★ NO HEADING OF ITS OWN ANY MORE. This used to be a card above the tabs
+        titled "Ca làm việc hôm nay"; it IS the "Hôm nay" tab now, and the tab is
+        what names it — a `tabpanel` is already labelled by its tab, so a second
+        heading would say the same thing twice to a screen reader.
+      */}
+      {loading && !workday ? <Skeleton className="h-40 w-full rounded-xl" /> : null}
+
+      {/* ★ THE ERROR IS SHOWN, NOT SWALLOWED. The panel used to return `null`
+          and let the schedule list below report the failure — it is the whole
+          tab now, so a silent `null` would read as "no work today", which is a
+          different and much worse sentence than "could not load". */}
+      {error ? <DriverLoadError error={error} onRetry={reload} /> : null}
+
+      {!loading && !error && lorries.length === 0 ? (
+        <DriverEmptyState
+          title="driverEmptyTitle"
+          message="driverEmptyToday"
+          action={{
+            label: 'driverEmptySeeUpcoming',
+            icon: <CalendarDays aria-hidden />,
+            onClick: onSeeUpcoming,
+          }}
+        />
       ) : null}
-      {workday && workday.vehicles.length > 0 ? (
+
+      {lorries.length > 0 ? (
         <ul className="space-y-3">
-          {workday.vehicles.map((lorry) => (
+          {lorries.map((lorry) => (
             <li key={lorry.vehicle.id}>
               <LorryCard lorry={lorry} onFuel={setAction} />
             </li>
@@ -115,8 +133,12 @@ export function WorkdayPanel() {
 }
 
 function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: FuelAction) => void }>) {
-  const { t, language } = useLanguage();
-  const { current, next } = currentAndNext(lorry.turns);
+  const { t } = useLanguage();
+  const { current } = currentAndNext(lorry.turns);
+  // Everything that is not the turn in hand, in the server's order. A closed
+  // turn stays in the list: "đã chạy xong" is a fact about the day, and hiding
+  // it is what made the old card disagree with the tab's own count.
+  const rest = lorry.turns.filter((turn) => turn !== current);
   const plate = formatPlate(lorry.vehicle.plate);
   // Any of today's turns may carry a fill; the one in hand is the natural provenance.
   const fillThrough = current ?? lorry.turns[lorry.turns.length - 1] ?? null;
@@ -159,13 +181,25 @@ function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: 
           <p className="text-sm text-muted-foreground">{t('driverWorkdayAllDone')}</p>
         )}
 
-        {next ? (
-          <div className="text-sm">
+        {/*
+          ★ EVERY OTHER TURN OF THE DAY, NOT JUST THE NEXT ONE.
+
+          This card used to show the turn in hand and the one after it, and
+          nothing else — fine as a summary above the schedule, wrong now that it
+          IS the "Hôm nay" tab: a driver with four turns would read "Hôm nay (4)"
+          and be shown two. Each row is a link, so none of the day's work is
+          reachable only by counting it.
+        */}
+        {rest.length > 0 ? (
+          <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground">{t('driverWorkdayNext')}</p>
-            <p className="font-medium">
-              {next.scheduledPickupAt ? `${formatTime(next.scheduledPickupAt, language)} · ` : ''}
-              <RouteText turn={next} />
-            </p>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {rest.map((turn) => (
+                <li key={turn.assignment.id}>
+                  <TurnRow turn={turn} />
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
 
@@ -193,6 +227,36 @@ function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: 
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * One of the day's other turns: when, where, and where it stands.
+ *
+ * ★ A LINK, NOT A LINE OF TEXT. The turn in hand has the big button; these have
+ * the same destination in a smaller shape, because a driver whose first trip is
+ * already closed still has to be able to open the second one.
+ */
+function TurnRow({ turn }: Readonly<{ turn: DriverWorkdayTurn }>) {
+  const { t, language } = useLanguage();
+
+  return (
+    <Link
+      to={`/driver/assignments/${encodeURIComponent(turn.assignment.id)}`}
+      state={OPENED_FROM_SCHEDULE}
+      className="flex min-h-14 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium wrap-anywhere">
+          {turn.scheduledPickupAt ? `${formatTime(turn.scheduledPickupAt, language)} · ` : ''}
+          <RouteText turn={turn} />
+        </span>
+        <span className="mt-0.5 block text-xs text-muted-foreground">
+          <span className="tabular-nums">{turn.progress.reached}/4</span> · {t(progressLabel(turn))}
+        </span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+    </Link>
   );
 }
 

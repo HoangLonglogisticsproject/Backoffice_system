@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Clock, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -78,6 +79,8 @@ export default function CompletionReviewPage() {
 
   const mayReview = can('trip.complete.review');
 
+  const { highlight, outcome } = useTripDeepLink(queue, loading, setOpen);
+
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -96,6 +99,13 @@ export default function CompletionReviewPage() {
       {error ? (
         <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {t(reviewErrorKey(error))}
+        </p>
+      ) : null}
+
+      {/* What the notification that brought somebody here actually found. */}
+      {outcome ? (
+        <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          {t(outcome)}
         </p>
       ) : null}
 
@@ -127,6 +137,7 @@ export default function CompletionReviewPage() {
                   key={row.assignmentId ?? row.tripId}
                   row={row}
                   language={language}
+                  highlighted={highlight === row.tripId}
                   onOpen={() => setOpen(row)}
                 />
               ))}
@@ -151,15 +162,86 @@ export default function CompletionReviewPage() {
   );
 }
 
+/**
+ * Opening the queue AT one trip, because a notification named it.
+ *
+ * ★ THE NOTIFICATION NAMES A TRIP; THE DECISION IS ABOUT A LORRY (ADR-0004).
+ * Those are not the same thing, and the gap is the whole of this hook. One
+ * matching row is unambiguous and opens. TWO matching rows means one trip with
+ * two lorries both waiting — and `notifications` has no column that could tell
+ * them apart (0020 stores a trip id and a day, nothing else). Opening either
+ * one would be guessing on somebody's behalf about which turn's money is being
+ * approved, so it opens neither and says to pick.
+ *
+ * ★ AND THE PARAM IS CONSUMED, NOT LEFT IN THE URL. Once acted on it is dropped
+ * with `replace`, so closing the modal does not leave a link that re-opens it on
+ * the next render, and a refresh lands on the plain queue.
+ *
+ * ⚠ RUNS ONCE PER PARAM VALUE, not once per render and not once per refetch.
+ * The queue re-reads whenever a signal arrives; without the ref a reviewer who
+ * closed the modal would have it reopened under them by the next refresh.
+ */
+function useTripDeepLink(
+  queue: OperationalBoardRow[],
+  loading: boolean,
+  openRow: (row: OperationalBoardRow) => void,
+): { highlight: string | null; outcome: TranslationKey | null } {
+  const [params, setParams] = useSearchParams();
+  const requested = params.get('trip');
+
+  const handled = useRef<string | null>(null);
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<TranslationKey | null>(null);
+
+  useEffect(() => {
+    // Nothing asked for, or the list has not answered yet: deciding on an empty
+    // queue would report "already decided" for every deep link.
+    if (!requested || loading) return;
+    if (handled.current === requested) return;
+    handled.current = requested;
+
+    const matches = queue.filter((row) => row.tripId === requested);
+
+    if (matches.length === 1) {
+      openRow(matches[0]);
+      setHighlight(null);
+      setOutcome(null);
+    } else if (matches.length > 1) {
+      setHighlight(requested);
+      setOutcome('reviewPickWhichLorry');
+    } else {
+      setHighlight(null);
+      setOutcome('reviewTripAlreadyDecided');
+    }
+
+    // The param has done its job. Dropped with `replace` so the back button
+    // does not walk into a link that opens the modal again.
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('trip');
+      return next;
+    }, { replace: true });
+  }, [requested, loading, queue, openRow, setParams]);
+
+  return { highlight, outcome };
+}
+
 function QueueRow({
   row,
   language,
+  highlighted,
   onOpen,
-}: Readonly<{ row: OperationalBoardRow; language: 'vi' | 'en'; onOpen: () => void }>) {
+}: Readonly<{
+  row: OperationalBoardRow;
+  language: 'vi' | 'en';
+  /** Named by a notification that could not say WHICH lorry. */
+  highlighted: boolean;
+  onOpen: () => void;
+}>) {
   const { t } = useLanguage();
 
   return (
-    <TableRow>
+    <TableRow className={highlighted ? 'bg-primary/5 ring-1 ring-primary/30 ring-inset' : undefined}>
       <TableCell className="whitespace-nowrap">
         {formatCalendarDay(row.scheduledOn, language)}
       </TableCell>

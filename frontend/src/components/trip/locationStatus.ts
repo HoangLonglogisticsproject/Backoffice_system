@@ -16,10 +16,13 @@ export const isLocated = (location: TripLocation): boolean =>
   location.latitude !== null && location.longitude !== null;
 
 /**
- * ★ "LOCATED" ANSWERS "CAN A DRIVER BE CHECKED HERE", AND NOTHING MORE. It is a
- * fact about the row's coordinates. Whether any driver's reading then passed at
- * this place is the server's verdict on an execution event, worded separately
- * in the completion review.
+ * ★ "LOCATED" ANSWERS "DOES THIS ROW HAVE COORDINATES", AND NOTHING MORE.
+ *
+ * ⚠ IT NO LONGER IMPLIES A DRIVER CAN BE CHECKED HERE (DL-118): the geofence is
+ * off, so an unlocated place blocks no confirmation. The pill still earns its
+ * place — a place the office means to locate and has not is worth seeing, and the
+ * check is deferred rather than abandoned — but it is a data-completeness marker
+ * now, not a readiness gate.
  */
 export const statusOf = (
   location: TripLocation,

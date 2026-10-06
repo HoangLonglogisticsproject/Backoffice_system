@@ -53,14 +53,14 @@ export class AppConfig {
     return this.config.get('TRUSTED_PROXIES', { infer: true });
   }
 
-  /** Live notification streams one account may hold. */
-  get sseMaxConnectionsPerUser(): number {
-    return this.config.get('SSE_MAX_CONNECTIONS_PER_USER', { infer: true });
+  /** Live notification sockets one account may hold. */
+  get realtimeMaxConnectionsPerUser(): number {
+    return this.config.get('REALTIME_MAX_CONNECTIONS_PER_USER', { infer: true });
   }
 
-  /** Live notification streams the whole process may hold. */
-  get sseMaxConnections(): number {
-    return this.config.get('SSE_MAX_CONNECTIONS', { infer: true });
+  /** Live notification sockets the whole process may hold. */
+  get realtimeMaxConnections(): number {
+    return this.config.get('REALTIME_MAX_CONNECTIONS', { infer: true });
   }
 
   /** What the AI Platform must present on internal routes. Empty = closed. Never log it. */

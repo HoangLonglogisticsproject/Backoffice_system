@@ -14,14 +14,25 @@ giao dịch nghiệp vụ  →  record(…, tx)  →  COMMIT  →  deliver(…) 
 - `deliver` chạy **sau** commit, không trả promise, không thể huỷ gì. Điện thoại
   không nghe được thì phân công vẫn đúng và dòng vẫn còn đó.
 - Idempotent bằng `event_key` do server đặt từ **dòng nghiệp vụ**
-  (`assignment:<id>:assigned`, `completion:<id>:rejected`) + unique index
-  `(recipient_user_id, event_key)`. Retry, gửi lại, hai tab: một dòng.
+  (`assignment:<id>:assigned`, `completion:<id>:rejected`,
+  `completion:<id>:submitted`) + unique index `(recipient_user_id, event_key)`.
+  Retry, gửi lại, hai tab: một dòng.
 
-## Bốn loại, đều là sự kiện đã tồn tại
+## Bảy loại, đều là sự kiện đã tồn tại
 
-`TRIP_ASSIGNED` · `TRIP_UNASSIGNED` · `COMPLETION_REJECTED` (kèm lý do) ·
-`COMPLETION_APPROVED`. Không có `EXPENSE_REJECTED` vì vòng đời chi phí không có
-từ chối theo từng dòng — từ chối hoàn tất mở lại tất cả.
+Sáu loại đi **xuống** tài xế: `TRIP_ASSIGNED` · `TRIP_UNASSIGNED` ·
+`COMPLETION_REJECTED` (kèm lý do) · `COMPLETION_APPROVED` ·
+`ASSIGNMENT_REQUEST_REJECTED` · `ASSIGNMENT_REQUEST_SUPERSEDED` (0035).
+
+Một loại đi **lên** văn phòng: `COMPLETION_SUBMITTED` (0036, DL-119) — tài xế đã
+gửi hoàn tất và người giữ `trip.complete.review` phải quyết. Không có bảng mới và
+không có cột mới cho nó: `recipient_user_id` vốn tham chiếu `users`, và SuperAdmin
+là một user. Người nhận **hỏi lúc ghi** (`findActiveSuperAdmin` dưới transaction),
+không cấu hình; đang handover thì không báo ai và request vẫn đứng trong queue.
+
+Không có `EXPENSE_REJECTED` vì vòng đời chi phí không có từ chối theo từng dòng —
+từ chối hoàn tất mở lại tất cả. Không có `COMPLETION_WITHDRAWN` vì tài xế không
+rút lại được request đang chờ.
 
 Dòng mang: loại, `trip_id`, `trip_scheduled_on` (snapshot — tài xế bị rút khỏi
 chuyến không đọc được chuyến nữa), `detail` (lý do), `read_at`. **Không có tiền,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
@@ -19,6 +19,7 @@ import DriverTripsPage from './DriverTripsPage';
  */
 const fetchMyAssignments = vi.fn();
 const fetchMyAssignment = vi.fn();
+const fetchMyWorkday = vi.fn();
 
 vi.mock('@/api/driverPortal', () => ({
   fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),
@@ -27,6 +28,23 @@ vi.mock('@/api/driverPortal', () => ({
   declareExpense: vi.fn(),
   editExpense: vi.fn(),
   submitCompletion: vi.fn(),
+  // "Ca làm việc hôm nay" is the "Hôm nay" tab now, so every render of the
+  // schedule reads it. Empty unless a case says otherwise.
+  fetchMyWorkday: (...a: unknown[]) => fetchMyWorkday(...a),
+  declareDailyFuel: vi.fn(),
+  recordFuelFill: vi.fn(),
+}));
+
+/**
+ * Open bookings have their own screen and their own spec (`OpenBookings.spec`).
+ * Here they exist only as the place an empty week sends the driver, so the
+ * module is stubbed to "nothing open" rather than left to reach the network.
+ */
+vi.mock('@/api/openBooking', () => ({
+  fetchOpenBookings: () => Promise.resolve([]),
+  fetchMyAssignmentRequests: () => Promise.resolve([]),
+  requestOpenBooking: vi.fn(),
+  withdrawAssignmentRequest: vi.fn(),
 }));
 
 /** 10:00 on 30 August in Hồ Chí Minh — the business day every fixture is on. */
@@ -177,17 +195,6 @@ const dayPanel = () => {
   return panels[panels.length - 1] as HTMLElement;
 };
 
-/**
- * Today's cards, once the schedule has loaded. A card is its list item — the
- * route inside it is a list of its own, so only the outer items count.
- */
-const todayCards = async () => {
-  const list = await screen.findByRole('list', { name: 'Hôm nay' });
-  return within(list)
-    .getAllByRole('listitem')
-    .filter((item) => item.parentElement === list);
-};
-
 /** A card's one link, "Xem chuyến" — `getByRole` throws the day a card grows a second. */
 const linkOf = (card: HTMLElement) => within(card).getByRole('link');
 
@@ -218,6 +225,7 @@ beforeEach(() => {
   // Date only — fake timers would stall TanStack and RTL's async queries.
   vi.setSystemTime(NOW);
   fetchMyAssignments.mockResolvedValue([]);
+  fetchMyWorkday.mockReset().mockResolvedValue({ businessDate: '2026-08-30', vehicles: [] });
   fetchMyAssignment.mockResolvedValue(trip());
 });
 
@@ -226,29 +234,184 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('★ the work schedule', () => {
-  it('shows loading, then today’s assignments as cards: when, from where, to where, in which lorry', async () => {
-    let release: (value: unknown[]) => void = () => {};
-    fetchMyAssignments.mockReturnValue(new Promise((resolve) => (release = resolve)));
+/**
+ * ★ "HÔM NAY" AND THE OTHER TWO TABS READ DIFFERENT ENDPOINTS, DELIBERATELY.
+ *
+ * `GET /driver/workday` answers "what is your shift today" — finished turns
+ * included, with each lorry's fuel obligation. `GET /driver/assignments`
+ * answers "what is still to do" and excludes a finished trip by construction
+ * (`LIFECYCLE_PREDICATE.operational`), which is right for "Sắp tới" and
+ * "Chuyến đã chạy" and wrong for today.
+ *
+ * So the card-shaped cases below live on "Sắp tới": that is where an
+ * `AssignmentCard` is still drawn, and the properties they pin — the link's
+ * name, the ordering, what survives a failed refresh — are properties of that
+ * list wherever it is shown.
+ */
+
+/** The assignment cards under one day's heading, on the open day tab. */
+const cardsOn = async (day: string) => {
+  const region = await screen.findByRole('region', { name: day });
+  const [list] = within(region).getAllByRole('list');
+  return within(list)
+    .getAllByRole('listitem')
+    .filter((item) => item.parentElement === list);
+};
+
+/** A lorry whose shift is today, as `GET /driver/workday` returns it. */
+const workdayTurn = (id: string, over: Record<string, unknown> = {}) => ({
+  assignment: { id, assignedAt: '2026-08-29T10:00:00.000Z' },
+  tripId: 't1',
+  scheduledOn: '2026-08-30',
+  scheduledPickupAt: AT,
+  pickupAddress: 'Kho HCM',
+  deliveryAddress: 'KHO 3SC',
+  vehicle: { id: 'v1', plate: '51D-65233' },
+  closed: false,
+  progress: { reached: 0, next: 'ARRIVED_PICKUP' },
+  ...over,
+});
+
+const workdayLorry = (turns: ReturnType<typeof workdayTurn>[], over: Record<string, unknown> = {}) => ({
+  vehicle: { id: 'v1', plate: '51D-65233' },
+  fuel: 'NOT_REQUIRED',
+  fuelOnVehicle: false,
+  turns,
+  ...over,
+});
+
+const shift = (...lorries: ReturnType<typeof workdayLorry>[]) => ({
+  businessDate: '2026-08-30',
+  vehicles: lorries,
+});
+
+describe('★ the work schedule — hôm nay', () => {
+  it('shows loading, then the lorries of the shift', async () => {
+    let release: (value: unknown) => void = () => {};
+    fetchMyWorkday.mockReturnValue(new Promise((resolve) => (release = resolve)));
     renderAt('/driver');
 
-    // A status region by the element's own semantics — an `<output>`, not a
-    // div wearing `role="status"` — holding only the sentence.
-    const status = screen.getByRole('status');
-    expect(status).toHaveTextContent(/^Đang tải…$/);
-    expect(status.tagName).toBe('OUTPUT');
-    expect(status).not.toHaveAttribute('role');
-    expect(screen.queryByRole('link')).toBeNull();
-    release([trip()]);
-
-    const [card] = await todayCards();
-    expect(screen.queryByRole('status')).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: 'Lịch làm việc' })).toBeInTheDocument();
     // ★ The business day (Asia/Ho_Chi_Minh), named — not the handset's.
     expect(screen.getByText('Chủ Nhật, 30/08/2026')).toBeInTheDocument();
     expect(tab('Hôm nay')).toHaveAttribute('aria-selected', 'true');
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 1');
+    release(shift(workdayLorry([workdayTurn('a1')])));
 
+    expect(await screen.findByText('51D-65233')).toBeInTheDocument();
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (1)');
+    // The turn in hand is a link to its own assignment (ADR-0004).
+    expect(screen.getByRole('link', { name: /tiếp tục chuyến/i })).toHaveAttribute(
+      'href',
+      '/driver/assignments/a1',
+    );
+  });
+
+  it('★ counts EVERY turn of the day, finished ones included', async () => {
+    // The point of reading the workday here: a turn closed an hour ago is still
+    // the driver's day. Counting it from the assignments list — which drops a
+    // finished trip — is what showed "Hôm nay (0)" under a card that said the
+    // day's trips were done.
+    fetchMyWorkday.mockResolvedValue(
+      shift(workdayLorry([
+        workdayTurn('a1', { closed: true, progress: { reached: 4, next: null } }),
+        workdayTurn('a2', { pickupAddress: 'Kho Bình Dương' }),
+      ])),
+    );
+    renderAt('/driver');
+
+    await screen.findByText('51D-65233');
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (2)');
+  });
+
+  it('★ shows every turn of the day, not only the one in hand and the next', async () => {
+    // A lorry with four turns must not show two: the count above would then
+    // promise work the screen does not offer, which is the bug this replaces.
+    fetchMyWorkday.mockResolvedValue(
+      shift(workdayLorry([
+        workdayTurn('a1', { progress: { reached: 2, next: 'ARRIVED_DELIVERY' } }),
+        workdayTurn('a2', { pickupAddress: 'Kho Bình Dương' }),
+        workdayTurn('a3', { pickupAddress: 'Kho Long An' }),
+        workdayTurn('a4', { pickupAddress: 'Kho Đồng Nai' }),
+      ])),
+    );
+    renderAt('/driver');
+
+    await screen.findByText('51D-65233');
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (4)');
+    // Every one of them is reachable, not merely counted.
+    expect(hrefs(screen.getAllByRole('link').filter((l) => l.getAttribute('href')?.startsWith('/driver/assignments')))).toEqual([
+      '/driver/assignments/a1',
+      '/driver/assignments/a2',
+      '/driver/assignments/a3',
+      '/driver/assignments/a4',
+    ]);
+  });
+
+  it('★ one driver on two lorries: one card each, told apart by the plate (ADR-0004)', async () => {
+    fetchMyWorkday.mockResolvedValue(
+      shift(
+        workdayLorry([workdayTurn('a1')]),
+        workdayLorry([workdayTurn('a2')], { vehicle: { id: 'v2', plate: '51D-00002' } }),
+      ),
+    );
+    renderAt('/driver');
+
+    expect(await screen.findByText('51D-65233')).toBeInTheDocument();
+    expect(screen.getByText('51D-00002')).toBeInTheDocument();
+    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay (2)');
+  });
+
+  it('shows a driver-worded failure with a retry that brings the shift back', async () => {
+    // Three rejections, not one: `useMyWorkday` retries twice on a network
+    // failure, so a single rejection would be recovered before any alert is drawn.
+    const down = new ApiError(0, undefined, 'down');
+    fetchMyWorkday
+      .mockRejectedValueOnce(down)
+      .mockRejectedValueOnce(down)
+      .mockRejectedValueOnce(down)
+      .mockResolvedValue(shift(workdayLorry([workdayTurn('a1')])));
+    renderAt('/driver');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
+    fireEvent.click(screen.getByRole('button', { name: 'Thử lại' }));
+
+    expect(await screen.findByText('51D-65233')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('★ offline, the shift says so — never “no trips today”', async () => {
+    // A silent `null` here would read as an empty day, which is a different and
+    // much worse sentence than "could not load".
+    onlineManager.setOnline(false);
+    fetchMyWorkday.mockRejectedValue(new ApiError(0, undefined, 'down'));
+    renderAt('/driver');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
+    expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument();
+    expect(screen.queryByText('Bạn chưa có chuyến nào hôm nay.')).toBeNull();
+  });
+
+  it('★ a refusal offers no retry — asking again cannot change it', async () => {
+    fetchMyWorkday.mockRejectedValue(new ApiError(403, undefined, 'no'));
+    renderAt('/driver');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Chuyến này không thuộc về bạn.');
+    expect(screen.queryByRole('button', { name: 'Thử lại' })).toBeNull();
+  });
+});
+
+describe('★ the work schedule — sắp tới và đã chạy', () => {
+  /** Tomorrow, so the fixture lands on "Sắp tới" where the cards are drawn. */
+  const TOMORROW = '2026-08-31';
+  const TOMORROW_NAMED = 'Thứ Hai, 31/08/2026';
+  const soon = (id: string, over: Record<string, unknown> = {}) =>
+    turn(id, { scheduledOn: TOMORROW, ...over });
+
+  it('draws a card with when, from where, to where and in which lorry', async () => {
+    fetchMyAssignments.mockResolvedValue([soon('a1')]);
+    renderAt('/driver?view=upcoming');
+
+    const [card] = await cardsOn(TOMORROW_NAMED);
     // ★ THE CARD NAMES THE ASSIGNMENT, NEVER THE TRIP (ADR-0004).
     expect(linkOf(card)).toHaveAttribute('href', '/driver/assignments/a1');
     const facts = ['01:00', 'Giờ lấy hàng', 'Điểm lấy hàng', 'Kho HCM', 'Điểm giao hàng', 'KHO 3SC', 'Xem chuyến'];
@@ -263,13 +426,13 @@ describe('★ the work schedule', () => {
   it('★ two trips for the same customer on the same day stay two cards, each opening its own assignment', async () => {
     // Nothing forbids this on the server: the trip schedule has no uniqueness
     // on customer + day. Each card is BOUND to its assignment id and nothing else.
-    fetchMyAssignments.mockResolvedValue([trip(), turn('a2', { tripId: 't2', pickupAddress: 'Kho Bình Dương' })]);
+    fetchMyAssignments.mockResolvedValue([soon('a1'), soon('a2', { tripId: 't2', pickupAddress: 'Kho Bình Dương' })]);
     fetchMyAssignment.mockImplementation(async (id: string) =>
       turn(id, { tripId: id === 'a2' ? 't2' : 't1', pickupAddress: id === 'a2' ? 'Kho Bình Dương' : 'Kho HCM' }),
     );
-    renderAt('/driver');
+    renderAt('/driver?view=upcoming');
 
-    const cards = await todayCards();
+    const cards = await cardsOn(TOMORROW_NAMED);
     expect(hrefs(cards.map(linkOf))).toEqual(['/driver/assignments/a1', '/driver/assignments/a2']);
 
     // Opening the second card loads the SECOND assignment, by its id.
@@ -285,11 +448,14 @@ describe('★ the work schedule', () => {
     // Same trip, same customer, same time — two turns with two timelines. The
     // assignment is the identity, so each lorry is its own card, told apart by
     // its plate and opened by its own assignment id, never the shared trip id.
-    fetchMyAssignments.mockResolvedValue([trip(), turn('a2', { vehicle: { id: 'v2', plate: '51D-00002' } })]);
-    renderAt('/driver');
+    fetchMyAssignments.mockResolvedValue([soon('a1'), soon('a2', { vehicle: { id: 'v2', plate: '51D-00002' } })]);
+    renderAt('/driver?view=upcoming');
 
-    expect(hrefs((await todayCards()).map(linkOf))).toEqual(['/driver/assignments/a1', '/driver/assignments/a2']);
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 2');
+    expect(hrefs((await cardsOn(TOMORROW_NAMED)).map(linkOf))).toEqual([
+      '/driver/assignments/a1',
+      '/driver/assignments/a2',
+    ]);
+    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (2)');
     expect(screen.getByRole('link', { name: /51D-65233/ })).toHaveAttribute('href', '/driver/assignments/a1');
     expect(screen.getByRole('link', { name: /51D-00002/ })).toHaveAttribute('href', '/driver/assignments/a2');
   });
@@ -297,9 +463,9 @@ describe('★ the work schedule', () => {
   it('★ a card’s link is named short — time and lorry — unique per lorry, and never reads the addresses out', async () => {
     // The whole card is one tap target, but a screen reader hears one short
     // link per card; the route is read as the card's own content, not its name.
-    fetchMyAssignments.mockResolvedValue([trip(), turn('a2', { vehicle: { id: 'v2', plate: '51D-00002' } })]);
-    renderAt('/driver');
-    const cards = await todayCards();
+    fetchMyAssignments.mockResolvedValue([soon('a1'), soon('a2', { vehicle: { id: 'v2', plate: '51D-00002' } })]);
+    renderAt('/driver?view=upcoming');
+    const cards = await cardsOn(TOMORROW_NAMED);
 
     // Found by EXACT name, so each name is unique on the screen.
     expect(screen.getByRole('link', { name: 'Xem chuyến, 01:00, Xe 51D-65233' })).toBe(linkOf(cards[0]));
@@ -312,41 +478,38 @@ describe('★ the work schedule', () => {
     }
   });
 
-  it('orders the day by planned pickup, and an assignment with no pickup time yet goes last', async () => {
+  it('orders a day by planned pickup, and an assignment with no pickup time yet goes last', async () => {
     fetchMyAssignments.mockResolvedValue([
-      turn('a-none', { scheduledPickupAt: null }),
-      turn('a-late', { scheduledPickupAt: '2026-08-30T05:00:00.000Z' }),
-      turn('a-early', { scheduledPickupAt: '2026-08-30T01:00:00.000Z' }),
+      soon('a-none', { scheduledPickupAt: null }),
+      soon('a-late', { scheduledPickupAt: '2026-08-31T05:00:00.000Z' }),
+      soon('a-early', { scheduledPickupAt: '2026-08-31T01:00:00.000Z' }),
     ]);
-    renderAt('/driver');
+    renderAt('/driver?view=upcoming');
 
-    const cards = await todayCards();
+    const cards = await cardsOn(TOMORROW_NAMED);
     expect(hrefs(cards.map(linkOf))).toEqual([
       '/driver/assignments/a-early',
       '/driver/assignments/a-late',
       '/driver/assignments/a-none',
     ]);
-    expect(within(cards[1]).getByText('05:00')).toBeInTheDocument();
-    expect(linkOf(cards[1])).toHaveAccessibleName('Xem chuyến, 05:00, Xe 51D-65233');
     expect(within(cards[2]).getByText('Chưa có giờ lấy hàng')).toBeInTheDocument();
     expect(linkOf(cards[2])).toHaveAccessibleName('Xem chuyến, Chưa có giờ lấy hàng, Xe 51D-65233');
   });
 
   it('puts later days under “Sắp tới”, one heading per day, the nearest first', async () => {
     fetchMyAssignments.mockResolvedValue([
-      trip(),
       turn('a-sep1', { scheduledOn: '2026-09-01' }),
-      turn('a-aug31', { scheduledOn: '2026-08-31' }),
+      turn('a-aug31', { scheduledOn: TOMORROW }),
     ]);
     renderAt('/driver');
 
-    expect(hrefs((await todayCards()).map(linkOf))).toEqual(['/driver/assignments/a1']);
-    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới 2');
+    // The count comes from the assignments read; wait for it before reading it.
+    await waitFor(() => expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (2)'));
     fireEvent.click(tab('Sắp tới'));
 
-    const nextDay = await screen.findByRole('region', { name: 'Thứ Hai, 31/08/2026' });
+    const nextDay = await screen.findByRole('region', { name: TOMORROW_NAMED });
     expect(tab('Sắp tới')).toHaveAttribute('aria-selected', 'true');
-    expect(dayHeadings()).toEqual(['Thứ Hai, 31/08/2026', 'Thứ Ba, 01/09/2026']);
+    expect(dayHeadings()).toEqual([TOMORROW_NAMED, 'Thứ Ba, 01/09/2026']);
     expect(within(nextDay).getByRole('link')).toHaveAttribute('href', '/driver/assignments/a-aug31');
     expect(hrefs(within(dayPanel()).getAllByRole('link'))).toEqual([
       '/driver/assignments/a-aug31',
@@ -376,6 +539,96 @@ describe('★ the work schedule', () => {
     expect(within(panel).queryByText(/hoàn thành|hoàn tất/i)).toBeNull();
   });
 
+  it('keeps a long Vietnamese address whole in the card — the clamp is visual only', async () => {
+    // The end of the address — ward, district — is what tells two warehouses apart.
+    const long =
+      'Lô A1-2, Đường số 7, KCN Tân Bình mở rộng, Phường Tây Thạnh, Quận Tân Phú, Thành phố Hồ Chí Minh, Việt Nam';
+    fetchMyAssignments.mockResolvedValue([soon('a1', { pickupAddress: long })]);
+    renderAt('/driver?view=upcoming');
+
+    const [card] = await cardsOn(TOMORROW_NAMED);
+    expect(within(card).getByText(long)).toBeInTheDocument();
+  });
+
+  it('shows a driver-worded failure with a retry that brings the cards back', async () => {
+    fetchMyAssignments.mockRejectedValueOnce(new ApiError(0, undefined, 'down')).mockResolvedValueOnce([soon('a1')]);
+    renderAt('/driver?view=upcoming');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
+    fireEvent.click(screen.getByRole('button', { name: 'Thử lại' }));
+
+    expect(hrefs((await cardsOn(TOMORROW_NAMED)).map(linkOf))).toEqual(['/driver/assignments/a1']);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(fetchMyAssignments).toHaveBeenCalledTimes(2);
+  });
+
+  it('★ offline, the production retry rules give up after three asks — no loop, no endless skeleton', async () => {
+    // The app's own query defaults (retry twice on a network failure), with
+    // the back-off shortened so the case runs fast. `networkMode: 'always'`
+    // means the retries RUN while offline instead of waiting for the network,
+    // so the error screen arrives after a bounded number of attempts.
+    onlineManager.setOnline(false);
+    fetchMyAssignments.mockRejectedValue(new ApiError(0, undefined, 'down'));
+    const production = new QueryClient({
+      defaultOptions: { queries: { ...productionClient.getDefaultOptions().queries, retryDelay: 0 } },
+    });
+    renderAt('/driver?view=upcoming', production);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
+    expect(fetchMyAssignments).toHaveBeenCalledTimes(3);
+    // And it stays at three: nothing keeps asking behind the error.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(fetchMyAssignments).toHaveBeenCalledTimes(3);
+    expect(production.getQueryState(['driver', 'assignments'])?.fetchStatus).toBe('idle');
+  });
+
+  it('★ a failed refresh keeps the schedule on screen, and says so above it with a retry', async () => {
+    fetchMyAssignments.mockResolvedValueOnce([soon('a1')]).mockRejectedValue(new ApiError(0, undefined, 'down'));
+    const { client } = renderAt('/driver?view=upcoming');
+    const [card] = await cardsOn(TOMORROW_NAMED);
+
+    await act(() => client.refetchQueries({ queryKey: ['driver', 'assignments'] }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
+    expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument();
+    // The same card, still mounted, still saying where to go.
+    expect(card).toBeInTheDocument();
+    expect(within(card).getByText('Kho HCM')).toBeInTheDocument();
+    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (1)');
+    // Read first: the warning comes before the cards it qualifies.
+    expect(alert.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    { status: 401, code: 'UNAUTHORIZED', message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' },
+    { status: 403, code: 'FORBIDDEN', message: 'Chuyến này không thuộc về bạn.' },
+  ])('★ a $status on refresh takes the loaded schedule away — nothing outlives the access', async ({ status, code, message }) => {
+    // A lost signal keeps the cards (above); a refusal must not. After a
+    // revoked session or a changed account, addresses fetched earlier would
+    // otherwise stay on an open phone next to the refusal.
+    fetchMyAssignments.mockResolvedValueOnce([soon('a1')]).mockRejectedValue(new ApiError(status, code, 'x'));
+    const { client } = renderAt('/driver?view=upcoming');
+    await cardsOn(TOMORROW_NAMED);
+
+    await act(() => client.refetchQueries({ queryKey: ['driver', 'assignments'] }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(screen.queryByText('Kho HCM')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /xem chuyến/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Thử lại' })).not.toBeInTheDocument();
+  });
+
+  it('★ a refusal offers no retry — asking again cannot change it', async () => {
+    fetchMyAssignments.mockRejectedValue(new ApiError(403, undefined, 'no'));
+    renderAt('/driver?view=upcoming');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Chuyến này không thuộc về bạn.');
+    expect(screen.queryByRole('button', { name: 'Thử lại' })).toBeNull();
+  });
+});
+
+describe('★ the work schedule — the tabs themselves', () => {
   it.each([
     ['/driver', 'Hôm nay', 'Bạn chưa có chuyến nào hôm nay.'],
     ['/driver?view=upcoming', 'Sắp tới', 'Chưa có lịch sắp tới.'],
@@ -390,20 +643,77 @@ describe('★ the work schedule', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  it('★ each tab says how many assignments it holds — to a screen reader too', async () => {
-    fetchMyAssignments.mockResolvedValue([trip(), turn('a2'), turn('a-next', { scheduledOn: '2026-08-31' })]);
+  /**
+   * ★ AN EMPTY DAY IS A DESIGNED SCREEN, NOT A BLANK ONE. The illustration says
+   * the page loaded; the heading says what is empty; the button says what to do
+   * next. These cases pin the three, and that the picture stays out of the
+   * accessibility tree — a driver using a screen reader must hear the words, not
+   * a description of a cartoon lorry.
+   */
+  describe('★ nothing to drive', () => {
+    it('draws the illustration, the headline, the line and one way out', async () => {
+      renderAt('/driver');
+
+      expect(await screen.findByText('Chưa có chuyến nào')).toBeInTheDocument();
+      expect(screen.getByText('Bạn chưa có chuyến nào hôm nay.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Xem chuyến sắp tới' })).toBeInTheDocument();
+    });
+
+    it('★ the picture is decoration: no role, no name, nothing to hear', async () => {
+      const { container } = renderAt('/driver');
+      await screen.findByText('Chưa có chuyến nào');
+
+      expect(screen.queryByRole('img')).toBeNull();
+      const picture = container.querySelector('img');
+      expect(picture).not.toBeNull();
+      expect(picture).toHaveAttribute('alt', '');
+    });
+
+    it('★ the way out of today is tomorrow — and it lands on the tab, not a new page', async () => {
+      renderAt('/driver');
+      fireEvent.click(await screen.findByRole('button', { name: 'Xem chuyến sắp tới' }));
+
+      await waitFor(() => expect(tab('Sắp tới')).toHaveAttribute('aria-selected', 'true'));
+      expect(screen.getByTestId('location')).toHaveTextContent(/^\/driver\?view=upcoming$/);
+    });
+
+    it('★ the way out of an empty week is to ask for work (0035), not another day', async () => {
+      renderAt('/driver?view=upcoming');
+      fireEvent.click(await screen.findByRole('button', { name: 'Xem booking đang mở' }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('tab', { name: /booking đang mở/i })).toHaveAttribute('aria-selected', 'true'),
+      );
+      // The day view is left behind: open bookings are not a day of the schedule.
+      expect(screen.getByTestId('location')).toHaveTextContent(/^\/driver\?section=open$/);
+    });
+
+    it('offers no action out of the past, because there is nothing to do about it', async () => {
+      renderAt('/driver?view=past');
+
+      expect(await screen.findByText('Chưa có chuyến nào đã qua.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /xem chuyến sắp tới|xem booking/i })).toBeNull();
+    });
+  });
+
+  it('★ each tab says how much it holds — to a screen reader too', async () => {
+    // ⚠ TODAY IS COUNTED FROM THE SHIFT, THE OTHER TWO FROM THE ASSIGNMENTS
+    // LIST. Two endpoints, two counts, and each tab waits for its OWN read
+    // before it claims a number.
+    fetchMyWorkday.mockResolvedValue(shift(workdayLorry([workdayTurn('a1'), workdayTurn('a2')])));
+    fetchMyAssignments.mockResolvedValue([turn('a-next', { scheduledOn: '2026-08-31' })]);
     renderAt('/driver');
-    await todayCards();
+    await screen.findByText('51D-65233');
 
     expect(dayTabs().getAllByRole('tab').map((option) => option.textContent)).toEqual([
-      'Hôm nay 2',
-      'Sắp tới 1',
-      'Chuyến đã chạy 0',
+      'Hôm nay (2)',
+      'Sắp tới (1)',
+      'Chuyến đã chạy (0)',
     ]);
     // The count is part of the name a screen reader announces, as a separate word.
-    expect(screen.getByRole('tab', { name: 'Hôm nay 2' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Sắp tới 1' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Chuyến đã chạy 0' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Hôm nay (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Sắp tới (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Chuyến đã chạy (0)' })).toBeInTheDocument();
   });
 
   it('selecting a tab rewrites the URL in place, and today is the bare /driver', async () => {
@@ -421,115 +731,19 @@ describe('★ the work schedule', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/driver$/);
   });
 
-  it('shows a driver-worded failure with a retry that brings the cards back', async () => {
-    fetchMyAssignments.mockRejectedValueOnce(new ApiError(0, undefined, 'down')).mockResolvedValueOnce([trip()]);
-    renderAt('/driver');
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
-    fireEvent.click(screen.getByRole('button', { name: 'Thử lại' }));
-
-    expect(hrefs((await todayCards()).map(linkOf))).toEqual(['/driver/assignments/a1']);
-    expect(screen.queryByRole('alert')).toBeNull();
-    expect(fetchMyAssignments).toHaveBeenCalledTimes(2);
-  });
-
-  it('★ offline, the schedule says so — never “no trips today”', async () => {
-    // TanStack would park the read while offline — no data, no error — and the
-    // page would read that as an empty day. The read runs and fails instead.
-    onlineManager.setOnline(false);
-    fetchMyAssignments.mockRejectedValue(new ApiError(0, undefined, 'down'));
-    renderAt('/driver');
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
-    expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument();
-    expect(screen.queryByText('Bạn chưa có chuyến nào hôm nay.')).toBeNull();
-  });
-
-  it('★ offline, the production retry rules give up after three asks — no loop, no endless skeleton', async () => {
-    // The app's own query defaults (retry twice on a network failure), with
-    // the back-off shortened so the case runs fast. `networkMode: 'always'`
-    // means the retries RUN while offline instead of waiting for the network,
-    // so the error screen arrives after a bounded number of attempts.
-    onlineManager.setOnline(false);
-    fetchMyAssignments.mockRejectedValue(new ApiError(0, undefined, 'down'));
-    const production = new QueryClient({
-      defaultOptions: { queries: { ...productionClient.getDefaultOptions().queries, retryDelay: 0 } },
-    });
-    renderAt('/driver', production);
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
-    expect(fetchMyAssignments).toHaveBeenCalledTimes(3);
-    // And it stays at three: nothing keeps asking behind the error.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
-    expect(fetchMyAssignments).toHaveBeenCalledTimes(3);
-    expect(production.getQueryState(['driver', 'assignments'])?.fetchStatus).toBe('idle');
-  });
-
-  it('★ a failed refresh keeps the schedule on screen, and says so above it with a retry', async () => {
-    fetchMyAssignments.mockResolvedValueOnce([trip()]).mockRejectedValue(new ApiError(0, undefined, 'down'));
-    const { client } = renderAt('/driver');
-    const [card] = await todayCards();
-
-    await act(() => client.refetchQueries({ queryKey: ['driver', 'assignments'] }));
-
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Không có kết nối. Kiểm tra mạng rồi thử lại.');
-    expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument();
-    // The same card, still mounted, still saying where to go.
-    expect(card).toBeInTheDocument();
-    expect(within(card).getByText('Kho HCM')).toBeInTheDocument();
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 1');
-    // Read first: the warning comes before the cards it qualifies.
-    expect(alert.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it.each([
-    { status: 401, code: 'UNAUTHORIZED', message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' },
-    { status: 403, code: 'FORBIDDEN', message: 'Chuyến này không thuộc về bạn.' },
-  ])('★ a $status on refresh takes the loaded schedule away — nothing outlives the access', async ({ status, code, message }) => {
-    // A lost signal keeps the cards (above); a refusal must not. After a
-    // revoked session or a changed account, addresses fetched earlier would
-    // otherwise stay on an open phone next to the refusal.
-    fetchMyAssignments.mockResolvedValueOnce([trip()]).mockRejectedValue(new ApiError(status, code, 'x'));
-    const { client } = renderAt('/driver');
-    await todayCards();
-
-    await act(() => client.refetchQueries({ queryKey: ['driver', 'assignments'] }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(message);
-    expect(screen.queryByText('Kho HCM')).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /xem chuyến/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Thử lại' })).not.toBeInTheDocument();
-  });
-
-  it('★ a refusal offers no retry — asking again cannot change it', async () => {
-    fetchMyAssignments.mockRejectedValue(new ApiError(403, undefined, 'no'));
-    renderAt('/driver');
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Chuyến này không thuộc về bạn.');
-    expect(screen.queryByRole('button', { name: 'Thử lại' })).toBeNull();
-  });
-
-  it('keeps a long Vietnamese address whole in the card — the clamp is visual only', async () => {
-    // The end of the address — ward, district — is what tells two warehouses apart.
-    const long =
-      'Lô A1-2, Đường số 7, KCN Tân Bình mở rộng, Phường Tây Thạnh, Quận Tân Phú, Thành phố Hồ Chí Minh, Việt Nam';
-    fetchMyAssignments.mockResolvedValue([trip({ pickupAddress: long })]);
-    renderAt('/driver');
-
-    const [card] = await todayCards();
-    expect(within(card).getByText(long)).toBeInTheDocument();
-  });
-
-  it('★ the day turns over while the page stays open — tomorrow’s trip becomes today’s without a reload', async () => {
+  it('★ the day turns over while the page stays open — the header and the tabs follow', async () => {
     // 23:59 on 30/08 in Hồ Chí Minh: the phone is locked with tomorrow's trip on it.
+    //
+    // ⚠ THE SHIFT ITSELF IS THE SERVER'S ANSWER FOR ITS OWN BUSINESS DAY, so
+    // what this case pins is the part the BROWSER decides: the day named in the
+    // header, and which tab an assignment falls under.
     vi.setSystemTime(new Date('2026-08-30T16:59:00.000Z'));
     fetchMyAssignments.mockResolvedValue([turn('a-next', { scheduledOn: '2026-08-31' })]);
     renderAt('/driver');
 
     expect(await screen.findByText('Bạn chưa có chuyến nào hôm nay.')).toBeInTheDocument();
     expect(screen.getByText('Chủ Nhật, 30/08/2026')).toBeInTheDocument();
-    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới 1');
+    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (1)');
 
     // 00:01 on 31/08, and the phone is unlocked.
     vi.setSystemTime(new Date('2026-08-30T17:01:00.000Z'));
@@ -538,9 +752,8 @@ describe('★ the work schedule', () => {
     });
 
     expect(screen.getByText('Thứ Hai, 31/08/2026')).toBeInTheDocument();
-    expect(hrefs((await todayCards()).map(linkOf))).toEqual(['/driver/assignments/a-next']);
-    expect(tab('Hôm nay')).toHaveTextContent('Hôm nay 1');
-    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới 0');
+    // The trip is today's now, so it has left "Sắp tới" without a reload.
+    expect(tab('Sắp tới')).toHaveTextContent('Sắp tới (0)');
   });
 
   it('★ back from a trip lands on the tab the driver left', async () => {

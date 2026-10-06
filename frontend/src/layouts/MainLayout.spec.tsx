@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import MainLayout from './MainLayout';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 
@@ -8,9 +9,30 @@ const signOut = vi.fn();
 const useSession = vi.fn();
 const useMyDepartments = vi.fn();
 const navigate = vi.fn();
+const fetchNotifications = vi.fn();
+const markNotificationRead = vi.fn();
+const fetchCompletionReviewQueue = vi.fn();
 
 vi.mock('@/contexts/SessionProvider', () => ({
   useSession: () => useSession(),
+}));
+/**
+ * The shell's bell opens the live notification socket and, once its panel is
+ * open, reads the review queue to name a lorry (0036). jsdom has no WebSocket
+ * and the hook copes with that on its own, so only the HTTP calls are faked.
+ */
+vi.mock('@/api/notifications', () => ({
+  fetchNotifications: () => fetchNotifications(),
+  markNotificationRead: (id: string) => markNotificationRead(id),
+  notificationSocketTarget: () => ({ origin: '', path: '/api/socket.io' }),
+}));
+vi.mock('@/api/tripCompletion', () => ({
+  fetchCompletionReviewQueue: () => fetchCompletionReviewQueue(),
+  fetchOperationalBoard: vi.fn(),
+  fetchCompletionRequests: vi.fn(),
+  fetchExecutionEvents: vi.fn(),
+  approveCompletion: vi.fn(),
+  rejectCompletion: vi.fn(),
 }));
 vi.mock('@/hooks/useMyDepartments', () => ({
   useMyDepartments: () => useMyDepartments(),
@@ -47,14 +69,20 @@ const headSession = (username = 'head') =>
 const memberSession = (username = 'member') =>
   ready(username, 'MEMBER', [HEAD_DEPARTMENT]);
 
-const renderLayout = () =>
-  render(
-    <MemoryRouter>
-      <LanguageProvider>
-        <MainLayout />
-      </LanguageProvider>
-    </MemoryRouter>,
+const renderLayout = () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <LanguageProvider>
+          <MainLayout />
+        </LanguageProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
+};
 
 /**
  * The shell says who you are and where you may go.
@@ -69,6 +97,9 @@ describe('MainLayout', () => {
     navigate.mockReset();
     useSession.mockReset().mockReturnValue(ready('boss'));
     useMyDepartments.mockReset().mockReturnValue({ departments: [], loading: false });
+    fetchNotifications.mockReset().mockResolvedValue({ items: [], unreadCount: 0 });
+    markNotificationRead.mockReset().mockResolvedValue({});
+    fetchCompletionReviewQueue.mockReset().mockResolvedValue([]);
   });
 
   it('shows the real signed-in user, not a placeholder', () => {
@@ -349,6 +380,198 @@ describe('MainLayout', () => {
     it('labels the language control for a screen reader', () => {
       renderLayout();
       expect(screen.getByRole('combobox', { name: 'Ngôn ngữ' })).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * ★ THE COMPLETION BELL (0036). A driver sends a turn for a decision; the
+   * person who decides has to learn it without watching the queue.
+   *
+   * ⚠ AND IT IS NOT AUTHORIZATION. These cases check what is DRAWN. The review
+   * routes are decided by the server on every request regardless.
+   */
+  describe('the completion bell', () => {
+    /** A session that may actually decide a completion. */
+    const reviewerSession = () => {
+      const permissions = ['user.write', 'unit.read', 'trip.complete.review'];
+      return {
+        state: {
+          status: 'ready',
+          authorization: { username: 'boss', role: 'SUPERADMIN', departmentIds: [], permissions },
+        },
+        signOut,
+        can: (permission: string) => permissions.includes(permission),
+      };
+    };
+
+    const submitted = (id: string, over: Record<string, unknown> = {}) => ({
+      id,
+      recipientUserId: 'u1',
+      type: 'COMPLETION_SUBMITTED',
+      tripId: `trip-${id}`,
+      tripScheduledOn: '2026-08-30',
+      detail: null,
+      readAt: null,
+      createdAt: '2026-08-30T10:00:00.000Z',
+      ...over,
+    });
+
+    const bell = () => screen.getByRole('button', { name: /thông báo/i });
+
+    /** Opens the panel, having first waited for the list the badge is built from. */
+    const openPanel = async () => {
+      await screen.findByTestId('completion-badge');
+      fireEvent.click(bell());
+      return screen.findAllByText(/tài xế đã gửi hoàn tất/i);
+    };
+
+    it('is not drawn at all for somebody who cannot decide a completion', async () => {
+      useSession.mockReturnValue(ready('member', 'MEMBER'));
+      fetchNotifications.mockResolvedValue({ items: [submitted('n1')], unreadCount: 1 });
+      renderLayout();
+
+      await waitFor(() => expect(screen.getByText('member')).toBeInTheDocument());
+      expect(screen.queryByTestId('completion-badge')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /thông báo/i })).not.toBeInTheDocument();
+    });
+
+    it('★ counts the submissions nobody has looked at', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({
+        items: [submitted('n1'), submitted('n2')],
+        unreadCount: 2,
+      });
+      renderLayout();
+
+      expect(await screen.findByTestId('completion-badge')).toHaveTextContent('2');
+    });
+
+    it('shows no number when there is nothing new, but keeps the bell', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({
+        items: [submitted('n1', { readAt: '2026-08-30T10:05:00.000Z' })],
+        unreadCount: 0,
+      });
+      renderLayout();
+
+      await waitFor(() => expect(bell()).toBeInTheDocument());
+      expect(screen.queryByTestId('completion-badge')).not.toBeInTheDocument();
+    });
+
+    it('★ counts only completions, never a type this bell cannot explain', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      // `unreadCount` is every type the account holds; the badge is not.
+      fetchNotifications.mockResolvedValue({
+        items: [submitted('n1'), submitted('n2', { type: 'TRIP_ASSIGNED' })],
+        unreadCount: 2,
+      });
+      renderLayout();
+
+      expect(await screen.findByTestId('completion-badge')).toHaveTextContent('1');
+    });
+
+    it('★ fetches no review queue for a bell nobody opened', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({ items: [submitted('n1')], unreadCount: 1 });
+      renderLayout();
+
+      await screen.findByTestId('completion-badge');
+
+      expect(screen.queryByText(/tài xế đã gửi hoàn tất/i)).not.toBeInTheDocument();
+      expect(fetchCompletionReviewQueue).not.toHaveBeenCalled();
+    });
+
+    it('★ lists every submission when opened, read ones included', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({
+        items: [submitted('n1'), submitted('n2', { readAt: '2026-08-30T10:05:00.000Z' })],
+        unreadCount: 1,
+      });
+      renderLayout();
+
+      const rows = await openPanel();
+
+      expect(rows).toHaveLength(2);
+      // And the queue is read only now, to name the lorries.
+      await waitFor(() => expect(fetchCompletionReviewQueue).toHaveBeenCalled());
+    });
+
+    it('names the lorry and driver when the queue can say, and draws the row regardless when it cannot', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({
+        items: [submitted('n1'), submitted('n2')],
+        unreadCount: 2,
+      });
+      // The queue knows about the first trip only — the second was just decided
+      // by somebody else, which is a real race rather than an error.
+      fetchCompletionReviewQueue.mockResolvedValue([
+        {
+          tripId: 'trip-n1',
+          scheduledOn: '2026-08-30',
+          assignmentId: 'a1',
+          completionRequestId: 'r1',
+          stage: 'COMPLETION_PENDING',
+          vehicle: { id: 'v1', plate: '50H49266' },
+          driver: { id: 'd1', displayName: 'Tài Xế A' },
+        },
+      ]);
+      renderLayout();
+
+      const rows = await openPanel();
+
+      expect(await screen.findByText('Tài Xế A')).toBeInTheDocument();
+      // Two rows still, not one: a missing plate never hides a notification.
+      expect(rows).toHaveLength(2);
+    });
+
+    it('★ opening one row stamps THAT row seen and goes to THAT trip', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({
+        items: [submitted('n1'), submitted('n2')],
+        unreadCount: 2,
+      });
+      renderLayout();
+
+      const rows = await openPanel();
+      fireEvent.click(rows[0]);
+
+      await waitFor(() => expect(markNotificationRead).toHaveBeenCalledWith('n1'));
+      // Only that one: the other is still unread and still waiting to be read.
+      expect(markNotificationRead).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith('/dispatch/completion-review?trip=trip-n1');
+    });
+
+    it('does not re-stamp a row that was already read, but still opens it', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({
+        items: [submitted('n1', { readAt: '2026-08-30T10:05:00.000Z' })],
+        unreadCount: 0,
+      });
+      renderLayout();
+
+      await waitFor(() => expect(bell()).toBeInTheDocument());
+      fireEvent.click(bell());
+      fireEvent.click((await screen.findAllByText(/tài xế đã gửi hoàn tất/i))[0]);
+
+      await waitFor(() =>
+        expect(navigate).toHaveBeenCalledWith('/dispatch/completion-review?trip=trip-n1'),
+      );
+      expect(markNotificationRead).not.toHaveBeenCalled();
+    });
+
+    it('says so when there is nothing to show, and still offers the queue', async () => {
+      useSession.mockReturnValue(reviewerSession());
+      fetchNotifications.mockResolvedValue({ items: [], unreadCount: 0 });
+      renderLayout();
+
+      await waitFor(() => expect(bell()).toBeInTheDocument());
+      fireEvent.click(bell());
+
+      expect(await screen.findByText(/chưa có thông báo nào/i)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /mở hàng đợi duyệt/i })).toHaveAttribute(
+        'href',
+        '/dispatch/completion-review',
+      );
     });
   });
 });

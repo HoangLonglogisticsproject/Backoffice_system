@@ -1,3 +1,4 @@
+import { DriverEmptyState } from '@/components/driver/DriverEmptyState';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useBookingRequests, useMyAssignmentRequests, useOpenBookings } from '@/hooks/driver/openBookings';
 import { isFinalRefusal } from '@/utils/driverErrors';
@@ -20,6 +21,7 @@ const blocks = (error: ApiError | null, count: number): boolean =>
 
 function ListFrame({
   intro,
+  emptyTitle,
   empty,
   loading,
   error,
@@ -28,6 +30,8 @@ function ListFrame({
   children,
 }: Readonly<{
   intro?: TranslationKey;
+  /** The headline over `empty` — the same empty state the schedule draws. */
+  emptyTitle: TranslationKey;
   empty: TranslationKey;
   loading: boolean;
   error: ApiError | null;
@@ -47,8 +51,11 @@ function ListFrame({
         </div>
       ) : null}
       {error ? <DriverLoadError error={error} onRetry={reload} /> : null}
+      {/* ★ NO ACTION ON EITHER OF THESE. "No open bookings" is Dispatch's to
+          change, not the driver's; "no requests" is answered by the tab next
+          door, which is already one tap away. */}
       {!loading && !blocked && count === 0 ? (
-        <p className="py-10 text-center text-sm text-muted-foreground">{t(empty)}</p>
+        <DriverEmptyState title={emptyTitle} message={empty} />
       ) : null}
       {!loading && !blocked && count > 0 ? <ul className="space-y-3">{children}</ul> : null}
     </div>
@@ -60,7 +67,15 @@ export function OpenBookingsSection() {
   const { ask, withdraw } = useBookingRequests();
 
   return (
-    <ListFrame intro="openBookingIntro" empty="openBookingEmpty" loading={loading} error={error} count={items.length} reload={reload}>
+    <ListFrame
+      intro="openBookingIntro"
+      emptyTitle="openBookingEmptyTitle"
+      empty="openBookingEmpty"
+      loading={loading}
+      error={error}
+      count={items.length}
+      reload={reload}
+    >
       {items.map((booking) => (
         <li key={booking.tripId}>
           <OpenBookingCard
@@ -83,7 +98,14 @@ export function MyRequestsSection() {
   const { withdraw } = useBookingRequests();
 
   return (
-    <ListFrame empty="requestEmpty" loading={loading} error={error} count={items.length} reload={reload}>
+    <ListFrame
+      emptyTitle="requestEmptyTitle"
+      empty="requestEmpty"
+      loading={loading}
+      error={error}
+      count={items.length}
+      reload={reload}
+    >
       {items.map((request) => (
         <li key={request.id}>
           <AssignmentRequestCard

@@ -102,8 +102,12 @@ const note = z.string().trim().max(2000).nullable().optional();
  * Four fields: where, how sure, and when the handset says it took the fix.
  * There is no `geofencePassed`, no `distance`, no `isInside` — a client that
  * sends any of those has them stripped by this schema before the service sees
- * the body, and the service computes the distance itself from the trip's own
+ * the body, and only the service may compute a distance, from the trip's own
  * coordinates. The browser is a sensor here, not a judge.
+ *
+ * ⚠ AND NOTHING MEASURES IT TODAY (DL-118). The geofence is off, so a reading
+ * that arrives is stored beside the event with no verdict. The schema is kept
+ * whole because validating a shape is cheap and re-deriving it is not.
  *
  * `z.number()` refuses `NaN` and a string; the bounds refuse the rest of what
  * is not a place. `capturedAt` is the handset's clock and is DIAGNOSTIC like
@@ -121,7 +125,12 @@ const recordEventSchema = z.object({
   type: z.enum(EXECUTION_EVENT_TYPES),
   /** What the handset's own clock said. Diagnostic only; never operational truth. */
   deviceReportedAt: z.coerce.date().nullable().optional(),
-  /** Where the handset was. Required for PICKUP_CONFIRMED — the service says so. */
+  /**
+   * Where the handset was. OPTIONAL on every milestone, and the portal sends it
+   * on none: the geofence is off (`GEOFENCED_MILESTONES`, DL-118). The field
+   * stays so a reading can be accepted the day it is asked for again — and one
+   * sent today is stored as evidence with no verdict.
+   */
   location: locationSchema.nullable().optional(),
   /** Idempotency. A retry on a bad connection must collide with its first attempt. */
   clientEventId: z.string().trim().min(1).max(200),

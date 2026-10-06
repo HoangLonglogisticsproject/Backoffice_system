@@ -17,12 +17,7 @@ import {
   type ExecutionEvent,
   type ExecutionEventType,
 } from '../domain/trip-execution';
-import {
-  checkMilestoneLocation,
-  type Coordinates,
-  type LocationEvidence,
-  type LocationRejection,
-} from '../domain/trip-location';
+import type { LocationEvidence } from '../domain/trip-location';
 import { TripVehicleRepository } from '../persistence/trip-catalogue.repository';
 import { VehicleDailyFuelCheckRepository } from '../persistence/vehicle-fuel-check.repository';
 import { requireDailyFuelCheck } from './vehicle-fuel-gate';
@@ -313,11 +308,12 @@ export class TripExecutionService {
     /** The handset's own clock. Diagnostic only. */
     deviceReportedAt?: Date | null;
     /**
-     * Where the handset said it was. REQUIRED for PICKUP_CONFIRMED, where the
-     * server measures it against the trip's pickup point; kept as evidence on
-     * any other milestone that carries one. Never a verdict — the route's DTO
-     * has no field for `geofencePassed` or a distance, so a client cannot send
-     * one, and this input type has none either.
+     * Where the handset said it was — OPTIONAL on every milestone today, and
+     * sent by nothing: the geofence is off (DL-118, see `domain/trip-location`),
+     * so no milestone requires a reading. One that arrives anyway is evidence
+     * beside the event, with no verdict, because nothing measured it. Never a
+     * verdict from the client either — the route's DTO has no field for
+     * `geofencePassed` or a distance, and this input type has none.
      */
     location?: LocationEvidence | null;
     clientEventId: string;
@@ -473,41 +469,25 @@ export class TripExecutionService {
         tx,
       );
 
-      // ★ THE GEOFENCE IS DECIDED HERE, UNDER THE LOCK, FROM THE TRIP'S OWN
-      // COORDINATES. The browser sent a reading; it did not send a verdict, and
-      // could not have — see the DTO. What the trip says its pickup or delivery
-      // point is was read a moment ago under `FOR UPDATE`, so Operations
-      // correcting the point mid-request cannot make this measure against a
-      // stale one. The same rule, the same radius, at both ends of the trip.
+      // ★ NO VERDICT IS REACHED ABOUT WHERE THE HANDSET WAS (DL-118). The
+      // geofence is off, so a reading that arrives is kept as EVIDENCE and
+      // nothing measures it — `geofencePassed` and `distanceM` stay NULL, which
+      // 0019's CHECK permits beside a stored position precisely for this.
       //
-      // ⚠ IDENTITY ASSURANCE AT DELIVERY IS THE SESSION, THE ASSIGNMENT AND
-      // THE POSITION — and nothing more today. There is no reference photo, no
-      // biometric provider and no liveness check anywhere in this deployment,
-      // so nothing here pretends to one. If one arrives, this is the point at
-      // which its verdict would be required before `DELIVERY_CONFIRMED` is
-      // written, beside the location verdict.
+      // ⚠ THE CHECK WAS REMOVED FROM HERE RATHER THAN LEFT SWITCHED OFF. A
+      // block that can never run reads as behaviour that happens and is never
+      // exercised by a test. The rule, the thresholds, the refusal sentences
+      // and the wiring that would go back in this spot all live in
+      // `domain/trip-location.ts`, which documents the restore and is covered
+      // by its own spec. Contract §11 keeps GPS [FUTURE]; this is where it
+      // returns, between the fuel gate above and `events.record` below.
       //
-      // Freshness is measured against the HANDSET's send time when it gave
-      // one: `capturedAt` and `deviceReportedAt` come off the same clock, so
-      // a phone that is an hour wrong is wrong on both and the age is right.
-      // Neither stamp touches `actual_at`, which stays the server's.
+      // ⚠ IDENTITY ASSURANCE AT DELIVERY IS THE SESSION AND THE ASSIGNMENT —
+      // and nothing more. There is no reference photo, no biometric provider
+      // and no liveness check anywhere in this deployment, so nothing here
+      // pretends to one. If one arrives, this is the point at which its verdict
+      // would be required before `DELIVERY_CONFIRMED` is written.
       const location = input.location ?? null;
-      let geofencePassed: boolean | null = null;
-      let distanceM: number | null = null;
-
-      const destination = geofencedPointOf(trip, input.type);
-      if (destination !== undefined) {
-        const verdict = checkMilestoneLocation(
-          destination,
-          location,
-          input.deviceReportedAt ?? new Date(),
-        );
-        if (!verdict.passed) {
-          throw new ValidationError(LOCATION_REFUSALS[verdict.reason], { location: verdict.reason });
-        }
-        geofencePassed = true;
-        distanceM = verdict.distanceM;
-      }
 
       const event = await this.events.record(
         {
@@ -527,8 +507,10 @@ export class TripExecutionService {
           actualAt,
           deviceReportedAt: input.deviceReportedAt ?? null,
           location,
-          geofencePassed,
-          distanceM,
+          // Evidence with no verdict: nothing measured this reading. 0019's
+          // CHECK allows exactly that shape — a position without a distance.
+          geofencePassed: null,
+          distanceM: null,
           clientEventId,
           recordedBy: input.recordedBy,
         },
@@ -665,40 +647,4 @@ const sameIntent = (
     );
   }
   return stored;
-};
-
-const pointOf = (latitude: number | null, longitude: number | null): Coordinates | null =>
-  latitude !== null && longitude !== null ? { latitude, longitude } : null;
-
-/**
- * Which point a milestone is measured against.
- *
- * `undefined` for the two ARRIVALS, which are not geofenced: arriving is what
- * the driver says on the way in, and the check happens at the confirmation
- * that follows. `null` for a confirmation whose point Operations has not
- * entered yet — refused, and named as the office's problem.
- */
-const geofencedPointOf = (
-  trip: TripSchedule,
-  type: ExecutionEventType,
-): Coordinates | null | undefined => {
-  if (type === 'PICKUP_CONFIRMED') return pointOf(trip.pickupLatitude, trip.pickupLongitude);
-  if (type === 'DELIVERY_CONFIRMED') return pointOf(trip.deliveryLatitude, trip.deliveryLongitude);
-  return undefined;
-};
-
-/**
- * One sentence per refusal, for whoever reads the API directly. The portal
- * switches on the CODE in `details.location`, never on these words, so they
- * can be edited without breaking a screen.
- */
-const LOCATION_REFUSALS: Record<LocationRejection, string> = {
-  DESTINATION_MISSING:
-    'This trip has no coordinates for that point yet, so it cannot be confirmed against them. Ask Operations to enter the location.',
-  LOCATION_REQUIRED: 'Confirming this milestone needs the handset’s current position.',
-  INVALID_COORDINATES: 'The position sent is not a place on Earth.',
-  ACCURACY_INSUFFICIENT:
-    'The handset is not sure enough where it is. Move to open sky and try again.',
-  LOCATION_STALE: 'That position is too old. Capture a fresh one and try again.',
-  OUTSIDE_GEOFENCE: 'That position is not at the point being confirmed.',
 };

@@ -1,17 +1,4 @@
-import {
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  type MessageEvent,
-  Param,
-  Post,
-  Res,
-  Sse,
-  UseGuards,
-} from '@nestjs/common';
-import type { Response } from 'express';
-import type { Observable } from 'rxjs';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
 import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
@@ -48,26 +35,16 @@ export class NotificationController {
     return this.notifications.listMine(actor.id);
   }
 
-  /**
-   * The live channel: server-sent events, on the session cookie.
+  /*
+   * ⚠ THE LIVE CHANNEL IS NOT HERE ANY MORE (CEO 2026-10-06). `GET
+   * /notifications/stream` was a server-sent-events route on this controller
+   * until the realtime transport moved to WebSocket; it now lives in
+   * `NotificationGateway`, which authenticates its own handshake. What stays on
+   * this controller is what it always was: a person's own rows, over HTTP.
    *
-   * ★ DECLARED BEFORE `:notificationId`, and the order is load-bearing — Nest
-   * matches in declaration order and `UuidParam` would otherwise refuse the
-   * word "stream" as an id.
-   *
-   * `X-Accel-Buffering: no` tells nginx to pass each event through as it is
-   * written rather than holding the response until it ends, which for a stream
-   * is never. Nest sends `Cache-Control: no-cache` itself.
+   * This note is not nostalgia — a client built against the old route gets a
+   * 404 with no explanation, and this is where somebody will look for one.
    */
-  @Sse('stream')
-  @UseGuards(AuthGuard)
-  stream(
-    @CurrentUser() actor: SessionUser,
-    @Res({ passthrough: true }) response: Response,
-  ): Observable<MessageEvent> {
-    response.setHeader('X-Accel-Buffering', 'no');
-    return this.notifications.streamFor(actor.id);
-  }
 
   @Post(':notificationId/read')
   @UseGuards(AuthGuard, CsrfGuard)
