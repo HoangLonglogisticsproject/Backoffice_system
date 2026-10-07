@@ -1,4 +1,4 @@
-import { ArrowRight, MapPin, Truck } from 'lucide-react';
+import { Archive, ArrowRight, MapPin, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
@@ -14,10 +14,13 @@ import { CrewPill, RequestsPill, UrgencyPill } from './BookingSignals';
  * One booking in the list — what dispatch scans for, and nothing else: when,
  * for whom, from where to where, on which lorries, and where it stands.
  *
- * ★ THE WHOLE ROW SELECTS, AND THE CREW BUTTON SITS BESIDE IT, NOT INSIDE.
+ * ★ THE WHOLE ROW SELECTS, AND ITS ONE ACTION SITS BESIDE IT, NOT INSIDE.
  * A button inside a button is not something a screen reader or a keyboard can
- * operate, so the row is two siblings: the selecting button, and the one
- * action worth a click without opening the trip — the crew queue's.
+ * operate, so the row is two siblings: the selecting button, and "Lưu trữ" —
+ * a low-frequency record action, quiet, confirmed in its own dialog, and bound
+ * to THIS row's trip, never to the one selected. Crewing is the detail
+ * toolbar's (one "Đổi phân công" per screen); a row whose caller may not
+ * archive carries no action at all rather than a stand-in.
  *
  * ★ EVERYTHING ELSE IS THE DETAIL PANEL'S. Prices, costs, contacts and the
  * record's metadata are not scanned down a list; showing every field here is
@@ -29,7 +32,7 @@ export function BookingListItem({
   selected,
   now,
   onSelect,
-  onAssign,
+  onArchive,
 }: Readonly<{
   trip: TripBoardRow;
   /** STT, continued across pages — row 1 of page 2 is 21, not 1. */
@@ -37,11 +40,12 @@ export function BookingListItem({
   selected: boolean;
   now: number;
   onSelect: (tripId: string) => void;
-  onAssign: (tripId: string) => void;
+  onArchive: (trip: TripBoardRow) => void;
 }>) {
   const { t, language } = useLanguage();
   const { can } = useSession();
-  const crewAction = bookingActions(trip, can).find((action) => action === 'assign' || action === 'reassign');
+  // The same rule as everywhere — `bookingActions` — so the row and the panel never disagree.
+  const mayArchive = bookingActions(trip, can).includes('archive');
   const pickup = placeLine(trip.pickupLocation, trip.pickupAddress) ?? t('notSelected');
   const delivery = placeLine(trip.deliveryLocation, trip.deliveryAddress) ?? t('notSelected');
 
@@ -104,14 +108,16 @@ export function BookingListItem({
           </span>
         )}
       </button>
-      {crewAction && (
+      {mayArchive && (
         <Button
+          type="button"
           variant="outline"
           size="sm"
-          className="h-9 shrink-0 self-start px-3 text-xs text-gray-700"
-          onClick={() => onAssign(trip.id)}
+          className="h-9 shrink-0 self-start px-3 text-xs text-gray-600"
+          onClick={() => onArchive(trip)}
         >
-          {t(ACTION_LABELS[crewAction])}
+          <Archive data-icon="inline-start" aria-hidden="true" />
+          {t(ACTION_LABELS.archive)}
         </Button>
       )}
     </li>

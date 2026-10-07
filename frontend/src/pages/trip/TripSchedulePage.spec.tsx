@@ -333,7 +333,8 @@ describe('TripSchedulePage', () => {
      * and the dialog comes first in document order.
      */
     const openPanel = async (name: RegExp) => {
-      fireEvent.click(await screen.findByRole('button', { name }));
+      // Crewing is the detail toolbar's — the row's one action is archiving.
+      fireEvent.click((await openBooking()).getByRole('button', { name }));
       const [dialog] = await screen.findAllByLabelText('Phương tiện điều độ');
       return within(dialog!);
     };
@@ -451,6 +452,9 @@ describe('TripSchedulePage', () => {
       const list = screen.getByRole('list', { name: 'Danh sách chuyến' });
       expect(within(list).getAllByRole('listitem')).toHaveLength(1);
       expect(screen.getAllByText('WWL')).toHaveLength(1);
+      // ★ ONE crew control on the whole screen once the trip is open: the detail's — never echoed on the row.
+      expect(screen.queryAllByRole('button', { name: /^đổi phân công$/i })).toHaveLength(0);
+      await openBooking();
       expect(screen.getAllByRole('button', { name: /^đổi phân công$/i })).toHaveLength(1);
     });
 
@@ -811,7 +815,7 @@ describe('TripSchedulePage', () => {
         items: [trip({ status: 'executing', note: 'Đổi giờ' })],
         page: 1, limit: 20, total: 1, totalPages: 1,
       });
-      fireEvent.click(panel.getByRole('button', { name: 'Lưu trữ' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Lưu trữ' }));
       const dialog = within(await screen.findByRole('dialog'));
       fireEvent.click(last(dialog.getAllByRole('button', { name: /lưu trữ/i })));
 
@@ -819,17 +823,50 @@ describe('TripSchedulePage', () => {
       expect(detail().getByText('Đang thực hiện')).toBeInTheDocument();
     });
 
-    it('★ the crew button sits beside the row, never inside its selecting button', async () => {
-      useSession.mockReturnValue(session(['trip.read', 'dispatch.write']));
+    it('★ the row`s one action is "Lưu trữ" — beside its selecting button, never inside, and quiet', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write', 'dispatch.write']));
       two();
       renderPage();
 
-      const assign = await screen.findByRole('button', { name: 'Phân công xe & tài xế' });
-      expect(assign.parentElement?.closest('button')).toBeNull();
-      // And it opens the dispatch panel, not the detail.
-      fireEvent.click(assign);
-      expect((await screen.findAllByLabelText('Phương tiện điều độ')).length).toBeGreaterThan(0);
+      const archives = await screen.findAllByRole('button', { name: 'Lưu trữ' });
+      expect(archives).toHaveLength(2);
+      for (const archive of archives) {
+        expect(archive.parentElement?.closest('button')).toBeNull();
+        expect(archive).not.toHaveClass('bg-blue-600');
+        for (const icon of archive.querySelectorAll('svg')) expect(icon).toHaveAttribute('aria-hidden', 'true');
+      }
+      // No crew action on any row: crewing is the detail toolbar's.
+      expect(screen.queryByRole('button', { name: /^(phân công xe & tài xế|đổi phân công)$/i })).toBeNull();
+      // Opening the confirmation does not open the detail.
+      fireEvent.click(archives[0]!);
+      expect(await screen.findByRole('dialog', { name: 'Lưu trữ chuyến' })).toBeInTheDocument();
       expect(detail().getByText('Chọn một chuyến để xem chi tiết.')).toBeInTheDocument();
+    });
+
+    it('★ archiving trip B while trip A is selected confirms and archives B — never the selected one', async () => {
+      useSession.mockReturnValue(session(['trip.read', 'trip.write']));
+      two();
+      renderPage();
+      await openBooking('WWL');
+
+      const rowB = (await screen.findByText('KHÁCH B')).closest('li')!;
+      fireEvent.click(within(rowB).getByRole('button', { name: 'Lưu trữ' }));
+
+      const dialog = within(await screen.findByRole('dialog', { name: 'Lưu trữ chuyến' }));
+      expect(dialog.getByText(/KHÁCH B/)).toBeInTheDocument();
+      expect(dialog.queryByText(/WWL/)).toBeNull();
+      // Cancel first: nothing is archived without the confirmation.
+      fireEvent.click(dialog.getByRole('button', { name: 'Hủy bỏ' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Lưu trữ chuyến' })).toBeNull());
+      expect(archiveTripSchedule).not.toHaveBeenCalled();
+
+      fireEvent.click(within(rowB).getByRole('button', { name: 'Lưu trữ' }));
+      const again = within(await screen.findByRole('dialog', { name: 'Lưu trữ chuyến' }));
+      fireEvent.click(last(again.getAllByRole('button', { name: 'Lưu trữ' })));
+      await waitFor(() => expect(archiveTripSchedule).toHaveBeenCalledWith('t2'));
+      expect(archiveTripSchedule).toHaveBeenCalledTimes(1);
+      // The detail still shows A, the trip that was selected all along.
+      expect(detail().getByRole('heading', { name: 'WWL' })).toBeInTheDocument();
     });
 
     it('★ on a narrow screen the detail is a dialog: no side column, and Escape closes it', async () => {
@@ -1260,18 +1297,21 @@ describe('TripSchedulePage', () => {
 
       const panel = await openBooking();
       expect(panel.queryByRole('button', { name: 'Sửa' })).toBeNull();
-      expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+      // Neither in the detail nor on the row — the row carries no stand-in action.
+      expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^(phân công xe & tài xế|đổi phân công)$/i })).toBeNull();
     });
 
-    it('offers both to a caller holding trip.write — in the detail, not on the row', async () => {
+    it('offers both to a caller holding trip.write — "Sửa" in the detail, "Lưu trữ" on the row', async () => {
       useSession.mockReturnValue(session(['trip.read', 'trip.create', 'trip.write']));
       renderPage();
 
       await screen.findByText('50H-49266');
       expect(screen.queryByRole('button', { name: 'Sửa' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Lưu trữ' })).toBeTruthy();
       const panel = await openBooking();
       expect(panel.getByRole('button', { name: 'Sửa' })).toBeTruthy();
-      expect(panel.getByRole('button', { name: 'Lưu trữ' })).toBeTruthy();
+      expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
     });
 
     it('hides the add button from a caller without trip.create', async () => {
@@ -1303,7 +1343,7 @@ describe('TripSchedulePage', () => {
       expect(panel.queryAllByRole('combobox')).toHaveLength(0);
     };
 
-    it('★ a pending booking: the status is said, and the office may crew, correct, cost or archive it — nothing more', async () => {
+    it('★ a pending booking: the status is said; the detail crews, corrects, costs and exports it — nothing more', async () => {
       useSession.mockReturnValue(session(everything));
       boardOf(trip({ status: 'pending', assignments: [] }));
       renderPage();
@@ -1317,9 +1357,10 @@ describe('TripSchedulePage', () => {
         'Chi phí chuyến',
         // A read, not an office action — offered to every reader (contract §30).
         'Xuất PNG',
-        // Destructive, confirmed in its own dialog: the quietest, and last.
-        'Lưu trữ',
       ]);
+      // Archiving is the list row's one action, not a fifth button here.
+      expect(screen.getAllByRole('button', { name: 'Lưu trữ' })).toHaveLength(1);
+      expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
     });
 
     it('★ the toolbar: every action keeps its words, its icon is decoration only, and the crew action alone is filled', async () => {
@@ -2174,7 +2215,7 @@ describe('TripSchedulePage', () => {
       expect(panel.getByRole('button', { name: 'Chi phí chuyến' })).toBeTruthy();
       // …and still no edit or archive, which are a different permission.
       expect(panel.queryByRole('button', { name: 'Sửa' })).toBeNull();
-      expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
     });
 
     it('★ renders no cost figure without cost.read — not even one the payload carried', async () => {
@@ -2988,8 +3029,8 @@ describe('TripSchedulePage', () => {
 
         const panel = await openBooking();
         expect(panel.getByRole('button', { name: 'Sửa' })).toBeInTheDocument();
-        // And no archive: that is `trip.write`.
-        expect(panel.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
+        // And no archive, on the row or anywhere: that is `trip.write`.
+        expect(screen.queryByRole('button', { name: 'Lưu trữ' })).toBeNull();
       });
 
       it('★ disables every non-price field, keeps the prices open, and sends only the two keys', async () => {

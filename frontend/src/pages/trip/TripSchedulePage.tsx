@@ -89,7 +89,7 @@ export default function TripSchedulePage() {
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,65fr)_minmax(0,35fr)]">
         <section className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-          <BookingList trips={trips} selectedId={detail.selected?.id ?? null} onSelect={detail.select} onAssign={assigning.select} />
+          <BookingList trips={trips} selectedId={detail.selected?.id ?? null} onSelect={detail.select} onArchive={setArchiving} />
           <OffsetPagination
             page={trips.page}
             totalPages={trips.totalPages}
@@ -111,7 +111,6 @@ export default function TripSchedulePage() {
           onAssign={assigning.select}
           onEdit={openForm}
           onCosts={setCostFor}
-          onArchive={setArchiving}
         />
       </div>
 
