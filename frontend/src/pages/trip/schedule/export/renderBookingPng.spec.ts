@@ -14,6 +14,9 @@ const drawn: string[] = [];
 const texts: Array<{ value: string; x: number; y: number; align: string; width: number }> = [];
 const images: Array<{ src: string; x: number; y: number; width: number; height: number }> = [];
 const sizes: Array<{ width: number; height: number }> = [];
+/** Each stroked `Path2D` — the section icons — with where the context had been moved to. */
+const icons: Array<{ d: string; x: number; y: number }> = [];
+let origin = { x: 0, y: 0 };
 /** jsdom decodes no image: the logo's decode is stubbed per test, at LOGO.png's real 879 × 697. */
 let logoDecodes = true;
 const realDecode = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'decode');
@@ -40,10 +43,20 @@ const fakeContext = () => ({
     images.push({ src: image.src, x, y, width, height }),
   fillRect: (...args: number[]) => calls.push(`fillRect:${args.join(',')}`),
   scale: (x: number) => calls.push(`scale:${x}`),
+  save: () => {},
+  restore: () => {
+    origin = { x: 0, y: 0 };
+  },
+  translate: (x: number, y: number) => {
+    origin = { x, y };
+  },
+  setLineDash: () => {},
   beginPath: () => {},
   arc: () => {},
   fill: () => {},
-  stroke: () => {},
+  stroke: (path?: { d: string }) => {
+    if (path) icons.push({ d: path.d, ...origin });
+  },
   moveTo: () => {},
   lineTo: () => {},
   arcTo: () => {},
@@ -83,7 +96,18 @@ beforeEach(() => {
   texts.length = 0;
   images.length = 0;
   sizes.length = 0;
+  icons.length = 0;
   logoDecodes = true;
+  // jsdom has no Path2D: keep the path data, which is what the icons are.
+  vi.stubGlobal(
+    'Path2D',
+    class {
+      d: string;
+      constructor(d: string) {
+        this.d = d;
+      }
+    },
+  );
   Object.defineProperty(HTMLImageElement.prototype, 'decode', {
     configurable: true,
     writable: true,
@@ -106,6 +130,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   if (realDecode) Object.defineProperty(HTMLImageElement.prototype, 'decode', realDecode);
   else Reflect.deleteProperty(HTMLImageElement.prototype, 'decode');
 });
@@ -160,11 +185,11 @@ describe('renderBookingPng', () => {
     expect(images).toHaveLength(1);
     const logo = images[0]!;
     expect(logo.src).toMatch(/\/assets\/img\/LOGO\.png$/);
-    expect(logo).toMatchObject({ x: 48, height: 56 });
+    expect(logo).toMatchObject({ x: 48, height: 52 });
     expect(logo.width / logo.height).toBeCloseTo(879 / 697, 6);
     const brand = at('HOÀNG LONG LOGISTICS');
     expect(brand.x).toBeGreaterThan(logo.x + logo.width);
-    expect(brand.y + 10).toBeCloseTo(logo.y + logo.height / 2); // a 20 px line, centred on the mark
+    expect(brand.y + 11).toBeCloseTo(logo.y + logo.height / 2); // a 22 px line, centred on the mark
     const title = at('PHIẾU BOOKING');
     expect(title).toMatchObject({ align: 'left', x: 48 });
     expect(title.y).toBeGreaterThanOrEqual(logo.y + logo.height);
@@ -173,6 +198,24 @@ describe('renderBookingPng', () => {
     expect(subtitle.y).toBeGreaterThan(title.y);
     // Nothing in the header is set against the right edge.
     expect(texts.filter((text) => text.y <= subtitle.y).every((text) => text.align === 'left')).toBe(true);
+  });
+
+  it('★ one icon per section heading, in order — clock, pin, package, truck — on a tile left of its title', async () => {
+    await render({ crew: THREE, driverInstructions: 'Gọi trước 30 phút' });
+
+    // lucide's geometry, recognised by a stroke only that icon has.
+    const kinds = icons.map(({ d }) =>
+      d.includes('M12 6v6l4 2') ? 'clock' : d.includes('C9.539') ? 'pin' : d.includes('M12 22V12') ? 'package' : d.includes('M15 18H9') ? 'truck' : d,
+    );
+    expect(kinds).toEqual(['clock', 'pin', 'package', 'truck']);
+    const headings = ['THỜI GIAN', 'LỘ TRÌNH', 'KHÁCH HÀNG & HÀNG HÓA', 'XE & TÀI XẾ'].map(at);
+    icons.forEach((icon, index) => {
+      const heading = headings[index]!;
+      expect(icon.x).toBeLessThan(heading.x); // the tile leads the title …
+      expect(Math.abs(icon.y + 8 - (heading.y + 4.32))).toBeLessThan(2); // … level with its capitals
+    });
+    // Nothing else on the sheet is an icon: one per section, none per line.
+    expect(icons).toHaveLength(4);
   });
 
   it('★ falls back to a text-only lockup when the logo will not decode — and the export still succeeds', async () => {
@@ -189,8 +232,8 @@ describe('renderBookingPng', () => {
 
   it('★ "Thời gian" is the time summary: a column per end — label, day, then the hour beneath', async () => {
     await render({ scheduledDeliveryAt: '2026-10-08T03:00:00.000Z' });
-    const pickup = { label: at('Lấy hàng'), day: at('Thứ Ba, 06/10/2026'), time: at('16:00') };
-    const delivery = { label: at('Giao hàng'), day: at('Thứ Năm, 08/10/2026'), time: at('10:00') };
+    const pickup = { label: at('LẤY HÀNG'), day: at('Thứ Ba, 06/10/2026'), time: at('16:00') };
+    const delivery = { label: at('GIAO HÀNG'), day: at('Thứ Năm, 08/10/2026'), time: at('10:00') };
     for (const end of [pickup, delivery]) {
       expect(end.day.x).toBe(end.label.x);
       expect(end.day.y).toBeGreaterThan(end.label.y);
@@ -202,7 +245,7 @@ describe('renderBookingPng', () => {
     // No delivery booked: its column is simply not there — no placeholder.
     texts.length = 0;
     await render({ scheduledDeliveryAt: null });
-    expect(texts.some((text) => text.value === 'Giao hàng' || text.value === '—')).toBe(false);
+    expect(texts.some((text) => text.value === 'GIAO HÀNG' || text.value === '—')).toBe(false);
   });
 
   it('★ nothing leaves the page: every string, long ones wrapped, sits inside the 48 px margins', async () => {
@@ -219,13 +262,13 @@ describe('renderBookingPng', () => {
     for (const moment of ['Thứ Ba, 06/10/2026', '16:00', 'Thứ Năm, 08/10/2026', '10:00']) {
       expect(texts.filter((text) => text.value.includes(moment))).toHaveLength(1);
     }
-    const pickup = at('Điểm lấy hàng');
+    const pickup = at('ĐIỂM LẤY HÀNG');
     expect(pickup.y).toBeGreaterThan(at('16:00').y);
     expect(at('Kho Củ Chi').y).toBeGreaterThan(pickup.y);
     const address = texts.find((text) => text.value.startsWith('Lô B2-7'))!;
     expect(address.y).toBeGreaterThan(at('Kho Củ Chi').y);
     expect(address.x).toBe(at('Kho Củ Chi').x);
-    expect(at('Điểm giao hàng').y).toBeGreaterThan(at('Liên hệ: Anh Tuấn — 0909 123 456').y);
+    expect(at('ĐIỂM GIAO HÀNG').y).toBeGreaterThan(at('Liên hệ: Anh Tuấn — 0909 123 456').y);
   });
 
   it('★ several lorries: one row each, the plate leading and its driver beside it — never squashed into one line', async () => {

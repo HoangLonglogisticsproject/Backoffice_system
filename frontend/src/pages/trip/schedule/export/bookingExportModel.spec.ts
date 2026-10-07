@@ -32,6 +32,8 @@ describe('bookingDocument', () => {
     const doc = bookingDocument(booking({ driverInstructions: 'Gọi trước 30 phút' }), EXPORTED_AT);
     expect([doc.brand, doc.title]).toEqual(['HOÀNG LONG LOGISTICS', 'PHIẾU BOOKING']);
     expect(doc.sections.map((part) => part.heading)).toEqual(['Thời gian', 'Lộ trình', 'Khách hàng & hàng hóa', 'Xe & tài xế']);
+    // Each section names its mark: time, place, goods, lorry.
+    expect(doc.sections.map((part) => part.icon)).toEqual(['clock', 'pin', 'package', 'truck']);
     expect(section(doc, 'Khách hàng & hàng hóa')).toEqual([
       { kind: 'field', label: 'Khách hàng', value: 'KAPV' },
       { kind: 'field', label: 'Hàng hóa', value: '24 kiện · 1.2 tấn · 6 CBM' },

@@ -28,8 +28,12 @@ export type DocumentBlock =
   | { kind: 'crew'; plate: string; driver: string }
   | { kind: 'empty'; text: string };
 
+/** The small mark beside a section's heading — named here, drawn by the renderer. */
+export type SectionIcon = 'clock' | 'pin' | 'package' | 'truck';
+
 export interface DocumentSection {
   heading: string;
+  icon: SectionIcon;
   blocks: DocumentBlock[];
 }
 
@@ -75,6 +79,7 @@ export function bookingDocument(booking: BookingExport, exportedAt: Date): Booki
   const sections: DocumentSection[] = [
     {
       heading: 'Thời gian',
+      icon: 'clock',
       blocks: [
         // Always a day; the hour only once one is booked. Delivery only when one is.
         moment(
@@ -89,10 +94,12 @@ export function bookingDocument(booking: BookingExport, exportedAt: Date): Booki
     },
     {
       heading: 'Lộ trình',
+      icon: 'pin',
       blocks: [stop('Điểm lấy hàng', booking.pickup), stop('Điểm giao hàng', booking.delivery)],
     },
     {
       heading: 'Khách hàng & hàng hóa',
+      icon: 'package',
       blocks: [
         ...field('Khách hàng', booking.customerName),
         ...field('Hàng hóa', booking.cargoInfo),
@@ -101,6 +108,7 @@ export function bookingDocument(booking: BookingExport, exportedAt: Date): Booki
     },
     {
       heading: 'Xe & tài xế',
+      icon: 'truck',
       // Every lorry the server listed — never truncated (ADR-0004: 0..N).
       blocks:
         booking.crew.length > 0

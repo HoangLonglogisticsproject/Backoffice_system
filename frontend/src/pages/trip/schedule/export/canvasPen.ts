@@ -47,25 +47,31 @@ export function textWidth(pen: Pen, value: string, style: TextStyle): number {
 /** Where a block may draw: from `x`, `width` wide. */
 export type Column = { x: number; width: number };
 export type Area = { x: number; y: number; width: number; height: number };
-export type Look = { fill: string; radius?: number; edge?: string };
+/** A box's corners: one radius, or [top-left, top-right, bottom-right, bottom-left]. */
+export type Corners = number | readonly [number, number, number, number];
+/** How a box looks: filled, outlined, or both. */
+export type Look = { fill?: string; radius?: Corners; edge?: string };
 
 /**
- * A filled box with rounded corners, outlined in `edge` when given; one pixel
- * high, a hairline. Corners by `arcTo`, which every canvas has — `roundRect`
- * is missing from the Safari of an older iPhone.
+ * A box with rounded corners — filled, outlined in `edge`, or both; filled and
+ * one pixel high, a hairline. Corners by `arcTo`, which every canvas has —
+ * `roundRect` is missing from the Safari of an older iPhone.
  */
 export function box(pen: Pen, { x, y, width, height }: Area, { fill, radius = 0, edge }: Look): void {
   if (!pen.draw) return;
   const { ctx } = pen;
+  const [topLeft, topRight, bottomRight, bottomLeft] = typeof radius === 'number' ? [radius, radius, radius, radius] : radius;
   ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + width, y, x + width, y + height, radius);
-  ctx.arcTo(x + width, y + height, x, y + height, radius);
-  ctx.arcTo(x, y + height, x, y, radius);
-  ctx.arcTo(x, y, x + width, y, radius);
+  ctx.moveTo(x + topLeft, y);
+  ctx.arcTo(x + width, y, x + width, y + height, topRight);
+  ctx.arcTo(x + width, y + height, x, y + height, bottomRight);
+  ctx.arcTo(x, y + height, x, y, bottomLeft);
+  ctx.arcTo(x, y, x + width, y, topLeft);
   ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
   if (edge) {
     ctx.strokeStyle = edge;
     ctx.lineWidth = 1;

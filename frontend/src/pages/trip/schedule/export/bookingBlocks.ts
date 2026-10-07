@@ -1,6 +1,6 @@
 import type { DocumentBlock } from './bookingExportModel';
 import { route } from './bookingRoute';
-import { RULE, TYPE } from './bookingTheme';
+import { DIVIDER, RULE, TYPE } from './bookingTheme';
 import { box, capMiddle, type Column, type Look, type Pen, text, textWidth, type TextStyle } from './canvasPen';
 
 /**
@@ -11,8 +11,8 @@ import { box, capMiddle, type Column, type Look, type Pen, text, textWidth, type
 
 const LABEL = 132;
 /** A chip's height, and the narrowest plate chip — so a column of plates lines up. */
-const CHIP = 28;
-const PLATE = 112;
+const CHIP = 30;
+const PLATE = 118;
 
 type Kind = DocumentBlock['kind'];
 type Of<K extends Kind> = Extract<DocumentBlock, { kind: K }>;
@@ -29,9 +29,16 @@ export function sectionBody(pen: Pen, blocks: readonly DocumentBlock[], column: 
   if (moments) return times(pen, moments, column, top);
   const stops = only(blocks, 'stop');
   if (stops) return route(pen, stops, column, top);
+  // Fields are set apart by a quiet divider; lorries simply stack.
+  const divided = blocks.every((block) => block.kind === 'field');
   let y = top;
   blocks.forEach((block, index) => {
-    if (index > 0) y += 10;
+    if (index > 0 && divided) {
+      box(pen, { x: column.x, y: y + 12, width: column.width, height: 1 }, { fill: DIVIDER });
+      y += 25;
+    } else if (index > 0) {
+      y += 12;
+    }
     y += row(pen, block, column, y);
   });
   return y - top;
@@ -45,10 +52,10 @@ function row(pen: Pen, block: DocumentBlock, column: Column, top: number): numbe
         text(pen, block.value, column.x + LABEL, top, column.width - LABEL, TYPE.value),
       );
     case 'crew': {
-      // The plate in a quiet chip, a step above the driver's name, which sits level with it.
-      chip(pen, block.plate, column.x, top, TYPE.plate, { fill: '#eff6ff', edge: '#bfdbfe', radius: 6, min: PLATE });
-      const offset = CHIP / 2 - capMiddle(TYPE.value);
-      return Math.max(CHIP, offset + text(pen, block.driver, column.x + LABEL, top + offset, column.width - LABEL, TYPE.value));
+      // The plate in a clean branded chip; the driver a step quieter, level with it.
+      chip(pen, block.plate, column.x, top, TYPE.plate, { fill: '#f5f8ff', edge: '#bfd2f6', radius: 6, min: PLATE });
+      const offset = CHIP / 2 - capMiddle(TYPE.driver);
+      return Math.max(CHIP, offset + text(pen, block.driver, column.x + LABEL, top + offset, column.width - LABEL, TYPE.driver));
     }
     case 'empty':
       chip(pen, block.text, column.x, top, TYPE.pending, { fill: '#fffbeb', edge: '#fde68a', radius: CHIP / 2, min: 0 });
@@ -69,14 +76,14 @@ function times(pen: Pen, moments: ReadonlyArray<Of<'moment'>>, column: Column, t
   const heights = moments.map((moment, index) => {
     const x = column.x + index * share + (index > 0 ? 24 : 0);
     const width = share - 24;
-    let y = top + text(pen, moment.label, x, top, width, TYPE.eyebrow) + 2;
+    let y = top + text(pen, moment.label.toLocaleUpperCase('vi'), x, top, width, TYPE.eyebrow) + 6;
     y += text(pen, moment.day, x, y, width, TYPE.day);
-    if (moment.time) y += 2 + text(pen, moment.time, x, y + 2, width, TYPE.time);
+    if (moment.time) y += 4 + text(pen, moment.time, x, y + 4, width, TYPE.time);
     return y - top;
   });
   const height = Math.max(...heights);
   for (let index = 1; index < moments.length; index += 1) {
-    box(pen, { x: column.x + index * share, y: top, width: 1, height }, { fill: RULE });
+    box(pen, { x: column.x + index * share, y: top + 2, width: 1, height: height - 4 }, { fill: RULE });
   }
   return height;
 }
