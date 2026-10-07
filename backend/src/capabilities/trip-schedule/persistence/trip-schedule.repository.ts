@@ -108,10 +108,15 @@ export interface BoardFilter {
  * this, searching `%` matches every customer and searching `_` matches every
  * one-letter difference — a filter that silently does the opposite of what the
  * box says. The backslash is escaped FIRST, or escaping the other two would
- * then be undone by their own escape character.
+ * then be undone by their own escape character. (PostgreSQL's default LIKE
+ * escape is that backslash; `customerSql` names no other.)
+ *
+ * The replacements are written raw — `\\`, `\%`, `\_` — exactly as LIKE reads
+ * them. The one plain literal is the single backslash being searched for: a
+ * raw template cannot end in a lone backslash.
  */
 export const escapeLikePattern = (value: string): string =>
-  value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  value.replaceAll('\\', String.raw`\\`).replaceAll('%', String.raw`\%`).replaceAll('_', String.raw`\_`);
 
 /**
  * The customer search, as a predicate on the trip row.
