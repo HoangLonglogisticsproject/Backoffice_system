@@ -1695,8 +1695,8 @@ Chưa có màn hình nào dùng (PR-2). Xem ADR-0008.
   vendor: {name, taxCode} | null, document: {series, number} | null,
   trip: {id, scheduledOn, customerName} | null, flags: [...], recordedBy: {id, displayName},
   evidence: FuelEvidence[] }`. `amount` **luôn** của dòng tiền; `unitPrice` = amount ÷ lít do PostgreSQL
-  tính, không lưu. `fuelTransactionId: null` = chưa bọc — đọc nguyên dòng tiền. Dòng chuyến không phải
-  nhiên liệu và chưa bọc → 404.
+  tính, không lưu. `fuelTransactionId: null` = chưa bọc — đọc nguyên dòng tiền. Dòng tiền (sổ xe hoặc
+  chuyến) không phải nhiên liệu và chưa bọc → 404: `cost.import` mở fill, không mở sổ.
 * `flags`: `backingVoided` · `noLongerFuel` (dòng chuyến bị đổi sang khoản khác) · `editedAfterEvidence`
   (số tiền/khoản bị sửa sau khi có ảnh — theo `trip_cost_edits`) · `vehicleConfirmedOnlyByEvidence`.
   **Cờ, không chặn**: vòng đời của dòng chuyến không đổi.

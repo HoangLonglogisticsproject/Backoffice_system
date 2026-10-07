@@ -26,6 +26,19 @@ export interface RecordTripFuelCommand extends RecordFuelCommand {
 const notLive = () => new ConflictError('Only a live fuel cost takes a fuel transaction.');
 
 /**
+ * ★ `cost.import` OPENS FILLS, NOT LEDGERS — on either ledger. A cost that is
+ * not fuel and was never wrapped has no fuel view: 404, as if absent, so a
+ * toll or repair line is never read through this key. (A wrapped line later
+ * re-headed stays readable, flagged `noLongerFuel`.)
+ */
+const fuelOnly = (record: FuelViewRecord | null): FuelViewRecord => {
+  if (!record || (!record.fuelTransactionId && record.category !== 'fuel')) {
+    throw new NotFoundError('Fuel cost not found.');
+  }
+  return record;
+};
+
+/**
  * ★ RECORD WHAT IS KNOWN ABOUT ONE FILL, ON ITS ONE MONEY ROW (0037). Each
  * command locks the backing cost, opens its fuel transaction if it has none,
  * adds the facts it brings field by field, and attaches the caller's staged
@@ -76,18 +89,11 @@ export class FuelTransactionService {
   }
 
   async viewOfVehicleCost(vehicleId: string, costId: string): Promise<FuelTransactionView> {
-    const record = await this.views.ofVehicleCost(vehicleId, costId);
-    if (!record) throw new NotFoundError('Vehicle cost not found.');
-    return this.withEvidence(record);
+    return this.withEvidence(fuelOnly(await this.views.ofVehicleCost(vehicleId, costId)));
   }
 
-  /** A trip line that is not fuel and was never wrapped has no fuel view at all. */
   async viewOfTripCost(tripId: string, costId: string): Promise<FuelTransactionView> {
-    const record = await this.views.ofTripCost(tripId, costId);
-    if (!record || (!record.fuelTransactionId && record.category !== 'fuel')) {
-      throw new NotFoundError('Trip fuel cost not found.');
-    }
-    return this.withEvidence(record);
+    return this.withEvidence(fuelOnly(await this.views.ofTripCost(tripId, costId)));
   }
 
   /**
