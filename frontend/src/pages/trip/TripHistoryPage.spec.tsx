@@ -277,7 +277,7 @@ describe('TripHistoryPage', () => {
     renderPage();
 
     const row = (await screen.findByText('WWL')).closest('tr')!;
-    fireEvent.click(within(row).getByRole('button', { name: 'Tải booking PNG' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Xuất PNG' }));
 
     const dialog = within(await screen.findByRole('dialog', { name: 'Xem trước booking' }));
     expect(await dialog.findByRole('img', { name: 'Ảnh xem trước phiếu booking' })).toHaveAttribute('src', 'blob:preview');

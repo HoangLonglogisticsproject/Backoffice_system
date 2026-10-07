@@ -7,7 +7,7 @@ import { updateTripLocationById } from '@/api/tripCatalogue';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiError } from '@/utils/errors';
-import { currentMonthRange, todayAsCalendarDay } from '@/utils/format/datetime';
+import { currentMonthRange, formatTimeOnDay, todayAsCalendarDay } from '@/utils/format/datetime';
 
 const fetchTripSchedules = vi.fn();
 const archiveTripSchedule = vi.fn();
@@ -1315,10 +1315,66 @@ describe('TripSchedulePage', () => {
         'Phân công xe & tài xế',
         'Sửa',
         'Chi phí chuyến',
-        'Lưu trữ',
         // A read, not an office action — offered to every reader (contract §30).
-        'Tải booking PNG',
+        'Xuất PNG',
+        // Destructive, confirmed in its own dialog: the quietest, and last.
+        'Lưu trữ',
       ]);
+    });
+
+    it('★ the toolbar: every action keeps its words, its icon is decoration only, and the crew action alone is filled', async () => {
+      useSession.mockReturnValue(session(everything));
+      boardOf(trip({ status: 'executing', assignments: [turn({ started: true })] }));
+      renderPage();
+
+      const buttons = (await openBooking()).getAllByRole('button');
+      for (const button of buttons) {
+        expect(button.textContent?.trim()).not.toBe('');
+        for (const icon of button.querySelectorAll('svg')) expect(icon).toHaveAttribute('aria-hidden', 'true');
+      }
+      expect(buttons.filter((button) => button.className.includes('bg-blue-600')).map((button) => button.textContent)).toEqual([
+        'Đổi phân công',
+      ]);
+    });
+
+    it('★ the route leads: each end`s place over its booked address and contact, the time as clock · day', async () => {
+      useSession.mockReturnValue(session(['trip.read']));
+      const pickupAt = '2026-08-04T12:30:00.000Z';
+      const deliveryAt = '2026-08-04T14:45:00.000Z';
+      boardOf(
+        trip({ pickupLocation: { id: 'la', name: 'KHO SCSC' }, pickupContact: 'Anh Tuấn — 0909 123 456', pickupAt, deliveryAt }),
+      );
+      renderPage();
+
+      const route = within((await openBooking()).getByRole('region', { name: 'Lộ trình' }));
+      expect(route.getAllByRole('listitem').map((stop) => stop.textContent)).toEqual([
+        `Điểm lấy hàngKHO SCSCBÃI XE MIỀN NAMAnh Tuấn — 0909 123 456${formatTimeOnDay(pickupAt, 'vi')}`,
+        `Điểm giao hàngTCS${formatTimeOnDay(deliveryAt, 'vi')}`,
+      ]);
+      expect(route.getByText('KHO SCSC')).toHaveClass('font-semibold');
+    });
+
+    it('★ every lorry of the run, the plate over its driver — none dropped', async () => {
+      useSession.mockReturnValue(session(['trip.read']));
+      boardOf(
+        trip({
+          status: 'executing',
+          assignments: [
+            turn(),
+            turn({ id: 'a2', vehicle: { id: 'v2', plate: '51D-65233' }, driver: { id: 'd2', displayName: 'Tài Xế B' }, started: true }),
+            turn({ id: 'a3', vehicle: { id: 'v3', plate: '51C-33333' }, driver: { id: 'd3', displayName: 'Tài Xế C' } }),
+          ],
+        }),
+      );
+      renderPage();
+
+      const crew = within((await openBooking()).getByRole('region', { name: 'Xe & tài xế' }));
+      expect(crew.getAllByRole('listitem').map((row) => [...row.querySelectorAll('p')].slice(0, 2).map((line) => line.textContent))).toEqual([
+        ['50H-49266', 'Tài Xế A'],
+        ['51D-65233', 'Tài Xế B'],
+        ['51C-33333', 'Tài Xế C'],
+      ]);
+      expect(crew.getAllByText('Tài xế đã bắt đầu')).toHaveLength(1);
     });
 
     it('★ an executing booking reads as the driver put it — on the road, the driver started — with no control over it', async () => {
@@ -1350,7 +1406,7 @@ describe('TripSchedulePage', () => {
       const panel = await openBooking();
       expect(panel.getByText('Chờ xử lý')).toBeInTheDocument();
       // No action — only the booking PNG, the one read every reader of the trip gets.
-      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Tải booking PNG']);
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Xuất PNG']);
     });
 
     it('★ offers nothing on a row that is momentarily finished in the cache, however senior the viewer', async () => {
@@ -1361,7 +1417,7 @@ describe('TripSchedulePage', () => {
       const panel = await openBooking();
       expect(panel.getByText('Đã xác nhận')).toBeInTheDocument();
       // No action — only the booking PNG, the one read every reader of the trip gets.
-      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Tải booking PNG']);
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Xuất PNG']);
     });
   });
 
@@ -2106,7 +2162,7 @@ describe('TripSchedulePage', () => {
 
       const panel = await openBooking();
       // No action — only the booking PNG, the one read every reader of the trip gets.
-      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Tải booking PNG']);
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Xuất PNG']);
     });
 
     it('★ offers cost.read ALONE its control, without trip.write', async () => {

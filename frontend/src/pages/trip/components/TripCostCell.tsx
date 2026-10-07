@@ -1,4 +1,5 @@
 import { useLanguage } from '@/contexts/LanguageContext';
+import { cn } from '@/utils/cn';
 import { formatMoney } from '@/utils/format/money';
 import type { TripCostSummary } from '@/types/tripBoard';
 
@@ -22,6 +23,7 @@ import type { TripCostSummary } from '@/types/tripBoard';
 export function TripCostCell({
   summary,
   onOpen,
+  className,
 }: Readonly<{
   /**
    * Only the two figures a cell shows. `undefined` for a server that predates
@@ -29,6 +31,8 @@ export function TripCostCell({
    */
   summary: Pick<TripCostSummary, 'total' | 'itemCount'> | null | undefined;
   onOpen: () => void;
+  /** A table column right-aligns it (the default); the detail panel reads it left to right. */
+  className?: string;
 }>) {
   const { t } = useLanguage();
 
@@ -48,7 +52,10 @@ export function TripCostCell({
       type="button"
       onClick={onOpen}
       aria-label={`${t('tripCost')}: ${amount}`}
-      className="group w-full rounded-md px-1 py-0.5 text-right outline-none hover:bg-blue-50 focus-visible:ring-3 focus-visible:ring-ring/50"
+      className={cn(
+        'group w-full rounded-md px-1 py-0.5 text-right outline-none hover:bg-blue-50 focus-visible:ring-3 focus-visible:ring-ring/50',
+        className,
+      )}
     >
       {empty ? (
         <span className="text-gray-400 group-hover:text-blue-700">{amount}</span>

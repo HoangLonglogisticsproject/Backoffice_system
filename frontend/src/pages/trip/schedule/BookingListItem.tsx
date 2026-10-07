@@ -1,4 +1,4 @@
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, MapPin, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
@@ -50,8 +50,10 @@ export function BookingListItem({
     // so the facts get the full width instead of a truncated half.
     <li
       className={cn(
-        'flex flex-col gap-2 px-4 py-3 transition-colors sm:flex-row sm:items-start sm:gap-3',
-        selected ? 'bg-blue-50/70' : 'hover:bg-gray-50',
+        // The selected row carries the panel's accent down its edge; the others keep the border transparent so nothing shifts.
+        'flex flex-col gap-2 border-l-2 px-4 py-3 transition-colors sm:flex-row sm:items-start sm:gap-3',
+        // Left edge only: the list's dividers are this row's other borders.
+        selected ? 'border-l-blue-600 bg-blue-50/70' : 'border-l-transparent hover:bg-gray-50',
       )}
     >
       <button
@@ -80,21 +82,25 @@ export function BookingListItem({
           )}
         </span>
         <span className="mt-0.5 flex items-center gap-1.5 text-sm text-gray-600 sm:pl-8">
+          <MapPin className="size-3.5 shrink-0 text-gray-400" aria-hidden="true" />
           <span className="truncate">{pickup}</span>
           <ArrowRight className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-label="→" />
           <span className="truncate">{delivery}</span>
         </span>
         {trip.assignments.length > 0 && (
-          <span className="mt-0.5 flex flex-wrap gap-x-4 text-sm sm:pl-8">
-            {trip.assignments.map((turn) => (
-              <span key={turn.id} className="whitespace-nowrap">
-                {/* A pair the migration could not backfill says so, never a blank plate. */}
-                <span className="font-medium text-gray-900">
-                  {turn.vehicle ? formatPlate(turn.vehicle.plate) : t('dispatchMissingVehicle')}
-                </span>{' '}
-                <span className="text-gray-600">{turn.driver.displayName}</span>
-              </span>
-            ))}
+          <span className="mt-0.5 flex items-start gap-1.5 text-sm sm:pl-8">
+            <Truck className="mt-0.5 size-3.5 shrink-0 text-gray-400" aria-hidden="true" />
+            <span className="flex flex-wrap gap-x-4">
+              {trip.assignments.map((turn) => (
+                <span key={turn.id} className="whitespace-nowrap">
+                  {/* A pair the migration could not backfill says so, never a blank plate. */}
+                  <span className="font-medium text-gray-900">
+                    {turn.vehicle ? formatPlate(turn.vehicle.plate) : t('dispatchMissingVehicle')}
+                  </span>{' '}
+                  <span className="text-gray-600">{turn.driver.displayName}</span>
+                </span>
+              ))}
+            </span>
           </span>
         )}
       </button>
