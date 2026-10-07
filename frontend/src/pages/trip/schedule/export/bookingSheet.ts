@@ -1,7 +1,7 @@
 import type { BookingDocument, DocumentBlock } from './bookingExportModel';
 import { route, type Stop } from './bookingRoute';
 import { BRAND, CONTENT, PAD, RULE, SHEET_WIDTH, TYPE } from './bookingTheme';
-import { box, capMiddle, dry, type Pen, text, textWidth, type TextStyle } from './canvasPen';
+import { box, capMiddle, dry, type Look, type Pen, text, textWidth, type TextStyle } from './canvasPen';
 
 /**
  * The booking sheet, top to bottom: a thin brand bar, the header, one section
@@ -17,13 +17,16 @@ const LOGO_HEIGHT = 56;
 const CHIP = 28;
 const PLATE = 112;
 
+/** A one-pixel hairline in the rule colour. */
+const rule = (pen: Pen, x: number, y: number, width: number) => box(pen, { x, y, width, height: 1 }, { fill: RULE });
+
 /** Lays `doc` out with `pen` and returns the sheet's height. `logo` is the decoded mark, or `null` for a text-only header. */
 export function paintBooking(pen: Pen, doc: BookingDocument, logo: HTMLImageElement | null): number {
   pen.ctx.textBaseline = 'top';
-  box(pen, 0, 0, SHEET_WIDTH, 4, BRAND);
+  box(pen, { x: 0, y: 0, width: SHEET_WIDTH, height: 4 }, { fill: BRAND });
   let y = 44;
   y += header(pen, doc, logo, y) + 22;
-  box(pen, PAD, y, CONTENT, 1, RULE);
+  rule(pen, PAD, y, CONTENT);
   for (const section of doc.sections) {
     y += 28;
     y += heading(pen, section.heading, y) + 14;
@@ -31,7 +34,7 @@ export function paintBooking(pen: Pen, doc: BookingDocument, logo: HTMLImageElem
     y += stops.length === section.blocks.length ? route(pen, stops, y) : rows(pen, section.blocks, y);
   }
   y += 36;
-  box(pen, PAD, y, CONTENT, 1, RULE);
+  rule(pen, PAD, y, CONTENT);
   y += 14;
   // When it was exported on the left, what it is for on the right.
   const exported = Math.min(textWidth(pen, doc.footer.exported, TYPE.small), CONTENT / 2);
@@ -64,7 +67,7 @@ function header(pen: Pen, doc: BookingDocument, logo: HTMLImageElement | null, t
 function heading(pen: Pen, value: string, top: number): number {
   const caps = value.toLocaleUpperCase('vi');
   const end = PAD + textWidth(pen, caps, TYPE.heading) + 12;
-  box(pen, end, top + capMiddle(TYPE.heading), PAD + CONTENT - end, 1, RULE);
+  rule(pen, end, top + capMiddle(TYPE.heading), PAD + CONTENT - end);
   return text(pen, caps, PAD, top, CONTENT, TYPE.heading);
 }
 
@@ -96,12 +99,12 @@ function row(pen: Pen, block: DocumentBlock, top: number): number {
   }
 }
 
-type ChipLook = { fill: string; edge: string; radius: number; min: number };
+type ChipLook = Look & { min: number };
 
 /** One line of text centred in a rounded box at the left margin. */
 function chip(pen: Pen, value: string, top: number, type: TextStyle, look: ChipLook): void {
   const inner = textWidth(pen, value, type);
   const width = Math.max(look.min, inner + 24);
-  box(pen, PAD, top, width, CHIP, look.fill, look.radius, look.edge);
+  box(pen, { x: PAD, y: top, width, height: CHIP }, look);
   text(pen, value, PAD + (width - inner) / 2, top + CHIP / 2 - capMiddle(type), inner, type);
 }

@@ -44,12 +44,15 @@ export function textWidth(pen: Pen, value: string, style: TextStyle): number {
   return pen.ctx.measureText(value).width;
 }
 
+export type Area = { x: number; y: number; width: number; height: number };
+export type Look = { fill: string; radius?: number; edge?: string };
+
 /**
  * A filled box with rounded corners, outlined in `edge` when given; one pixel
  * high, a hairline. Corners by `arcTo`, which every canvas has — `roundRect`
  * is missing from the Safari of an older iPhone.
  */
-export function box(pen: Pen, x: number, y: number, width: number, height: number, fill: string, radius = 0, edge?: string): void {
+export function box(pen: Pen, { x, y, width, height }: Area, { fill, radius = 0, edge }: Look): void {
   if (!pen.draw) return;
   const { ctx } = pen;
   ctx.beginPath();

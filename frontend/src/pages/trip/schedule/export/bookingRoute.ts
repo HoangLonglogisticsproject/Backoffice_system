@@ -36,7 +36,7 @@ export function route(pen: Pen, stops: readonly Stop[], top: number): number {
   };
   // The panel goes down first, so its height is measured before anything is drawn on it.
   const { height } = ends(dry(pen));
-  box(pen, PAD, top, CONTENT, height, '#f8fafc', 10, RULE);
+  box(pen, { x: PAD, y: top, width: CONTENT, height }, { fill: '#f8fafc', radius: 10, edge: RULE });
   const { markers } = ends(pen);
   if (pen.draw) rail(pen.ctx, PAD + INSET + 7, markers);
   return height;
