@@ -108,6 +108,13 @@ export const PERMISSIONS = [
    * board's cost column. Read by `GET /trip-schedules/export` alone (DL-117).
    */
   'cost.export',
+  /**
+   * ★ BACKFILL FUEL EVIDENCE — and nothing else (0037). Stage images, attach
+   * them to a fill's ONE money row (a lorry's cost line, or a trip's legacy
+   * fuel line), add its station and receipt. Not `cost.read`: holding this
+   * opens the fill being worked on, never the lorry's ledger or a total.
+   */
+  'cost.import',
 
   /**
    * ★ ONE KEY FOR BOTH DECISIONS, NOT TWO.
@@ -378,6 +385,14 @@ export const PERMISSION_REQUIREMENT: Readonly<Record<PermissionKey, PermissionRe
    * `authorization-policy.spec` holds both halves.
    */
   'cost.export': { tier: 'global', orFunction: ['accounting'] },
+  /**
+   * ★ THE SUPERADMIN AND ACCOUNTING — FOR FUEL EVIDENCE ONLY. The office that
+   * holds the receipts backfills them, member or head. Its own key for the
+   * reason `cost.export` has one: `orFunction` on `cost.read` would open the
+   * whole ledger, and the decision is to open the fill being worked on.
+   * Voiding and correcting stay `cost.void` — the SuperAdmin's.
+   */
+  'cost.import': { tier: 'global', orFunction: ['accounting'] },
 
   /**
    * ★ 'global' BECAUSE THE CONTRACT NAMES ONE ACTOR, NOT BECAUSE IT IS SAFEST.

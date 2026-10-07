@@ -73,6 +73,34 @@ describe('★ cost.export is the SuperAdmin’s and accounting’s — for the e
   });
 });
 
+/**
+ * ★ FUEL EVIDENCE IS ACCOUNTING'S TO BACKFILL — AND THAT OPENS NO LEDGER (0037).
+ *
+ * `cost.import` lets the office that holds the receipts attach them to a
+ * fill. It is pinned to the two fuel controllers so it cannot quietly become
+ * the key a ledger route asks, and the void that corrects evidence stays
+ * `cost.void` — the SuperAdmin's.
+ */
+describe('★ cost.import is the SuperAdmin’s and accounting’s — for fuel evidence alone', () => {
+  const api = join(__dirname, '..', '..', 'src', 'capabilities', 'trip-schedule', 'api');
+
+  it('is global or the accounting function, and nobody else', () => {
+    expect(PERMISSION_REQUIREMENT['cost.import']).toEqual({ tier: 'global', orFunction: ['accounting'] });
+  });
+
+  it('is asked by the fuel transaction and fuel evidence routes, and the ledger read still asks cost.read', async () => {
+    const source = (file: string) => readFile(join(api, file), 'utf8');
+    const transactions = await source('fuel-transaction.controller.ts');
+    const evidence = await source('fuel-evidence.controller.ts');
+    const ledger = await source('vehicle-cost.controller.ts');
+    expect(transactions.split("@RequirePermission('cost.import')").length - 1).toBe(4);
+    expect(evidence.split("@RequirePermission('cost.import')").length - 1).toBe(3);
+    expect(evidence.split("@RequirePermission('cost.void')").length - 1).toBe(1);
+    expect(ledger).toContain("@RequirePermission('cost.read')");
+    expect(ledger).not.toContain('cost.import');
+  });
+});
+
 describe('★ the two price keys agree with each other', () => {
   it('everybody who may WRITE a price may READ it back', () => {
     // A holder who could type a figure and not see it saved would have a form

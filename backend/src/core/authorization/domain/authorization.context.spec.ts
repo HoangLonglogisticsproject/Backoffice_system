@@ -335,10 +335,11 @@ describe('grantedPermissions()', () => {
     ]);
   });
 
-  it('★ gives accounting the export’s cost key and none of the cost dialog’s (DL-117)', () => {
+  it('★ gives accounting the export’s and the fuel backfill’s cost keys, and none of the cost dialog’s (DL-117, 0037)', () => {
     const granted = grantedPermissions(context({ memberOf: [A], functions: ['accounting'] }));
 
     expect(granted).toContain('cost.export');
+    expect(granted).toContain('cost.import');
     expect(granted).not.toContain('cost.read');
     expect(granted).not.toContain('cost.create');
     expect(granted).not.toContain('cost.void');
@@ -544,6 +545,8 @@ describe('★ orFunction — permissions a department FUNCTION grants', () => {
       // The Excel export's cost breakdown (DL-117) — not `cost.read`: the
       // board's cost column and the cost dialog stay the SuperAdmin's.
       'cost.export',
+      // Fuel evidence backfill (0037) — the fill being worked on, not the ledger.
+      'cost.import',
       'customer.create',
       'location.create',
       'trip.create',

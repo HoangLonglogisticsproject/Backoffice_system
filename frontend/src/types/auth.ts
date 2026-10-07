@@ -79,6 +79,10 @@ export type PermissionKey =
   // (DL-117). Not `cost.read`: it opens neither the board's cost column nor the
   // cost dialog. The server enforces it on `GET /trip-schedules/export`.
   | 'cost.export'
+  // ★ FUEL EVIDENCE BACKFILL (0037) — the SuperAdmin's and ACCOUNTING's. Stage
+  // images and attach them to one fill's money row; opens neither the lorry
+  // ledger nor a total. No screen uses it yet.
+  | 'cost.import'
   // ★ CLOSING A TRIP, AND DELIBERATELY NOT `trip.write`. A dispatcher
   // correcting a delivery address and a reviewer closing a trip's books are
   // different acts with different consequences — approval is irreversible —
