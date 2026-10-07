@@ -108,10 +108,15 @@ export interface BoardFilter {
  * this, searching `%` matches every customer and searching `_` matches every
  * one-letter difference — a filter that silently does the opposite of what the
  * box says. The backslash is escaped FIRST, or escaping the other two would
- * then be undone by their own escape character.
+ * then be undone by their own escape character. (PostgreSQL's default LIKE
+ * escape is that backslash; `customerSql` names no other.)
+ *
+ * The replacements are written raw — `\\`, `\%`, `\_` — exactly as LIKE reads
+ * them. The one plain literal is the single backslash being searched for: a
+ * raw template cannot end in a lone backslash.
  */
 export const escapeLikePattern = (value: string): string =>
-  value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  value.replaceAll('\\', String.raw`\\`).replaceAll('%', String.raw`\%`).replaceAll('_', String.raw`\_`);
 
 /**
  * The customer search, as a predicate on the trip row.
@@ -285,8 +290,9 @@ const RETURNING_TRIP = `RETURNING ${tripColumns('')}`;
  * (`TripEntryCrew`), so no driver portal or operational board treats
  * a finished run as work; `finished` + the entry's own mark is what tells them
  * apart from a turn somebody ended by hand. A trusted constant, not input.
+ * Shared with the booking export, so the PNG lists the board's crew exactly.
  */
-const IS_CREW = `(a.state = 'active'
+export const IS_CREW = `(a.state = 'active'
                    OR (t.status = 'finished' AND a.state = 'ended'
                        AND a.end_reason = '${HISTORICAL_ENTRY_REASON}'))`;
 

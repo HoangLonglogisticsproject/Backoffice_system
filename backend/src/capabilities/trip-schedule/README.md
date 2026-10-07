@@ -35,7 +35,7 @@ Index là lớp thứ hai, không phải lớp thứ nhất.
 ## Quyền — bất đối xứng, và cố ý
 
 ```
-trip.read         global | function sales·accounting·dispatch·customer_service — board, detail, history, events, assignments, completion list, danh mục
+trip.read         global | function sales·accounting·dispatch·customer_service — board, detail, history, events, assignments, completion list, danh mục, phiếu booking
 trip.create       global | function sales·accounting·dispatch·customer_service — CHỈ thêm chuyến (DL-111)
 customer.create   global | function sales·accounting·dispatch·customer_service — POST /trip-customers (DL-112)
 location.create   global | function sales·accounting·dispatch·customer_service — POST /trip-locations, /trip-customers/:id/locations
@@ -395,6 +395,14 @@ và sổ nhiên liệu trong ngày (`vehicle_costs`, 0..N/xe/ngày).
 * **Không AP, không P&L** — sổ chi phí xe không biết nhà cung cấp, hoá đơn hay thanh toán.
 * Contract: `docs/backend/frontend-integration-contract.md` §29.
 
+## Phiếu booking (PNG) — một tài liệu, mọi người đọc (2026-10-07)
+
+`GET /trip-schedules/:id/booking-export` (`trip.read`, Backoffice) trả **một** projection cố định, an
+toàn để gửi khách / tài xế / đối tác — giống nhau cho SuperAdmin, Điều độ, Kinh doanh, CSKH, Kế toán.
+Allowlist nằm **trong SELECT** (`persistence/booking-export.repository.ts`): không giá, không chi phí,
+không `note`, không `status`, không id; crew dùng chung `IS_CREW` với board. Archive → 404. Ảnh vẽ
+trong trình duyệt; route chỉ đọc. Test kiến trúc giữ SELECT đó. Contract §30.
+
 ## Những gì cố ý KHÔNG có
 
 **Khối CHI PHÍ.** Bảng tính có nhóm cột thứ hai (DẦU · CẦU TRẠM · PHÍ KHO · BỐC
@@ -437,4 +445,5 @@ cli/normalize-legacy-confirmed.cli.ts  CLI (mặc định dry run); scripts/lega
 domain/fleet-operations.ts           trạng thái suy ra của xe/lượt, nghĩa vụ nhiên liệu, cờ dữ liệu
 persistence/fleet-operations.repository.ts  turnWorksOn · worksToday · bảng đội xe một câu
 application/fleet-operations.service.ts     GET /fleet-operations (dispatch.write; tiền với cost.read)
+persistence/booking-export.repository.ts    phiếu booking: allowlist trong SELECT, crew = IS_CREW
 ```

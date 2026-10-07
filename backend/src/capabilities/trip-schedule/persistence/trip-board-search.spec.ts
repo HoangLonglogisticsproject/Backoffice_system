@@ -40,4 +40,13 @@ describe('escapeLikePattern', () => {
   it('handles the empty string without inventing anything', () => {
     expect(escapeLikePattern('')).toBe('');
   });
+
+  it('★ the contract, pinned — each output written exactly as LIKE reads it', () => {
+    expect(escapeLikePattern('abc')).toBe('abc');
+    expect(escapeLikePattern('abc%def')).toBe(String.raw`abc\%def`);
+    expect(escapeLikePattern('abc_def')).toBe(String.raw`abc\_def`);
+    expect(escapeLikePattern(String.raw`abc\def`)).toBe(String.raw`abc\\def`);
+    // All three at once: the backslash doubled first, then `%` and `_` escaped.
+    expect(escapeLikePattern(String.raw`a\b%c_d`)).toBe(String.raw`a\\b\%c\_d`);
+  });
 });

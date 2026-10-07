@@ -5,6 +5,7 @@ import { UsersModule } from '../../core/users/users.module';
 import { NotificationModule } from '../notification/notification.module';
 import { ActiveAssignmentGuard } from './api/active-assignment.guard';
 import { AssignmentRequestController } from './api/assignment-request.controller';
+import { BookingExportController } from './api/booking-export.controller';
 import { DriverOpenBookingController } from './api/driver-open-booking.controller';
 import { FleetOperationsController } from './api/fleet-operations.controller';
 import { ExpenseAssignmentGuard } from './api/expense-assignment.guard';
@@ -17,6 +18,7 @@ import { TripScheduleController } from './api/trip-schedule.controller';
 import { VehicleCostController } from './api/vehicle-cost.controller';
 import { AssignmentRequestReviewService } from './application/assignment-request-review.service';
 import { AssignmentRequestSupersession } from './application/assignment-request-supersession';
+import { BookingExportService } from './application/booking-export.service';
 import { DispatchCrew } from './application/dispatch-crew';
 import { DriverAssignmentRequestService } from './application/driver-assignment-request.service';
 import { TripBoardService } from './application/trip-board.service';
@@ -47,6 +49,7 @@ import {
   DriverAssignmentRepository,
   ExecutionEventRepository,
 } from './persistence/trip-execution.repository';
+import { BookingExportRepository } from './persistence/booking-export.repository';
 import { DriverTripReadModelRepository } from './persistence/driver-read-model.repository';
 import { FleetOperationsRepository } from './persistence/fleet-operations.repository';
 import { OpenBookingRepository } from './persistence/open-booking.repository';
@@ -84,6 +87,7 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     DriverOpenBookingController,
     FleetOperationsController,
     AssignmentRequestController,
+    BookingExportController,
   ],
   providers: [
     TripScheduleService,
@@ -103,6 +107,7 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     AssignmentRequestSupersession,
     DriverAssignmentRequestService,
     AssignmentRequestReviewService,
+    BookingExportService,
     ActiveAssignmentGuard,
     ExpenseAssignmentGuard,
     ReadableAssignmentGuard,
@@ -125,6 +130,7 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     TripAssignmentRequestRepository,
     OpenBookingRepository,
     FleetOperationsRepository,
+    BookingExportRepository,
   ],
   exports: [
     TripScheduleService,

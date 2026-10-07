@@ -107,6 +107,12 @@ export const tripKeys = {
    */
   assignments: (tripId: string) => [...tripKeys.all, 'assignments', tripId] as const,
 
+  /**
+   * The booking document's data for ONE open preview. Its own root, held only
+   * while the dialog is (`gcTime: 0`): every opening reads the trip afresh.
+   */
+  bookingExport: (tripId: string) => [...tripKeys.all, 'booking-export', tripId] as const,
+
   catalogues: () => [...tripKeys.all, 'catalogue'] as const,
   /** One customer's places. Under the catalogue prefix, so a reload clears them too. */
   locations: (customerId: string, includeArchived: boolean) =>

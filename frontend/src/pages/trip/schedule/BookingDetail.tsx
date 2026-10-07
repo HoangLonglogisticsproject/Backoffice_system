@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useNow } from '@/hooks/useNow';
@@ -14,6 +15,7 @@ import {
   BookingRouteSection,
 } from './BookingDetailSections';
 import { CrewPill, RequestsPill, UrgencyPill } from './BookingSignals';
+import { BookingExportDialog } from './export/BookingExportDialog';
 
 type Props = Readonly<
   {
@@ -33,9 +35,17 @@ type Props = Readonly<
  * selected. Narrow, it is the app's own `Modal` — full screen on a phone —
  * which already traps focus, closes on Escape and locks the page behind it, so
  * the narrow layout inherits all of that rather than re-implementing a drawer.
+ *
+ * ★ THE BOOKING PNG PREVIEW OPENS FROM HERE, AND WHERE IT MOUNTS MATTERS.
+ * Narrow, INSIDE the detail dialog, so Escape closes the preview alone. Wide,
+ * BESIDE the column — never in it: the sticky column is a stacking context of
+ * its own, and a dialog inside it would sit under the app's top bar.
  */
 export function BookingDetail({ trip, wide, onClose, ...handlers }: Props) {
   const { t } = useLanguage();
+  const [exporting, setExporting] = useState<string | null>(null);
+  const preview = exporting && <BookingExportDialog tripId={exporting} onClose={() => setExporting(null)} />;
+  const body = trip && <Body trip={trip} onExport={setExporting} {...handlers} />;
 
   if (!wide) {
     return (
@@ -45,22 +55,30 @@ export function BookingDetail({ trip, wide, onClose, ...handlers }: Props) {
         title={t('bookingDetailTitle')}
         className="h-dvh max-h-dvh max-w-none rounded-none sm:h-auto sm:max-h-[90vh] sm:max-w-2xl sm:rounded-xl"
       >
-        {trip && <Body trip={trip} {...handlers} />}
+        {body}
+        {preview}
       </Modal>
     );
   }
 
   return (
-    <aside
-      aria-label={t('bookingDetailTitle')}
-      className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm xl:sticky xl:top-0 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto"
-    >
-      {trip ? <Body trip={trip} {...handlers} /> : <p className="text-sm text-gray-500">{t('bookingSelectHint')}</p>}
-    </aside>
+    <>
+      <aside
+        aria-label={t('bookingDetailTitle')}
+        className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm xl:sticky xl:top-0 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto"
+      >
+        {body || <p className="text-sm text-gray-500">{t('bookingSelectHint')}</p>}
+      </aside>
+      {preview}
+    </>
   );
 }
 
-function Body({ trip, ...handlers }: Readonly<{ trip: TripBoardRow } & BookingActionHandlers>) {
+function Body({
+  trip,
+  onExport,
+  ...handlers
+}: Readonly<{ trip: TripBoardRow; onExport: (tripId: string) => void } & BookingActionHandlers>) {
   const { t, language } = useLanguage();
   const now = useNow();
 
@@ -79,7 +97,7 @@ function Body({ trip, ...handlers }: Readonly<{ trip: TripBoardRow } & BookingAc
           <UrgencyPill urgency={urgencyOf(trip, now)} />
         </div>
       </header>
-      <BookingDetailActions trip={trip} {...handlers} />
+      <BookingDetailActions trip={trip} onExport={onExport} {...handlers} />
       <BookingRouteSection trip={trip} />
       <BookingCustomerSection trip={trip} />
       <BookingCrewSection trip={trip} />

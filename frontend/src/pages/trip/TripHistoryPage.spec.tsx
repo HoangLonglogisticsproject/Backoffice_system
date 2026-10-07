@@ -14,6 +14,7 @@ const createTripSchedule = vi.fn();
 const useSession = vi.fn();
 const downloadTripScheduleWorkbook = vi.fn();
 const notifySuccess = vi.fn();
+const fetchBookingExport = vi.fn();
 
 vi.mock('@/api/tripSchedule', () => ({
   fetchTripSchedules: (...a: unknown[]) => fetchTripSchedules(...a),
@@ -30,6 +31,9 @@ vi.mock('@/api/tripCatalogue', () => ({
 }));
 vi.mock('@/api/tripAssignment', () => ({ fetchEligibleDrivers: async () => [], assignDriver: vi.fn() }));
 vi.mock('@/contexts/SessionProvider', () => ({ useSession: () => useSession() }));
+vi.mock('@/api/bookingExport', () => ({ fetchBookingExport: (...args: unknown[]) => fetchBookingExport(...args) }));
+// jsdom draws no canvas; the renderer has its own spec.
+vi.mock('./schedule/export/renderBookingPng', () => ({ renderBookingPng: async () => new Blob(['png'], { type: 'image/png' }) }));
 vi.mock('@/utils/export/tripScheduleWorkbook', () => ({
   downloadTripScheduleWorkbook: (...a: unknown[]) => downloadTripScheduleWorkbook(...a),
 }));
@@ -259,6 +263,25 @@ describe('TripHistoryPage', () => {
     await waitFor(() =>
       expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'history' })),
     );
+  });
+
+  it('★ every reader exports a finished trip`s booking PNG from its row — a read, no write permission needed', async () => {
+    useSession.mockReturnValue(session(['trip.read']));
+    fetchBookingExport.mockResolvedValue({
+      scheduledOn: '2026-08-04', scheduledPickupAt: null, scheduledDeliveryAt: null,
+      pickup: { name: null, address: 'BÃI XE MIỀN NAM', contact: null },
+      delivery: { name: null, address: 'TCS', contact: null },
+      customerName: 'WWL', cargoInfo: '17CTN', driverInstructions: null, crew: [],
+    });
+    Object.assign(URL, { createObjectURL: () => 'blob:preview', revokeObjectURL: () => {} });
+    renderPage();
+
+    const row = (await screen.findByText('WWL')).closest('tr')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Tải booking PNG' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'Xem trước booking' }));
+    expect(await dialog.findByRole('img', { name: 'Ảnh xem trước phiếu booking' })).toHaveAttribute('src', 'blob:preview');
+    expect(fetchBookingExport).toHaveBeenCalledWith('t1');
   });
 
   it('offers no entry to somebody without trip.create, and no screen without trip.read', async () => {

@@ -1316,6 +1316,8 @@ describe('TripSchedulePage', () => {
         'Sửa',
         'Chi phí chuyến',
         'Lưu trữ',
+        // A read, not an office action — offered to every reader (contract §30).
+        'Tải booking PNG',
       ]);
     });
 
@@ -1347,7 +1349,8 @@ describe('TripSchedulePage', () => {
 
       const panel = await openBooking();
       expect(panel.getByText('Chờ xử lý')).toBeInTheDocument();
-      expect(panel.queryAllByRole('button')).toHaveLength(0);
+      // No action — only the booking PNG, the one read every reader of the trip gets.
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Tải booking PNG']);
     });
 
     it('★ offers nothing on a row that is momentarily finished in the cache, however senior the viewer', async () => {
@@ -1357,7 +1360,8 @@ describe('TripSchedulePage', () => {
 
       const panel = await openBooking();
       expect(panel.getByText('Đã xác nhận')).toBeInTheDocument();
-      expect(panel.queryAllByRole('button')).toHaveLength(0);
+      // No action — only the booking PNG, the one read every reader of the trip gets.
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Tải booking PNG']);
     });
   });
 
@@ -2101,7 +2105,8 @@ describe('TripSchedulePage', () => {
       renderPage();
 
       const panel = await openBooking();
-      expect(panel.queryAllByRole('button')).toHaveLength(0);
+      // No action — only the booking PNG, the one read every reader of the trip gets.
+      expect(panel.getAllByRole('button').map((button) => button.textContent)).toEqual(['Tải booking PNG']);
     });
 
     it('★ offers cost.read ALONE its control, without trip.write', async () => {

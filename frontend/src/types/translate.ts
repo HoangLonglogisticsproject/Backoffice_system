@@ -1683,6 +1683,21 @@ const PHRASES = {
   bookingSectionPricing: { vi: 'Giá cước & chi phí', en: 'Prices & costs' },
   bookingSectionMeta: { vi: 'Thông tin bản ghi', en: 'Record' },
   colUpdatedAt: { vi: 'Cập nhật lần cuối', en: 'Last updated' },
+  // ★ THE BOOKING PNG — one fixed external-safe document. The IMAGE is always
+  // Vietnamese (`bookingExportModel`); only the dialog around it is translated.
+  bookingExportAction: { vi: 'Tải booking PNG', en: 'Download booking PNG' },
+  bookingExportTitle: { vi: 'Xem trước booking', en: 'Booking preview' },
+  bookingExportHelp: {
+    vi: 'Ảnh booking dùng để chia sẻ thông tin vận hành. Không bao gồm giá, chi phí hoặc dữ liệu tài chính nội bộ.',
+    en: 'The booking image is for sharing operational details. It contains no prices, costs or internal financial data.',
+  },
+  bookingExportDownload: { vi: 'Tải ảnh PNG', en: 'Download PNG' },
+  bookingExportPreparing: { vi: 'Đang tạo ảnh booking…', en: 'Preparing the booking image…' },
+  bookingExportFailed: {
+    vi: 'Không tạo được ảnh booking. Đóng lại và thử lần nữa.',
+    en: 'Could not prepare the booking image. Close this and try again.',
+  },
+  bookingExportPreviewAlt: { vi: 'Ảnh xem trước phiếu booking', en: 'Booking document preview' },
 
   // Catalogue — vehicles and customers, the two tabs of one screen
   vehicles: { vi: 'Xe', en: 'Vehicles' },
