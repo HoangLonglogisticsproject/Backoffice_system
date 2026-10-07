@@ -16,6 +16,12 @@ import { TripSortControl } from './TripSortControl';
  * Two groups on one row: the date range, and the order. The wider gap between
  * them is what says which controls belong together; when the row runs out, the
  * order wraps below as a whole.
+ *
+ * ★ ON A PHONE THE SEARCH TAKES THE WHOLE ROW, ITS BUTTONS THE NEXT. Below
+ * `sm` the box stretches to the card's width and "Tìm" / "Bỏ lọc" wrap beneath
+ * it at their own size — the card clips anything wider (`overflow-hidden`), so
+ * a fixed 200 px box beside two buttons pushed "Bỏ lọc" out of sight. From `sm`
+ * up nothing changes: the same 200 px box, the buttons beside it.
  */
 export function TripRangeFilters({
   trips,
@@ -86,17 +92,17 @@ export function TripRangeFilters({
         suppressed — `onSubmit` prevents the default and sets the filter.
       */}
       <form
-        className="flex items-end gap-2"
+        className="flex w-full flex-wrap items-end gap-2 sm:w-auto sm:flex-nowrap"
         onSubmit={(event) => {
           event.preventDefault();
           trips.submitCustomer();
         }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex w-full items-center gap-2 sm:w-auto">
           <label htmlFor="trip-customer-search" className="text-xs font-medium whitespace-nowrap text-gray-600">
             {t('tripCustomerSearchLabel')}
           </label>
-          <div className="relative">
+          <div className="relative min-w-0 flex-1 sm:flex-initial">
             <Search
               aria-hidden
               className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-gray-400"
@@ -111,7 +117,7 @@ export function TripRangeFilters({
               value={trips.customer}
               onChange={(event) => trips.setCustomer(event.target.value)}
               placeholder={t('tripCustomerSearchHint')}
-              className="h-9 w-[200px] bg-white pl-8"
+              className="h-9 w-full bg-white pl-8 sm:w-[200px]"
             />
           </div>
         </div>

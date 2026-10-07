@@ -91,4 +91,20 @@ describe('TripRangeFilters — the customer search', () => {
     expect(screen.queryByLabelText('Khách hàng')).toBeNull();
     expect(box()).toBeInTheDocument();
   });
+
+  it('★ on a phone the search wraps instead of overflowing — the box takes the row, the buttons follow in reading order', () => {
+    // The layout itself is measured in real Chromium (360–1440 px); jsdom pins the
+    // contract: the form may wrap, the box is full width below `sm` and 200 px from
+    // `sm` up, and Tab still runs box → "Tìm" → "Bỏ lọc".
+    bar({ customer: 'KAPV', appliedCustomer: 'KAPV' });
+    const form = box().closest('form')!;
+
+    expect(form).toHaveClass('flex-wrap', 'w-full', 'sm:w-auto', 'sm:flex-nowrap');
+    expect(box()).toHaveClass('w-full', 'sm:w-[200px]');
+    expect([...form.querySelectorAll('input, button')].map((el) => el.id || el.textContent?.trim())).toEqual([
+      'trip-customer-search',
+      'Tìm',
+      'Bỏ lọc',
+    ]);
+  });
 });
