@@ -23,7 +23,7 @@ import { businessClockOf, formatCalendarWeekday, todayAsCalendarDay } from '@/ut
 
 export type DocumentBlock =
   | { kind: 'field'; label: string; value: string }
-  | { kind: 'stop'; label: string; name: string | null; lines: string[] }
+  | { kind: 'stop'; label: string; name: string | null; lines: string[]; time: string | null }
   | { kind: 'crew'; plate: string; driver: string }
   | { kind: 'empty'; text: string };
 
@@ -37,7 +37,7 @@ export interface BookingDocument {
   title: string;
   subtitle: string;
   sections: DocumentSection[];
-  footer: string[];
+  footer: { exported: string; note: string };
 }
 
 /** The row, or nothing when the value is absent. */
@@ -50,32 +50,31 @@ const field = (label: string, value: string | null | undefined): DocumentBlock[]
 const businessMoment = (iso: string): string =>
   `${formatCalendarWeekday(todayAsCalendarDay(new Date(iso)), 'vi')} · ${businessClockOf(iso)}`;
 
-/** One end: the place's name, then its address and contact as they were booked. */
-const stop = (label: string, place: BookingExportStop): DocumentBlock => {
+/** One end: the place's name, then its address and contact as they were booked; its time when one is. */
+const stop = (label: string, place: BookingExportStop, time: string | null): DocumentBlock => {
   const lines = [place.address?.trim(), place.contact?.trim() && `Liên hệ: ${place.contact.trim()}`].filter(
     (line): line is string => Boolean(line),
   );
   const name = place.name?.trim() || null;
   // A route end is structural: one with nothing on file still says so.
-  return { kind: 'stop', label, name, lines: name || lines.length > 0 ? lines : ['Chưa xác định'] };
+  return { kind: 'stop', label, name, lines: name || lines.length > 0 ? lines : ['Chưa xác định'], time };
 };
 
 export function bookingDocument(booking: BookingExport, exportedAt: Date): BookingDocument {
+  // Always a day; the hour only once one is booked.
+  const pickupAt = booking.scheduledPickupAt
+    ? businessMoment(booking.scheduledPickupAt)
+    : formatCalendarWeekday(booking.scheduledOn, 'vi');
+  const deliveryAt = booking.scheduledDeliveryAt ? businessMoment(booking.scheduledDeliveryAt) : null;
   const sections: DocumentSection[] = [
     {
       heading: 'Thời gian',
-      blocks: [
-        // Always a day; the hour only once one is booked.
-        ...field(
-          'Lấy hàng',
-          booking.scheduledPickupAt ? businessMoment(booking.scheduledPickupAt) : formatCalendarWeekday(booking.scheduledOn, 'vi'),
-        ),
-        ...field('Giao hàng', booking.scheduledDeliveryAt && businessMoment(booking.scheduledDeliveryAt)),
-      ],
+      blocks: [...field('Lấy hàng', pickupAt), ...field('Giao hàng', deliveryAt)],
     },
     {
       heading: 'Lộ trình',
-      blocks: [stop('Điểm lấy hàng', booking.pickup), stop('Điểm giao hàng', booking.delivery)],
+      // Each end carries its own time too, so the route reads on its own.
+      blocks: [stop('Điểm lấy hàng', booking.pickup, pickupAt), stop('Điểm giao hàng', booking.delivery, deliveryAt)],
     },
     {
       heading: 'Khách hàng & hàng hóa',
@@ -99,6 +98,9 @@ export function bookingDocument(booking: BookingExport, exportedAt: Date): Booki
     title: 'PHIẾU BOOKING',
     subtitle: 'Booking confirmation',
     sections: sections.filter((section) => section.blocks.length > 0),
-    footer: [`Ngày xuất: ${businessMoment(exportedAt.toISOString())}`, 'Thông tin phục vụ xác nhận và vận hành booking.'],
+    footer: {
+      exported: `Ngày xuất: ${businessMoment(exportedAt.toISOString())}`,
+      note: 'Thông tin phục vụ xác nhận và vận hành booking.',
+    },
   };
 }

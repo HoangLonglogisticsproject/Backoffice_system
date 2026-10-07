@@ -10,15 +10,19 @@ import { renderBookingPng } from './renderBookingPng';
  */
 const calls: string[] = [];
 const drawn: string[] = [];
-const texts: Array<{ value: string; x: number; y: number }> = [];
+/** Each string as drawn: where, against which edge, and how wide. */
+const texts: Array<{ value: string; x: number; y: number; align: string; width: number }> = [];
 const images: Array<{ src: string; x: number; y: number; width: number; height: number }> = [];
 const sizes: Array<{ width: number; height: number }> = [];
 /** jsdom decodes no image: the logo's decode is stubbed per test, at LOGO.png's real 879 × 697. */
 let logoDecodes = true;
 const realDecode = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'decode');
 
+/** The fake face: every character 8 px wide. */
+const widthOf = (value: string) => Array.from(value).length * 8;
 const fakeContext = () => ({
   textBaseline: 'alphabetic',
+  textAlign: 'left',
   font: '',
   fillStyle: '',
   strokeStyle: '',
@@ -26,11 +30,11 @@ const fakeContext = () => ({
   imageSmoothingQuality: 'low',
   measureText: (value: string) => {
     calls.push('measure');
-    return { width: Array.from(value).length * 8 };
+    return { width: widthOf(value) };
   },
-  fillText: (value: string, x: number, y: number) => {
+  fillText(this: { textAlign: string }, value: string, x: number, y: number) {
     drawn.push(value);
-    texts.push({ value, x, y });
+    texts.push({ value, x, y, align: this.textAlign, width: widthOf(value) });
   },
   drawImage: (image: HTMLImageElement, x: number, y: number, width: number, height: number) =>
     images.push({ src: image.src, x, y, width, height }),
@@ -42,6 +46,8 @@ const fakeContext = () => ({
   stroke: () => {},
   moveTo: () => {},
   lineTo: () => {},
+  arcTo: () => {},
+  closePath: () => {},
 });
 
 const booking = (over: Partial<BookingExport> = {}): BookingExport => ({
@@ -61,6 +67,15 @@ const booking = (over: Partial<BookingExport> = {}): BookingExport => ({
   ...over,
 });
 const render = (over?: Partial<BookingExport>) => renderBookingPng(bookingDocument(booking(over), new Date('2026-10-07T03:05:00Z')));
+const THREE = [
+  { plate: '51H27314', driverName: 'Nguyễn Văn A' },
+  { plate: '51D65233', driverName: 'Trần Thị Cúc' },
+  { plate: '51C33333', driverName: 'Lê Văn Đông' },
+];
+/** The first drawing of `value`. */
+const at = (value: string) => texts.find((text) => text.value === value)!;
+/** A drawn string's left and right edges, whichever edge it was set against. */
+const edges = (text: (typeof texts)[number]) => (text.align === 'right' ? [text.x - text.width, text.x] : [text.x, text.x + text.width]);
 
 beforeEach(() => {
   calls.length = 0;
@@ -123,13 +138,7 @@ describe('renderBookingPng', () => {
 
   it('★ grows with its content: three lorries make a taller image than none, and all three are drawn', async () => {
     await render({ crew: [] });
-    await render({
-      crew: [
-        { plate: '51H27314', driverName: 'Nguyễn Văn A' },
-        { plate: '51D65233', driverName: 'Trần Thị Cúc' },
-        { plate: '51C33333', driverName: 'Lê Văn Đông' },
-      ],
-    });
+    await render({ crew: THREE });
     expect(sizes[1]!.height).toBeGreaterThan(sizes[0]!.height);
     expect(drawn).toEqual(expect.arrayContaining(['Chưa phân công', 'Nguyễn Văn A', 'Trần Thị Cúc', 'Lê Văn Đông']));
   });
@@ -145,35 +154,77 @@ describe('renderBookingPng', () => {
     expect(calls).toContain('scale:1');
   });
 
-  it('★ draws the company logo from the bundled LOGO.png — its own aspect ratio, beside the name, above the title', async () => {
+  it('★ the header: LOGO.png at its own ratio, the name centred beside it, the title clear of both against the right edge', async () => {
     await render();
 
     expect(images).toHaveLength(1);
     const logo = images[0]!;
     expect(logo.src).toMatch(/\/assets\/img\/LOGO\.png$/);
-    expect(logo.height).toBe(44);
+    expect(logo).toMatchObject({ x: 48, height: 56 });
     expect(logo.width / logo.height).toBeCloseTo(879 / 697, 6);
-    const brand = texts.find((text) => text.value === 'HOÀNG LONG LOGISTICS')!;
-    expect(brand.x).toBeGreaterThanOrEqual(logo.x + logo.width);
-    expect(brand.y).toBeGreaterThan(logo.y);
-    expect(brand.y).toBeLessThan(logo.y + logo.height);
-    expect(texts.find((text) => text.value === 'PHIẾU BOOKING')!.y).toBeGreaterThanOrEqual(logo.y + logo.height);
+    const brand = at('HOÀNG LONG LOGISTICS');
+    expect(brand.x).toBeGreaterThan(logo.x + logo.width);
+    expect(brand.y + 10).toBeCloseTo(logo.y + logo.height / 2); // a 20 px line, centred on the mark
+    const title = at('PHIẾU BOOKING');
+    expect(title).toMatchObject({ align: 'right', x: 672 });
+    expect(edges(title)[0]).toBeGreaterThan(edges(brand)[1]);
+    expect(at('Booking confirmation')).toMatchObject({ align: 'right', x: 672 });
+    expect(at('Booking confirmation').y).toBeGreaterThan(title.y);
   });
 
-  it('★ falls back to the text-only header when the logo will not decode — and the export still succeeds', async () => {
-    await render();
-    const withLogo = sizes[0]!;
+  it('★ falls back to a text-only lockup when the logo will not decode — and the export still succeeds', async () => {
     logoDecodes = false;
-    images.length = 0;
-    texts.length = 0;
 
     const blob = await render();
 
     expect(blob.type).toBe('image/png');
     expect(images).toHaveLength(0);
-    expect(texts.find((text) => text.value === 'HOÀNG LONG LOGISTICS')!.x).toBe(40);
-    // Exactly the header from before the logo: 30 logical px (60 at 2×) shorter.
-    expect(withLogo.height - sizes[1]!.height).toBe(60);
+    expect(at('HOÀNG LONG LOGISTICS').x).toBe(48);
+    expect(at('PHIẾU BOOKING')).toMatchObject({ align: 'right', x: 672 });
+  });
+
+  it('★ nothing leaves the page: every string, long ones wrapped, sits inside the 48 px margins', async () => {
+    await render({ cargoInfo: 'Hàng đông lạnh giữ nhiệt độ −18°C '.repeat(12), crew: THREE });
+    for (const text of texts) {
+      const [left, right] = edges(text);
+      expect(left).toBeGreaterThanOrEqual(48);
+      expect(right).toBeLessThanOrEqual(672);
+    }
+  });
+
+  it('★ the route reads top-down: each end`s label with its time on one line, then the place, then the address', async () => {
+    await render({ scheduledDeliveryAt: '2026-10-07T03:00:00.000Z' });
+    const pickup = at('Điểm lấy hàng');
+    const time = texts.find((text) => text.value === 'Thứ Ba, 06/10/2026 · 16:00' && text.align === 'right')!;
+    expect(time.y).toBe(pickup.y);
+    expect(at('Kho Củ Chi').y).toBeGreaterThan(pickup.y);
+    const address = texts.find((text) => text.value.startsWith('Lô B2-7'))!;
+    expect(address.y).toBeGreaterThan(at('Kho Củ Chi').y);
+    expect(address.x).toBe(at('Kho Củ Chi').x);
+    expect(at('Điểm giao hàng').y).toBeGreaterThan(at('Liên hệ: Anh Tuấn — 0909 123 456').y);
+  });
+
+  it('★ several lorries: one row each, the plate leading and its driver beside it — never squashed into one line', async () => {
+    await render({ crew: THREE });
+    const rows = [
+      ['51H-27314', 'Nguyễn Văn A'],
+      ['51D-65233', 'Trần Thị Cúc'],
+      ['51C-33333', 'Lê Văn Đông'],
+    ].map(([plate, driver]) => ({ plate: at(plate!), driver: at(driver!) }));
+    for (const { plate, driver } of rows) {
+      expect(driver.x).toBeGreaterThan(plate.x + plate.width);
+      expect(Math.abs(driver.y - plate.y)).toBeLessThanOrEqual(1);
+    }
+    expect(rows[1]!.plate.y).toBeGreaterThanOrEqual(rows[0]!.plate.y + 28);
+    expect(rows[2]!.plate.y).toBeGreaterThanOrEqual(rows[1]!.plate.y + 28);
+  });
+
+  it('the footer, one line: when it was exported on the left, what it is for against the right edge', async () => {
+    await render();
+    const exported = at('Ngày xuất: Thứ Tư, 07/10/2026 · 10:05');
+    const note = texts.find((text) => text.value.startsWith('Thông tin phục vụ'))!;
+    expect(exported).toMatchObject({ x: 48, align: 'left' });
+    expect(note).toMatchObject({ x: 672, align: 'right', y: exported.y });
   });
 
   it('rejects when the browser cannot encode the PNG', async () => {

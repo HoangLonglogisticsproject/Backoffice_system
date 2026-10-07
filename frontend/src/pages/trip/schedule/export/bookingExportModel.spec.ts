@@ -64,11 +64,31 @@ describe('bookingDocument', () => {
   it('each end: the place, the whole address as typed, the contact; an end with nothing on file still says so', () => {
     const route = section(bookingDocument(booking(), EXPORTED_AT), 'Lộ trình');
     expect(route).toEqual([
-      { kind: 'stop', label: 'Điểm lấy hàng', name: 'Kho Củ Chi', lines: [LONG_ADDRESS, 'Liên hệ: Anh Tuấn — 0909 123 456'] },
-      { kind: 'stop', label: 'Điểm giao hàng', name: null, lines: ['12 Nguyễn Huệ\nPhường Sài Gòn'] },
+      {
+        kind: 'stop',
+        label: 'Điểm lấy hàng',
+        name: 'Kho Củ Chi',
+        lines: [LONG_ADDRESS, 'Liên hệ: Anh Tuấn — 0909 123 456'],
+        time: 'Thứ Ba, 06/10/2026 · 16:00',
+      },
+      { kind: 'stop', label: 'Điểm giao hàng', name: null, lines: ['12 Nguyễn Huệ\nPhường Sài Gòn'], time: 'Thứ Tư, 07/10/2026 · 10:00' },
     ]);
-    const blank = bookingDocument(booking({ delivery: { name: null, address: ' ', contact: null } }), EXPORTED_AT);
-    expect(section(blank, 'Lộ trình')[1]).toEqual({ kind: 'stop', label: 'Điểm giao hàng', name: null, lines: ['Chưa xác định'] });
+    const blank = bookingDocument(
+      booking({ delivery: { name: null, address: ' ', contact: null }, scheduledDeliveryAt: null }),
+      EXPORTED_AT,
+    );
+    expect(section(blank, 'Lộ trình')[1]).toEqual({
+      kind: 'stop',
+      label: 'Điểm giao hàng',
+      name: null,
+      lines: ['Chưa xác định'],
+      time: null,
+    });
+  });
+
+  it('★ each end`s time is the one "Thời gian" prints — the day alone until an hour is booked, none invented', () => {
+    const route = section(bookingDocument(booking({ scheduledPickupAt: null, scheduledDeliveryAt: null }), EXPORTED_AT), 'Lộ trình');
+    expect(route.map((end) => end.kind === 'stop' && end.time)).toEqual(['Thứ Ba, 06/10/2026', null]);
   });
 
   it('★ 0..N crew: "Chưa phân công", one pair, or EVERY pair — formatted plates, never truncated', () => {
@@ -94,7 +114,10 @@ describe('bookingDocument', () => {
 
   it('the footer: when, on the business clock, and what the document is for — no permission wording', () => {
     const doc = bookingDocument(booking(), EXPORTED_AT);
-    expect(doc.footer).toEqual(['Ngày xuất: Thứ Tư, 07/10/2026 · 10:05', 'Thông tin phục vụ xác nhận và vận hành booking.']);
+    expect(doc.footer).toEqual({
+      exported: 'Ngày xuất: Thứ Tư, 07/10/2026 · 10:05',
+      note: 'Thông tin phục vụ xác nhận và vận hành booking.',
+    });
     expect(JSON.stringify(doc)).not.toMatch(/quyền|giá|chi phí|lợi nhuận/i);
   });
 });
