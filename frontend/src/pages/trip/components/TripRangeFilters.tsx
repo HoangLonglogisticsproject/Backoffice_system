@@ -102,7 +102,7 @@ export function TripRangeFilters({
           <label htmlFor="trip-customer-search" className="text-xs font-medium whitespace-nowrap text-gray-600">
             {t('tripCustomerSearchLabel')}
           </label>
-          <div className="relative min-w-0 flex-1 sm:flex-none">
+          <div className="relative min-w-0 flex-1 sm:flex-initial">
             <Search
               aria-hidden
               className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-gray-400"
