@@ -5,6 +5,7 @@ import {
   DomainError,
   ForbiddenError,
   NotFoundError,
+  ServiceUnavailableError,
   UnauthorizedError,
   ValidationError,
 } from '../errors/domain.error';
@@ -30,6 +31,7 @@ const STATUS_BY_ERROR = new Map<Function, HttpStatus>([
   [ForbiddenError, HttpStatus.FORBIDDEN],
   [ValidationError, HttpStatus.UNPROCESSABLE_ENTITY],
   [ConflictError, HttpStatus.CONFLICT],
+  [ServiceUnavailableError, HttpStatus.SERVICE_UNAVAILABLE],
 ]);
 
 /**

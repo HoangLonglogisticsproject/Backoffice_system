@@ -7,8 +7,8 @@
  * called from a controller today and from a job runner tomorrow without the
  * rules learning what a 404 is.
  *
- * Only four kinds, because four is what the failures actually are. A taxonomy
- * of twenty is a taxonomy nobody picks from correctly.
+ * Only a handful of kinds, because that is what the failures actually are. A
+ * taxonomy of twenty is a taxonomy nobody picks from correctly.
  */
 export abstract class DomainError extends Error {
   abstract readonly code: string;
@@ -81,4 +81,12 @@ export class ValidationError extends DomainError {
 /** The action is legal but the current state does not allow it right now. */
 export class ConflictError extends DomainError {
   readonly code = 'CONFLICT';
+}
+
+/**
+ * A capability this deployment has not been given — file storage with no
+ * provider configured. 503: the request was fine, the service is not there.
+ */
+export class ServiceUnavailableError extends DomainError {
+  readonly code = 'SERVICE_UNAVAILABLE';
 }

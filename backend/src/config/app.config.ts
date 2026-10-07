@@ -2,6 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Env } from './env.schema';
 
+/** The evidence store, as the environment configured it. Credentials: never log. */
+export interface ObjectStorageConfig {
+  driver: Env['OBJECT_STORAGE_DRIVER'];
+  root: string;
+  r2: { accountId: string; bucket: string; accessKeyId: string; secretAccessKey: string };
+}
+
 /**
  * Typed access to the validated environment.
  *
@@ -71,6 +78,20 @@ export class AppConfig {
   /** The key trusted user contexts are signed with. Empty = the signer refuses. Never log it. */
   get trustedContextSecret(): string {
     return this.config.get('TRUSTED_CONTEXT_SECRET', { infer: true });
+  }
+
+  /** Which evidence store this deployment has — `none` answers 503 on file routes. */
+  get objectStorage(): ObjectStorageConfig {
+    return {
+      driver: this.config.get('OBJECT_STORAGE_DRIVER', { infer: true }),
+      root: this.config.get('OBJECT_STORAGE_ROOT', { infer: true }),
+      r2: {
+        accountId: this.config.get('R2_ACCOUNT_ID', { infer: true }),
+        bucket: this.config.get('R2_BUCKET', { infer: true }),
+        accessKeyId: this.config.get('R2_ACCESS_KEY_ID', { infer: true }),
+        secretAccessKey: this.config.get('R2_SECRET_ACCESS_KEY', { infer: true }),
+      },
+    };
   }
 
   get isProduction(): boolean {

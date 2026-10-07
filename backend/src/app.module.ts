@@ -7,6 +7,7 @@ import { TtyModule } from './infrastructure/tty/tty.module';
 import { VnAdministrativeModule } from './infrastructure/vn-administrative/vn-administrative.module';
 import { PlaceSearchModule } from './infrastructure/place-search/place-search.module';
 import { MapTilesModule } from './infrastructure/map-tiles/map-tiles.module';
+import { ObjectStorageModule } from './infrastructure/object-storage/object-storage.module';
 import { ServiceAuthModule } from './infrastructure/service-auth/service-auth.module';
 import { AuthorizationModule } from './core/authorization/authorization.module';
 import { IdentityModule } from './core/identity/identity.module';
@@ -51,6 +52,7 @@ import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.m
     MapTilesModule,
     // machine-to-machine trust with the AI Platform (ADR-0007); no consumer yet
     ServiceAuthModule,
+    ObjectStorageModule,
 
     // the foundation
     UsersModule,

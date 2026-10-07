@@ -181,4 +181,44 @@ describe('validateEnv', () => {
     expect(message).toContain('PORT');
     expect(message).toContain('DATABASE_URL');
   });
+
+  describe('evidence storage (0037)', () => {
+    const r2 = {
+      OBJECT_STORAGE_DRIVER: 'r2',
+      R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+      R2_BUCKET: 'hoanglong-evidence',
+      R2_ACCESS_KEY_ID: 'a'.repeat(32),
+      R2_SECRET_ACCESS_KEY: 'b'.repeat(64),
+    };
+
+    it('★ defaults to none, so a deployment without a bucket still boots', () => {
+      expect(validateEnv(valid).OBJECT_STORAGE_DRIVER).toBe('none');
+      expect(validateEnv({ ...valid, NODE_ENV: 'production' }).OBJECT_STORAGE_DRIVER).toBe('none');
+    });
+
+    it('accepts a complete R2 configuration, in production too', () => {
+      expect(validateEnv({ ...valid, ...r2, NODE_ENV: 'production' }).R2_BUCKET).toBe('hoanglong-evidence');
+    });
+
+    it('refuses r2 with any of its four settings missing — every missing one named', () => {
+      expect(() => validateEnv({ ...valid, OBJECT_STORAGE_DRIVER: 'r2' })).toThrow(
+        /R2_ACCOUNT_ID[\s\S]*R2_BUCKET[\s\S]*R2_ACCESS_KEY_ID[\s\S]*R2_SECRET_ACCESS_KEY/,
+      );
+    });
+
+    it('★ refuses an account id that could name another host', () => {
+      expect(() => validateEnv({ ...valid, ...r2, R2_ACCOUNT_ID: 'evil.example.com#' })).toThrow(/32-character hex/);
+      expect(() => validateEnv({ ...valid, ...r2, R2_BUCKET: 'Bad_Bucket' })).toThrow(/bucket name/);
+    });
+
+    it('★ refuses filesystem storage in production — a container disk is not where evidence survives', () => {
+      expect(() =>
+        validateEnv({ ...valid, NODE_ENV: 'production', OBJECT_STORAGE_DRIVER: 'filesystem', OBJECT_STORAGE_ROOT: '/data' }),
+      ).toThrow(/production uses r2/);
+      expect(validateEnv({ ...valid, OBJECT_STORAGE_DRIVER: 'filesystem', OBJECT_STORAGE_ROOT: '/data' }).OBJECT_STORAGE_ROOT).toBe(
+        '/data',
+      );
+      expect(() => validateEnv({ ...valid, OBJECT_STORAGE_DRIVER: 'filesystem' })).toThrow(/OBJECT_STORAGE_ROOT is required/);
+    });
+  });
 });
