@@ -99,7 +99,7 @@ describe('TripRangeFilters — the customer search', () => {
     bar({ customer: 'KAPV', appliedCustomer: 'KAPV' });
     const form = box().closest('form')!;
 
-    expect(form).toHaveClass('flex-wrap', 'w-full', 'sm:w-auto');
+    expect(form).toHaveClass('flex-wrap', 'w-full', 'sm:w-auto', 'sm:flex-nowrap');
     expect(box()).toHaveClass('w-full', 'sm:w-[200px]');
     expect([...form.querySelectorAll('input, button')].map((el) => el.id || el.textContent?.trim())).toEqual([
       'trip-customer-search',

@@ -92,7 +92,7 @@ export function TripRangeFilters({
         suppressed — `onSubmit` prevents the default and sets the filter.
       */}
       <form
-        className="flex w-full flex-wrap items-end gap-2 sm:w-auto"
+        className="flex w-full flex-wrap items-end gap-2 sm:w-auto sm:flex-nowrap"
         onSubmit={(event) => {
           event.preventDefault();
           trips.submitCustomer();
