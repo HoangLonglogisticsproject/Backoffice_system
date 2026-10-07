@@ -383,7 +383,7 @@ describe('TripSchedulePage', () => {
         asking();
         renderPage();
 
-        await screen.findByText(/chưa phân công/i);
+        await screen.findByText('WWL');
         expect(fetchAssignmentRequestQueue).not.toHaveBeenCalled();
         expect(screen.queryByText(/tài xế xin nhận/)).toBeNull();
       });
@@ -424,13 +424,16 @@ describe('TripSchedulePage', () => {
       });
     });
 
-    it('shows "not assigned" and no control to a reader', async () => {
+    it('a reader: no "Chưa phân công" pill on the row (the tab says it), the detail still does, and no control', async () => {
       board();
       renderPage();
 
-      expect(await screen.findByText(/chưa phân công/i)).toBeInTheDocument();
+      const row = (await screen.findByText('WWL')).closest('li')!;
+      expect(within(row).queryByText(/chưa phân công/i)).toBeNull();
       expect(screen.queryByRole('button', { name: /^phân công xe & tài xế$/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^đổi phân công$/i })).not.toBeInTheDocument();
+      // The selected trip's own header still names the state.
+      expect((await openBooking()).getByText('Chưa phân công')).toBeInTheDocument();
     });
 
     it('★ one booking per trip, each lorry with ITS driver — and one crew control for the trip', async () => {
@@ -887,6 +890,20 @@ describe('TripSchedulePage', () => {
     describe('★ the planned hour against the clock — read from the row alone', () => {
       const at = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
       const HOUR = 60 * 60 * 1000;
+
+      it('★ an uncrewed trip near its hour reads [Chờ xử lý] [Sắp đến giờ] — nothing between them', async () => {
+        fetchTripSchedules.mockResolvedValue({
+          items: [trip({ status: 'pending', assignments: [], pickupAt: at(HOUR), deliveryAt: at(3 * HOUR) })],
+          page: 1, limit: 20, total: 1, totalPages: 1,
+        });
+        renderPage();
+
+        const row = (await screen.findByText('WWL')).closest('li')!;
+        expect([...row.querySelectorAll('span.rounded-full')].map((pill) => pill.textContent)).toEqual([
+          'Chờ xử lý',
+          'Sắp đến giờ',
+        ]);
+      });
 
       it('says "Sắp đến giờ" inside the window, "Quá giờ dự kiến" once it has passed', async () => {
         fetchTripSchedules.mockResolvedValue({
@@ -2729,6 +2746,36 @@ describe('TripSchedulePage', () => {
         ),
       );
     };
+
+    it('★ the row says nothing about a missing crew — the "Chờ phân công" tab does: it counts the trip and asks for it', async () => {
+      board({
+        total: 2,
+        unassigned: 1,
+        items: [
+          trip({ id: 'waiting', status: 'pending', assignments: [], customer: { id: 'c9', name: 'CHỜ XE' } }),
+          trip({ id: 'crewed', status: 'pending', customer: { id: 'c8', name: 'CÓ XE' } }),
+        ],
+      });
+      renderPage();
+
+      const rowOf = async (name: string) => (await screen.findByText(name)).closest('li')!;
+      const waiting = await rowOf('CHỜ XE');
+      expect(waiting).toHaveTextContent('Chờ xử lý');
+      expect(within(waiting).queryByText(/chưa phân công/i)).toBeNull();
+      // A crewed row still names its crew, exactly as before.
+      expect(await rowOf('CÓ XE')).toHaveTextContent('Đã phân công');
+
+      const queue = screen.getByRole('tab', { name: /chờ phân công/i });
+      await waitFor(() => expect(queue).toHaveTextContent('1'));
+      fireEvent.click(queue);
+      await waitFor(() =>
+        expect(listCalls().some(([r]) => (r as { assignment?: string }).assignment === 'unassigned')).toBe(true),
+      );
+      fireEvent.click(screen.getByRole('tab', { name: /đã phân công/i }));
+      await waitFor(() =>
+        expect(listCalls().some(([r]) => (r as { assignment?: string }).assignment === 'assigned')).toBe(true),
+      );
+    });
 
     it('opens on the whole board, not on one of its halves', async () => {
       renderPage();

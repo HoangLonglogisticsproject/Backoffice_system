@@ -23,12 +23,17 @@ import { businessClockOf, formatCalendarWeekday, todayAsCalendarDay } from '@/ut
 
 export type DocumentBlock =
   | { kind: 'field'; label: string; value: string }
+  | { kind: 'moment'; label: string; day: string; time: string | null }
   | { kind: 'stop'; label: string; name: string | null; lines: string[] }
   | { kind: 'crew'; plate: string; driver: string }
   | { kind: 'empty'; text: string };
 
+/** The small mark beside a section's heading — named here, drawn by the renderer. */
+export type SectionIcon = 'clock' | 'pin' | 'package' | 'truck';
+
 export interface DocumentSection {
   heading: string;
+  icon: SectionIcon;
   blocks: DocumentBlock[];
 }
 
@@ -46,9 +51,19 @@ const field = (label: string, value: string | null | undefined): DocumentBlock[]
   return text ? [{ kind: 'field', label, value: text }] : [];
 };
 
+/** "Thứ Ba, 06/10/2026" — the office's day for an instant. */
+const businessDay = (iso: string): string => formatCalendarWeekday(todayAsCalendarDay(new Date(iso)), 'vi');
+
 /** "Thứ Ba, 06/10/2026 · 16:00" — the office's day and hour. */
-const businessMoment = (iso: string): string =>
-  `${formatCalendarWeekday(todayAsCalendarDay(new Date(iso)), 'vi')} · ${businessClockOf(iso)}`;
+const businessMoment = (iso: string): string => `${businessDay(iso)} · ${businessClockOf(iso)}`;
+
+/** When one end happens: its day, and its hour once one is booked — apart, so the hour can stand out. */
+const moment = (label: string, day: string, at: string | null): DocumentBlock => ({
+  kind: 'moment',
+  label,
+  day,
+  time: at ? businessClockOf(at) : null,
+});
 
 /** One end: the place's name, then its address and contact as they were booked. */
 const stop = (label: string, place: BookingExportStop): DocumentBlock => {
@@ -64,21 +79,27 @@ export function bookingDocument(booking: BookingExport, exportedAt: Date): Booki
   const sections: DocumentSection[] = [
     {
       heading: 'Thời gian',
+      icon: 'clock',
       blocks: [
-        // Always a day; the hour only once one is booked.
-        ...field(
+        // Always a day; the hour only once one is booked. Delivery only when one is.
+        moment(
           'Lấy hàng',
-          booking.scheduledPickupAt ? businessMoment(booking.scheduledPickupAt) : formatCalendarWeekday(booking.scheduledOn, 'vi'),
+          booking.scheduledPickupAt ? businessDay(booking.scheduledPickupAt) : formatCalendarWeekday(booking.scheduledOn, 'vi'),
+          booking.scheduledPickupAt,
         ),
-        ...field('Giao hàng', booking.scheduledDeliveryAt && businessMoment(booking.scheduledDeliveryAt)),
+        ...(booking.scheduledDeliveryAt
+          ? [moment('Giao hàng', businessDay(booking.scheduledDeliveryAt), booking.scheduledDeliveryAt)]
+          : []),
       ],
     },
     {
       heading: 'Lộ trình',
+      icon: 'pin',
       blocks: [stop('Điểm lấy hàng', booking.pickup), stop('Điểm giao hàng', booking.delivery)],
     },
     {
       heading: 'Khách hàng & hàng hóa',
+      icon: 'package',
       blocks: [
         ...field('Khách hàng', booking.customerName),
         ...field('Hàng hóa', booking.cargoInfo),
@@ -87,6 +108,7 @@ export function bookingDocument(booking: BookingExport, exportedAt: Date): Booki
     },
     {
       heading: 'Xe & tài xế',
+      icon: 'truck',
       // Every lorry the server listed — never truncated (ADR-0004: 0..N).
       blocks:
         booking.crew.length > 0
