@@ -96,8 +96,7 @@ export class FuelTransactionWriter {
         evidence: 'TOO_MANY_IMAGES',
       });
     }
-    const now = new Date();
-    for (const item of pending) await this.evidence.attach(item, fuelTransactionId, by, now, tx);
+    await this.evidence.attachMany(pending, fuelTransactionId, by, new Date(), tx);
   }
 
   /** The rules a fact must meet that its column alone cannot say. */

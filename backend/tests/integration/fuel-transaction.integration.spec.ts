@@ -266,7 +266,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       await record({ vendorName: 'Cây xăng X', vendorTaxCode: '0100109106' });
       const logged = (await sql(`SELECT 1 FROM fuel_transaction_enrichments`)).length;
       await record({ vendorName: '  Cây  xăng X ', vendorTaxCode: '0100.109.106' });
-      expect((await sql(`SELECT 1 FROM fuel_transaction_enrichments`)).length).toBe(logged);
+      expect(await sql(`SELECT 1 FROM fuel_transaction_enrichments`)).toHaveLength(logged);
     });
 
     it('★ refuses a different value for a stored fact, by name, and leaves the row as it was', async () => {

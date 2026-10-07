@@ -48,7 +48,7 @@ export type SniffedImage =
 const startsWith = (bytes: Uint8Array, signature: readonly number[], offset = 0): boolean =>
   bytes.length >= offset + signature.length && signature.every((byte, i) => bytes[offset + i] === byte);
 
-const ascii = (text: string): number[] => [...text].map((char) => char.charCodeAt(0));
+const ascii = (text: string): number[] => [...text].map((char) => char.codePointAt(0) ?? 0);
 
 /** ISO-BMFF brands of the HEIF family — iPhone photos, and AVIF with them. */
 const HEIF_BRANDS = new Set(['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1', 'avif', 'avis']);
@@ -68,7 +68,7 @@ export function sniffImage(bytes: Uint8Array): SniffedImage {
     return { kind: 'image', mimeType: 'image/webp' };
   }
   if (startsWith(bytes, ascii('ftyp'), 4) && bytes.length >= 12) {
-    const brand = String.fromCharCode(...bytes.subarray(8, 12));
+    const brand = String.fromCodePoint(...bytes.subarray(8, 12));
     if (HEIF_BRANDS.has(brand)) return { kind: 'heic' };
   }
   return { kind: 'unsupported' };
@@ -82,7 +82,10 @@ export function sniffImage(bytes: Uint8Array): SniffedImage {
 export function safeFilename(name: string | undefined): string | null {
   if (!name) return null;
   const base = name.split(/[\\/]/).pop() ?? '';
-  const printable = [...base].filter((char) => char.charCodeAt(0) > 0x1f && char.charCodeAt(0) !== 0x7f);
+  const printable = [...base].filter((char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code > 0x1f && code !== 0x7f;
+  });
   const clean = printable.join('').trim().slice(0, 255);
   return clean === '' ? null : clean;
 }

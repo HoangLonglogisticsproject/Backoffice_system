@@ -56,8 +56,7 @@ const toEvidence = (row: EvidenceRow): StoredEvidence => ({
 });
 
 /** The API shape: storage details never leave the server. */
-export const publicEvidence = ({ storageKey: _key, discardedAt: _discarded, ...evidence }: StoredEvidence): FuelEvidence =>
-  evidence;
+export const publicEvidence = ({ storageKey: _key, discardedAt: _gone, ...evidence }: StoredEvidence): FuelEvidence => evidence;
 
 @Injectable()
 export class FuelEvidenceRepository {
@@ -78,14 +77,13 @@ export class FuelEvidenceRepository {
 
   async countStaged(uploader: string): Promise<number> {
     const [row] = await this.db.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM fuel_transaction_evidence
-        WHERE uploaded_by = $1 AND attached_at IS NULL AND discarded_at IS NULL`,
+      `SELECT COUNT(*)::int AS count FROM fuel_transaction_evidence WHERE uploaded_by = $1 AND attached_at IS NULL AND discarded_at IS NULL`,
       [uploader],
     );
     return row?.count ?? 0;
   }
 
-  /** Whether these bytes are already in the store — content-addressed, so one copy serves all. */
+  /** Whether these bytes are already stored — content-addressed, one copy serves all. */
   async objectStored(sha256: string): Promise<boolean> {
     const rows = await this.db.query(`SELECT 1 FROM fuel_transaction_evidence WHERE sha256 = $1 LIMIT 1`, [sha256]);
     return rows.length > 0;
@@ -145,13 +143,16 @@ export class FuelEvidenceRepository {
     );
   }
 
-  async attach(item: EvidenceAttachment, fuelTransactionId: string, by: string, now: Date, tx: DatabaseQuery) {
+  /** Attaches staged images in one statement, each with what the command said about it. */
+  async attachMany(items: readonly EvidenceAttachment[], fuelTransactionId: string, by: string, now: Date, tx: DatabaseQuery) {
+    if (items.length === 0) return;
     await tx.query(
-      `UPDATE fuel_transaction_evidence
+      `UPDATE fuel_transaction_evidence e
           SET fuel_transaction_id = $2, attached_by = $3, attached_at = $4,
-              evidence_type = COALESCE($5, evidence_type), captured_at = COALESCE($6, captured_at)
-        WHERE id = $1 AND attached_at IS NULL AND discarded_at IS NULL`,
-      [item.id, fuelTransactionId, by, now, item.type ?? null, item.capturedAt ?? null],
+              evidence_type = COALESCE(i.type, e.evidence_type), captured_at = COALESCE(i.captured_at, e.captured_at)
+         FROM unnest($1::uuid[], $5::text[], $6::timestamptz[]) AS i(id, type, captured_at)
+        WHERE e.id = i.id AND e.attached_at IS NULL AND e.discarded_at IS NULL`,
+      [items.map((i) => i.id), fuelTransactionId, by, now, items.map((i) => i.type ?? null), items.map((i) => i.capturedAt ?? null)],
     );
   }
 
