@@ -1,45 +1,31 @@
 import type { DocumentBlock } from './bookingExportModel';
-import { BRAND, CONTENT, PAD, RULE, TYPE } from './bookingTheme';
-import { box, capMiddle, dry, type Pen, text, textWidth } from './canvasPen';
+import { BRAND, TYPE } from './bookingTheme';
+import { capMiddle, type Column, type Pen, text } from './canvasPen';
 
 export type Stop = Extract<DocumentBlock, { kind: 'stop' }>;
 
-/** The panel's padding, and the column the timeline runs down. */
-const INSET = 20;
+/** The column the timeline runs down, left of the stops' text. */
 const RAIL = 30;
 
 /**
- * The route as a vertical timeline on a tinted panel. Each end: its label with
- * its time against the right edge, then its place in bold, its address and its
- * contact. Returns the panel's height.
+ * The route as a vertical timeline: each end's small label, its place in
+ * bold, its address and contact. Places only — when they happen is
+ * "Thời gian"'s to say. Returns the height it takes.
  */
-export function route(pen: Pen, stops: readonly Stop[], top: number): number {
-  const x = PAD + INSET + RAIL;
-  const width = CONTENT - INSET * 2 - RAIL;
-  const ends = (p: Pen) => {
-    const markers: number[] = [];
-    let y = top + INSET;
-    stops.forEach((stop, index) => {
-      if (index > 0) y += 20;
-      markers.push(y + capMiddle(TYPE.stopLabel));
-      const time = stop.time ? textWidth(p, stop.time, TYPE.stopTime) + 16 : 0;
-      let height = Math.max(
-        text(p, stop.label, x, y, width - time, TYPE.stopLabel),
-        stop.time ? text(p, stop.time, x, y, width, TYPE.stopTime, 'right') : 0,
-      );
-      height += 4;
-      if (stop.name) height += text(p, stop.name, x, y + height, width, TYPE.place);
-      for (const line of stop.lines) height += text(p, line, x, y + height, width, TYPE.detail);
-      y += height;
-    });
-    return { height: y + INSET - top, markers };
-  };
-  // The panel goes down first, so its height is measured before anything is drawn on it.
-  const { height } = ends(dry(pen));
-  box(pen, { x: PAD, y: top, width: CONTENT, height }, { fill: '#f8fafc', radius: 10, edge: RULE });
-  const { markers } = ends(pen);
-  if (pen.draw) rail(pen.ctx, PAD + INSET + 7, markers);
-  return height;
+export function route(pen: Pen, stops: readonly Stop[], column: Column, top: number): number {
+  const x = column.x + RAIL;
+  const width = column.width - RAIL;
+  const markers: number[] = [];
+  let y = top;
+  stops.forEach((stop, index) => {
+    if (index > 0) y += 20;
+    markers.push(y + capMiddle(TYPE.eyebrow));
+    y += text(pen, stop.label, x, y, width, TYPE.eyebrow) + 2;
+    if (stop.name) y += text(pen, stop.name, x, y, width, TYPE.place);
+    for (const line of stop.lines) y += text(pen, line, x, y, width, TYPE.detail);
+  });
+  if (pen.draw) rail(pen.ctx, column.x + 7, markers);
+  return y - top;
 }
 
 /** The ends as markers — hollow, then filled — joined by a light line that arrives as an arrowhead. */

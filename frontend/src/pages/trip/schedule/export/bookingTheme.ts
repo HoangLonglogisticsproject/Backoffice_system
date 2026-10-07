@@ -4,9 +4,9 @@ import { font } from './canvasText';
 /**
  * The booking sheet's look: page geometry, palette and type.
  *
- * ★ A CORPORATE DOCUMENT, NOT A POSTER: white ground, one brand blue, slate
- * greys and hairlines. The only tint sits behind the route — what the sheet is
- * for — and the only warm colour marks a lorry not yet assigned.
+ * ★ A LOGISTICS DOCUMENT, NOT A POSTER: white ground, one brand blue, slate
+ * greys and hairlines. Each section sits in a quiet slate container; the only
+ * warm colour marks a lorry not yet assigned.
  */
 
 export const SHEET_WIDTH = 720;
@@ -19,17 +19,20 @@ const INK = '#0f172a';
 const BODY = '#334155';
 const MUTED = '#64748b';
 export const RULE = '#e2e8f0';
+/** A section container's ground — slate-50, a breath off white. */
+export const PANEL = '#f8fafc';
 
 const style = (weight: number, size: number, line: number, color: string): TextStyle => ({ font: font(weight, size), size, line, color });
 export const TYPE = {
   brand: style(700, 15, 20, NAVY),
-  title: style(700, 26, 32, INK),
+  title: style(700, 28, 34, INK),
   subtitle: style(400, 13, 18, MUTED),
   heading: style(600, 12, 16, BRAND),
   label: style(500, 13, 22, MUTED),
   value: style(400, 15, 22, INK),
-  stopLabel: style(500, 12, 18, MUTED),
-  stopTime: style(600, 13, 18, BODY),
+  day: style(500, 15, 22, BODY),
+  time: style(700, 22, 28, INK),
+  eyebrow: style(500, 12, 18, MUTED),
   place: style(600, 16, 24, INK),
   detail: style(400, 14, 21, BODY),
   plate: style(700, 14, 20, NAVY),

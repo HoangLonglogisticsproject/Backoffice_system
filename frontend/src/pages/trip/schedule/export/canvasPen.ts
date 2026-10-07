@@ -44,6 +44,8 @@ export function textWidth(pen: Pen, value: string, style: TextStyle): number {
   return pen.ctx.measureText(value).width;
 }
 
+/** Where a block may draw: from `x`, `width` wide. */
+export type Column = { x: number; width: number };
 export type Area = { x: number; y: number; width: number; height: number };
 export type Look = { fill: string; radius?: number; edge?: string };
 

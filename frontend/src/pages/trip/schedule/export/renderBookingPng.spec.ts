@@ -154,7 +154,7 @@ describe('renderBookingPng', () => {
     expect(calls).toContain('scale:1');
   });
 
-  it('★ the header: LOGO.png at its own ratio, the name centred beside it, the title clear of both against the right edge', async () => {
+  it('★ the header reads top-down, left-aligned: LOGO.png and the name as one lockup, PHIẾU BOOKING below it, the subtitle below that', async () => {
     await render();
 
     expect(images).toHaveLength(1);
@@ -166,10 +166,13 @@ describe('renderBookingPng', () => {
     expect(brand.x).toBeGreaterThan(logo.x + logo.width);
     expect(brand.y + 10).toBeCloseTo(logo.y + logo.height / 2); // a 20 px line, centred on the mark
     const title = at('PHIẾU BOOKING');
-    expect(title).toMatchObject({ align: 'right', x: 672 });
-    expect(edges(title)[0]).toBeGreaterThan(edges(brand)[1]);
-    expect(at('Booking confirmation')).toMatchObject({ align: 'right', x: 672 });
-    expect(at('Booking confirmation').y).toBeGreaterThan(title.y);
+    expect(title).toMatchObject({ align: 'left', x: 48 });
+    expect(title.y).toBeGreaterThanOrEqual(logo.y + logo.height);
+    const subtitle = at('Booking confirmation');
+    expect(subtitle).toMatchObject({ align: 'left', x: 48 });
+    expect(subtitle.y).toBeGreaterThan(title.y);
+    // Nothing in the header is set against the right edge.
+    expect(texts.filter((text) => text.y <= subtitle.y).every((text) => text.align === 'left')).toBe(true);
   });
 
   it('★ falls back to a text-only lockup when the logo will not decode — and the export still succeeds', async () => {
@@ -180,7 +183,26 @@ describe('renderBookingPng', () => {
     expect(blob.type).toBe('image/png');
     expect(images).toHaveLength(0);
     expect(at('HOÀNG LONG LOGISTICS').x).toBe(48);
-    expect(at('PHIẾU BOOKING')).toMatchObject({ align: 'right', x: 672 });
+    expect(at('PHIẾU BOOKING')).toMatchObject({ align: 'left', x: 48 });
+    expect(at('PHIẾU BOOKING').y).toBeGreaterThan(at('HOÀNG LONG LOGISTICS').y);
+  });
+
+  it('★ "Thời gian" is the time summary: a column per end — label, day, then the hour beneath', async () => {
+    await render({ scheduledDeliveryAt: '2026-10-08T03:00:00.000Z' });
+    const pickup = { label: at('Lấy hàng'), day: at('Thứ Ba, 06/10/2026'), time: at('16:00') };
+    const delivery = { label: at('Giao hàng'), day: at('Thứ Năm, 08/10/2026'), time: at('10:00') };
+    for (const end of [pickup, delivery]) {
+      expect(end.day.x).toBe(end.label.x);
+      expect(end.day.y).toBeGreaterThan(end.label.y);
+      expect(end.time.y).toBeGreaterThan(end.day.y);
+    }
+    expect(delivery.label.y).toBe(pickup.label.y);
+    expect(delivery.label.x).toBeGreaterThan(edges(pickup.day)[1]);
+
+    // No delivery booked: its column is simply not there — no placeholder.
+    texts.length = 0;
+    await render({ scheduledDeliveryAt: null });
+    expect(texts.some((text) => text.value === 'Giao hàng' || text.value === '—')).toBe(false);
   });
 
   it('★ nothing leaves the page: every string, long ones wrapped, sits inside the 48 px margins', async () => {
@@ -192,11 +214,13 @@ describe('renderBookingPng', () => {
     }
   });
 
-  it('★ the route reads top-down: each end`s label with its time on one line, then the place, then the address', async () => {
-    await render({ scheduledDeliveryAt: '2026-10-07T03:00:00.000Z' });
+  it('★ the route reads top-down, pickup then delivery: label, place, address — and no date or hour repeated from "Thời gian"', async () => {
+    await render({ scheduledDeliveryAt: '2026-10-08T03:00:00.000Z' });
+    for (const moment of ['Thứ Ba, 06/10/2026', '16:00', 'Thứ Năm, 08/10/2026', '10:00']) {
+      expect(texts.filter((text) => text.value.includes(moment))).toHaveLength(1);
+    }
     const pickup = at('Điểm lấy hàng');
-    const time = texts.find((text) => text.value === 'Thứ Ba, 06/10/2026 · 16:00' && text.align === 'right')!;
-    expect(time.y).toBe(pickup.y);
+    expect(pickup.y).toBeGreaterThan(at('16:00').y);
     expect(at('Kho Củ Chi').y).toBeGreaterThan(pickup.y);
     const address = texts.find((text) => text.value.startsWith('Lô B2-7'))!;
     expect(address.y).toBeGreaterThan(at('Kho Củ Chi').y);
@@ -219,12 +243,14 @@ describe('renderBookingPng', () => {
     expect(rows[2]!.plate.y).toBeGreaterThanOrEqual(rows[1]!.plate.y + 28);
   });
 
-  it('the footer, one line: when it was exported on the left, what it is for against the right edge', async () => {
+  it('the footer, quiet and last: when it was exported, then what it is for, both left-aligned', async () => {
     await render();
     const exported = at('Ngày xuất: Thứ Tư, 07/10/2026 · 10:05');
-    const note = texts.find((text) => text.value.startsWith('Thông tin phục vụ'))!;
+    const note = at('Thông tin phục vụ xác nhận và vận hành booking.');
     expect(exported).toMatchObject({ x: 48, align: 'left' });
-    expect(note).toMatchObject({ x: 672, align: 'right', y: exported.y });
+    expect(note).toMatchObject({ x: 48, align: 'left' });
+    expect(note.y).toBeGreaterThan(exported.y);
+    expect(Math.max(...texts.map((text) => text.y))).toBe(note.y);
   });
 
   it('rejects when the browser cannot encode the PNG', async () => {
