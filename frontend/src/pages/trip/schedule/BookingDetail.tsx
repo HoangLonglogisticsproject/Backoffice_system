@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { CalendarClock } from 'lucide-react';
 import { Modal } from '@/components/ui/modal';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useNow } from '@/hooks/useNow';
@@ -7,13 +8,8 @@ import { formatCalendarDay, formatTime } from '@/utils/format/datetime';
 import { TripStatusBadge } from '../components/TripStatusBadge';
 import { urgencyOf } from './bookingPresentation';
 import { BookingDetailActions, type BookingActionHandlers } from './BookingDetailActions';
-import {
-  BookingCrewSection,
-  BookingCustomerSection,
-  BookingMetaSection,
-  BookingPricingSection,
-  BookingRouteSection,
-} from './BookingDetailSections';
+import { BookingCrewSection, BookingCustomerSection, BookingMetaSection, BookingPricingSection } from './BookingDetailSections';
+import { BookingRouteSection } from './BookingRouteSection';
 import { CrewPill, RequestsPill, UrgencyPill } from './BookingSignals';
 import { BookingExportDialog } from './export/BookingExportDialog';
 
@@ -83,14 +79,16 @@ function Body({
   const now = useNow();
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      {/* Who and when first, then where the run stands — the trip's identity. */}
       <header className="space-y-2">
-        <p className="text-sm text-gray-500">
+        <p className="flex items-center gap-1.5 text-sm text-gray-500 tabular-nums">
+          <CalendarClock className="size-4 text-gray-400" aria-hidden="true" />
           {formatCalendarDay(trip.scheduledOn, language)}
           {trip.pickupAt && ` · ${formatTime(trip.pickupAt, language)}`}
         </p>
-        <h2 className="text-lg font-semibold text-gray-900">{trip.customer?.name ?? t('notSelected')}</h2>
-        <div className="flex flex-wrap gap-2">
+        <h2 className="text-lg leading-snug font-semibold text-gray-900">{trip.customer?.name ?? t('notSelected')}</h2>
+        <div className="flex flex-wrap gap-1.5">
           <TripStatusBadge status={trip.status} />
           <CrewPill trip={trip} />
           <RequestsPill tripId={trip.id} />

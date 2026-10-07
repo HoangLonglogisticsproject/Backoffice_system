@@ -3,6 +3,7 @@ import type { TripSchedules } from '@/hooks/trip';
 import { useNow } from '@/hooks/useNow';
 import type { TripAssignmentFilter } from '@/types/trip';
 import type { TranslationKey } from '@/types/translate';
+import type { TripBoardRow } from '@/types/tripBoard';
 import { cn } from '@/utils/cn';
 import { isApiError } from '@/utils/errors';
 import { BookingListItem } from './BookingListItem';
@@ -31,7 +32,7 @@ export function BookingList({
   trips,
   selectedId,
   onSelect,
-  onAssign,
+  onArchive,
 }: Readonly<{
   trips: Pick<
     TripSchedules,
@@ -39,7 +40,8 @@ export function BookingList({
   >;
   selectedId: string | null;
   onSelect: (tripId: string) => void;
-  onAssign: (tripId: string) => void;
+  /** Opens the archive confirmation for THAT row's trip. */
+  onArchive: (trip: TripBoardRow) => void;
 }>) {
   const { t } = useLanguage();
   // Read once for the whole page, so twenty rows share one clock.
@@ -58,7 +60,7 @@ export function BookingList({
             selected={trip.id === selectedId}
             now={now}
             onSelect={onSelect}
-            onAssign={onAssign}
+            onArchive={onArchive}
           />
         ))}
       </ul>

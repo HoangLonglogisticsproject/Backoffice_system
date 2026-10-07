@@ -25,7 +25,7 @@ function Owner() {
   return (
     <>
       <button type="button" onClick={() => setExporting('trip-1')}>
-        Tải booking PNG
+        Xuất PNG
       </button>
       {exporting && <BookingExportDialog tripId={exporting} onClose={() => setExporting(null)} />}
     </>
@@ -63,7 +63,7 @@ const open = () => {
       </QueryClientProvider>
     </StrictMode>,
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Tải booking PNG' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Xuất PNG' }));
   return view;
 };
 
@@ -116,7 +116,7 @@ describe('BookingExportDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tải booking PNG' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Xuất PNG' }));
     await screen.findByRole('img');
     expect(fetchBookingExport).toHaveBeenCalledTimes(2);
   });

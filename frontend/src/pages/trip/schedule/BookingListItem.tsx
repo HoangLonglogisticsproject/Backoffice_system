@@ -1,4 +1,4 @@
-import { ArrowRight } from 'lucide-react';
+import { Archive, ArrowRight, MapPin, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
@@ -14,10 +14,13 @@ import { CrewPill, RequestsPill, UrgencyPill } from './BookingSignals';
  * One booking in the list — what dispatch scans for, and nothing else: when,
  * for whom, from where to where, on which lorries, and where it stands.
  *
- * ★ THE WHOLE ROW SELECTS, AND THE CREW BUTTON SITS BESIDE IT, NOT INSIDE.
+ * ★ THE WHOLE ROW SELECTS, AND ITS ONE ACTION SITS BESIDE IT, NOT INSIDE.
  * A button inside a button is not something a screen reader or a keyboard can
- * operate, so the row is two siblings: the selecting button, and the one
- * action worth a click without opening the trip — the crew queue's.
+ * operate, so the row is two siblings: the selecting button, and "Lưu trữ" —
+ * a low-frequency record action, quiet, confirmed in its own dialog, and bound
+ * to THIS row's trip, never to the one selected. Crewing is the detail
+ * toolbar's (one "Đổi phân công" per screen); a row whose caller may not
+ * archive carries no action at all rather than a stand-in.
  *
  * ★ EVERYTHING ELSE IS THE DETAIL PANEL'S. Prices, costs, contacts and the
  * record's metadata are not scanned down a list; showing every field here is
@@ -29,7 +32,7 @@ export function BookingListItem({
   selected,
   now,
   onSelect,
-  onAssign,
+  onArchive,
 }: Readonly<{
   trip: TripBoardRow;
   /** STT, continued across pages — row 1 of page 2 is 21, not 1. */
@@ -37,11 +40,12 @@ export function BookingListItem({
   selected: boolean;
   now: number;
   onSelect: (tripId: string) => void;
-  onAssign: (tripId: string) => void;
+  onArchive: (trip: TripBoardRow) => void;
 }>) {
   const { t, language } = useLanguage();
   const { can } = useSession();
-  const crewAction = bookingActions(trip, can).find((action) => action === 'assign' || action === 'reassign');
+  // The same rule as everywhere — `bookingActions` — so the row and the panel never disagree.
+  const mayArchive = bookingActions(trip, can).includes('archive');
   const pickup = placeLine(trip.pickupLocation, trip.pickupAddress) ?? t('notSelected');
   const delivery = placeLine(trip.deliveryLocation, trip.deliveryAddress) ?? t('notSelected');
 
@@ -50,8 +54,10 @@ export function BookingListItem({
     // so the facts get the full width instead of a truncated half.
     <li
       className={cn(
-        'flex flex-col gap-2 px-4 py-3 transition-colors sm:flex-row sm:items-start sm:gap-3',
-        selected ? 'bg-blue-50/70' : 'hover:bg-gray-50',
+        // The selected row carries the panel's accent down its edge; the others keep the border transparent so nothing shifts.
+        'flex flex-col gap-2 border-l-2 px-4 py-3 transition-colors sm:flex-row sm:items-start sm:gap-3',
+        // Left edge only: the list's dividers are this row's other borders.
+        selected ? 'border-l-blue-600 bg-blue-50/70' : 'border-l-transparent hover:bg-gray-50',
       )}
     >
       <button
@@ -80,32 +86,38 @@ export function BookingListItem({
           )}
         </span>
         <span className="mt-0.5 flex items-center gap-1.5 text-sm text-gray-600 sm:pl-8">
+          <MapPin className="size-3.5 shrink-0 text-gray-400" aria-hidden="true" />
           <span className="truncate">{pickup}</span>
           <ArrowRight className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-label="→" />
           <span className="truncate">{delivery}</span>
         </span>
         {trip.assignments.length > 0 && (
-          <span className="mt-0.5 flex flex-wrap gap-x-4 text-sm sm:pl-8">
-            {trip.assignments.map((turn) => (
-              <span key={turn.id} className="whitespace-nowrap">
-                {/* A pair the migration could not backfill says so, never a blank plate. */}
-                <span className="font-medium text-gray-900">
-                  {turn.vehicle ? formatPlate(turn.vehicle.plate) : t('dispatchMissingVehicle')}
-                </span>{' '}
-                <span className="text-gray-600">{turn.driver.displayName}</span>
-              </span>
-            ))}
+          <span className="mt-0.5 flex items-start gap-1.5 text-sm sm:pl-8">
+            <Truck className="mt-0.5 size-3.5 shrink-0 text-gray-400" aria-hidden="true" />
+            <span className="flex flex-wrap gap-x-4">
+              {trip.assignments.map((turn) => (
+                <span key={turn.id} className="whitespace-nowrap">
+                  {/* A pair the migration could not backfill says so, never a blank plate. */}
+                  <span className="font-medium text-gray-900">
+                    {turn.vehicle ? formatPlate(turn.vehicle.plate) : t('dispatchMissingVehicle')}
+                  </span>{' '}
+                  <span className="text-gray-600">{turn.driver.displayName}</span>
+                </span>
+              ))}
+            </span>
           </span>
         )}
       </button>
-      {crewAction && (
+      {mayArchive && (
         <Button
+          type="button"
           variant="outline"
           size="sm"
-          className="h-9 shrink-0 self-start px-3 text-xs text-gray-700"
-          onClick={() => onAssign(trip.id)}
+          className="h-9 shrink-0 self-start px-3 text-xs text-gray-600"
+          onClick={() => onArchive(trip)}
         >
-          {t(ACTION_LABELS[crewAction])}
+          <Archive data-icon="inline-start" aria-hidden="true" />
+          {t(ACTION_LABELS.archive)}
         </Button>
       )}
     </li>

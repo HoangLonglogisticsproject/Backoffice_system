@@ -101,7 +101,8 @@ export const urgencyOf = (trip: TripScheduleWithRefs, now: number): Urgency => {
  * Lịch xe; a row that is momentarily `finished` in the cache is one that is
  * about to leave, and every write would be refused with a 409.
  *
- * In the order the detail panel shows them: the crew first, archive last.
+ * In the order they are offered: the crew first. The detail toolbar shows all
+ * but `archive`, which is the list row's one action (`BookingListItem`).
  */
 export type BookingAction = 'assign' | 'reassign' | 'edit' | 'costs' | 'archive';
 

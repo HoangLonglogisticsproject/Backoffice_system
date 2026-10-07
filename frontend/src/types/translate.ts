@@ -1685,7 +1685,8 @@ const PHRASES = {
   colUpdatedAt: { vi: 'Cập nhật lần cuối', en: 'Last updated' },
   // ★ THE BOOKING PNG — one fixed external-safe document. The IMAGE is always
   // Vietnamese (`bookingExportModel`); only the dialog around it is translated.
-  bookingExportAction: { vi: 'Tải booking PNG', en: 'Download booking PNG' },
+  // Short: the button sits on the booking itself, so "booking" goes without saying.
+  bookingExportAction: { vi: 'Xuất PNG', en: 'Export PNG' },
   bookingExportTitle: { vi: 'Xem trước booking', en: 'Booking preview' },
   bookingExportHelp: {
     vi: 'Ảnh booking dùng để chia sẻ thông tin vận hành. Không bao gồm giá, chi phí hoặc dữ liệu tài chính nội bộ.',
