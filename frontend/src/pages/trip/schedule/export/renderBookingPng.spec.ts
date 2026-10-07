@@ -10,7 +10,12 @@ import { renderBookingPng } from './renderBookingPng';
  */
 const calls: string[] = [];
 const drawn: string[] = [];
+const texts: Array<{ value: string; x: number; y: number }> = [];
+const images: Array<{ src: string; x: number; y: number; width: number; height: number }> = [];
 const sizes: Array<{ width: number; height: number }> = [];
+/** jsdom decodes no image: the logo's decode is stubbed per test, at LOGO.png's real 879 × 697. */
+let logoDecodes = true;
+const realDecode = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'decode');
 
 const fakeContext = () => ({
   textBaseline: 'alphabetic',
@@ -18,11 +23,17 @@ const fakeContext = () => ({
   fillStyle: '',
   strokeStyle: '',
   lineWidth: 1,
+  imageSmoothingQuality: 'low',
   measureText: (value: string) => {
     calls.push('measure');
     return { width: Array.from(value).length * 8 };
   },
-  fillText: (value: string) => drawn.push(value),
+  fillText: (value: string, x: number, y: number) => {
+    drawn.push(value);
+    texts.push({ value, x, y });
+  },
+  drawImage: (image: HTMLImageElement, x: number, y: number, width: number, height: number) =>
+    images.push({ src: image.src, x, y, width, height }),
   fillRect: (...args: number[]) => calls.push(`fillRect:${args.join(',')}`),
   scale: (x: number) => calls.push(`scale:${x}`),
   beginPath: () => {},
@@ -54,7 +65,17 @@ const render = (over?: Partial<BookingExport>) => renderBookingPng(bookingDocume
 beforeEach(() => {
   calls.length = 0;
   drawn.length = 0;
+  texts.length = 0;
+  images.length = 0;
   sizes.length = 0;
+  logoDecodes = true;
+  Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+    configurable: true,
+    writable: true,
+    value: () => (logoDecodes ? Promise.resolve() : Promise.reject(new Error('the image would not decode'))),
+  });
+  vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(879);
+  vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(697);
   Object.defineProperty(document, 'fonts', {
     configurable: true,
     value: { load: vi.fn(async () => calls.push('font')), ready: Promise.resolve() },
@@ -70,6 +91,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (realDecode) Object.defineProperty(HTMLImageElement.prototype, 'decode', realDecode);
+  else Reflect.deleteProperty(HTMLImageElement.prototype, 'decode');
 });
 
 describe('renderBookingPng', () => {
@@ -120,6 +143,37 @@ describe('renderBookingPng', () => {
     await render({ crew: Array.from({ length: 1000 }, (_, index) => ({ plate: `51H${index}`, driverName: `Tài xế ${index}` })) });
     expect(sizes[1]!.width).toBe(720);
     expect(calls).toContain('scale:1');
+  });
+
+  it('★ draws the company logo from the bundled LOGO.png — its own aspect ratio, beside the name, above the title', async () => {
+    await render();
+
+    expect(images).toHaveLength(1);
+    const logo = images[0]!;
+    expect(logo.src).toMatch(/\/assets\/img\/LOGO\.png$/);
+    expect(logo.height).toBe(44);
+    expect(logo.width / logo.height).toBeCloseTo(879 / 697, 6);
+    const brand = texts.find((text) => text.value === 'HOÀNG LONG LOGISTICS')!;
+    expect(brand.x).toBeGreaterThanOrEqual(logo.x + logo.width);
+    expect(brand.y).toBeGreaterThan(logo.y);
+    expect(brand.y).toBeLessThan(logo.y + logo.height);
+    expect(texts.find((text) => text.value === 'PHIẾU BOOKING')!.y).toBeGreaterThanOrEqual(logo.y + logo.height);
+  });
+
+  it('★ falls back to the text-only header when the logo will not decode — and the export still succeeds', async () => {
+    await render();
+    const withLogo = sizes[0]!;
+    logoDecodes = false;
+    images.length = 0;
+    texts.length = 0;
+
+    const blob = await render();
+
+    expect(blob.type).toBe('image/png');
+    expect(images).toHaveLength(0);
+    expect(texts.find((text) => text.value === 'HOÀNG LONG LOGISTICS')!.x).toBe(40);
+    // Exactly the header from before the logo: 30 logical px (60 at 2×) shorter.
+    expect(withLogo.height - sizes[1]!.height).toBe(60);
   });
 
   it('rejects when the browser cannot encode the PNG', async () => {

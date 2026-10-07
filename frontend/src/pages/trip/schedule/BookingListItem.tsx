@@ -7,7 +7,7 @@ import { cn } from '@/utils/cn';
 import { formatPlate } from '@/utils/format';
 import { formatCalendarDay, formatTime } from '@/utils/format/datetime';
 import { TripStatusBadge } from '../components/TripStatusBadge';
-import { ACTION_LABELS, bookingActions, placeLine, urgencyOf } from './bookingPresentation';
+import { ACTION_LABELS, bookingActions, crewSignal, placeLine, urgencyOf } from './bookingPresentation';
 import { CrewPill, RequestsPill, UrgencyPill } from './BookingSignals';
 
 /**
@@ -75,7 +75,9 @@ export function BookingListItem({
             <span className="font-medium text-blue-700 tabular-nums">{formatTime(trip.pickupAt, language)}</span>
           )}
           <TripStatusBadge status={trip.status} />
-          <CrewPill trip={trip} />
+          {/* "Chưa phân công" is what the "Chờ phân công" tab already says; the row
+              only names a crew that exists (or a legacy lorry to re-dispatch). */}
+          {crewSignal(trip) !== 'unassigned' && <CrewPill trip={trip} />}
           <RequestsPill tripId={trip.id} />
           <UrgencyPill urgency={urgencyOf(trip, now)} />
         </span>

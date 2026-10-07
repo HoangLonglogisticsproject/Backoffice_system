@@ -1,7 +1,7 @@
 /**
- * The three things native Canvas 2D needs around it to draw a document: the
- * app's own font, loaded first; text wrapped to a width; and the PNG encoding.
- * No library — the browser already does all of it.
+ * What native Canvas 2D needs around it to draw a document: the app's own
+ * font, loaded first; text wrapped to a width; the company logo, decoded; and
+ * the PNG encoding. No library — the browser already does all of it.
  */
 
 /** Geist, the face the app ships — its Vietnamese subset included (`main.tsx`). */
@@ -68,6 +68,24 @@ function breakWord(word: string, maxWidth: number, measure: Measure): string[] {
 export async function loadFonts(fonts: readonly string[], sample: string): Promise<void> {
   await Promise.all(fonts.map((spec) => document.fonts.load(spec, sample)));
   await document.fonts.ready;
+}
+
+/**
+ * A bundled image, decoded and ready to draw — or `null` when it will not
+ * decode. Same-origin (a Vite asset), so the canvas stays exportable.
+ *
+ * ★ BRANDING IS NOT WORTH A FAILED EXPORT. The caller draws a text-only header
+ * on `null`; only the decode is caught here, nothing else.
+ */
+export async function loadImage(src: string): Promise<HTMLImageElement | null> {
+  const image = new Image();
+  image.src = src;
+  try {
+    await image.decode();
+  } catch {
+    return null;
+  }
+  return image.naturalWidth > 0 && image.naturalHeight > 0 ? image : null;
 }
 
 export function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {

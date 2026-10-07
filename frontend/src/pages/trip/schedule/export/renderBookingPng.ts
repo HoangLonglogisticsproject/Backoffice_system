@@ -1,5 +1,6 @@
+import logoUrl from '@/assets/img/LOGO.png';
 import type { BookingDocument, DocumentBlock } from './bookingExportModel';
-import { canvasToPng, font, loadFonts, wrapText } from './canvasText';
+import { canvasToPng, font, loadFonts, loadImage, wrapText } from './canvasText';
 
 /**
  * The booking document → a PNG `Blob`, drawn with native Canvas 2D.
@@ -31,6 +32,9 @@ const MAX_PIXELS = 16_000_000;
  */
 const MIN_SCALE = 1;
 
+/** The company logo's height in the header; its width follows its own aspect ratio. */
+const LOGO_HEIGHT = 44;
+
 const INK = '#111827';
 const MUTED = '#6b7280';
 const RULE = '#e5e7eb';
@@ -49,8 +53,11 @@ const TYPE = {
   small: { font: font(400, 12), line: 18 },
 } satisfies Record<string, Style>;
 
-/** Lays `doc` out on `ctx` — drawing only when `draw` — and returns the height it takes. */
-function layout(ctx: CanvasRenderingContext2D, doc: BookingDocument, draw: boolean): number {
+/**
+ * Lays `doc` out on `ctx` — drawing only when `draw` — and returns the height it
+ * takes. `logo` is the decoded company mark, or `null` for the text-only header.
+ */
+function layout(ctx: CanvasRenderingContext2D, doc: BookingDocument, draw: boolean, logo: HTMLImageElement | null): number {
   let y = PAD;
   ctx.textBaseline = 'top';
 
@@ -94,7 +101,18 @@ function layout(ctx: CanvasRenderingContext2D, doc: BookingDocument, draw: boole
     ctx.fillStyle = ACCENT;
     ctx.fillRect(0, 0, WIDTH, 6);
   }
-  y += write(doc.brand, PAD, CONTENT, TYPE.brand, ACCENT) + 6;
+  if (logo) {
+    // The mark beside the company name, the name centred on it — never stretched.
+    const width = (LOGO_HEIGHT * logo.naturalWidth) / logo.naturalHeight;
+    if (draw) {
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(logo, PAD, y, width, LOGO_HEIGHT);
+    }
+    write(doc.brand, PAD + width + 12, CONTENT - width - 12, TYPE.brand, ACCENT, y + (LOGO_HEIGHT - TYPE.brand.line) / 2);
+    y += LOGO_HEIGHT + 10;
+  } else {
+    y += write(doc.brand, PAD, CONTENT, TYPE.brand, ACCENT) + 6;
+  }
   y += write(doc.title, PAD, CONTENT, TYPE.title);
   y += write(doc.subtitle, PAD, CONTENT, TYPE.subtitle, MUTED) + 16;
   rule();
@@ -152,8 +170,8 @@ const context2d = (canvas: HTMLCanvasElement): CanvasRenderingContext2D => {
 };
 
 export async function renderBookingPng(doc: BookingDocument): Promise<Blob> {
-  await loadFonts(Object.values(TYPE).map((style) => style.font), textOf(doc));
-  const height = layout(context2d(document.createElement('canvas')), doc, false);
+  const [logo] = await Promise.all([loadImage(logoUrl), loadFonts(Object.values(TYPE).map((style) => style.font), textOf(doc))]);
+  const height = layout(context2d(document.createElement('canvas')), doc, false, logo);
   // 2×, or as large as the pixel budget allows — but never below the readability floor.
   const scale = Math.max(MIN_SCALE, Math.min(SCALE, Math.sqrt(MAX_PIXELS / (WIDTH * height))));
 
@@ -164,6 +182,6 @@ export async function renderBookingPng(doc: BookingDocument): Promise<Blob> {
   ctx.scale(scale, scale);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, WIDTH, height);
-  layout(ctx, doc, true);
+  layout(ctx, doc, true, logo);
   return canvasToPng(canvas);
 }
