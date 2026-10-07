@@ -1636,3 +1636,67 @@ và quyền ghi giao dịch nhiên liệu. Lượt `ended` không bao giờ là 
 * Không có mã booking: chuyến chưa có mã người dùng; tên file là `booking-<khách hàng>-<ngày lấy hàng>.png`.
 
 ---
+
+## 31. Fuel transaction và chứng từ — nền móng (0037, 2026-10-08)
+
+**Một lần đổ nhiên liệu thật, cho một xe** (`fuel_transactions`) — **không phải sổ thứ hai**: không
+có cột tiền, không tổng nào đọc nó. Tiền của lần đổ nằm ở **đúng một** dòng: `vehicle_costs` (sổ xe)
+**hoặc** dòng `trip_costs` nhiên liệu cũ. Fill được tạo **lười** — lần đầu dòng tiền nhận ảnh hoặc
+thông tin. Mọi route: Auth → BackofficeOnly → `PermissionGuard`; route ghi có thêm CSRF. Tài xế → 403.
+Chưa có màn hình nào dùng (PR-2). Xem ADR-0008.
+
+### 31.1 Quyền
+
+* **`cost.import`** (mới) — SuperAdmin + chức năng **Kế toán** (member hoặc head). Mở fill đang được
+  làm việc (số tiền, lít, cây xăng, chứng từ) — **không** mở sổ xe, tổng, hay chi phí khác.
+* **`cost.void`** (giữ nguyên, SuperAdmin) — retire ảnh. **`cost.read` không đổi.**
+
+### 31.2 Ảnh chứng từ
+
+* `POST /fuel-evidence` — multipart, **một** field `file`, không field khác → **201** `FuelEvidence`
+  (đang chờ gắn: `fuelTransactionId: null`). Định dạng do **byte đầu** quyết định: JPEG · PNG · WebP.
+  422 `details.file`: `REQUIRED` · `FILE_EMPTY` · `FILE_TOO_LARGE` (> 2 000 000 byte) ·
+  `HEIC_NOT_SUPPORTED` (ảnh HEIC/HEIF — "chụp trực tiếp hoặc chọn JPEG/PNG") ·
+  `UNSUPPORTED_IMAGE_FORMAT` · `TOO_MANY_STAGED` (> 30 ảnh chờ gắn / người). > 2 MiB → 413 (nginx /
+  multer, trước khi service thấy). Cùng người + cùng byte → **cùng dòng** (retry an toàn). Kho chưa cấu
+  hình → **503** `SERVICE_UNAVAILABLE`.
+* `POST /fuel-evidence/:id/discard` → **204**; chỉ ảnh **của mình, đang chờ**; khác → 404.
+* `GET /fuel-evidence/:id/content` → byte ảnh; `Content-Type` = định dạng đã kiểm, `Cache-Control:
+  private, no-store`, `Content-Disposition: inline; filename="<id>.<ext>"`. Đọc được: ảnh đã gắn (kể cả
+  đã retire) hoặc ảnh chờ **của mình**; còn lại 404. **Không có URL công khai hay URL ký sẵn nào.**
+* `POST /fuel-evidence/:id/retire` `{ reason }` (`cost.void`) → **200**; chỉ ảnh đã gắn; lần hai → 409.
+* `FuelEvidence = { id, sha256, mimeType, byteSize, originalFilename, evidenceType, capturedAt,
+  uploadedBy: {id, displayName}, uploadedAt, fuelTransactionId, attachedAt, retiredAt, retireReason }`.
+  `evidenceType ∈ pump_meter · timemark · fuel_voucher · receipt · tax_invoice · null` (không có `other`).
+  `capturedAt` do người gõ từ ảnh (vd. dấu Timemark) — không bao giờ lấy từ EXIF.
+
+### 31.3 Ghi và đọc một fill
+
+* `GET|POST /trip-vehicles/:vehicleId/costs/:costId/fuel-transaction` — fill trên dòng **sổ xe**.
+  Body POST: `{ evidence?: [{ id, type?, capturedAt? }] (≤ 10, không trùng), occurredAt?, driverUserId?,
+  vendorName?, vendorTaxCode?, documentSeries?, documentNumber? }` — ít nhất một ảnh hoặc một thông tin.
+  Xe, ngày, lít, odo là **của dòng tiền**: gửi lên thì bị bỏ.
+* `GET|POST /trip-schedules/:tripId/costs/:costId/fuel-transaction` — fill trên dòng **chuyến** nhiên
+  liệu. Thêm `vehicleId`, `businessDate`, `liters?`, `odometerKm?` — **bắt buộc xe + ngày lần đầu**,
+  sau đó cố định (gửi lại cùng giá trị được; khác → 422 `FIXED`). Xe là **lựa chọn tường minh**: phải là
+  xe dòng ghi (`NOT_THE_COSTS_LORRY`), hoặc một xe chuyến có ghi (`NOT_ON_TRIP`); chuyến không ghi xe nào
+  → nhận, cờ `vehicleConfirmedOnlyByEvidence`. Một dòng chuyến chỉ thuộc **một** xe.
+* POST trả **201** `FuelTransactionView` sau khi ghi. Dòng tiền đã void / không phải nhiên liệu → 409.
+* **Thông tin bổ sung từng trường, chỉ thêm:** trường trống → nhận; cùng giá trị (sau chuẩn hoá khoảng
+  trắng, dấu chấm, hoa/thường) → replay; khác giá trị → 422 `details.<trường>: FACT_ALREADY_SET` — không
+  ghi đè; sửa giá trị sai là việc của SuperAdmin (PR sau). Sai dạng → `FACT_INVALID`. `occurredAt` phải
+  nằm trong ngày của fill (`NOT_ON_BUSINESS_DATE`), không ở tương lai; `driverUserId` phải là tài khoản tài
+  xế (`NOT_A_DRIVER`) và là tài xế mà chính dòng tiền ghi nhận, nếu dòng có ghi.
+* Ảnh: chỉ ảnh **mình** stage (`NOT_STAGED`); cùng ảnh hai lần trên một fill → `ALREADY_ON_TRANSACTION`;
+  > 10 ảnh → `TOO_MANY_IMAGES`; gửi lại id đã gắn = replay. Cùng ảnh trên fill **khác** được (cảnh báo ở PR-2).
+* `FuelTransactionView = { fuelTransactionId | null, backing: { ledger: 'vehicle'|'trip', costId, source,
+  voided }, vehicle: {id, plate} | null, businessDate | null, occurredAt | null, recordedAt, amount,
+  liters | null, odometerKm | null, unitPrice | null, driver: {id, displayName} | null,
+  vendor: {name, taxCode} | null, document: {series, number} | null,
+  trip: {id, scheduledOn, customerName} | null, flags: [...], recordedBy: {id, displayName},
+  evidence: FuelEvidence[] }`. `amount` **luôn** của dòng tiền; `unitPrice` = amount ÷ lít do PostgreSQL
+  tính, không lưu. `fuelTransactionId: null` = chưa bọc — đọc nguyên dòng tiền. Dòng chuyến không phải
+  nhiên liệu và chưa bọc → 404.
+* `flags`: `backingVoided` · `noLongerFuel` (dòng chuyến bị đổi sang khoản khác) · `editedAfterEvidence`
+  (số tiền/khoản bị sửa sau khi có ảnh — theo `trip_cost_edits`) · `vehicleConfirmedOnlyByEvidence`.
+  **Cờ, không chặn**: vòng đời của dòng chuyến không đổi.
