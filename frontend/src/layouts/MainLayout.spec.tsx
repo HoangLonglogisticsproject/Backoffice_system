@@ -277,6 +277,17 @@ describe('MainLayout', () => {
       expect(hrefOf('Điều hành xe')).toBe('/dispatch/fleet-operations');
     });
 
+    it('★ offers "Chứng từ nhiên liệu" to `cost.import` holders only — a trip reader without it never sees it', () => {
+      useSession.mockReturnValue({ ...ready('sales', 'MEMBER'), can: (p: string) => p === 'trip.read' });
+      const sales = renderLayout();
+      expect(screen.queryByText('Chứng từ nhiên liệu')).toBeNull();
+      sales.unmount();
+
+      useSession.mockReturnValue({ ...ready('ketoan', 'MEMBER'), can: (p: string) => p === 'trip.read' || p === 'cost.import' });
+      renderLayout();
+      expect(hrefOf('Chứng từ nhiên liệu')).toBe('/accounting/fuel-receipts');
+    });
+
     it('★ gives a SUPERADMIN driver management and the request queue, under SYSTEM', () => {
       useSession.mockReturnValue(ready('boss', 'SUPERADMIN'));
       renderLayout();

@@ -51,6 +51,7 @@ const TripMasterDataPage = lazy(() => import('./pages/trip/TripMasterDataPage'))
 const LocationCataloguePage = lazy(() => import('./pages/trip/LocationCataloguePage'))
 const CompletionReviewPage = lazy(() => import('./pages/trip/CompletionReviewPage'))
 const FleetOperationsPage = lazy(() => import('./pages/trip/FleetOperationsPage'))
+const FuelReceiptPage = lazy(() => import('./pages/trip/FuelReceiptPage'))
 
 const NoAccessPage = lazy(() => import('./pages/system/NoAccessPage'))
 const PlaceholderPage = lazy(() => import('./pages/system/PlaceholderPage'))
@@ -163,6 +164,8 @@ function App() {
           {/* The office side of the SAME completion lifecycle the Driver Portal
               submits into. One model, two counters. */}
           <Route path="/dispatch/completion-review" element={<CompletionReviewPage />} />
+          {/* Accounting: receipts onto fuel ALREADY recorded — attach-only, never a new cost. */}
+          <Route path="/accounting/fuel-receipts" element={<FuelReceiptPage />} />
 
           <Route path="/account/security" element={<AccountSecurityPage />} />
           <Route path="/system/approvals" element={<ApprovalsPage />} />

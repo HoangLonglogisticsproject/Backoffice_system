@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LogOut,
   MapPin,
+  Receipt,
   Settings,
   Sparkles,
   Truck,
@@ -269,6 +270,15 @@ export default function MainLayout() {
                 />
               )}
             </SidebarSection>
+            )}
+
+            {/* ★ `cost.import` ONLY — the SuperAdmin and the accounting function.
+                Receipts go onto fuel already recorded; the screen creates no
+                cost, and the server decides regardless. */}
+            {can('cost.import') && (
+              <SidebarSection title={t('accountingSection')}>
+                <NavItem to="/accounting/fuel-receipts" icon={Receipt} label={t('fuelReceipts')} />
+              </SidebarSection>
             )}
 
             <SidebarSection title={t('system')}>

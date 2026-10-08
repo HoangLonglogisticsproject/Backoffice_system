@@ -1222,6 +1222,77 @@ describe('driver portal (D1) against the real API', () => {
       expect((await boss.get('/fleet-operations', { params: { date: 'today' } })).status).toBe(422);
     });
 
+    // ------------------- a receipt onto the fill ALREADY recorded (PR-2, cost.import) --
+
+    const VIEW_KEYS = [
+      'amount', 'backing', 'businessDate', 'document', 'driver', 'flags', 'fuelTransactionId', 'liters', 'occurredAt',
+      'odometerKm', 'recordedAt', 'recordedBy', 'trip', 'unitPrice', 'vehicle', 'vendor',
+    ];
+    const CANDIDATE_KEYS = [...VIEW_KEYS, 'basis', 'conflicts', 'evidenceCount', 'level'];
+
+    it('★ Chứng từ nhiên liệu — finds the fill on the lorry ledger, attaches to THAT cost, and creates none', async () => {
+      const day = todayAsCalendarDay();
+      const document = `FE${unique.toUpperCase()}`;
+      const ledger = () => boss.get(`/trip-vehicles/${fuelVehicle}/costs`, { params: { from: day, to: day } });
+      const before = (await ledger()).data;
+      const matchesFor = (params: Record<string, string>) =>
+        boss.get(`/trip-vehicles/${fuelVehicle}/fuel-matches`, { params: { businessDate: day, amount: '1250000', ...params } });
+
+      const search = await matchesFor({ liters: '50.25' });
+      expect(search.status).toBe(200);
+      expect(keysOf(search.data)).toEqual(['dayRows', 'matches', 'outcome']);
+      expect(search.data.outcome).toBe('single');
+      const [match] = search.data.matches;
+      expect(keysOf(match)).toEqual(sorted(CANDIDATE_KEYS));
+      expect(keysOf(match.backing)).toEqual(['costId', 'ledger', 'source', 'voided']);
+      expect(match).toMatchObject({
+        backing: { ledger: 'vehicle', source: 'driver_portal', voided: false },
+        amount: '1250000.00', liters: '50.25', level: 'possible', basis: ['fingerprint'],
+        fuelTransactionId: null, evidenceCount: 0, conflicts: [],
+      });
+      // The lorry's other fill that day is shown, never merged into the match.
+      expect(search.data.dayRows.map((row: { amount: string }) => row.amount)).toEqual(['300000.00']);
+
+      const route = `/trip-vehicles/${fuelVehicle}/costs/${match.backing.costId}/fuel-transaction`;
+      const facts = { vendorName: 'Petrolimex 12', vendorTaxCode: '0100109106', documentNumber: document };
+      const attached = await boss.post(route, facts);
+      expect(attached.status).toBe(201);
+      expect(keysOf(attached.data)).toEqual(sorted([...VIEW_KEYS, 'evidence']));
+      expect(attached.data).toMatchObject({
+        amount: '1250000.00', vendor: { name: 'Petrolimex 12', taxCode: '0100109106' }, document: { series: null, number: document },
+      });
+      // The same command again is the same fill — and the lorry's money is exactly as it was.
+      expect((await boss.post(route, facts)).data.fuelTransactionId).toBe(attached.data.fuelTransactionId);
+      expect((await ledger()).data).toMatchObject({ total: before.total, totalAmount: before.totalAmount });
+
+      // Asked again by its document, the receipt is found as recorded — on that fill.
+      const known = await matchesFor({ vendorTaxCode: '0100 109 106', documentNumber: document });
+      expect(known.data.matches[0]).toMatchObject({
+        fuelTransactionId: attached.data.fuelTransactionId, level: 'high', basis: ['document_identity', 'fingerprint'],
+      });
+
+      // A search that matches nothing writes nothing.
+      const none = await matchesFor({ amount: '1' });
+      expect(none.data).toMatchObject({ outcome: 'none', matches: [] });
+      expect((await ledger()).data.total).toBe(before.total);
+
+      expect((await driverA.get(`/trip-vehicles/${fuelVehicle}/fuel-matches`, { params: { businessDate: day, amount: '1' } })).status).toBe(403);
+      expect((await matchesFor({ amount: '0' })).status).toBe(422);
+    });
+
+    it('stages a receipt image when the server has a store — and answers 503 SERVICE_UNAVAILABLE when it has none', async () => {
+      const form = new FormData();
+      form.append('file', new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...randomBytes(32)])], { type: 'image/jpeg' }), 'bill.jpg');
+      const staged = await boss.post('/fuel-evidence', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      expect([201, 503]).toContain(staged.status);
+      if (staged.status === 503) {
+        expect(toApiError(staged.status, staged.data).code).toBe('SERVICE_UNAVAILABLE');
+        return;
+      }
+      expect(staged.data).toMatchObject({ mimeType: 'image/jpeg', fuelTransactionId: null });
+      expect((await boss.post(`/fuel-evidence/${staged.data.id}/discard`)).status).toBe(204);
+    });
+
     /**
      * ★ WHO MAY READ THE BOARD — real departments with real functions, real
      * heads and members, real sign-ins: the authorization the server loads
