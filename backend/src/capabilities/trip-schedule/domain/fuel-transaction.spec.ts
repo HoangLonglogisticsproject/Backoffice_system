@@ -56,6 +56,10 @@ describe('a trip fill’s readings — facts like the others', () => {
     expect(normalizeFacts({ liters: '26' }).facts.liters).toBe('26.00');
     expect(normalizeFacts({ liters: '026.5' }).facts.liters).toBe('26.50');
     expect(normalizeFacts({ liters: '0' }).invalid).toEqual(['liters']);
+    // A malformed value is refused as given — never respelled into a valid-looking one.
+    for (const malformed of ['1.2.3', '.5', '26.555', '26.', 'abc', '-3', '']) {
+      expect(normalizeFacts({ liters: malformed }).invalid).toEqual(['liters']);
+    }
     expect(normalizeFacts({ odometerKm: -1 }).invalid).toEqual(['odometerKm']);
     expect(normalizeFacts({ odometerKm: 1.5 }).invalid).toEqual(['odometerKm']);
   });

@@ -89,9 +89,15 @@ interface FactRule {
 
 const text = (value: FactValue) => String(value).replace(/\s+/g, ' ').trim();
 const code = (value: FactValue) => String(value).replace(/[\s.]+/g, '').toUpperCase();
-/** Liters as `NUMERIC(10,2)` prints them: "26" → "26.00", "026.5" → "26.50". */
+/**
+ * Liters as `NUMERIC(10,2)` prints them: "26" → "26.00", "026.5" → "26.50".
+ * Only a value already in the recordable shape is respelled; anything else is
+ * returned as given, so the rule refuses it rather than a respelling hiding it.
+ */
 const asStoredLiters = (value: FactValue) => {
-  const [whole = '', fraction = ''] = String(value).trim().split('.');
+  const raw = String(value).trim();
+  if (!isRecordableLiters(raw)) return raw;
+  const [whole, fraction = ''] = raw.split('.');
   return `${Number(whole)}.${fraction.padEnd(2, '0')}`;
 };
 
