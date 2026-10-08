@@ -395,6 +395,66 @@ export const envSchema = z.object({
     .refine((value) => value.length === 0 || value.length >= 32, {
       message: 'TRUSTED_CONTEXT_SECRET must be at least 32 characters when set — generate it, never type it',
     }),
+
+  /**
+   * Where uploaded evidence is kept (0037) — never in PostgreSQL.
+   *
+   * ★ `none` BY DEFAULT, AND NONE MEANS 503, NOT A CRASH. A deployment that has
+   * not been given a bucket still boots; only the upload and image routes
+   * answer "not available". Production is `r2`, a PRIVATE Cloudflare R2 bucket;
+   * `filesystem` is for development and tests, and is refused in production —
+   * a container's disk is not where financial evidence survives a redeploy.
+   */
+  OBJECT_STORAGE_DRIVER: z.enum(['none', 'filesystem', 'r2']).default('none'),
+  /** The directory `filesystem` writes under. Required with that driver. */
+  OBJECT_STORAGE_ROOT: z.string().default(''),
+  /**
+   * ★ THE ACCOUNT ID BECOMES A HOSTNAME (`<id>.r2.cloudflarestorage.com`), so
+   * it is held to exactly what Cloudflare issues: 32 hex characters. Anything
+   * else could point the signed request at another host.
+   */
+  R2_ACCOUNT_ID: z
+    .string()
+    .default('')
+    .refine((value) => value === '' || /^[0-9a-f]{32}$/.test(value), {
+      message: 'R2_ACCOUNT_ID must be the 32-character hex account id',
+    }),
+  R2_BUCKET: z
+    .string()
+    .default('')
+    .refine((value) => value === '' || /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(value), {
+      message: 'R2_BUCKET must be a valid bucket name (3–63 lowercase letters, digits, hyphens)',
+    }),
+  /** ⚠ CREDENTIALS. Server-side only, never logged, never sent to a browser. */
+  R2_ACCESS_KEY_ID: z
+    .string()
+    .default('')
+    .refine((value) => value === '' || /^[A-Za-z0-9]{16,128}$/.test(value), {
+      message: 'R2_ACCESS_KEY_ID must be the access key id Cloudflare issued',
+    }),
+  R2_SECRET_ACCESS_KEY: z
+    .string()
+    .default('')
+    .refine((value) => value === '' || /^\S{32,}$/.test(value), {
+      message: 'R2_SECRET_ACCESS_KEY must be the secret Cloudflare issued (at least 32 characters)',
+    }),
+}).superRefine((env, ctx) => {
+  const missing = (path: string, message: string) =>
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+
+  if (env.OBJECT_STORAGE_DRIVER === 'filesystem') {
+    if (env.OBJECT_STORAGE_ROOT.trim() === '') {
+      missing('OBJECT_STORAGE_ROOT', 'OBJECT_STORAGE_ROOT is required when OBJECT_STORAGE_DRIVER=filesystem');
+    }
+    if (env.NODE_ENV === 'production') {
+      missing('OBJECT_STORAGE_DRIVER', 'filesystem storage is for development and tests — production uses r2');
+    }
+  }
+  if (env.OBJECT_STORAGE_DRIVER === 'r2') {
+    for (const key of ['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'] as const) {
+      if (env[key] === '') missing(key, `${key} is required when OBJECT_STORAGE_DRIVER=r2`);
+    }
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -403,6 +403,30 @@ Allowlist nằm **trong SELECT** (`persistence/booking-export.repository.ts`): k
 không `note`, không `status`, không id; crew dùng chung `IS_CREW` với board. Archive → 404. Ảnh vẽ
 trong trình duyệt; route chỉ đọc. Test kiến trúc giữ SELECT đó. Contract §30.
 
+## Fuel transaction và chứng từ (0037, 2026-10-08)
+
+**Một lần đổ nhiên liệu thật, cho một xe — KHÔNG phải sổ thứ hai.** `fuel_transactions` không có cột
+tiền; tiền của lần đổ nằm ở **đúng một** dòng tài chính: `vehicle_costs` (sổ xe) **hoặc** `trip_costs`
+nhiên liệu cũ (CHECK một-trong-hai, unique "một fill sống / dòng tiền"). Không ALTER bảng nào đang có.
+
+* **Sở hữu từng trường:** tiền luôn của dòng gốc; xe + ngày của `vehicle_costs` (bản sao bị FK ghim)
+  hoặc của fill khi gốc là `trip_costs`; lít/odo của `vehicle_costs` hoặc của fill (CHECK); giờ, tài
+  xế, cây xăng, MST, ký hiệu, số chứng từ — của fill.
+* **Bổ sung từng trường, chỉ thêm** — thông tin và lít/odo của fill dòng chuyến: NULL → giá trị được;
+  cùng giá trị = replay; khác giá trị hoặc xoá → 422 `FACT_ALREADY_SET` (trigger cũng chặn).
+  `fuel_transaction_enrichments` ghi ai thêm trường nào, khi nào — cả giá trị người mở fill gửi kèm.
+  Void là một hành động riêng: câu lệnh void không được đổi trường nào khác.
+* **Xe của dòng chuyến là lựa chọn tường minh của văn phòng** — không suy từ chuyến. Phải là xe dòng ghi
+  (nếu có), hoặc một xe chuyến có ghi; chuyến không ghi xe nào → nhận và gắn cờ. Một dòng chuyến chỉ
+  thuộc **một** xe. Tài xế chỉ là người vận hành/báo lần đổ đó — không có luật "xe → tài xế cố định".
+* **Bọc lười:** fill được tạo lần đầu dòng tiền nhận chứng từ hoặc thông tin; đường ghi của tài xế không đổi.
+* **Chứng từ:** stage trước (byte quyết định định dạng: JPEG/PNG/WebP; HEIC bị từ chối kèm hướng dẫn;
+  ≤ 2 MB; sha256), gắn bằng lệnh. Cùng ảnh hai lần trên một fill → chặn (DB); khác fill → cảnh báo (PR-2).
+  Gắn rồi thì bất biến, chỉ SuperAdmin retire (`cost.void`), không xoá. Object theo nội dung
+  `fuel-evidence/<sha256>`, R2 riêng tư (prod) / filesystem (dev).
+* **Quyền:** `cost.import` (SuperAdmin + chức năng Kế toán) — không mở sổ xe hay tổng nào; `cost.read` giữ nguyên.
+* Khoá: dòng tiền `FOR NO KEY UPDATE` — hai người bọc cùng dòng xếp hàng; không khoá chuyến/lượt.
+
 ## Những gì cố ý KHÔNG có
 
 **Khối CHI PHÍ.** Bảng tính có nhóm cột thứ hai (DẦU · CẦU TRẠM · PHÍ KHO · BỐC
@@ -446,4 +470,10 @@ domain/fleet-operations.ts           trạng thái suy ra của xe/lượt, ngh�
 persistence/fleet-operations.repository.ts  turnWorksOn · worksToday · bảng đội xe một câu
 application/fleet-operations.service.ts     GET /fleet-operations (dispatch.write; tiền với cost.read)
 persistence/booking-export.repository.ts    phiếu booking: allowlist trong SELECT, crew = IS_CREW
+domain/fuel-transaction.ts           một lần đổ: facts, chuẩn hoá, mergeFacts (từng trường, chỉ thêm)
+domain/fuel-evidence.ts              sniffImage (byte quyết định), giới hạn, tên file chỉ là nhãn
+application/fuel-transaction.service.ts  ghi trên dòng tiền xe/chuyến; xe của dòng chuyến do văn phòng chọn
+application/fuel-transaction-writer.ts   mở fill · thêm facts · gắn ảnh — trong transaction của lệnh
+application/fuel-evidence.service.ts     stage · discard · content · retire
+persistence/fuel-transaction-view.repository.ts  một shape cho mọi fill, bọc hay chưa
 ```
