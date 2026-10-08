@@ -17,7 +17,7 @@ import type {
  * the turn that declared a trip line) and nothing is invented beyond that.
  */
 
-type ViewRow = {
+export type ViewRow = {
   cost_id: string;
   source: string;
   voided: boolean;
@@ -51,7 +51,8 @@ type ViewRow = {
 const FACTS = `ft.id AS fuel_transaction_id, ft.occurred_at, ft.vendor_name, ft.vendor_tax_code,
                ft.document_series, ft.document_number`;
 
-const VEHICLE_VIEW = `
+/** The lorry-ledger projection, unfiltered: callers add their WHERE (`c` is the cost, `ft` its live fill). */
+export const VEHICLE_SELECT = `
   SELECT c.id AS cost_id, c.source, c.voided_at IS NOT NULL AS voided, c.category,
          v.id AS vehicle_id, v.plate, c.business_date::text AS business_date,
          c.created_at AS recorded_at, c.amount::text AS amount, c.liters::text AS liters, c.odometer_km,
@@ -67,10 +68,10 @@ const VEHICLE_VIEW = `
     LEFT JOIN users du ON du.id = COALESCE(ft.driver_user_id,
                                            CASE WHEN c.source = 'driver_portal' THEN c.created_by END)
     LEFT JOIN trip_schedules st ON st.id = c.source_trip_id
-    LEFT JOIN trip_customers sc ON sc.id = st.customer_id
-   WHERE c.id = $1 AND c.vehicle_id = $2`;
+    LEFT JOIN trip_customers sc ON sc.id = st.customer_id`;
 
-const TRIP_VIEW = `
+/** The trip-ledger projection, unfiltered: `tc` is the line, `ts` its trip, `ft` its live fill. */
+export const TRIP_SELECT = `
   SELECT tc.id AS cost_id, tc.source, tc.voided_at IS NOT NULL AS voided, tc.category,
          v.id AS vehicle_id, v.plate, ft.business_date::text AS business_date,
          tc.created_at AS recorded_at, tc.amount::text AS amount, ft.liters::text AS liters, ft.odometer_km,
@@ -95,8 +96,7 @@ const TRIP_VIEW = `
     LEFT JOIN fuel_transactions ft ON ft.trip_cost_id = tc.id AND ft.voided_at IS NULL
     LEFT JOIN trip_vehicles v ON v.id = COALESCE(ft.vehicle_id, tc.vehicle_id)
     LEFT JOIN users du ON du.id = COALESCE(ft.driver_user_id, a.driver_user_id)
-    LEFT JOIN trip_customers cust ON cust.id = ts.customer_id
-   WHERE tc.id = $1 AND tc.trip_id = $2`;
+    LEFT JOIN trip_customers cust ON cust.id = ts.customer_id`;
 
 const flagsOf = (row: ViewRow): FuelTransactionFlag[] => {
   const flags: FuelTransactionFlag[] = [];
@@ -110,7 +110,7 @@ const flagsOf = (row: ViewRow): FuelTransactionFlag[] => {
 /** The view without its evidence list, plus the category the service needs to judge it. */
 export type FuelViewRecord = Omit<FuelTransactionView, 'evidence'> & { category: string };
 
-const toView = (ledger: FuelLedger, row: ViewRow): FuelViewRecord => ({
+export const toView = (ledger: FuelLedger, row: ViewRow): FuelViewRecord => ({
   fuelTransactionId: row.fuel_transaction_id,
   backing: { ledger, costId: row.cost_id, source: row.source, voided: row.voided },
   vehicle: row.vehicle_id && row.plate ? { id: row.vehicle_id, plate: row.plate } : null,
@@ -139,12 +139,12 @@ export class FuelTransactionViewRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   async ofVehicleCost(vehicleId: string, costId: string): Promise<FuelViewRecord | null> {
-    const [row] = await this.db.query<ViewRow>(VEHICLE_VIEW, [costId, vehicleId]);
+    const [row] = await this.db.query<ViewRow>(`${VEHICLE_SELECT} WHERE c.id = $1 AND c.vehicle_id = $2`, [costId, vehicleId]);
     return row ? toView('vehicle', row) : null;
   }
 
   async ofTripCost(tripId: string, costId: string): Promise<FuelViewRecord | null> {
-    const [row] = await this.db.query<ViewRow>(TRIP_VIEW, [costId, tripId]);
+    const [row] = await this.db.query<ViewRow>(`${TRIP_SELECT} WHERE tc.id = $1 AND tc.trip_id = $2`, [costId, tripId]);
     return row ? toView('trip', row) : null;
   }
 }

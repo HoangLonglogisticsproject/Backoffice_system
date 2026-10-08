@@ -93,11 +93,30 @@ describe('★ cost.import is the SuperAdmin’s and accounting’s — for fuel 
     const transactions = await source('fuel-transaction.controller.ts');
     const evidence = await source('fuel-evidence.controller.ts');
     const ledger = await source('vehicle-cost.controller.ts');
-    expect(transactions.split("@RequirePermission('cost.import')").length - 1).toBe(4);
+    expect(transactions.split("@RequirePermission('cost.import')").length - 1).toBe(5);
     expect(evidence.split("@RequirePermission('cost.import')").length - 1).toBe(3);
     expect(evidence.split("@RequirePermission('cost.void')").length - 1).toBe(1);
     expect(ledger).toContain("@RequirePermission('cost.read')");
     expect(ledger).not.toContain('cost.import');
+  });
+});
+
+describe('★ cost.import attaches to costs that exist — it never creates one (PR-2)', () => {
+  it('opens exactly the search, and a read and a write on ONE named cost per ledger — no create route', async () => {
+    const api = join(__dirname, '..', '..', 'src', 'capabilities', 'trip-schedule', 'api');
+    const controller = await readFile(join(api, 'fuel-transaction.controller.ts'), 'utf8');
+    const routes = [...controller.matchAll(/@(Get|Post|Patch|Put|Delete)\('([^']+)'\)/g)].map(([, verb, path]) => `${verb} ${path}`);
+    expect(routes).toEqual([
+      'Get trip-vehicles/:vehicleId/fuel-matches',
+      'Get trip-vehicles/:vehicleId/costs/:costId/fuel-transaction',
+      'Post trip-vehicles/:vehicleId/costs/:costId/fuel-transaction',
+      'Get trip-schedules/:tripId/costs/:costId/fuel-transaction',
+      'Post trip-schedules/:tripId/costs/:costId/fuel-transaction',
+    ]);
+    // The one route that creates a trip cost stays the SuperAdmin's `cost.create`.
+    const costs = await readFile(join(api, 'trip-cost.controller.ts'), 'utf8');
+    expect(costs).toMatch(/@Post\('trip-schedules\/:tripId\/costs'\)\s*@UseGuards\([^)]*\)\s*@RequirePermission\('cost\.create'\)/);
+    expect(costs).not.toContain('cost.import');
   });
 });
 

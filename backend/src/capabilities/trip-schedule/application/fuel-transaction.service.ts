@@ -8,11 +8,14 @@ import type { FuelTransactionView } from '../domain/fuel-transaction-view';
 import { FuelEvidenceRepository, publicEvidence } from '../persistence/fuel-evidence.repository';
 import { FuelTransactionRepository, type StoredFuelTransaction } from '../persistence/fuel-transaction.repository';
 import { FuelTransactionViewRepository, type FuelViewRecord } from '../persistence/fuel-transaction-view.repository';
+import { FuelDuplicateGuard } from './fuel-duplicate-guard';
 import { FuelTransactionWriter, normalized, refuseChangedFixedFields } from './fuel-transaction-writer';
 
 export interface RecordFuelCommand {
   facts: FuelFactsInput;
   evidence: readonly EvidenceAttachment[];
+  /** Other fills the caller saw holding this receipt, and confirms are different fills. */
+  acknowledgedMatches?: readonly string[];
 }
 
 /**
@@ -54,6 +57,7 @@ export class FuelTransactionService {
     private readonly views: FuelTransactionViewRepository,
     private readonly evidence: FuelEvidenceRepository,
     private readonly writer: FuelTransactionWriter,
+    private readonly duplicates: FuelDuplicateGuard,
   ) {}
 
   async recordOnVehicleCost(vehicleId: string, costId: string, command: RecordFuelCommand, by: string): Promise<FuelTransactionView> {
@@ -73,7 +77,7 @@ export class FuelTransactionService {
           by,
           tx,
         ));
-      await this.complete(stored, facts, command.evidence, by, tx);
+      await this.complete(stored, { ...command, facts }, by, tx);
     });
     return this.viewOfVehicleCost(vehicleId, costId);
   }
@@ -87,7 +91,7 @@ export class FuelTransactionService {
       const live = await this.transactions.lockLive('trip_cost_id', cost.id, tx);
       if (live) refuseChangedFixedFields(live, command);
       const stored = live ?? (await this.openOnTrip(cost, command, by, tx));
-      await this.complete(stored, facts, command.evidence, by, tx);
+      await this.complete(stored, { ...command, facts }, by, tx);
     });
     return this.viewOfTripCost(tripId, costId);
   }
@@ -143,15 +147,11 @@ export class FuelTransactionService {
     );
   }
 
-  private async complete(
-    stored: StoredFuelTransaction,
-    facts: FuelFactsInput,
-    evidence: readonly EvidenceAttachment[],
-    by: string,
-    tx: DatabaseQuery,
-  ): Promise<void> {
-    await this.writer.enrich(stored, facts, by, tx);
-    await this.writer.attach(stored.id, evidence, by, tx);
+  /** Facts, then images, then — over what is new — the duplicate guard: one transaction, all or nothing. */
+  private async complete(stored: StoredFuelTransaction, command: RecordFuelCommand, by: string, tx: DatabaseQuery): Promise<void> {
+    const added = await this.writer.enrich(stored, command.facts, by, tx);
+    const attached = await this.writer.attach(stored.id, command.evidence, by, tx);
+    await this.duplicates.confirm(stored, added, attached, command.acknowledgedMatches ?? [], by, tx);
   }
 
   private async withEvidence({ category: _category, ...record }: FuelViewRecord): Promise<FuelTransactionView> {
