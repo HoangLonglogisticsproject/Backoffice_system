@@ -78,47 +78,54 @@ const DOCUMENT_CODE = (max: number) => new RegExp(`^[A-Z0-9][A-Z0-9/.-]{0,${max 
 const SERIES = DOCUMENT_CODE(20);
 const NUMBER = DOCUMENT_CODE(30);
 
+/** A fact's value, as any of its columns holds it. */
+type FactValue = Date | string | number;
+
+/** How one field is spelled the one way, and whether the spelling is a shape its column holds. */
+interface FactRule {
+  spell(value: FactValue): FactValue;
+  valid(value: FactValue): boolean;
+}
+
+const text = (value: FactValue) => String(value).replace(/\s+/g, ' ').trim();
+const code = (value: FactValue) => String(value).replace(/[\s.]+/g, '').toUpperCase();
+/** Liters as `NUMERIC(10,2)` prints them: "26" → "26.00", "026.5" → "26.50". */
+const asStoredLiters = (value: FactValue) => {
+  const [whole = '', fraction = ''] = String(value).trim().split('.');
+  return `${Number(whole)}.${fraction.padEnd(2, '0')}`;
+};
+
+const RULES: Partial<Record<FuelFactKey, FactRule>> = {
+  vendorName: { spell: text, valid: (v) => String(v).length > 0 && String(v).length <= 200 },
+  vendorTaxCode: { spell: (v) => String(v).replace(/[\s.]+/g, ''), valid: (v) => TAX_CODE.test(String(v)) },
+  documentSeries: { spell: code, valid: (v) => SERIES.test(String(v)) },
+  documentNumber: { spell: code, valid: (v) => NUMBER.test(String(v)) },
+  liters: { spell: asStoredLiters, valid: (v) => isRecordableLiters(String(v)) },
+  odometerKm: { spell: (v) => v, valid: (v) => Number.isInteger(v) && Number(v) >= 0 },
+};
+
 /**
  * ★ ONE SPELLING PER FACT, so a replay of what was typed yesterday is the same
  * value and not a "conflict". Station names keep their letters and lose stray
  * whitespace; codes lose spaces and dots and are upper-cased; liters are
- * written as `NUMERIC(10,2)` prints them ("26" → "26.00"). A value that is
- * still not the shape the column holds is refused, by field.
+ * written as `NUMERIC(10,2)` prints them. A value that is still not the shape
+ * the column holds is refused, by field.
  */
 export function normalizeFacts(input: FuelFactsInput): { facts: FuelFactsInput; invalid: FuelFactKey[] } {
   const facts: FuelFactsInput = { ...input };
   const invalid: FuelFactKey[] = [];
-  const text = (value: string) => value.replace(/\s+/g, ' ').trim();
-  const code = (value: string) => value.replace(/[\s.]+/g, '').toUpperCase();
-
-  if (input.vendorName !== undefined) {
-    facts.vendorName = text(input.vendorName);
-    if (facts.vendorName.length === 0 || facts.vendorName.length > 200) invalid.push('vendorName');
-  }
-  if (input.vendorTaxCode !== undefined) {
-    facts.vendorTaxCode = input.vendorTaxCode.replace(/[\s.]+/g, '');
-    if (!TAX_CODE.test(facts.vendorTaxCode)) invalid.push('vendorTaxCode');
-  }
-  if (input.documentSeries !== undefined) {
-    facts.documentSeries = code(input.documentSeries);
-    if (!SERIES.test(facts.documentSeries)) invalid.push('documentSeries');
-  }
-  if (input.documentNumber !== undefined) {
-    facts.documentNumber = code(input.documentNumber);
-    if (!NUMBER.test(facts.documentNumber)) invalid.push('documentNumber');
-  }
-  if (input.liters !== undefined) {
-    const [whole = '', fraction = ''] = input.liters.trim().split('.');
-    facts.liters = `${Number(whole)}.${fraction.padEnd(2, '0')}`;
-    if (!isRecordableLiters(input.liters.trim())) invalid.push('liters');
-  }
-  if (input.odometerKm !== undefined && !(Number.isInteger(input.odometerKm) && input.odometerKm >= 0)) {
-    invalid.push('odometerKm');
+  for (const key of FUEL_FACT_KEYS) {
+    const value = input[key];
+    const rule = RULES[key];
+    if (value === undefined || !rule) continue;
+    const spelled = rule.spell(value);
+    Object.assign(facts, { [key]: spelled });
+    if (!rule.valid(spelled)) invalid.push(key);
   }
   return { facts, invalid };
 }
 
-const same = (stored: Date | string | number, incoming: Date | string | number): boolean =>
+const same = (stored: FactValue, incoming: FactValue): boolean =>
   stored instanceof Date && incoming instanceof Date
     ? stored.getTime() === incoming.getTime()
     : stored === incoming;
@@ -150,7 +157,7 @@ export function mergeFacts(
 }
 
 /** A fact as its enrichment row records it. */
-export const factText = (value: Date | string | number): string =>
+export const factText = (value: FactValue): string =>
   value instanceof Date ? value.toISOString() : String(value);
 
 export const hasFacts = (facts: FuelFactsInput): boolean => FUEL_FACT_KEYS.some((key) => facts[key] !== undefined);
