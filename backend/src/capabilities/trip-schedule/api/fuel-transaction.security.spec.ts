@@ -182,13 +182,18 @@ describe('fuel-transaction HTTP security', () => {
     expect(fuel.recordOnTripCost).not.toHaveBeenCalled();
   });
 
+  it('reads an image listed twice as one image — never a false NOT_STAGED', async () => {
+    await authed('get', `/trip-vehicles/${VEHICLE}/fuel-matches?businessDate=2026-10-06&amount=1&evidence=${IMAGE},${IMAGE}`).expect(200);
+    expect(matches.find.mock.calls[0]?.[1]).toMatchObject({ evidence: [IMAGE] });
+  });
+
   it.each([
     ['no day', 'amount=772460'],
     ['no amount', 'businessDate=2026-10-06'],
     ['an amount of zero', 'businessDate=2026-10-06&amount=0'],
     ['a day that is not one', 'businessDate=2026-02-30&amount=1'],
     ['an image id that is not a UUID', 'businessDate=2026-10-06&amount=1&evidence=nope'],
-    ['eleven images', `businessDate=2026-10-06&amount=1&evidence=${Array(11).fill(IMAGE).join(',')}`],
+    ['eleven images', `businessDate=2026-10-06&amount=1&evidence=${Array.from({ length: 11 }, (_, i) => `99999999-9999-9999-9999-9999999999${10 + i}`).join(',')}`],
   ])('answers 422 to a search with %s', async (_case, query) => {
     const response = await authed('get', `/trip-vehicles/${VEHICLE}/fuel-matches?${query}`);
     expect(response.status).toBe(422);

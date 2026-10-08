@@ -93,8 +93,8 @@ export const fuelMatchQuerySchema = z.object({
 });
 export type FuelMatchQueryParams = z.infer<typeof fuelMatchQuerySchema>;
 
-/** `evidence=a,b` → `['a', 'b']`; absent → none. */
-export const imageIds = (ids: string | undefined): string[] => (ids ? ids.split(',') : []);
+/** `evidence=a,b` → `['a', 'b']`; absent → none; an id listed twice is one image. */
+export const imageIds = (ids: string | undefined): string[] => (ids ? [...new Set(ids.split(','))] : []);
 
 export const retireSchema = z.object({ reason: z.string().trim().min(1).max(500) });
 export type RetireBody = z.infer<typeof retireSchema>;

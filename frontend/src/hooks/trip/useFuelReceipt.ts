@@ -111,8 +111,10 @@ export function useFuelReceipt() {
     },
     onError: (error) => {
       if (!isOnAnotherFill(error)) return notifyApiError(error, 'fuelAttachFailed');
-      // Somebody put this receipt on another fill since the list was read: read it again.
+      // Part of this receipt is on another fill the list did not show — somebody attached it since, or it
+      // is an image added after the search. Read again WITH every image being sent, so it can be confirmed.
       notifyError('fuelOnAnotherFill');
+      setSearch((current) => current && { ...current, evidenceIds: waiting.current.map((image) => image.evidence.id) });
       return queryClient.invalidateQueries({ queryKey: tripKeys.fuel() });
     },
   });

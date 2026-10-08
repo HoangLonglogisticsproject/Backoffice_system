@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import type { FuelCandidate, FuelMatchResult } from '@/types/fuel';
+import { ApiError } from '@/utils/errors';
 import { todayAsCalendarDay } from '@/utils/format/datetime';
 import FuelReceiptPage from './FuelReceiptPage';
 
@@ -103,6 +104,7 @@ describe('FuelReceiptPage', () => {
     useSession.mockReturnValue(session(['cost.import', 'trip.read']));
     fetchTripVehicles.mockResolvedValue([{ id: 'lorry-1', plate: '51D12345', status: 'active' }]);
     attachFuelReceipt.mockResolvedValue({});
+    discardFuelEvidence.mockResolvedValue(undefined);
   });
 
   it('is Accounting’s screen: without `cost.import` there is no form and nothing is read', () => {
@@ -168,6 +170,23 @@ describe('FuelReceiptPage', () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(attachFuelReceipt).toHaveBeenCalledTimes(1));
     expect(attachFuelReceipt.mock.calls[0]?.[1]).toMatchObject({ acknowledgedMatches: ['fill-9'] });
+  });
+
+  it('★ an image added after the search that sits on another fill is searched again — so it can be confirmed', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:preview');
+    URL.revokeObjectURL = vi.fn();
+    stageFuelEvidence.mockResolvedValue({ id: 'img-late', originalFilename: 'late.jpg' });
+    findFuelMatches.mockResolvedValue(result({ outcome: 'single', matches: [candidate()] }));
+    attachFuelReceipt.mockRejectedValue(new ApiError(422, 'VALIDATION_FAILED', 'on another fill', { evidence: 'ON_ANOTHER_FILL' }));
+    renderPage();
+    await searchFor();
+    await screen.findByRole('button', { name: 'Gắn vào chi phí này' });
+    fireEvent.change(screen.getByLabelText('Thêm ảnh'), { target: { files: [new File(['x'], 'late.jpg', { type: 'image/jpeg' })] } });
+    await screen.findByRole('img', { name: 'late.jpg' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Gắn vào chi phí này' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Gắn chứng từ' }));
+    await waitFor(() => expect(findFuelMatches).toHaveBeenLastCalledWith('lorry-1', expect.anything(), ['img-late']));
   });
 
   it('will not attach to a withdrawn cost, or to a fill whose own receipt says otherwise', async () => {
