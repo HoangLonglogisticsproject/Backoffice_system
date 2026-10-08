@@ -21,10 +21,12 @@ import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { VehicleCostRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-cost.repository';
 import { VehicleDailyFuelCheckRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-fuel-check.repository';
+import { FuelDuplicateGuard } from '../../src/capabilities/trip-schedule/application/fuel-duplicate-guard';
 import { FuelEvidenceService } from '../../src/capabilities/trip-schedule/application/fuel-evidence.service';
 import { FuelTransactionService } from '../../src/capabilities/trip-schedule/application/fuel-transaction.service';
 import { FuelTransactionWriter } from '../../src/capabilities/trip-schedule/application/fuel-transaction-writer';
 import { FuelEvidenceRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-evidence.repository';
+import { FuelMatchRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-match.repository';
 import { FuelTransactionRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-transaction.repository';
 import { FuelTransactionViewRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-transaction-view.repository';
 
@@ -134,6 +136,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       new FuelTransactionViewRepository(database),
       images,
       new FuelTransactionWriter(transactions, images),
+      new FuelDuplicateGuard(new FuelMatchRepository(database)),
     );
     evidence = new FuelEvidenceService(new FilesystemObjectStorage(root), images);
     driverFuel = new VehicleFuelService(
@@ -752,7 +755,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       });
     });
 
-    it('★ refuses the same image twice on one fill, replays an attach, and allows it on another fill', async () => {
+    it('★ refuses the same image twice on one fill, replays an attach, and takes it on another fill once acknowledged', async () => {
       const vehicle = await lorry();
       const [costA, costB] = [await portalFill(vehicle), await portalFill(vehicle)];
       const bytes = jpeg();
@@ -764,7 +767,10 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       expect((await attach(costA, image)).evidence).toHaveLength(1); // the replay
       const again = await stage(office, bytes);
       expect((await refusal(() => attach(costA, again)))?.details).toEqual({ evidence: 'ALREADY_ON_TRANSACTION' });
-      expect((await attach(costB, again)).evidence).toHaveLength(1);
+      expect((await refusal(() => attach(costB, again)))?.details).toEqual({ evidence: 'ON_ANOTHER_FILL' });
+      const onA = (await fuel.viewOfVehicleCost(vehicle, costA)).fuelTransactionId as string;
+      const onB = await fuel.recordOnVehicleCost(vehicle, costB, { facts: {}, evidence: [{ id: again }], acknowledgedMatches: [onA] }, office);
+      expect(onB.evidence).toHaveLength(1);
     });
 
     it('attaches only the caller’s own staged images, at most ten to a fill', async () => {

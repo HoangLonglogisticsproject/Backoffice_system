@@ -34,7 +34,9 @@ import { TripEntryCrew } from './application/trip-entry-crew';
 import { LegacyConfirmedNormalization } from './application/legacy-confirmed-normalization';
 import { TripScheduleService } from './application/trip-schedule.service';
 import { FleetOperationsService } from './application/fleet-operations.service';
+import { FuelDuplicateGuard } from './application/fuel-duplicate-guard';
 import { FuelEvidenceService } from './application/fuel-evidence.service';
+import { FuelMatchService } from './application/fuel-match.service';
 import { FuelTransactionService } from './application/fuel-transaction.service';
 import { FuelTransactionWriter } from './application/fuel-transaction-writer';
 import { VehicleCostService } from './application/vehicle-cost.service';
@@ -58,6 +60,7 @@ import { BookingExportRepository } from './persistence/booking-export.repository
 import { DriverTripReadModelRepository } from './persistence/driver-read-model.repository';
 import { FleetOperationsRepository } from './persistence/fleet-operations.repository';
 import { FuelEvidenceRepository } from './persistence/fuel-evidence.repository';
+import { FuelMatchRepository } from './persistence/fuel-match.repository';
 import { FuelTransactionRepository } from './persistence/fuel-transaction.repository';
 import { FuelTransactionViewRepository } from './persistence/fuel-transaction-view.repository';
 import { OpenBookingRepository } from './persistence/open-booking.repository';
@@ -120,6 +123,8 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     BookingExportService,
     FuelTransactionService,
     FuelTransactionWriter,
+    FuelDuplicateGuard,
+    FuelMatchService,
     FuelEvidenceService,
     ActiveAssignmentGuard,
     ExpenseAssignmentGuard,
@@ -147,6 +152,7 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     FuelTransactionRepository,
     FuelTransactionViewRepository,
     FuelEvidenceRepository,
+    FuelMatchRepository,
   ],
   exports: [
     TripScheduleService,

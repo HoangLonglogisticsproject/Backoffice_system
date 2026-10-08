@@ -58,6 +58,9 @@ const toEvidence = (row: EvidenceRow): StoredEvidence => ({
 /** The API shape: storage details never leave the server. */
 export const publicEvidence = ({ storageKey: _key, discardedAt: _gone, ...evidence }: StoredEvidence): FuelEvidence => evidence;
 
+/** One uploader's ($1) images still waiting: uploaded, neither attached nor discarded. */
+const WAITING = `e.uploaded_by = $1 AND e.attached_at IS NULL AND e.discarded_at IS NULL`;
+
 @Injectable()
 export class FuelEvidenceRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
@@ -68,18 +71,17 @@ export class FuelEvidenceRepository {
   }
 
   async findStaged(uploader: string, sha256: string): Promise<StoredEvidence | null> {
-    const [row] = await this.db.query<EvidenceRow>(
-      `${SELECT} WHERE e.uploaded_by = $1 AND e.sha256 = $2 AND e.attached_at IS NULL AND e.discarded_at IS NULL`,
-      [uploader, sha256],
-    );
+    const [row] = await this.db.query<EvidenceRow>(`${SELECT} WHERE ${WAITING} AND e.sha256 = $2`, [uploader, sha256]);
     return row ? toEvidence(row) : null;
   }
 
+  /** ★ Every image an uploader left waiting, newest first — what a returning uploader recovers. */
+  async listStaged(uploader: string): Promise<StoredEvidence[]> {
+    return (await this.db.query<EvidenceRow>(`${SELECT} WHERE ${WAITING} ORDER BY e.uploaded_at DESC, e.id`, [uploader])).map(toEvidence);
+  }
+
   async countStaged(uploader: string): Promise<number> {
-    const [row] = await this.db.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM fuel_transaction_evidence WHERE uploaded_by = $1 AND attached_at IS NULL AND discarded_at IS NULL`,
-      [uploader],
-    );
+    const [row] = await this.db.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM fuel_transaction_evidence e WHERE ${WAITING}`, [uploader]);
     return row?.count ?? 0;
   }
 

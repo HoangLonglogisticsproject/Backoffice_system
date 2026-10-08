@@ -14,6 +14,7 @@ import {
 } from '../domain/fuel-transaction';
 import { FuelEvidenceRepository } from '../persistence/fuel-evidence.repository';
 import { FuelTransactionRepository, type StoredFuelTransaction } from '../persistence/fuel-transaction.repository';
+import type { AttachedImage } from './fuel-duplicate-guard';
 
 const byField = (keys: readonly FuelFactKey[], code: string) => Object.fromEntries(keys.map((key) => [key, code]));
 
@@ -46,9 +47,9 @@ export class FuelTransactionWriter {
    * empty field is filled, the same value is a no-op, a different value is
    * refused by name — never overwritten, never cleared. Each addition is
    * logged with the actor and the time, so an opener's first readings are
-   * attributed exactly as a later accountant's are.
+   * attributed exactly as a later accountant's are. Returns what it added.
    */
-  async enrich(stored: StoredFuelTransaction, facts: FuelFactsInput, by: string, tx: DatabaseQuery): Promise<void> {
+  async enrich(stored: StoredFuelTransaction, facts: FuelFactsInput, by: string, tx: DatabaseQuery): Promise<FuelFactsInput> {
     const { additions, conflicts } = mergeFacts(stored, facts);
     if (conflicts.length > 0) {
       throw new ValidationError(
@@ -59,21 +60,22 @@ export class FuelTransactionWriter {
     await this.checkFacts(additions, stored.businessDate, tx);
     await this.transactions.addFacts(stored.id, additions, tx);
     await this.transactions.logFacts(stored.id, additions, by, tx);
+    return additions;
   }
 
   /**
    * Attaches the caller's own staged images. One already on this fill is a
    * replay; the same picture under another staged row is refused, as is a
-   * fill past its cap. Another fill holding the same picture is a warning
-   * for the duplicate check (PR-2), not a refusal here.
+   * fill past its cap. Another fill holding the same picture is the
+   * duplicate guard's to weigh. Returns the images newly attached.
    */
   async attach(
     fuelTransactionId: string,
     items: readonly EvidenceAttachment[],
     by: string,
     tx: DatabaseQuery,
-  ): Promise<void> {
-    if (items.length === 0) return;
+  ): Promise<AttachedImage[]> {
+    if (items.length === 0) return [];
     const rows = new Map((await this.evidence.lockMany(items.map((item) => item.id), tx)).map((row) => [row.id, row]));
     const pending: EvidenceAttachment[] = [];
     for (const item of items) {
@@ -100,6 +102,7 @@ export class FuelTransactionWriter {
       });
     }
     await this.evidence.attachMany(pending, fuelTransactionId, by, new Date(), tx);
+    return pending.map((item) => ({ id: item.id, sha256: rows.get(item.id)?.sha256 as string }));
   }
 
   /** The rules a fact must meet that its column alone cannot say. */

@@ -1643,7 +1643,7 @@ và quyền ghi giao dịch nhiên liệu. Lượt `ended` không bao giờ là 
 có cột tiền, không tổng nào đọc nó. Tiền của lần đổ nằm ở **đúng một** dòng: `vehicle_costs` (sổ xe)
 **hoặc** dòng `trip_costs` nhiên liệu cũ. Fill được tạo **lười** — lần đầu dòng tiền nhận ảnh hoặc
 thông tin. Mọi route: Auth → BackofficeOnly → `PermissionGuard`; route ghi có thêm CSRF. Tài xế → 403.
-Chưa có màn hình nào dùng (PR-2). Xem ADR-0008.
+Màn hình: **Kế toán → Chứng từ nhiên liệu** (`/accounting/fuel-receipts`, §31.4). Xem ADR-0008.
 
 ### 31.1 Quyền
 
@@ -1661,6 +1661,10 @@ Chưa có màn hình nào dùng (PR-2). Xem ADR-0008.
   multer, trước khi service thấy). Cùng người + cùng byte → **cùng dòng** (retry an toàn). Kho chưa cấu
   hình → **503** `SERVICE_UNAVAILABLE`.
 * `POST /fuel-evidence/:id/discard` → **204**; chỉ ảnh **của mình, đang chờ**; khác → 404.
+* `GET /fuel-evidence/staged` → **200** `FuelEvidence[]` — **mọi ảnh của chính người gọi còn đang chờ** (chưa gắn,
+  chưa bỏ), mới nhất trước; không bao giờ ảnh người khác, ảnh đã gắn hay đã bỏ. **Máy chủ nhớ, không phải trình duyệt:**
+  đóng tab, sập máy, mất mạng giữa chừng — người dùng quay lại vẫn lấy lại được, để gắn hoặc bỏ; giới hạn 30 ảnh chờ
+  vì vậy không bao giờ thành khoá vĩnh viễn. Không có xoá tự động: ảnh chờ chỉ rời danh sách khi được gắn hoặc bỏ.
 * `GET /fuel-evidence/:id/content` → byte ảnh; `Content-Type` = định dạng đã kiểm, `Cache-Control:
   private, no-store`, `Content-Disposition: inline; filename="<id>.<ext>"`. Đọc được: ảnh đã gắn (kể cả
   đã retire) hoặc ảnh chờ **của mình**; còn lại 404. **Không có URL công khai hay URL ký sẵn nào.**
@@ -1692,7 +1696,8 @@ Chưa có màn hình nào dùng (PR-2). Xem ADR-0008.
   nằm trong ngày của fill (`NOT_ON_BUSINESS_DATE`), không ở tương lai; `driverUserId` phải là tài khoản tài
   xế (`NOT_A_DRIVER`) và là tài xế mà chính dòng tiền ghi nhận, nếu dòng có ghi.
 * Ảnh: chỉ ảnh **mình** stage (`NOT_STAGED`); cùng ảnh hai lần trên một fill → `ALREADY_ON_TRANSACTION`;
-  > 10 ảnh → `TOO_MANY_IMAGES`; gửi lại id đã gắn = replay. Cùng ảnh trên fill **khác** được (cảnh báo ở PR-2).
+  > 10 ảnh → `TOO_MANY_IMAGES`; gửi lại id đã gắn = replay. Cùng ảnh, hoặc cùng MST + số chứng từ, trên fill
+  **khác** → phải xác nhận (§31.4 `acknowledgedMatches`).
 * `FuelTransactionView = { fuelTransactionId | null, backing: { ledger: 'vehicle'|'trip', costId, source,
   voided }, vehicle: {id, plate} | null, businessDate | null, occurredAt | null, recordedAt, amount,
   liters | null, odometerKm | null, unitPrice | null, driver: {id, displayName} | null,
@@ -1704,3 +1709,39 @@ Chưa có màn hình nào dùng (PR-2). Xem ADR-0008.
 * `flags`: `backingVoided` · `noLongerFuel` (dòng chuyến bị đổi sang khoản khác) · `editedAfterEvidence`
   (số tiền/khoản bị sửa sau khi có ảnh — theo `trip_cost_edits`) · `vehicleConfirmedOnlyByEvidence`.
   **Cờ, không chặn**: vòng đời của dòng chuyến không đổi.
+
+### 31.4 Tìm chi phí đã ghi — gắn chứng từ, không tạo chi phí (PR-2, 2026-10-08)
+
+Kế toán cầm một chứng từ nhiên liệu thật và gắn nó vào **dòng tiền đã có** — sổ xe hoặc sổ chuyến. **Không
+route nào ở đây tạo chi phí**; không có kết quả thì không ghi gì (chi phí được ghi qua quy trình của nó).
+
+* `GET /trip-vehicles/:vehicleId/fuel-matches?businessDate&amount&liters?&vendorName?&vendorTaxCode?&documentSeries?&documentNumber?&evidence?`
+  (`cost.import`) — **chỉ đọc**. `businessDate` + `amount` bắt buộc; `evidence` = id ảnh **của mình**, cách
+  nhau dấu phẩy (≤ 10; ảnh người khác → 422 `NOT_STAGED`). Thông tin sai dạng → 422 `FACT_INVALID`.
+  → `{ outcome: 'none'|'single'|'ambiguous', matches: FuelCandidate[], dayRows: FuelCandidate[] }`.
+* `FuelCandidate` = `FuelTransactionView` **không** `evidence`, thêm `evidenceCount`, `level`,
+  `basis[]`, `conflicts[]`. Mức (mạnh trước):
+  `exact` (`evidence_hash` — cùng byte ảnh đã ở fill đó, **mọi xe, mọi ngày**) ·
+  `high` (`document_identity` — cùng MST + số chứng từ; ký hiệu trống không mâu thuẫn) ·
+  `possible` (`fingerprint` — đúng xe đang tìm, cùng số tiền, ±1 ngày, lít khớp nếu cả hai có, không có
+  MST/ký hiệu/số khác chứng từ). `conflicts` = thông tin chứng từ mà fill đã ghi **khác** — gắn sẽ bị 422.
+* Tập tìm: sổ xe — chi phí nhiên liệu sống của xe, ±1 ngày; sổ chuyến — dòng nhiên liệu sống ghi xe đó,
+  hoặc trên chuyến có xe đó (lượt hoặc xe cũ của chuyến), hoặc đã bọc cho xe đó. Dòng của chuyến **không
+  ghi xe nào** chỉ hiện khi **cùng số tiền** — không làm ngập danh sách. Ngày của dòng chuyến chưa bọc =
+  ngày chuyến. Dòng đã huỷ / không còn là nhiên liệu không hiện.
+* `matches` = có mức; `dayRows` = các chi phí nhiên liệu khác của xe quanh ngày (không mức) — để dòng
+  lệch số hay gộp không bị bỏ sót. Hai chi phí giống hệt nhau là **hai** ứng viên, không bao giờ gộp.
+  `single` vẫn chờ người bấm; `ambiguous` không bao giờ tự chọn.
+* **Gắn** = §31.3 trên đúng route của sổ đó (`/trip-vehicles/:vehicleId/costs/:costId/…` hoặc
+  `/trip-schedules/:tripId/costs/:costId/…`): mở fill hoặc thêm vào fill đang có — gửi lại = cùng fill.
+  Body thêm `acknowledgedMatches?: uuid[]` (≤ 20): các fill **khác** đã giữ ảnh hoặc MST + số chứng từ
+  này mà người dùng đã xem và xác nhận là giao dịch khác. Chưa xác nhận → 422
+  `details.evidence | details.documentNumber: ON_ANOTHER_FILL`, không ghi gì. Đã xác nhận → ghi
+  `fuel_match_acks` (append-only: ai, khi nào, mức, cơ sở, ảnh). Replay không thêm gì, không hỏi lại.
+  Kiểm tra trong transaction ghi, dưới khoá theo từng ảnh / từng chứng từ: hai người gắn cùng chứng từ
+  vào hai fill cùng lúc → đúng một người bị hỏi xác nhận.
+* Màn hình **Chứng từ nhiên liệu** (`cost.import`; menu KẾ TOÁN): biển số · ngày · số tiền · lít · cây xăng ·
+  MST · ký hiệu · số · ảnh (stage khi chọn; mỗi lần mở màn hình đọc lại ảnh còn chờ từ máy chủ — mục "Ảnh đã tải
+  lên, chưa gắn": Dùng / Bỏ / Bỏ tất cả, không ảnh nào tự gắn; rời màn hình vẫn thử discard, chỉ là phép lịch sự) → kết quả theo
+  nhóm "Đã ghi ở Chi phí xe" / "Đã ghi ở Chi phí chuyến" + "chi phí khác quanh ngày" → "Gắn vào chi phí
+  này" → hộp xác nhận (không tạo chi phí mới; tick từng fill khác đã giữ chứng từ). Không có nút tạo chi phí.

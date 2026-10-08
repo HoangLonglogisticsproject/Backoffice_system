@@ -61,6 +61,14 @@ export class FuelEvidenceController {
     return this.evidence.stage(file, actor.id);
   }
 
+  /** The caller's own images still waiting — never anybody else's, never an attached one. */
+  @Get('staged')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('cost.import')
+  async staged(@CurrentUser() actor: SessionUser): Promise<FuelEvidence[]> {
+    return this.evidence.staged(actor.id);
+  }
+
   @Post(':evidenceId/discard')
   @UseGuards(AuthGuard, CsrfGuard, BackofficeOnlyGuard, PermissionGuard)
   @RequirePermission('cost.import')

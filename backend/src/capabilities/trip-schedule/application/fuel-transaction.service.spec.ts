@@ -2,6 +2,7 @@ import type { Database } from '../../../common/types/database.port';
 import type { FuelEvidenceRepository } from '../persistence/fuel-evidence.repository';
 import type { FuelTransactionRepository } from '../persistence/fuel-transaction.repository';
 import type { FuelTransactionViewRepository, FuelViewRecord } from '../persistence/fuel-transaction-view.repository';
+import type { FuelDuplicateGuard } from './fuel-duplicate-guard';
 import type { FuelTransactionWriter } from './fuel-transaction-writer';
 import { FuelTransactionService } from './fuel-transaction.service';
 
@@ -23,6 +24,7 @@ describe('FuelTransactionService — the fuel views', () => {
       views as unknown as FuelTransactionViewRepository,
       evidence as unknown as FuelEvidenceRepository,
       {} as FuelTransactionWriter,
+      {} as FuelDuplicateGuard,
     );
   };
   const viewOn = (ledger: 'vehicle' | 'trip', found: FuelViewRecord | null) =>

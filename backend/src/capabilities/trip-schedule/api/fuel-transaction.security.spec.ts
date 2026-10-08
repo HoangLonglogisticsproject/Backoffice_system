@@ -12,11 +12,13 @@ import { AuthGuard } from '../../../core/identity/api/auth.guard';
 import { CsrfGuard } from '../../../core/identity/api/csrf.guard';
 import { SESSION_COOKIE } from '../../../core/identity/api/session.cookie';
 import { SessionService } from '../../../core/identity/application/session.service';
+import { FuelMatchService } from '../application/fuel-match.service';
 import { FuelTransactionService } from '../application/fuel-transaction.service';
 import { FuelTransactionController } from './fuel-transaction.controller';
 
 /**
- * A fill's fuel transaction, over HTTP (0037). The policy pinned here:
+ * A fill's fuel transaction, and the search for the cost a receipt already
+ * is (PR-2), over HTTP. The policy pinned here:
  * `cost.import` — the SuperAdmin and the ACCOUNTING function, member or head —
  * and nobody else; never a driver account; every write behind CSRF.
  */
@@ -36,6 +38,7 @@ describe('fuel-transaction HTTP security', () => {
     viewOfTripCost: jest.fn(),
     recordOnTripCost: jest.fn(),
   };
+  const matches = { find: jest.fn() };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: ACTOR,
@@ -52,6 +55,7 @@ describe('fuel-transaction HTTP security', () => {
     context = accountant();
     accountType = 'employee';
     for (const mock of Object.values(fuel)) mock.mockReset().mockResolvedValue({ fuelTransactionId: null });
+    matches.find.mockReset().mockResolvedValue({ outcome: 'none', matches: [], dayRows: [] });
 
     const moduleRef = await Test.createTestingModule({
       controllers: [FuelTransactionController],
@@ -61,6 +65,7 @@ describe('fuel-transaction HTTP security', () => {
         AuthGuard,
         CsrfGuard,
         { provide: FuelTransactionService, useValue: fuel },
+        { provide: FuelMatchService, useValue: matches },
         { provide: AppConfig, useValue: { isProduction: true } },
         {
           provide: SessionService,
@@ -84,7 +89,9 @@ describe('fuel-transaction HTTP security', () => {
 
   const vehicleRoute = `/trip-vehicles/${VEHICLE}/costs/${COST}/fuel-transaction`;
   const tripRoute = `/trip-schedules/${TRIP}/costs/${COST}/fuel-transaction`;
+  const matchRoute = `/trip-vehicles/${VEHICLE}/fuel-matches?businessDate=2026-10-06&amount=772460`;
   const ROUTES = [
+    ['get', matchRoute],
     ['get', vehicleRoute],
     ['post', vehicleRoute],
     ['get', tripRoute],
@@ -136,7 +143,7 @@ describe('fuel-transaction HTTP security', () => {
     expect(fuel.recordOnVehicleCost).toHaveBeenCalledWith(
       VEHICLE,
       COST,
-      { facts: { vendorName: 'Cây xăng X' }, evidence: [{ id: IMAGE, type: 'receipt' }] },
+      { facts: { vendorName: 'Cây xăng X' }, evidence: [{ id: IMAGE, type: 'receipt' }], acknowledgedMatches: [] },
       ACTOR,
     );
   });
@@ -146,9 +153,51 @@ describe('fuel-transaction HTTP security', () => {
     expect(fuel.recordOnTripCost).toHaveBeenCalledWith(
       TRIP,
       COST,
-      { facts: { liters: '26.00', odometerKm: 1200 }, evidence: [], vehicleId: VEHICLE, businessDate: '2026-10-06' },
+      {
+        facts: { liters: '26.00', odometerKm: 1200 },
+        evidence: [],
+        vehicleId: VEHICLE,
+        businessDate: '2026-10-06',
+        acknowledgedMatches: [],
+      },
       ACTOR,
     );
+  });
+
+  it('carries the fills a caller acknowledged as different — and nothing else from them', async () => {
+    await authed('post', vehicleRoute).send({ ...body, acknowledgedMatches: [TRIP] }).expect(201);
+    expect(fuel.recordOnVehicleCost.mock.calls[0]?.[2]).toMatchObject({ acknowledgedMatches: [TRIP] });
+    expect((await authed('post', vehicleRoute).send({ ...body, acknowledgedMatches: ['nope'] })).status).toBe(422);
+  });
+
+  it('★ searches with the parsed receipt and the session actor — a read, never a write', async () => {
+    const path = `/trip-vehicles/${VEHICLE}/fuel-matches?businessDate=2026-10-06&amount=772460&documentNumber=0001234&evidence=${IMAGE},${COST}`;
+    await authed('get', path).expect(200);
+    expect(matches.find).toHaveBeenCalledWith(
+      VEHICLE,
+      { businessDate: '2026-10-06', amount: '772460', documentNumber: '0001234', evidence: [IMAGE, COST] },
+      ACTOR,
+    );
+    expect(fuel.recordOnVehicleCost).not.toHaveBeenCalled();
+    expect(fuel.recordOnTripCost).not.toHaveBeenCalled();
+  });
+
+  it('reads an image listed twice as one image — never a false NOT_STAGED', async () => {
+    await authed('get', `/trip-vehicles/${VEHICLE}/fuel-matches?businessDate=2026-10-06&amount=1&evidence=${IMAGE},${IMAGE}`).expect(200);
+    expect(matches.find.mock.calls[0]?.[1]).toMatchObject({ evidence: [IMAGE] });
+  });
+
+  it.each([
+    ['no day', 'amount=772460'],
+    ['no amount', 'businessDate=2026-10-06'],
+    ['an amount of zero', 'businessDate=2026-10-06&amount=0'],
+    ['a day that is not one', 'businessDate=2026-02-30&amount=1'],
+    ['an image id that is not a UUID', 'businessDate=2026-10-06&amount=1&evidence=nope'],
+    ['eleven images', `businessDate=2026-10-06&amount=1&evidence=${Array.from({ length: 11 }, (_, i) => `99999999-9999-9999-9999-9999999999${10 + i}`).join(',')}`],
+  ])('answers 422 to a search with %s', async (_case, query) => {
+    const response = await authed('get', `/trip-vehicles/${VEHICLE}/fuel-matches?${query}`);
+    expect(response.status).toBe(422);
+    expect(matches.find).not.toHaveBeenCalled();
   });
 
   it.each([

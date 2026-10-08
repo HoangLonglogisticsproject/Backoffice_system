@@ -39,8 +39,10 @@ approved ones are immutable.
    belongs to one lorry. **A lorry has no permanent driver** — `driver_user_id` is only the driver known
    to have operated or reported that fill, pinned to the cost's own provenance when it names one.
 5. **Evidence belongs to the fuel transaction**, staged by its uploader and attached by a command. The
-   same image twice on one fill is refused by a unique index; across fills it is a warning a person
-   confirms (PR-2), so `sha256` is not globally unique. Attached evidence is immutable and only retired.
+   same image twice on one fill is refused by a unique index; on ANOTHER live fill it is refused
+   (422 `ON_ANOTHER_FILL`) until a person acknowledges that fill (PR-2, `fuel_match_acks`) — a station's
+   statement may cover several fills, so `sha256` is not globally unique. The same holds for a tax code
+   and document number. Attached evidence is immutable and only retired.
 6. **Wrapping is lazy.** A fill row appears the first time its cost receives evidence or a fact; the
    read model shows an unwrapped cost as it stands. The driver write path is untouched (no rollout-window
    risk), and 0037 alters no existing table.
@@ -55,3 +57,8 @@ approved ones are immutable.
 * Trip-line drift after wrapping (re-priced, re-headed, voided) is **flagged, not blocked**.
 * The cutoff-dependent ledger extension (`historical_import`, `backoffice_recovery`, correction) is a
   separate migration and does not change this model.
+* **PR-2 (no migration):** a read-only search over both ledgers ranks candidates (`exact` image ·
+  `high` tax code + number · `possible` lorry, amount, ±1 day) and never chooses; attaching stays the
+  §31.3 command on the one cost a person picked. The same receipt on another live fill is accepted only
+  when acknowledged (`fuel_match_acks`), checked under a per-image / per-document advisory lock. Nothing
+  under `cost.import` creates a cost; with no candidate, nothing is written.

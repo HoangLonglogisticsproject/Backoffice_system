@@ -29,7 +29,7 @@ describe('fuel-evidence HTTP security', () => {
 
   let app: INestApplication;
   let context: AuthorizationContext;
-  const evidence = { stage: jest.fn(), discard: jest.fn(), content: jest.fn(), retire: jest.fn() };
+  const evidence = { stage: jest.fn(), staged: jest.fn(), discard: jest.fn(), content: jest.fn(), retire: jest.fn() };
 
   const asContext = (over: Partial<AuthorizationContext> = {}): AuthorizationContext => ({
     userId: ACTOR,
@@ -127,6 +127,16 @@ describe('fuel-evidence HTTP security', () => {
     expect(response.headers['content-disposition']).toBe(`inline; filename="${IMAGE}.jpg"`);
     expect(Buffer.compare(response.body as Buffer, JPEG)).toBe(0);
     expect(evidence.content).toHaveBeenCalledWith(IMAGE, ACTOR);
+  });
+
+  it('★ lists the CALLER’s own waiting images — a returning uploader finds them again', async () => {
+    evidence.staged.mockResolvedValue([]);
+    await authed('get', '/fuel-evidence/staged').expect(200);
+    expect(evidence.staged).toHaveBeenCalledWith(ACTOR);
+    expect((await request(app.getHttpServer()).get('/fuel-evidence/staged')).status).toBe(401);
+    context = asContext({ functions: ['sales'] });
+    expect((await authed('get', '/fuel-evidence/staged')).status).toBe(403);
+    expect(evidence.staged).toHaveBeenCalledTimes(1);
   });
 
   it('lets the uploader discard a staged image', async () => {

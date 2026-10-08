@@ -89,6 +89,14 @@ export const tripKeys = {
   vehicleCosts: (vehicleId: string, range: { from: string; to: string }) =>
     [...tripKeys.all, 'money', 'vehicle', vehicleId, range] as const,
 
+  /**
+   * "Chứng từ nhiên liệu" (`cost.import`): the costs a receipt may already be.
+   * Its own root, dropped when the key is lost (`useFuelReceipt`).
+   */
+  fuel: () => [...tripKeys.all, 'fuel'] as const,
+  fuelMatches: (search: unknown) => [...tripKeys.fuel(), 'matches', search] as const,
+  fuelStaged: () => [...tripKeys.fuel(), 'staged'] as const,
+
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,
 
