@@ -321,7 +321,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       await turn(tripId, second, driverB);
       const cost = await officeTripFuel(tripId);
       const before = await rowOf('trip_costs', cost);
-      const command = (vehicleId: string) => ({ vehicleId, businessDate: DAY, liters: '26.00', facts: {}, evidence: [] });
+      const command = (vehicleId: string) => ({ vehicleId, businessDate: DAY, facts: { liters: '26.00' }, evidence: [] });
 
       expect((await refusal(() => fuel.recordOnTripCost(tripId, cost, command(stranger), office)))?.details).toEqual({
         vehicleId: 'NOT_ON_TRIP',
@@ -384,21 +384,21 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       expect(view.vehicle?.id).toBe(vehicle);
     });
 
-    it('needs the lorry and the day the first time; fixes them, and the readings, after', async () => {
-      const vehicle = await lorry();
+    it('needs the lorry and the day the first time, and fixes them after', async () => {
+      const [vehicle, other] = [await lorry(), await lorry()];
       const tripId = await trip(vehicle);
       const cost = await officeTripFuel(tripId);
-      expect((await refusal(() => fuel.recordOnTripCost(tripId, cost, { facts: { vendorName: 'X' }, evidence: [] }, office)))?.details).toEqual({
+      const record = (command: object) => fuel.recordOnTripCost(tripId, cost, { facts: {}, evidence: [], ...command }, office);
+      expect((await refusal(() => record({ facts: { vendorName: 'X' } })))?.details).toEqual({
         vehicleId: 'REQUIRED',
         businessDate: 'REQUIRED',
       });
-      await fuel.recordOnTripCost(tripId, cost, { vehicleId: vehicle, businessDate: DAY, liters: '26', facts: {}, evidence: [] }, office);
+      await record({ vehicleId: vehicle, businessDate: DAY });
       // Re-sending the same is fine; changing is not — in the service and in the database.
-      await fuel.recordOnTripCost(tripId, cost, { vehicleId: vehicle, liters: '26.00', facts: { vendorName: 'X' }, evidence: [] }, office);
-      expect((await refusal(() => fuel.recordOnTripCost(tripId, cost, { liters: '30', facts: {}, evidence: [] }, office)))?.details).toEqual({
-        liters: 'FIXED',
-      });
-      expect(await codeOf(() => sql(`UPDATE fuel_transactions SET liters = 30`))).toBe(RESTRICT);
+      await record({ vehicleId: vehicle, businessDate: DAY, facts: { vendorName: 'X' } });
+      expect((await refusal(() => record({ vehicleId: other })))?.details).toEqual({ vehicleId: 'FIXED' });
+      expect((await refusal(() => record({ businessDate: '2026-10-05' })))?.details).toEqual({ businessDate: 'FIXED' });
+      expect(await codeOf(() => sql(`UPDATE fuel_transactions SET business_date = '2026-10-05'`))).toBe(RESTRICT);
     });
 
     it('wraps only a live fuel line', async () => {
@@ -441,6 +441,167 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       const view = await fuel.viewOfTripCost(tripId, cost);
       expect(view.amount).toBe('510000.00');
       expect(view.flags.sort()).toEqual(['editedAfterEvidence', 'noLongerFuel']);
+    });
+  });
+
+  describe('★ a trip fill’s readings — added once each, never rewritten, never cleared', () => {
+    let vehicle: string;
+    let tripId: string;
+    let cost: string;
+    const record = (facts: object, by = office) =>
+      fuel.recordOnTripCost(tripId, cost, { vehicleId: vehicle, businessDate: DAY, facts, evidence: [] }, by);
+    const readingLog = () =>
+      sql<{ field: string; value: string; recorded_by: string; recorded_at: Date }>(
+        `SELECT field, value, recorded_by, recorded_at FROM fuel_transaction_enrichments
+          WHERE field IN ('liters', 'odometer_km') ORDER BY field`,
+      );
+    const stored = () =>
+      one<{ liters: string | null; odometer_km: number | null }>(`SELECT liters::text AS liters, odometer_km FROM fuel_transactions`);
+
+    beforeEach(async () => {
+      vehicle = await lorry();
+      tripId = await trip(vehicle);
+      cost = await officeTripFuel(tripId);
+    });
+
+    it('★ opens without readings and takes them later — each logged once, by whoever supplied it', async () => {
+      expect(await record({ vendorName: 'X' })).toMatchObject({ liters: null, odometerKm: null, unitPrice: null });
+      await record({ liters: '26' }, otherOffice);
+      expect(await record({ odometerKm: 182345 })).toMatchObject({ liters: '26.00', odometerKm: 182345, unitPrice: '29710.00' });
+      const log = await readingLog();
+      expect(log.map(({ field, value, recorded_by }) => ({ field, value, recorded_by }))).toEqual([
+        { field: 'liters', value: '26.00', recorded_by: otherOffice },
+        { field: 'odometer_km', value: '182345', recorded_by: office },
+      ]);
+      expect(log.every((row) => row.recorded_at instanceof Date)).toBe(true);
+    });
+
+    it('attributes the readings an opener brings to the opener', async () => {
+      await record({ liters: '26.00', odometerKm: 1200 }, otherOffice);
+      expect((await readingLog()).map((row) => row.recorded_by)).toEqual([otherOffice, otherOffice]);
+    });
+
+    it('★ replays the same reading — however it is written — with no new audit row', async () => {
+      await record({ liters: '26', odometerKm: 1200 });
+      await record({ liters: '26.00', odometerKm: 1200 });
+      await record({ liters: '026.0' }, otherOffice);
+      expect(await readingLog()).toHaveLength(2);
+    });
+
+    it('★ refuses a different liters or odometer — the stored value stands', async () => {
+      await record({ liters: '26.00', odometerKm: 1200 });
+      expect((await refusal(() => record({ liters: '27.00' })))?.details).toEqual({ liters: 'FACT_ALREADY_SET' });
+      expect((await refusal(() => record({ odometerKm: 1201 })))?.details).toEqual({ odometerKm: 'FACT_ALREADY_SET' });
+      expect(await stored()).toEqual({ liters: '26.00', odometer_km: 1200 });
+      expect(await readingLog()).toHaveLength(2);
+    });
+
+    it('★ two writers filling an empty reading with the same value both succeed — one audit row each field', async () => {
+      await record({ vendorName: 'X' });
+      await Promise.all([record({ liters: '26.00', odometerKm: 9 }, office), record({ liters: '26', odometerKm: 9 }, otherOffice)]);
+      expect(await stored()).toEqual({ liters: '26.00', odometer_km: 9 });
+      expect(await readingLog()).toHaveLength(2);
+    });
+
+    it('★ two writers racing different values leave exactly one value, and the audit names the one who won', async () => {
+      await record({ vendorName: 'X' });
+      const outcomes = await Promise.allSettled([record({ liters: '26.00' }, office), record({ liters: '27.00' }, otherOffice)]);
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+      const lost = outcomes.find((outcome) => outcome.status === 'rejected') as PromiseRejectedResult;
+      expect((lost.reason as { details?: unknown }).details).toEqual({ liters: 'FACT_ALREADY_SET' });
+      const { liters } = await stored();
+      const log = await readingLog();
+      expect(log).toHaveLength(1);
+      expect(log[0]).toMatchObject({ field: 'liters', value: liters, recorded_by: liters === '26.00' ? office : otherOffice });
+    });
+
+    /** A competing writer, held open by hand: it holds the trip line and has filled the reading, uncommitted. */
+    const holdLiters = async (liters: string, by: string) => {
+      const held = await pool.connect();
+      await held.query('BEGIN');
+      await held.query(`SELECT 1 FROM trip_costs WHERE id = $1 FOR NO KEY UPDATE`, [cost]);
+      const filled = await held.query<{ id: string }>(
+        `UPDATE fuel_transactions SET liters = $1 WHERE trip_cost_id = $2 RETURNING id`,
+        [liters, cost],
+      );
+      await held.query(
+        `INSERT INTO fuel_transaction_enrichments (fuel_transaction_id, field, value, recorded_by) VALUES ($1, 'liters', $2, $3)`,
+        [filled.rows[0]?.id, liters, by],
+      );
+      return held;
+    };
+    const stillWaiting = async (work: Promise<unknown>) => {
+      let settled = false;
+      work.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return !settled;
+    };
+
+    it('★ a writer arriving mid-fill waits, then replays the same reading — the first writer stays the audited one', async () => {
+      await record({ vendorName: 'X' });
+      const held = await holdLiters('26.00', otherOffice);
+      const second = record({ liters: '26' }, office);
+      expect(await stillWaiting(second)).toBe(true);
+      await held.query('COMMIT');
+      held.release();
+      await expect(second).resolves.toMatchObject({ liters: '26.00' });
+      expect((await readingLog()).map((row) => row.recorded_by)).toEqual([otherOffice]);
+    });
+
+    it('★ a writer arriving mid-fill with a different reading waits, then is refused — one value, one audit row', async () => {
+      await record({ vendorName: 'X' });
+      const held = await holdLiters('26.00', otherOffice);
+      const second = record({ liters: '27.00' }, office);
+      expect(await stillWaiting(second)).toBe(true);
+      await held.query('COMMIT');
+      held.release();
+      expect((await refusal(() => second))?.details).toEqual({ liters: 'FACT_ALREADY_SET' });
+      expect(await stored()).toEqual({ liters: '26.00', odometer_km: null });
+      expect((await readingLog()).map((row) => row.recorded_by)).toEqual([otherOffice]);
+    });
+
+    it('★ refuses readings on a lorry-ledger fill — the vehicle cost owns them', async () => {
+      const fill = await portalFill(vehicle);
+      expect(
+        (await refusal(() => fuel.recordOnVehicleCost(vehicle, fill, { facts: { liters: '26' }, evidence: [] }, office)))?.details,
+      ).toEqual({ liters: 'ON_THE_COST' });
+    });
+
+    describe('the database, with no service in front', () => {
+      it('★ takes a reading into an empty trip fill, and never into a vehicle-backed one', async () => {
+        await record({ vendorName: 'X' });
+        expect(
+          await codeOf(() => sql(`UPDATE fuel_transactions SET liters = 26, odometer_km = 1200 WHERE trip_cost_id = $1`, [cost])),
+        ).toBeUndefined();
+        const fill = await portalFill(vehicle);
+        await fuel.recordOnVehicleCost(vehicle, fill, { facts: { vendorName: 'X' }, evidence: [] }, office);
+        expect(await codeOf(() => sql(`UPDATE fuel_transactions SET liters = 26 WHERE vehicle_cost_id = $1`, [fill]))).toBe(CHECK);
+        expect(await codeOf(() => sql(`UPDATE fuel_transactions SET odometer_km = 1 WHERE vehicle_cost_id = $1`, [fill]))).toBe(CHECK);
+      });
+
+      it('★ refuses an overwritten or a cleared reading', async () => {
+        await record({ liters: '26.00', odometerKm: 1200 });
+        for (const change of ['liters = 27', 'liters = NULL', 'odometer_km = 1201', 'odometer_km = NULL']) {
+          expect(await codeOf(() => sql(`UPDATE fuel_transactions SET ${change}`))).toBe(RESTRICT);
+        }
+        expect(await stored()).toEqual({ liters: '26.00', odometer_km: 1200 });
+      });
+
+      it('★ keeps a void its own act — voiding and enriching in one statement is refused', async () => {
+        await record({ vendorName: 'X' });
+        const voidWith = (extra: string) =>
+          codeOf(() => sql(`UPDATE fuel_transactions SET voided_at = now(), voided_by = $1, void_reason = 'nhầm'${extra}`, [office]));
+        expect(await voidWith(', liters = 26')).toBe(RESTRICT);
+        expect(await voidWith(', odometer_km = 1')).toBe(RESTRICT);
+        expect(await voidWith(", document_number = 'A1'")).toBe(RESTRICT);
+        expect(await voidWith('')).toBeUndefined();
+        // Voided once, it takes nothing more — not a reading, not a second void.
+        expect(await codeOf(() => sql(`UPDATE fuel_transactions SET liters = 26`))).toBe(RESTRICT);
+        expect(await voidWith('')).toBe(RESTRICT);
+      });
     });
   });
 

@@ -412,8 +412,10 @@ nhiên liệu cũ (CHECK một-trong-hai, unique "một fill sống / dòng ti�
 * **Sở hữu từng trường:** tiền luôn của dòng gốc; xe + ngày của `vehicle_costs` (bản sao bị FK ghim)
   hoặc của fill khi gốc là `trip_costs`; lít/odo của `vehicle_costs` hoặc của fill (CHECK); giờ, tài
   xế, cây xăng, MST, ký hiệu, số chứng từ — của fill.
-* **Bổ sung từng trường, chỉ thêm:** NULL → giá trị được; cùng giá trị = replay; khác giá trị → 422
-  `FACT_ALREADY_SET` (trigger cũng chặn). `fuel_transaction_enrichments` ghi ai thêm trường nào, khi nào.
+* **Bổ sung từng trường, chỉ thêm** — thông tin và lít/odo của fill dòng chuyến: NULL → giá trị được;
+  cùng giá trị = replay; khác giá trị hoặc xoá → 422 `FACT_ALREADY_SET` (trigger cũng chặn).
+  `fuel_transaction_enrichments` ghi ai thêm trường nào, khi nào — cả giá trị người mở fill gửi kèm.
+  Void là một hành động riêng: câu lệnh void không được đổi trường nào khác.
 * **Xe của dòng chuyến là lựa chọn tường minh của văn phòng** — không suy từ chuyến. Phải là xe dòng ghi
   (nếu có), hoặc một xe chuyến có ghi; chuyến không ghi xe nào → nhận và gắn cờ. Một dòng chuyến chỉ
   thuộc **một** xe. Tài xế chỉ là người vận hành/báo lần đổ đó — không có luật "xe → tài xế cố định".

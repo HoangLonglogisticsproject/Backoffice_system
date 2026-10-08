@@ -1,3 +1,5 @@
+import { isRecordableLiters } from './vehicle-fuel';
+
 /**
  * ★ ONE REAL REFUELLING EVENT, FOR ONE LORRY (0037) — and not a ledger. Its
  * money is the backing row's: a lorry's `vehicle_costs` line, or a trip's
@@ -8,7 +10,11 @@
  * has no permanent driver, and nothing here may imply one.
  */
 
-/** The descriptive facts a fill may gain, each at most once (NULL → value). */
+/**
+ * What a fill may gain, each at most once (NULL → value): its descriptive
+ * facts, and — for a TRIP-backed fill only — its readings. A vehicle-backed
+ * fill's liters and odometer are the vehicle cost's, never stored twice.
+ */
 export interface FuelFacts {
   occurredAt: Date | null;
   driverUserId: string | null;
@@ -16,6 +22,8 @@ export interface FuelFacts {
   vendorTaxCode: string | null;
   documentSeries: string | null;
   documentNumber: string | null;
+  liters: string | null;
+  odometerKm: number | null;
 }
 
 export type FuelFactKey = keyof FuelFacts;
@@ -30,7 +38,12 @@ export const FUEL_FACT_KEYS: readonly FuelFactKey[] = [
   'vendorTaxCode',
   'documentSeries',
   'documentNumber',
+  'liters',
+  'odometerKm',
 ];
+
+/** The readings a vehicle cost already owns — refused on a vehicle-backed fill. */
+export const READING_KEYS: readonly FuelFactKey[] = ['liters', 'odometerKm'];
 
 /** The column each fact lives in — also the `field` of its enrichment row. */
 export const FUEL_FACT_COLUMN: Readonly<Record<FuelFactKey, string>> = {
@@ -40,6 +53,8 @@ export const FUEL_FACT_COLUMN: Readonly<Record<FuelFactKey, string>> = {
   vendorTaxCode: 'vendor_tax_code',
   documentSeries: 'document_series',
   documentNumber: 'document_number',
+  liters: 'liters',
+  odometerKm: 'odometer_km',
 };
 
 export const NO_FACTS: FuelFacts = {
@@ -49,6 +64,8 @@ export const NO_FACTS: FuelFacts = {
   vendorTaxCode: null,
   documentSeries: null,
   documentNumber: null,
+  liters: null,
+  odometerKm: null,
 };
 
 /** `details` codes on the 422s these rules earn. */
@@ -64,7 +81,8 @@ const NUMBER = DOCUMENT_CODE(30);
 /**
  * ★ ONE SPELLING PER FACT, so a replay of what was typed yesterday is the same
  * value and not a "conflict". Station names keep their letters and lose stray
- * whitespace; codes lose spaces and dots and are upper-cased. A value that is
+ * whitespace; codes lose spaces and dots and are upper-cased; liters are
+ * written as `NUMERIC(10,2)` prints them ("26" → "26.00"). A value that is
  * still not the shape the column holds is refused, by field.
  */
 export function normalizeFacts(input: FuelFactsInput): { facts: FuelFactsInput; invalid: FuelFactKey[] } {
@@ -89,10 +107,18 @@ export function normalizeFacts(input: FuelFactsInput): { facts: FuelFactsInput; 
     facts.documentNumber = code(input.documentNumber);
     if (!NUMBER.test(facts.documentNumber)) invalid.push('documentNumber');
   }
+  if (input.liters !== undefined) {
+    const [whole = '', fraction = ''] = input.liters.trim().split('.');
+    facts.liters = `${Number(whole)}.${fraction.padEnd(2, '0')}`;
+    if (!isRecordableLiters(input.liters.trim())) invalid.push('liters');
+  }
+  if (input.odometerKm !== undefined && !(Number.isInteger(input.odometerKm) && input.odometerKm >= 0)) {
+    invalid.push('odometerKm');
+  }
   return { facts, invalid };
 }
 
-const same = (stored: Date | string, incoming: Date | string): boolean =>
+const same = (stored: Date | string | number, incoming: Date | string | number): boolean =>
   stored instanceof Date && incoming instanceof Date
     ? stored.getTime() === incoming.getTime()
     : stored === incoming;
@@ -124,6 +150,7 @@ export function mergeFacts(
 }
 
 /** A fact as its enrichment row records it. */
-export const factText = (value: Date | string): string => (value instanceof Date ? value.toISOString() : value);
+export const factText = (value: Date | string | number): string =>
+  value instanceof Date ? value.toISOString() : String(value);
 
 export const hasFacts = (facts: FuelFactsInput): boolean => FUEL_FACT_KEYS.some((key) => facts[key] !== undefined);

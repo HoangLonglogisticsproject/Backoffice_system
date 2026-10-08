@@ -141,12 +141,12 @@ describe('fuel-transaction HTTP security', () => {
     );
   });
 
-  it('gives the trip route its lorry, day and readings', async () => {
+  it('gives the trip route its lorry and day — and its readings as facts, added once each', async () => {
     await authed('post', tripRoute).send({ vehicleId: VEHICLE, businessDate: '2026-10-06', liters: '26.00', odometerKm: 1200 }).expect(201);
     expect(fuel.recordOnTripCost).toHaveBeenCalledWith(
       TRIP,
       COST,
-      { facts: {}, evidence: [], vehicleId: VEHICLE, businessDate: '2026-10-06', liters: '26.00', odometerKm: 1200 },
+      { facts: { liters: '26.00', odometerKm: 1200 }, evidence: [], vehicleId: VEHICLE, businessDate: '2026-10-06' },
       ACTOR,
     );
   });

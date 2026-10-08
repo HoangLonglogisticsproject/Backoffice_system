@@ -57,11 +57,23 @@ describe('0037_fuel_transaction_foundation.sql', () => {
     expect(code()).toContain("CHECK (storage_key = 'fuel-evidence/' || sha256)");
   });
 
-  it('keeps each fact append-only in the trigger, and logs each once', () => {
-    for (const fact of ['occurred_at', 'driver_user_id', 'vendor_name', 'vendor_tax_code', 'document_series', 'document_number']) {
-      expect(code()).toContain(`(OLD.${fact} IS NOT NULL AND NEW.${fact} IS DISTINCT FROM OLD.${fact})`);
+  it('★ keeps each fact and each trip reading append-only in the trigger — never rewritten, never cleared — and logs each once', () => {
+    const fields = ['liters', 'odometer_km', 'occurred_at', 'driver_user_id', 'vendor_name', 'vendor_tax_code', 'document_series', 'document_number'];
+    for (const field of fields) {
+      expect(code()).toContain(`(OLD.${field} IS NOT NULL AND NEW.${field} IS DISTINCT FROM OLD.${field})`);
+      expect(code()).toMatch(new RegExp(String.raw`field IN \([^)]*'${field}'`));
     }
+    // Readings are no longer frozen at creation: only the identity is.
+    expect(code()).toContain(
+      'ROW(NEW.id, NEW.vehicle_id, NEW.business_date, NEW.vehicle_cost_id, NEW.trip_cost_id, NEW.created_by, NEW.created_at)',
+    );
     expect(code()).toContain('ON fuel_transaction_enrichments (fuel_transaction_id, field)');
+  });
+
+  it('★ makes a void its own act — the voiding statement may change nothing else', () => {
+    expect(code()).toMatch(
+      /IF NEW\.voided_at IS NOT NULL AND ROW\(NEW\.liters, NEW\.odometer_km, NEW\.occurred_at, NEW\.driver_user_id, NEW\.vendor_name, NEW\.vendor_tax_code, NEW\.document_series, NEW\.document_number\) IS DISTINCT FROM/,
+    );
   });
 
   it('★ never ties a lorry to a fixed driver — the driver rule reads the cost’s own provenance, not the lorry', () => {

@@ -56,9 +56,10 @@ export const recordOnTripCostSchema = z
 export type RecordOnVehicleCostBody = z.infer<typeof recordOnVehicleCostSchema>;
 export type RecordOnTripCostBody = z.infer<typeof recordOnTripCostSchema>;
 
+/** A trip fill's readings are facts — added once each — so they travel with the facts. */
 export const toTripCommand = (body: RecordOnTripCostBody): RecordTripFuelCommand => {
-  const { evidence: images, vehicleId, businessDate, liters, odometerKm, ...given } = body;
-  return { facts: given, evidence: images, vehicleId, businessDate, liters, odometerKm };
+  const { evidence: images, vehicleId, businessDate, ...facts } = body;
+  return { facts, evidence: images, vehicleId, businessDate };
 };
 
 export const retireSchema = z.object({ reason: z.string().trim().min(1).max(500) });

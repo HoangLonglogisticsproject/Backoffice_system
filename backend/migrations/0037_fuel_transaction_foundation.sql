@@ -24,8 +24,9 @@
 --                     or, trip-backed, HERE — chosen by the office
 --   liters, odometer  the vehicle cost, or HERE when trip-backed (CHECK)
 --   time, driver, station, tax code, document series and number   HERE
--- Each descriptive fact may be ADDED once (NULL → value) and is then fixed;
--- `fuel_transaction_enrichments` says who added which, and when.
+-- Each fact — and a trip-backed fill's readings — may be ADDED once
+-- (NULL → value), never rewritten, never cleared; `fuel_transaction_enrichments`
+-- says who added which, and when. A void is an act of its own.
 --
 -- Four tables, in the runner's single transaction. Idempotent throughout.
 --
@@ -99,8 +100,9 @@ CREATE INDEX IF NOT EXISTS idx_fuel_transaction_document
   WHERE voided_at IS NULL AND document_number IS NOT NULL;
 
 -- What was written stays written: the lorry, the day, the backing and the
--- readings never change; each descriptive fact is added at most once; a void
--- happens once and freezes the row.
+-- author never change; each fact and each trip-backed reading is added at
+-- most once and never cleared (a vehicle-backed fill holds no readings — the
+-- CHECK above); a void happens once, changes nothing else, and freezes the row.
 CREATE OR REPLACE FUNCTION fuel_transactions_guard_update() RETURNS trigger AS $$
 BEGIN
   IF OLD.voided_at IS NOT NULL THEN
@@ -108,22 +110,37 @@ BEGIN
       USING ERRCODE = 'restrict_violation';
   END IF;
   IF ROW(NEW.id, NEW.vehicle_id, NEW.business_date, NEW.vehicle_cost_id, NEW.trip_cost_id,
-         NEW.liters, NEW.odometer_km, NEW.created_by, NEW.created_at)
+         NEW.created_by, NEW.created_at)
      IS DISTINCT FROM
      ROW(OLD.id, OLD.vehicle_id, OLD.business_date, OLD.vehicle_cost_id, OLD.trip_cost_id,
-         OLD.liters, OLD.odometer_km, OLD.created_by, OLD.created_at)
+         OLD.created_by, OLD.created_at)
   THEN
-    RAISE EXCEPTION 'fuel_transactions %: the lorry, day, backing and readings are fixed', OLD.id
+    RAISE EXCEPTION 'fuel_transactions %: the lorry, day, backing and author are fixed', OLD.id
       USING ERRCODE = 'restrict_violation';
   END IF;
-  IF (OLD.occurred_at     IS NOT NULL AND NEW.occurred_at     IS DISTINCT FROM OLD.occurred_at)
+  -- NULL → value once; a stored value is never rewritten and never cleared.
+  IF (OLD.liters          IS NOT NULL AND NEW.liters          IS DISTINCT FROM OLD.liters)
+  OR (OLD.odometer_km     IS NOT NULL AND NEW.odometer_km     IS DISTINCT FROM OLD.odometer_km)
+  OR (OLD.occurred_at     IS NOT NULL AND NEW.occurred_at     IS DISTINCT FROM OLD.occurred_at)
   OR (OLD.driver_user_id  IS NOT NULL AND NEW.driver_user_id  IS DISTINCT FROM OLD.driver_user_id)
   OR (OLD.vendor_name     IS NOT NULL AND NEW.vendor_name     IS DISTINCT FROM OLD.vendor_name)
   OR (OLD.vendor_tax_code IS NOT NULL AND NEW.vendor_tax_code IS DISTINCT FROM OLD.vendor_tax_code)
   OR (OLD.document_series IS NOT NULL AND NEW.document_series IS DISTINCT FROM OLD.document_series)
   OR (OLD.document_number IS NOT NULL AND NEW.document_number IS DISTINCT FROM OLD.document_number)
   THEN
-    RAISE EXCEPTION 'fuel_transactions %: a recorded fact is never overwritten', OLD.id
+    RAISE EXCEPTION 'fuel_transactions %: a recorded fact or reading is never overwritten or cleared', OLD.id
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  -- A void and an enrichment are two acts, each audited on its own: the
+  -- statement that voids may add the void columns and nothing else.
+  IF NEW.voided_at IS NOT NULL
+     AND ROW(NEW.liters, NEW.odometer_km, NEW.occurred_at, NEW.driver_user_id, NEW.vendor_name,
+             NEW.vendor_tax_code, NEW.document_series, NEW.document_number)
+         IS DISTINCT FROM
+         ROW(OLD.liters, OLD.odometer_km, OLD.occurred_at, OLD.driver_user_id, OLD.vendor_name,
+             OLD.vendor_tax_code, OLD.document_series, OLD.document_number)
+  THEN
+    RAISE EXCEPTION 'fuel_transactions %: a void changes nothing but the void columns', OLD.id
       USING ERRCODE = 'restrict_violation';
   END IF;
   RETURN NEW;
@@ -212,19 +229,21 @@ CREATE TRIGGER fuel_transactions_deny_delete
   BEFORE DELETE ON fuel_transactions
   FOR EACH ROW EXECUTE FUNCTION deny_delete();
 
--- ------------------------------------------ 2. who added which fact, when ----
+-- ------------------------ 2. who added which fact or reading, and when ----
 
 CREATE TABLE IF NOT EXISTS fuel_transaction_enrichments (
   id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   fuel_transaction_id UUID        NOT NULL REFERENCES fuel_transactions(id),
   field               TEXT        NOT NULL CHECK (field IN ('occurred_at', 'driver_user_id', 'vendor_name',
-                                                         'vendor_tax_code', 'document_series', 'document_number')),
+                                                         'vendor_tax_code', 'document_series', 'document_number',
+                                                         'liters', 'odometer_km')),
   value               TEXT        NOT NULL CHECK (length(value) > 0),
   recorded_by         UUID        NOT NULL REFERENCES users(id),
   recorded_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- A fact is added once, so it is logged once.
+-- A fact or reading is added once, so it is logged once — the database's own
+-- answer to two writers racing to fill the same field.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fuel_transaction_enrichment_field
   ON fuel_transaction_enrichments (fuel_transaction_id, field);
 

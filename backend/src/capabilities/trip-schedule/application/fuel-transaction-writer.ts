@@ -42,8 +42,11 @@ export class FuelTransactionWriter {
   }
 
   /**
-   * ★ FIELD BY FIELD, APPEND-ONLY: an empty fact is filled, the same value is
-   * a no-op, a different value is refused by name — never overwritten.
+   * ★ FIELD BY FIELD, APPEND-ONLY — facts and a trip fill's readings alike: an
+   * empty field is filled, the same value is a no-op, a different value is
+   * refused by name — never overwritten, never cleared. Each addition is
+   * logged with the actor and the time, so an opener's first readings are
+   * attributed exactly as a later accountant's are.
    */
   async enrich(stored: StoredFuelTransaction, facts: FuelFactsInput, by: string, tx: DatabaseQuery): Promise<void> {
     const { additions, conflicts } = mergeFacts(stored, facts);
@@ -125,15 +128,16 @@ export function normalized(input: FuelFactsInput): FuelFactsInput {
 }
 
 const fixed = (field: string) =>
-  new ValidationError('The lorry, the day and the readings of a fuel transaction are fixed once recorded.', { [field]: 'FIXED' });
+  new ValidationError('The lorry and the day of a fuel transaction are fixed once recorded.', { [field]: 'FIXED' });
 
-/** Re-sending a trip fill's lorry, day or readings is fine; changing them is not. */
+/**
+ * Re-sending a trip fill's lorry or day is fine; changing them is not. Its
+ * readings are facts like the others — added once, never rewritten (`enrich`).
+ */
 export function refuseChangedFixedFields(
   live: StoredFuelTransaction,
-  command: { vehicleId?: string; businessDate?: string; liters?: string; odometerKm?: number },
+  command: { vehicleId?: string; businessDate?: string },
 ): void {
   if (command.vehicleId !== undefined && command.vehicleId !== live.vehicleId) throw fixed('vehicleId');
   if (command.businessDate !== undefined && command.businessDate !== live.businessDate) throw fixed('businessDate');
-  if (command.liters !== undefined && Number(command.liters) !== Number(live.liters)) throw fixed('liters');
-  if (command.odometerKm !== undefined && command.odometerKm !== live.odometerKm) throw fixed('odometerKm');
 }

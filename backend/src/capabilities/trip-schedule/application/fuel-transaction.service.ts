@@ -3,7 +3,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../../../common/e
 import { businessToday } from '../../../common/pagination/date-range-page-query.dto';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { EvidenceAttachment } from '../domain/fuel-evidence';
-import type { FuelFactsInput } from '../domain/fuel-transaction';
+import { READING_KEYS, type FuelFactsInput } from '../domain/fuel-transaction';
 import type { FuelTransactionView } from '../domain/fuel-transaction-view';
 import { FuelEvidenceRepository, publicEvidence } from '../persistence/fuel-evidence.repository';
 import { FuelTransactionRepository, type StoredFuelTransaction } from '../persistence/fuel-transaction.repository';
@@ -15,12 +15,13 @@ export interface RecordFuelCommand {
   evidence: readonly EvidenceAttachment[];
 }
 
-/** A trip line has no lorry or readings of its own — the office supplies them, once. */
+/**
+ * A trip line has no lorry of its own — the office names it, and the day, the
+ * first time. Its readings travel in `facts`: added once each, like the rest.
+ */
 export interface RecordTripFuelCommand extends RecordFuelCommand {
   vehicleId?: string;
   businessDate?: string;
-  liters?: string;
-  odometerKm?: number;
 }
 
 const notLive = () => new ConflictError('Only a live fuel cost takes a fuel transaction.');
@@ -57,6 +58,9 @@ export class FuelTransactionService {
 
   async recordOnVehicleCost(vehicleId: string, costId: string, command: RecordFuelCommand, by: string): Promise<FuelTransactionView> {
     const facts = normalized(command.facts);
+    // A lorry cost already holds its liters and odometer; a second copy could disagree.
+    const readings = READING_KEYS.filter((key) => facts[key] !== undefined).map((key) => [key, 'ON_THE_COST']);
+    if (readings.length > 0) throw new ValidationError('A lorry cost holds its own readings.', Object.fromEntries(readings));
     await this.db.transaction(async (tx) => {
       const cost = await this.transactions.lockVehicleCost(vehicleId, costId, tx);
       if (!cost) throw new NotFoundError('Vehicle cost not found.');
@@ -64,7 +68,7 @@ export class FuelTransactionService {
       const stored =
         (await this.transactions.lockLive('vehicle_cost_id', cost.id, tx)) ??
         (await this.writer.open(
-          { vehicleId: cost.vehicleId, businessDate: cost.businessDate, vehicleCostId: cost.id, tripCostId: null, liters: null, odometerKm: null },
+          { vehicleId: cost.vehicleId, businessDate: cost.businessDate, vehicleCostId: cost.id, tripCostId: null },
           cost.source === 'driver_portal' ? cost.createdBy : null,
           by,
           tx,
@@ -130,8 +134,9 @@ export class FuelTransactionService {
         throw new ValidationError('That lorry is not on the trip.', { vehicleId: 'NOT_ON_TRIP' });
       }
     }
+    // Readings come in `complete`, as logged facts: the opener's carry a who-and-when too.
     return this.writer.open(
-      { vehicleId, businessDate, vehicleCostId: null, tripCostId: cost.id, liters: command.liters ?? null, odometerKm: command.odometerKm ?? null },
+      { vehicleId, businessDate, vehicleCostId: null, tripCostId: cost.id },
       cost.provenanceDriver,
       by,
       tx,

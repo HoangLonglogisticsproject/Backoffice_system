@@ -28,9 +28,12 @@ approved ones are immutable.
    pinned by a composite FK to `vehicle_costs (id, vehicle_id, business_date)`), or the fill for a trip
    line. Liters and odometer: the vehicle cost, or the fill for a trip line (a CHECK forbids both). Time,
    driver, station, tax code, document series and number: the fill.
-3. **Facts are append-only, field by field.** NULL → value is allowed; the same value is a replay; a
-   different value is refused (trigger and service). `fuel_transaction_enrichments` records who added
-   which fact, once each. A wrong value is a SuperAdmin correction (void and recreate), never an overwrite.
+3. **Facts are append-only, field by field — and so are a trip-backed fill's readings.** NULL → value
+   is allowed; the same value is a replay; a different value or a clear is refused (trigger and service),
+   so liters and odometer may arrive after the fill was opened. `fuel_transaction_enrichments` records
+   who added which fact or reading, once each — the opener's first values included. A wrong value is a
+   SuperAdmin correction (void and recreate), never an overwrite. A void is an act of its own: the
+   statement that voids may change nothing else.
 4. **A trip line's lorry is the office's explicit choice**, never inferred. It must equal the line's own
    snapshot, else be a lorry the trip records; a trip recording none takes the choice (flagged). One line
    belongs to one lorry. **A lorry has no permanent driver** — `driver_user_id` is only the driver known

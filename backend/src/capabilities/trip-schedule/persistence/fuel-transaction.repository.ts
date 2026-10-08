@@ -36,14 +36,13 @@ export interface TripBacking {
   voided: boolean;
 }
 
+/** A fill as stored: its fixed identity, and its facts and readings (`FuelFacts`). */
 export type StoredFuelTransaction = FuelFacts & {
   id: string;
   vehicleId: string;
   businessDate: string;
   vehicleCostId: string | null;
   tripCostId: string | null;
-  liters: string | null;
-  odometerKm: number | null;
 };
 
 /** Aliased to the domain shape, so a row needs no mapper. */
@@ -142,7 +141,7 @@ export class FuelTransactionRepository {
     }
   }
 
-  /** Adds facts to empty columns — the column names come from a fixed map, never from input. */
+  /** Adds facts and readings to empty columns — names from a fixed map, never from input. */
   async addFacts(id: string, additions: FuelFactsInput, tx: DatabaseQuery): Promise<void> {
     const keys = FUEL_FACT_KEYS.filter((key) => additions[key] !== undefined);
     if (keys.length === 0) return;
@@ -150,14 +149,14 @@ export class FuelTransactionRepository {
     await tx.query(`UPDATE fuel_transactions SET ${sets} WHERE id = $1`, [id, ...keys.map((key) => additions[key])]);
   }
 
-  /** Who added which fact, and when — one row per fact, ever. */
+  /** Who added which fact or reading, and when — one row per field, ever. */
   async logFacts(id: string, facts: FuelFactsInput, by: string, tx: DatabaseQuery): Promise<void> {
     const keys = FUEL_FACT_KEYS.filter((key) => facts[key] !== undefined);
     if (keys.length === 0) return;
     await tx.query(
       `INSERT INTO fuel_transaction_enrichments (fuel_transaction_id, field, value, recorded_by)
        SELECT $1, field, value, $4 FROM unnest($2::text[], $3::text[]) AS t(field, value)`,
-      [id, keys.map((key) => FUEL_FACT_COLUMN[key]), keys.map((key) => factText(facts[key] as Date | string)), by],
+      [id, keys.map((key) => FUEL_FACT_COLUMN[key]), keys.map((key) => factText(facts[key] as Date | string | number)), by],
     );
   }
 }

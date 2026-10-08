@@ -41,6 +41,26 @@ describe('mergeFacts — field by field, append-only', () => {
   });
 });
 
+describe('a trip fill’s readings — facts like the others', () => {
+  it('★ fills an empty reading, replays the same one, and refuses a different one', () => {
+    expect(mergeFacts(NO_FACTS, { liters: '26.00', odometerKm: 182345 })).toEqual({
+      additions: { liters: '26.00', odometerKm: 182345 },
+      conflicts: [],
+    });
+    const stored: FuelFacts = { ...NO_FACTS, liters: '26.00', odometerKm: 182345 };
+    expect(mergeFacts(stored, { liters: '26.00', odometerKm: 182345 })).toEqual({ additions: {}, conflicts: [] });
+    expect(mergeFacts(stored, { liters: '27.00', odometerKm: 182346 }).conflicts).toEqual(['liters', 'odometerKm']);
+  });
+
+  it('writes liters as the column prints them, so "26" sent again is "26.00" stored', () => {
+    expect(normalizeFacts({ liters: '26' }).facts.liters).toBe('26.00');
+    expect(normalizeFacts({ liters: '026.5' }).facts.liters).toBe('26.50');
+    expect(normalizeFacts({ liters: '0' }).invalid).toEqual(['liters']);
+    expect(normalizeFacts({ odometerKm: -1 }).invalid).toEqual(['odometerKm']);
+    expect(normalizeFacts({ odometerKm: 1.5 }).invalid).toEqual(['odometerKm']);
+  });
+});
+
 describe('normalizeFacts — one spelling per fact', () => {
   it('tidies whitespace in a station name and strips spaces and dots from codes', () => {
     expect(

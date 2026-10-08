@@ -1678,13 +1678,17 @@ Chưa có màn hình nào dùng (PR-2). Xem ADR-0008.
   Xe, ngày, lít, odo là **của dòng tiền**: gửi lên thì bị bỏ.
 * `GET|POST /trip-schedules/:tripId/costs/:costId/fuel-transaction` — fill trên dòng **chuyến** nhiên
   liệu. Thêm `vehicleId`, `businessDate`, `liters?`, `odometerKm?` — **bắt buộc xe + ngày lần đầu**,
-  sau đó cố định (gửi lại cùng giá trị được; khác → 422 `FIXED`). Xe là **lựa chọn tường minh**: phải là
+  sau đó cố định (gửi lại cùng giá trị được; khác → 422 `FIXED`). **Lít và odo là thông tin như các trường
+  khác:** mở fill khi chưa biết cũng được, bổ sung sau — một lần mỗi trường (dưới đây). Xe là **lựa chọn tường minh**: phải là
   xe dòng ghi (`NOT_THE_COSTS_LORRY`), hoặc một xe chuyến có ghi (`NOT_ON_TRIP`); chuyến không ghi xe nào
   → nhận, cờ `vehicleConfirmedOnlyByEvidence`. Một dòng chuyến chỉ thuộc **một** xe.
 * POST trả **201** `FuelTransactionView` sau khi ghi. Dòng tiền đã void / không phải nhiên liệu → 409.
-* **Thông tin bổ sung từng trường, chỉ thêm:** trường trống → nhận; cùng giá trị (sau chuẩn hoá khoảng
-  trắng, dấu chấm, hoa/thường) → replay; khác giá trị → 422 `details.<trường>: FACT_ALREADY_SET` — không
-  ghi đè; sửa giá trị sai là việc của SuperAdmin (PR sau). Sai dạng → `FACT_INVALID`. `occurredAt` phải
+* **Thông tin bổ sung từng trường, chỉ thêm** — cả lít/odo của fill trên dòng chuyến: trường trống →
+  nhận; cùng giá trị (sau chuẩn hoá khoảng trắng, dấu chấm, hoa/thường; lít "26" = "26.00") → replay, không
+  ghi audit lần nữa; khác giá trị → 422 `details.<trường>: FACT_ALREADY_SET` — không ghi đè, không xoá; sửa
+  giá trị sai là việc của SuperAdmin (PR sau). Sai dạng → `FACT_INVALID`. Mỗi trường được thêm — kể cả giá
+  trị người mở fill gửi kèm — ghi một dòng audit: ai, khi nào. Fill trên **sổ xe** không nhận lít/odo
+  (422 `ON_THE_COST` — số đó của `vehicle_costs`). `occurredAt` phải
   nằm trong ngày của fill (`NOT_ON_BUSINESS_DATE`), không ở tương lai; `driverUserId` phải là tài khoản tài
   xế (`NOT_A_DRIVER`) và là tài xế mà chính dòng tiền ghi nhận, nếu dòng có ghi.
 * Ảnh: chỉ ảnh **mình** stage (`NOT_STAGED`); cùng ảnh hai lần trên một fill → `ALREADY_ON_TRANSACTION`;
