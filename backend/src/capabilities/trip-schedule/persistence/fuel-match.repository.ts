@@ -116,12 +116,16 @@ export class FuelMatchRepository {
   /**
    * ★ ONE WRITER AT A TIME PER IMAGE AND PER DOCUMENT, until commit — so two
    * accountants putting one receipt on two fills cannot both miss each other.
-   * Taken in sorted order, after the backing row: no two writers wait in a circle.
+   * Taken in sorted order, after the backing row: no two writers wait in a
+   * circle. One statement: PostgreSQL evaluates the output list after ORDER BY.
    */
   async lockReceipt(keys: readonly string[], tx: DatabaseQuery): Promise<void> {
-    for (const key of [...new Set(keys)].sort()) {
-      await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`fuel-receipt:${key}`]);
-    }
+    const sorted = [...new Set(keys)].sort((a, b) => a.localeCompare(b)).map((key) => `fuel-receipt:${key}`);
+    await tx.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended(k, 0))
+         FROM unnest($1::text[]) WITH ORDINALITY AS t(k, n) ORDER BY n`,
+      [sorted],
+    );
   }
 
   async acknowledge(subject: string, acks: readonly Acknowledgement[], by: string, tx: DatabaseQuery): Promise<void> {

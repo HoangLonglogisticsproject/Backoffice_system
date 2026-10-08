@@ -80,13 +80,19 @@ export function FuelMatchPanel({ result, onAttach }: Readonly<{ result: FuelMatc
   const byLedger = (ledger: FuelLedger) => result.matches.filter((match) => match.backing.ledger === ledger);
   return (
     <div className="space-y-3">
-      <div role="status" className={result.outcome === 'none' ? 'rounded-lg bg-amber-50 p-3 text-sm text-amber-900' : 'rounded-lg bg-blue-50 p-3 text-sm text-blue-900'}>
-        <p className="font-medium">
+      <output
+        className={
+          result.outcome === 'none'
+            ? 'block rounded-lg bg-amber-50 p-3 text-sm text-amber-900'
+            : 'block rounded-lg bg-blue-50 p-3 text-sm text-blue-900'
+        }
+      >
+        <span className="block font-medium">
           {t(OUTCOME[result.outcome])}
           {result.outcome === 'ambiguous' ? ` (${result.matches.length})` : ''}
-        </p>
-        <p className="mt-1 text-xs">{t(result.outcome === 'none' ? 'fuelNoCreateHint' : 'fuelPickHint')}</p>
-      </div>
+        </span>
+        <span className="mt-1 block text-xs">{t(result.outcome === 'none' ? 'fuelNoCreateHint' : 'fuelPickHint')}</span>
+      </output>
       {(['vehicle', 'trip'] as const).map((ledger) => (
         <Group key={ledger} title={t(LEDGER[ledger])} candidates={byLedger(ledger)} onAttach={onAttach} />
       ))}

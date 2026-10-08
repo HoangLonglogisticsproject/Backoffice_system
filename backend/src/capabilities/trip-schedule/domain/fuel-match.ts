@@ -57,7 +57,7 @@ export interface FuelMatchResult {
 const LEVEL: Record<MatchBasis, MatchLevel> = { evidence_hash: 'exact', document_identity: 'high', fingerprint: 'possible' };
 const RANK: Record<MatchLevel, number> = { exact: 0, high: 1, possible: 2 };
 /** A fill whose receipt says otherwise is another receipt's fill. */
-const IDENTITY_KEYS: readonly FuelFactKey[] = ['vendorTaxCode', 'documentSeries', 'documentNumber'];
+const IDENTITY_KEYS: ReadonlySet<FuelFactKey> = new Set<FuelFactKey>(['vendorTaxCode', 'documentSeries', 'documentNumber']);
 
 const sameDecimal = (a: string | null | undefined, b: string | null | undefined) =>
   a === null || a === undefined || b === null || b === undefined || Number(a) === Number(b);
@@ -100,7 +100,7 @@ function judgeOne(receipt: FuelReceipt, seen: SeenCost): FuelCandidate {
     daysApart(dayOf(view), receipt.businessDate) <= 1 &&
     Number(view.amount) === Number(receipt.amount) &&
     sameDecimal(view.liters, receipt.facts.liters) &&
-    !conflicts.some((key) => IDENTITY_KEYS.includes(key));
+    !conflicts.some((key) => IDENTITY_KEYS.has(key));
   if (fingerprint) basis.push('fingerprint');
   const level = basis[0] ? LEVEL[basis[0]] : null;
   return { ...view, evidenceCount: seen.evidenceCount, level, basis, conflicts };
