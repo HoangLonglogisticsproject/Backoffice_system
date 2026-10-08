@@ -13,6 +13,13 @@ const declareDailyFuel = vi.fn();
 const recordFuelFill = vi.fn();
 const seeUpcoming = vi.fn();
 
+vi.mock('@/api/driverFuel', () => ({
+  // The fill's photos (0038): none waiting on the server in these cases.
+  fetchDriverWaitingPhotos: () => Promise.resolve([]),
+  stageDriverFuelPhoto: vi.fn(),
+  discardDriverFuelPhoto: vi.fn(),
+  driverFuelPhotoUrl: (id: string) => `/api/driver/fuel-evidence/${id}/content`,
+}));
 vi.mock('@/api/driverPortal', () => ({
   fetchMyWorkday: (...a: unknown[]) => fetchMyWorkday(...a),
   declareDailyFuel: (...a: unknown[]) => declareDailyFuel(...a),
@@ -156,6 +163,7 @@ describe('★ Ca làm việc hôm nay', () => {
         odometerKm: null,
         note: null,
         clientRequestId: expect.any(String),
+        evidence: [],
       }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());

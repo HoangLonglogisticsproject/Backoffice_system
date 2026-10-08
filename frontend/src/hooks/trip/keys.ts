@@ -96,6 +96,9 @@ export const tripKeys = {
   fuel: () => [...tripKeys.all, 'fuel'] as const,
   fuelMatches: (search: unknown) => [...tripKeys.fuel(), 'matches', search] as const,
   fuelStaged: () => [...tripKeys.fuel(), 'staged'] as const,
+  /** "Kế toán → Nhiên liệu" (0038): one review state's page, and one fill. Under `fuel()`, so a decision refreshes both. */
+  fuelReviews: (status: string, page: number) => [...tripKeys.fuel(), 'reviews', status, page] as const,
+  fuelReview: (id: string) => [...tripKeys.fuel(), 'review', id] as const,
 
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,

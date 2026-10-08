@@ -1,4 +1,4 @@
-import { Bell, CalendarDays, History, User } from 'lucide-react';
+import { Bell, CalendarDays, Fuel, History, User } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TranslationKey } from '@/types/translate';
 
@@ -16,7 +16,7 @@ import type { TranslationKey } from '@/types/translate';
  * as being there, so the tab stays lit while the driver works a trip.
  */
 export interface DriverDestination {
-  key: 'schedule' | 'history' | 'notifications' | 'profile';
+  key: 'schedule' | 'fuel' | 'history' | 'notifications' | 'profile';
   to: string;
   icon: LucideIcon;
   label: TranslationKey;
@@ -26,6 +26,8 @@ export interface DriverDestination {
 
 export const DRIVER_NAVIGATION: readonly DriverDestination[] = [
   { key: 'schedule', to: '/driver', icon: CalendarDays, label: 'driverSchedule', exact: true, activePaths: ['/driver/assignments'] },
+  // ★ The driver's fuel (0038): record a fill, see where Accounting's check stands, answer "Cần bổ sung".
+  { key: 'fuel', to: '/driver/fuel', icon: Fuel, label: 'driverFuelNav' },
   { key: 'history', to: '/driver/history', icon: History, label: 'driverHistory' },
   { key: 'notifications', to: '/driver/notifications', icon: Bell, label: 'driverNotifications' },
   { key: 'profile', to: '/driver/account/security', icon: User, label: 'driverProfile' },

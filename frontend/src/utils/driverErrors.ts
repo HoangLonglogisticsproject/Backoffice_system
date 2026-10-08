@@ -57,6 +57,13 @@ const validationKey = (details: Readonly<Record<string, string>> | undefined): T
   if (details?.['booking'] === 'BOOKING_NOT_OPEN') return 'driverErrBookingNotOpen';
   // A fill on a lorry that is not the driver's work today.
   if (details?.['fuelTransaction'] === 'NOT_OPERATED_TODAY') return 'driverErrNotOperatedToday';
+  // A "Có đổ nhiên liệu" declaration that lost the day: its money was NOT saved (0038).
+  if (details?.['dailyFuelCheck'] === 'CHECK_ALREADY_ANSWERED') return 'driverErrCheckAlreadyAnswered';
+  // The same photo or invoice already sent with another fill (0038).
+  if (details?.['evidence'] === 'ON_ANOTHER_FILL' || details?.['documentNumber'] === 'ON_ANOTHER_FILL') {
+    return 'driverErrReceiptOnAnotherFill';
+  }
+  if (Object.values(details ?? {}).includes('FACT_ALREADY_SET')) return 'driverErrFactAlreadySet';
   const rejection = details?.['location'];
   return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';
 };

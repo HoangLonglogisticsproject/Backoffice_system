@@ -281,11 +281,14 @@ describe('MainLayout', () => {
       useSession.mockReturnValue({ ...ready('sales', 'MEMBER'), can: (p: string) => p === 'trip.read' });
       const sales = renderLayout();
       expect(screen.queryByText('Chứng từ nhiên liệu')).toBeNull();
+      expect(screen.queryByText('Nhiên liệu')).toBeNull();
       sales.unmount();
 
       useSession.mockReturnValue({ ...ready('ketoan', 'MEMBER'), can: (p: string) => p === 'trip.read' || p === 'cost.import' });
       renderLayout();
       expect(hrefOf('Chứng từ nhiên liệu')).toBe('/accounting/fuel-receipts');
+      // The drivers' fills to check and mark paid (0038) — the same key, the same holders.
+      expect(hrefOf('Nhiên liệu')).toBe('/accounting/fuel-reviews');
     });
 
     it('★ gives a SUPERADMIN driver management and the request queue, under SYSTEM', () => {

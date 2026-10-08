@@ -19,6 +19,7 @@ import {
   type RecordEventInput,
 } from '@/api/driverPortal';
 import type {
+  DailyFuelCheck,
   DailyFuelDeclarationInput,
   DriverHistoryCursor,
   DriverTrip,
@@ -51,6 +52,15 @@ import { notifySuccess } from '@/utils/toast';
  * pieces move together, so refreshing one and leaving the others is how a
  * screen ends up contradicting itself.
  */
+/**
+ * ★ NEVER "ĐÃ KHAI" FOR AN ANSWER THE DRIVER DID NOT GIVE. The server answers
+ * a declaration that lost the day with the check that stands; when that is not
+ * what this driver said, they are told the day was already declared. (Money
+ * typed into a lost declaration is refused outright — `CHECK_ALREADY_ANSWERED`.)
+ */
+export const fuelDeclaredKey = (stood: DailyFuelCheck['outcome'], said: DailyFuelCheck['outcome']) =>
+  stood === said ? 'toastFuelDeclared' : 'toastFuelCheckAlreadyStood';
+
 export const driverKeys = {
   all: ['driver'] as const,
   assignments: () => [...driverKeys.all, 'assignments'] as const,
@@ -144,14 +154,13 @@ export function useMyWorkday(): {
  */
 export function useWorkdayFuel() {
   const client = useQueryClient();
-  const refresh = () => client.invalidateQueries({ queryKey: driverKeys.workday() });
 
   const declareCheck = useMutation({
     mutationFn: ({ assignmentId, input }: { assignmentId: string; input: DailyFuelDeclarationInput }) =>
       declareDailyFuel(assignmentId, input),
-    onSuccess: () => {
-      notifySuccess('toastFuelDeclared');
-      return refresh();
+    onSuccess: (check, { input }) => {
+      notifySuccess(fuelDeclaredKey(check.outcome, input.outcome));
+      return client.invalidateQueries({ queryKey: driverKeys.assignments() });
     },
   });
 
@@ -160,7 +169,8 @@ export function useWorkdayFuel() {
       recordFuelFill(assignmentId, input),
     onSuccess: () => {
       notifySuccess('toastFuelFillRecorded');
-      return refresh();
+      // The day and the driver's fuel list both moved: both live under `assignments()`.
+      return client.invalidateQueries({ queryKey: driverKeys.assignments() });
     },
   });
 
@@ -311,7 +321,7 @@ export function useDriverActions(assignmentId: string) {
   // asked for is retried at once, and that write refreshes the screen.
   const fuel = useMutation({
     mutationFn: (input: DailyFuelDeclarationInput) => declareDailyFuel(assignmentId, input),
-    onSuccess: () => notifySuccess('toastFuelDeclared'),
+    onSuccess: (check, input) => notifySuccess(fuelDeclaredKey(check.outcome, input.outcome)),
   });
 
   return { report, declare, correct, complete, fuel };

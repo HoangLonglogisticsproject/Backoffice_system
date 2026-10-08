@@ -30,6 +30,13 @@ const editExpense = vi.fn();
 const submitCompletion = vi.fn();
 const declareDailyFuel = vi.fn();
 
+vi.mock('@/api/driverFuel', () => ({
+  // The fill's photos (0038): none waiting on the server in these cases.
+  fetchDriverWaitingPhotos: () => Promise.resolve([]),
+  stageDriverFuelPhoto: vi.fn(),
+  discardDriverFuelPhoto: vi.fn(),
+  driverFuelPhotoUrl: (id: string) => `/api/driver/fuel-evidence/${id}/content`,
+}));
 vi.mock('@/api/driverPortal', () => ({
   declareDailyFuel: (...a: unknown[]) => declareDailyFuel(...a),
   fetchMyAssignments: (...a: unknown[]) => fetchMyAssignments(...a),
@@ -1713,6 +1720,7 @@ describe('★ the day’s first milestone, held for the lorry’s daily fuel che
         odometerKm: 182345,
         note: 'Petrolimex Q7',
         clientRequestId: expect.any(String),
+        evidence: [],
       }),
     );
     await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalledTimes(2));
