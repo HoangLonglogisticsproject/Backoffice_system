@@ -55,3 +55,8 @@ approved ones are immutable.
 * Trip-line drift after wrapping (re-priced, re-headed, voided) is **flagged, not blocked**.
 * The cutoff-dependent ledger extension (`historical_import`, `backoffice_recovery`, correction) is a
   separate migration and does not change this model.
+* **PR-2 (no migration):** a read-only search over both ledgers ranks candidates (`exact` image ·
+  `high` tax code + number · `possible` lorry, amount, ±1 day) and never chooses; attaching stays the
+  §31.3 command on the one cost a person picked. The same receipt on another live fill is accepted only
+  when acknowledged (`fuel_match_acks`), checked under a per-image / per-document advisory lock. Nothing
+  under `cost.import` creates a cost; with no candidate, nothing is written.

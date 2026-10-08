@@ -421,11 +421,15 @@ nhiên liệu cũ (CHECK một-trong-hai, unique "một fill sống / dòng ti�
   thuộc **một** xe. Tài xế chỉ là người vận hành/báo lần đổ đó — không có luật "xe → tài xế cố định".
 * **Bọc lười:** fill được tạo lần đầu dòng tiền nhận chứng từ hoặc thông tin; đường ghi của tài xế không đổi.
 * **Chứng từ:** stage trước (byte quyết định định dạng: JPEG/PNG/WebP; HEIC bị từ chối kèm hướng dẫn;
-  ≤ 2 MB; sha256), gắn bằng lệnh. Cùng ảnh hai lần trên một fill → chặn (DB); khác fill → cảnh báo (PR-2).
+  ≤ 2 MB; sha256), gắn bằng lệnh. Cùng ảnh hai lần trên một fill → chặn (DB); khác fill → phải xác nhận
+  (`acknowledgedMatches` → `fuel_match_acks`), kiểm tra dưới khoá theo ảnh / theo chứng từ.
   Gắn rồi thì bất biến, chỉ SuperAdmin retire (`cost.void`), không xoá. Object theo nội dung
   `fuel-evidence/<sha256>`, R2 riêng tư (prod) / filesystem (dev).
 * **Quyền:** `cost.import` (SuperAdmin + chức năng Kế toán) — không mở sổ xe hay tổng nào; `cost.read` giữ nguyên.
 * Khoá: dòng tiền `FOR NO KEY UPDATE` — hai người bọc cùng dòng xếp hàng; không khoá chuyến/lượt.
+* **Tìm chi phí đã ghi (PR-2):** `GET /trip-vehicles/:vehicleId/fuel-matches` đọc cả hai sổ — chỉ đọc,
+  không chọn, không tạo. Mức `exact` (cùng ảnh) · `high` (cùng MST + số) · `possible` (xe, số tiền, ±1 ngày);
+  dòng chuyến không ghi xe nào chỉ hiện khi cùng số tiền. Gắn là lệnh ghi §31.3 trên đúng sổ.
 
 ## Những gì cố ý KHÔNG có
 
@@ -476,4 +480,8 @@ application/fuel-transaction.service.ts  ghi trên dòng tiền xe/chuyến; xe 
 application/fuel-transaction-writer.ts   mở fill · thêm facts · gắn ảnh — trong transaction của lệnh
 application/fuel-evidence.service.ts     stage · discard · content · retire
 persistence/fuel-transaction-view.repository.ts  một shape cho mọi fill, bọc hay chưa
+domain/fuel-match.ts                 judge: exact/high/possible, none/single/ambiguous — không bao giờ chọn
+application/fuel-match.service.ts    tìm trên cả hai sổ (chỉ đọc)
+application/fuel-duplicate-guard.ts  cùng chứng từ trên fill khác → phải xác nhận; khoá theo ảnh/chứng từ
+persistence/fuel-match.repository.ts tập quanh ngày · fill giữ ảnh/chứng từ · khoá · fuel_match_acks
 ```
