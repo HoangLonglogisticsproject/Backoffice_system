@@ -94,7 +94,7 @@ describe('★ cost.import is the SuperAdmin’s and accounting’s — for fuel 
     const evidence = await source('fuel-evidence.controller.ts');
     const ledger = await source('vehicle-cost.controller.ts');
     expect(transactions.split("@RequirePermission('cost.import')").length - 1).toBe(5);
-    expect(evidence.split("@RequirePermission('cost.import')").length - 1).toBe(3);
+    expect(evidence.split("@RequirePermission('cost.import')").length - 1).toBe(4);
     expect(evidence.split("@RequirePermission('cost.void')").length - 1).toBe(1);
     expect(ledger).toContain("@RequirePermission('cost.read')");
     expect(ledger).not.toContain('cost.import');

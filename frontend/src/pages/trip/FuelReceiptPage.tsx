@@ -11,6 +11,7 @@ import { FuelAttachDialog } from './fuel/FuelAttachDialog';
 import { sharingFills } from './fuel/fuelCandidates';
 import { FuelMatchPanel } from './fuel/FuelMatchPanel';
 import { ReceiptForm, type ReceiptDraft } from './fuel/ReceiptForm';
+import { StagedLeftovers } from './fuel/StagedLeftovers';
 
 /** The receipt as the API takes it: a field left blank is not sent. */
 const toQuery = ({ vehicleId: _vehicle, businessDate, amount, ...rest }: ReceiptDraft): FuelReceiptQuery => ({
@@ -70,7 +71,7 @@ export default function FuelReceiptPage() {
         images={fuel.images}
         uploading={fuel.upload.isPending}
         onPick={(files) => files.forEach((file) => fuel.upload.mutate(file))}
-        onRemove={(image) => fuel.discard.mutate(image)}
+        onRemove={(image) => fuel.discard.mutate(image.evidence)}
         onSearch={() =>
           fuel.setSearch({
             vehicleId: draft.vehicleId as string,
@@ -79,6 +80,7 @@ export default function FuelReceiptPage() {
           })
         }
       />
+      <StagedLeftovers leftovers={fuel.leftovers} onUse={fuel.reuse} onDiscard={(image) => fuel.discard.mutate(image)} />
       {matches.isError ? <p role="alert" className="text-sm text-red-600">{t('fuelSearchFailed')}</p> : null}
       {matches.isFetching && !matches.data ? <p className="py-6 text-center text-sm text-gray-500">{t('driverLoading')}</p> : null}
       {matches.data ? <FuelMatchPanel result={matches.data} onAttach={setTarget} /> : null}

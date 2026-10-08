@@ -95,6 +95,7 @@ export const tripKeys = {
    */
   fuel: () => [...tripKeys.all, 'fuel'] as const,
   fuelMatches: (search: unknown) => [...tripKeys.fuel(), 'matches', search] as const,
+  fuelStaged: () => [...tripKeys.fuel(), 'staged'] as const,
 
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,

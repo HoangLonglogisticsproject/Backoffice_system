@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { attachFuelReceipt, discardFuelEvidence, findFuelMatches, stageFuelEvidence, type FuelAttachment } from '@/api/fuelEvidence';
+import {
+  attachFuelReceipt,
+  discardFuelEvidence,
+  fetchStagedFuelEvidence,
+  findFuelMatches,
+  fuelEvidenceContentUrl,
+  stageFuelEvidence,
+  type FuelAttachment,
+} from '@/api/fuelEvidence';
 import { useSession } from '@/contexts/SessionProvider';
 import type { FuelCandidate, FuelEvidence, FuelReceiptQuery } from '@/types/fuel';
 import type { TranslationKey } from '@/types/translate';
@@ -37,6 +45,11 @@ export function uploadErrorKey(error: unknown): TranslationKey {
   return 'fuelUploadFailed';
 }
 
+/** A local preview is a blob the page made; a recovered one is the server's URL and needs no release. */
+const release = (image: StagedImage) => {
+  if (image.previewUrl.startsWith('blob:')) URL.revokeObjectURL(image.previewUrl);
+};
+
 /** Part of the receipt already sits on another fill the person has not confirmed as different. */
 export const isOnAnotherFill = (error: unknown): boolean =>
   isApiError(error) && Object.values(error.details ?? {}).includes('ON_ANOTHER_FILL');
@@ -47,8 +60,12 @@ export const isOnAnotherFill = (error: unknown): boolean =>
  * ★ THE SEARCH NEVER WRITES AND THE ATTACH NEVER CREATES. A receipt goes onto
  * the one cost a person picked; with nothing found, nothing is written.
  *
- * ★ AN IMAGE LEFT BEHIND IS DISCARDED. The server holds at most 30 waiting
- * images per person; leaving the screen gives back the ones never attached.
+ * ★ THE SERVER REMEMBERS WHAT WAITS. At most 30 images may wait per person.
+ * Every visit reads the caller's waiting images back from the server, and
+ * the ones not in this receipt are offered as `leftovers` — to use or to
+ * discard — so a closed tab or a crash never locks anybody out. Leaving the
+ * screen still tries to discard the unattached ones: a courtesy, not the
+ * mechanism.
  */
 export function useFuelReceipt() {
   const queryClient = useQueryClient();
@@ -58,6 +75,14 @@ export function useFuelReceipt() {
   const [search, setSearch] = useState<FuelSearch | null>(null);
   const waiting = useRef<StagedImage[]>([]);
   waiting.current = images;
+
+  const waitingOnServer = useQuery({ queryKey: tripKeys.fuelStaged(), queryFn: fetchStagedFuelEvidence, enabled: allowed });
+  const inTray = new Set(images.map((image) => image.evidence.id));
+  const leftovers = (waitingOnServer.data ?? []).filter((evidence) => !inTray.has(evidence.id));
+  const toTray = (evidence: FuelEvidence, previewUrl: string) =>
+    setImages((current) => (current.some((image) => image.evidence.id === evidence.id) ? current : [...current, { evidence, previewUrl }]));
+  /** A leftover is used only when a person says so — never attached on its own. */
+  const reuse = (evidence: FuelEvidence) => toTray(evidence, fuelEvidenceContentUrl(evidence.id));
 
   const matches = useQuery({
     queryKey: tripKeys.fuelMatches(search),
@@ -72,7 +97,7 @@ export function useFuelReceipt() {
   useEffect(
     () => () => {
       for (const image of waiting.current) {
-        URL.revokeObjectURL(image.previewUrl);
+        release(image);
         void discardFuelEvidence(image.evidence.id).catch(() => undefined);
       }
     },
@@ -82,20 +107,20 @@ export function useFuelReceipt() {
   const upload = useMutation({
     mutationFn: stageFuelEvidence,
     // The same bytes again are the same staged row: never listed twice.
-    onSuccess: (evidence, file) =>
-      setImages((current) =>
-        current.some((image) => image.evidence.id === evidence.id)
-          ? current
-          : [...current, { evidence, previewUrl: URL.createObjectURL(file) }],
-      ),
-    onError: (error) => notifyError(uploadErrorKey(error)),
+    onSuccess: (evidence, file) => toTray(evidence, URL.createObjectURL(file)),
+    onError: (error) => {
+      notifyError(uploadErrorKey(error));
+      // At the cap the leftovers are what to clear: read them again, this tab may not have seen them all.
+      if (uploadErrorKey(error) === 'fuelTooManyStaged') void queryClient.invalidateQueries({ queryKey: tripKeys.fuelStaged() });
+    },
   });
 
   const discard = useMutation({
-    mutationFn: (image: StagedImage) => discardFuelEvidence(image.evidence.id),
-    onSuccess: (_done, image) => {
-      URL.revokeObjectURL(image.previewUrl);
-      setImages((current) => current.filter((other) => other.evidence.id !== image.evidence.id));
+    mutationFn: (evidence: FuelEvidence) => discardFuelEvidence(evidence.id),
+    onSuccess: (_done, evidence) => {
+      waiting.current.filter((image) => image.evidence.id === evidence.id).forEach(release);
+      setImages((current) => current.filter((other) => other.evidence.id !== evidence.id));
+      return queryClient.invalidateQueries({ queryKey: tripKeys.fuelStaged() });
     },
     onError: (error) => notifyApiError(error, 'fuelDiscardFailed'),
   });
@@ -105,7 +130,7 @@ export function useFuelReceipt() {
       attachFuelReceipt(target, attachment),
     onSuccess: (_view, { target }) => {
       notifySuccess(target.backing.ledger === 'vehicle' ? 'fuelAttachedVehicle' : 'fuelAttachedTrip');
-      for (const image of waiting.current) URL.revokeObjectURL(image.previewUrl);
+      waiting.current.forEach(release);
       setImages([]); // attached now — no longer waiting, never discarded
       return queryClient.invalidateQueries({ queryKey: tripKeys.fuel() });
     },
@@ -119,5 +144,5 @@ export function useFuelReceipt() {
     },
   });
 
-  return { allowed, images, search, setSearch, matches, upload, discard, attach };
+  return { allowed, images, leftovers, reuse, search, setSearch, matches, upload, discard, attach };
 }

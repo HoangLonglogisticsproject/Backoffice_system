@@ -1661,6 +1661,10 @@ Màn hình: **Kế toán → Chứng từ nhiên liệu** (`/accounting/fuel-rec
   multer, trước khi service thấy). Cùng người + cùng byte → **cùng dòng** (retry an toàn). Kho chưa cấu
   hình → **503** `SERVICE_UNAVAILABLE`.
 * `POST /fuel-evidence/:id/discard` → **204**; chỉ ảnh **của mình, đang chờ**; khác → 404.
+* `GET /fuel-evidence/staged` → **200** `FuelEvidence[]` — **mọi ảnh của chính người gọi còn đang chờ** (chưa gắn,
+  chưa bỏ), mới nhất trước; không bao giờ ảnh người khác, ảnh đã gắn hay đã bỏ. **Máy chủ nhớ, không phải trình duyệt:**
+  đóng tab, sập máy, mất mạng giữa chừng — người dùng quay lại vẫn lấy lại được, để gắn hoặc bỏ; giới hạn 30 ảnh chờ
+  vì vậy không bao giờ thành khoá vĩnh viễn. Không có xoá tự động: ảnh chờ chỉ rời danh sách khi được gắn hoặc bỏ.
 * `GET /fuel-evidence/:id/content` → byte ảnh; `Content-Type` = định dạng đã kiểm, `Cache-Control:
   private, no-store`, `Content-Disposition: inline; filename="<id>.<ext>"`. Đọc được: ảnh đã gắn (kể cả
   đã retire) hoặc ảnh chờ **của mình**; còn lại 404. **Không có URL công khai hay URL ký sẵn nào.**
@@ -1737,6 +1741,7 @@ route nào ở đây tạo chi phí**; không có kết quả thì không ghi g�
   Kiểm tra trong transaction ghi, dưới khoá theo từng ảnh / từng chứng từ: hai người gắn cùng chứng từ
   vào hai fill cùng lúc → đúng một người bị hỏi xác nhận.
 * Màn hình **Chứng từ nhiên liệu** (`cost.import`; menu KẾ TOÁN): biển số · ngày · số tiền · lít · cây xăng ·
-  MST · ký hiệu · số · ảnh (stage khi chọn; rời màn hình → ảnh chưa gắn được discard) → kết quả theo
+  MST · ký hiệu · số · ảnh (stage khi chọn; mỗi lần mở màn hình đọc lại ảnh còn chờ từ máy chủ — mục "Ảnh đã tải
+  lên, chưa gắn": Dùng / Bỏ / Bỏ tất cả, không ảnh nào tự gắn; rời màn hình vẫn thử discard, chỉ là phép lịch sự) → kết quả theo
   nhóm "Đã ghi ở Chi phí xe" / "Đã ghi ở Chi phí chuyến" + "chi phí khác quanh ngày" → "Gắn vào chi phí
   này" → hộp xác nhận (không tạo chi phí mới; tick từng fill khác đã giữ chứng từ). Không có nút tạo chi phí.

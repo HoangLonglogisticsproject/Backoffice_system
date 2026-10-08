@@ -478,7 +478,7 @@ domain/fuel-transaction.ts           một lần đổ: facts, chuẩn hoá, mer
 domain/fuel-evidence.ts              sniffImage (byte quyết định), giới hạn, tên file chỉ là nhãn
 application/fuel-transaction.service.ts  ghi trên dòng tiền xe/chuyến; xe của dòng chuyến do văn phòng chọn
 application/fuel-transaction-writer.ts   mở fill · thêm facts · gắn ảnh — trong transaction của lệnh
-application/fuel-evidence.service.ts     stage · discard · content · retire
+application/fuel-evidence.service.ts     stage · staged (ảnh còn chờ của chính mình — phục hồi sau khi tab đóng) · discard · content · retire
 persistence/fuel-transaction-view.repository.ts  một shape cho mọi fill, bọc hay chưa
 domain/fuel-match.ts                 judge: exact/high/possible, none/single/ambiguous — không bao giờ chọn
 application/fuel-match.service.ts    tìm trên cả hai sổ (chỉ đọc)

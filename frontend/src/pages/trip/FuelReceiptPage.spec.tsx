@@ -19,6 +19,7 @@ const findFuelMatches = vi.fn();
 const attachFuelReceipt = vi.fn();
 const stageFuelEvidence = vi.fn();
 const discardFuelEvidence = vi.fn();
+const fetchStagedFuelEvidence = vi.fn();
 const fetchTripVehicles = vi.fn();
 const useSession = vi.fn();
 
@@ -27,6 +28,8 @@ vi.mock('@/api/fuelEvidence', () => ({
   attachFuelReceipt: (...a: unknown[]) => attachFuelReceipt(...a),
   stageFuelEvidence: (...a: unknown[]) => stageFuelEvidence(...a),
   discardFuelEvidence: (...a: unknown[]) => discardFuelEvidence(...a),
+  fetchStagedFuelEvidence: (...a: unknown[]) => fetchStagedFuelEvidence(...a),
+  fuelEvidenceContentUrl: (id: string) => `/api/fuel-evidence/${id}/content`,
 }));
 vi.mock('@/api/tripCatalogue', () => ({ fetchTripVehicles: (...a: unknown[]) => fetchTripVehicles(...a) }));
 vi.mock('@/contexts/SessionProvider', () => ({ useSession: () => useSession() }));
@@ -100,7 +103,10 @@ const searchFor = async (amount = '772460') => {
 
 describe('FuelReceiptPage', () => {
   beforeEach(() => {
-    for (const mock of [findFuelMatches, attachFuelReceipt, stageFuelEvidence, discardFuelEvidence, fetchTripVehicles]) mock.mockReset();
+    for (const mock of [findFuelMatches, attachFuelReceipt, stageFuelEvidence, discardFuelEvidence, fetchTripVehicles, fetchStagedFuelEvidence]) {
+      mock.mockReset();
+    }
+    fetchStagedFuelEvidence.mockResolvedValue([]);
     useSession.mockReturnValue(session(['cost.import', 'trip.read']));
     fetchTripVehicles.mockResolvedValue([{ id: 'lorry-1', plate: '51D12345', status: 'active' }]);
     attachFuelReceipt.mockResolvedValue({});
@@ -187,6 +193,48 @@ describe('FuelReceiptPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Gắn vào chi phí này' }));
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Gắn chứng từ' }));
     await waitFor(() => expect(findFuelMatches).toHaveBeenLastCalledWith('lorry-1', expect.anything(), ['img-late']));
+  });
+
+  describe('★ images left waiting by an earlier visit — read back from the server', () => {
+    const leftover = (id: string) => ({ id, originalFilename: `${id}.jpg`, fuelTransactionId: null });
+
+    it('offers them to a returning user, attaches only the one they choose to use', async () => {
+      fetchStagedFuelEvidence.mockResolvedValue([leftover('old-a'), leftover('old-b')]);
+      findFuelMatches.mockResolvedValue(result({ outcome: 'single', matches: [candidate()] }));
+      renderPage();
+      const panel = await screen.findByRole('region', { name: 'Ảnh đã tải lên, chưa gắn (2)' });
+      expect(within(panel).getByRole('img', { name: 'old-a.jpg' })).toHaveAttribute('src', '/api/fuel-evidence/old-a/content');
+      fireEvent.click(within(panel).getAllByRole('button', { name: 'Dùng' })[0] as HTMLElement);
+      expect(await screen.findByRole('region', { name: 'Ảnh đã tải lên, chưa gắn (1)' })).toBeInTheDocument();
+
+      await searchFor();
+      await waitFor(() => expect(findFuelMatches).toHaveBeenCalledWith('lorry-1', expect.anything(), ['old-a']));
+      fireEvent.click(await screen.findByRole('button', { name: 'Gắn vào chi phí này' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Gắn chứng từ' }));
+      await waitFor(() => expect(attachFuelReceipt).toHaveBeenCalledTimes(1));
+      expect(attachFuelReceipt.mock.calls[0]?.[1]).toMatchObject({ evidenceIds: ['old-a'] });
+    });
+
+    it('discards one, or all of them, when the person says so — and reads the list again', async () => {
+      fetchStagedFuelEvidence.mockResolvedValue([leftover('old-a'), leftover('old-b')]);
+      renderPage();
+      const panel = await screen.findByRole('region', { name: 'Ảnh đã tải lên, chưa gắn (2)' });
+      fireEvent.click(within(panel).getByRole('button', { name: 'Bỏ ảnh old-b.jpg' }));
+      await waitFor(() => expect(discardFuelEvidence).toHaveBeenCalledWith('old-b'));
+      fireEvent.click(within(panel).getByRole('button', { name: 'Bỏ tất cả' }));
+      await waitFor(() => expect(discardFuelEvidence).toHaveBeenCalledWith('old-a'));
+      await waitFor(() => expect(fetchStagedFuelEvidence.mock.calls.length).toBeGreaterThan(1));
+      expect(attachFuelReceipt).not.toHaveBeenCalled();
+    });
+
+    it('reads the list again when the upload cap is reached', async () => {
+      URL.createObjectURL = vi.fn(() => 'blob:preview');
+      stageFuelEvidence.mockRejectedValue(new ApiError(422, 'VALIDATION_FAILED', 'cap', { file: 'TOO_MANY_STAGED' }));
+      renderPage();
+      await waitFor(() => expect(fetchStagedFuelEvidence).toHaveBeenCalledTimes(1));
+      fireEvent.change(screen.getByLabelText('Thêm ảnh'), { target: { files: [new File(['x'], 'n.jpg', { type: 'image/jpeg' })] } });
+      await waitFor(() => expect(fetchStagedFuelEvidence).toHaveBeenCalledTimes(2));
+    });
   });
 
   it('will not attach to a withdrawn cost, or to a fill whose own receipt says otherwise', async () => {

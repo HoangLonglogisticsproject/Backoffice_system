@@ -5,13 +5,14 @@ const get = vi.fn();
 const post = vi.fn();
 
 vi.mock('./client', () => ({
+  API_BASE_URL: '/api',
   httpClient: {
     get: (...args: unknown[]) => get(...args),
     post: (...args: unknown[]) => post(...args),
   },
 }));
 
-const { attachFuelReceipt, findFuelMatches, stageFuelEvidence } = await import('./fuelEvidence');
+const { attachFuelReceipt, fetchStagedFuelEvidence, findFuelMatches, fuelEvidenceContentUrl, stageFuelEvidence } = await import('./fuelEvidence');
 
 const candidate = (over: Partial<FuelCandidate> = {}): FuelCandidate =>
   ({
@@ -48,6 +49,13 @@ describe('fuel receipt calls', () => {
     expect(url).toBe('/fuel-evidence');
     expect([...form.keys()]).toEqual(['file']);
     expect(config.headers['Content-Type']).toBe('multipart/form-data');
+  });
+
+  it('reads the caller’s waiting images back from the server, and points an <img> at an image’s bytes', async () => {
+    get.mockResolvedValue({ data: [] });
+    await fetchStagedFuelEvidence();
+    expect(get).toHaveBeenCalledWith('/fuel-evidence/staged');
+    expect(fuelEvidenceContentUrl('img-1')).toBe('/api/fuel-evidence/img-1/content');
   });
 
   it('searches with the receipt and its images, comma-separated — a GET, never a write', async () => {

@@ -1,4 +1,4 @@
-import { httpClient } from './client';
+import { API_BASE_URL, httpClient } from './client';
 import type { FuelCandidate, FuelEvidence, FuelMatchResult, FuelReceiptQuery, FuelTransactionView } from '@/types/fuel';
 
 /**
@@ -17,6 +17,19 @@ export async function stageFuelEvidence(file: File): Promise<FuelEvidence> {
   });
   return data;
 }
+
+/**
+ * ★ THE SERVER'S LIST, NOT THE BROWSER'S MEMORY: every image the caller
+ * uploaded that still waits — from this visit or one that ended in a closed
+ * tab, a crash or a lost network.
+ */
+export async function fetchStagedFuelEvidence(): Promise<FuelEvidence[]> {
+  const { data } = await httpClient.get<FuelEvidence[]>('/fuel-evidence/staged');
+  return data;
+}
+
+/** An image's bytes, for an `<img>` — authorised by the session like any call (cf. map tiles). */
+export const fuelEvidenceContentUrl = (id: string): string => `${API_BASE_URL}/fuel-evidence/${encodeURIComponent(id)}/content`;
 
 /** Drops a staged image of one's own. */
 export async function discardFuelEvidence(id: string): Promise<void> {

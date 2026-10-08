@@ -56,7 +56,7 @@ export class FuelEvidenceService {
     if (already) return publicEvidence(already);
     // ponytail: counted without a lock — two parallel uploads may land one over; the cap bounds abuse, not accuracy.
     if ((await this.evidence.countStaged(uploadedBy)) >= MAX_STAGED_PER_UPLOADER) {
-      throw refused(TOO_MANY_STAGED, `At most ${MAX_STAGED_PER_UPLOADER} images may wait to be attached — attach or discard some first.`);
+      throw refused(TOO_MANY_STAGED, `At most ${MAX_STAGED_PER_UPLOADER} images may wait to be attached — attach or discard some first (GET /fuel-evidence/staged lists them).`);
     }
 
     const storageKey = evidenceStorageKey(sha256);
@@ -72,6 +72,15 @@ export class FuelEvidenceService {
       uploadedBy,
     });
     return publicEvidence(staged);
+  }
+
+  /**
+   * ★ THE SERVER REMEMBERS WHAT WAITS, NOT THE BROWSER. An uploader who closed
+   * the tab, lost the network or crashed gets back every image still waiting —
+   * to attach or to discard — so the cap can never become a lockout.
+   */
+  async staged(by: string): Promise<FuelEvidence[]> {
+    return (await this.evidence.listStaged(by)).map(publicEvidence);
   }
 
   /** Only the uploader's own image, and only while it waits. */

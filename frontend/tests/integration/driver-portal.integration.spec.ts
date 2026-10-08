@@ -1280,17 +1280,32 @@ describe('driver portal (D1) against the real API', () => {
       expect((await matchesFor({ amount: '0' })).status).toBe(422);
     });
 
-    it('stages a receipt image when the server has a store — and answers 503 SERVICE_UNAVAILABLE when it has none', async () => {
+    it('★ stages a receipt image (503 with no store) and hands every waiting image back to its uploader — the browser need not remember', async () => {
+      const waiting = async () => {
+        const listed = await boss.get('/fuel-evidence/staged');
+        expect(listed.status).toBe(200);
+        return listed.data as Array<{ id: string }>;
+      };
+      expect((await driverA.get('/fuel-evidence/staged')).status).toBe(403);
+      const before = await waiting();
+
       const form = new FormData();
       form.append('file', new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...randomBytes(32)])], { type: 'image/jpeg' }), 'bill.jpg');
       const staged = await boss.post('/fuel-evidence', form, { headers: { 'Content-Type': 'multipart/form-data' } });
       expect([201, 503]).toContain(staged.status);
       if (staged.status === 503) {
         expect(toApiError(staged.status, staged.data).code).toBe('SERVICE_UNAVAILABLE');
+        expect(await waiting()).toEqual(before);
         return;
       }
       expect(staged.data).toMatchObject({ mimeType: 'image/jpeg', fuelTransactionId: null });
+      const listed = (await waiting()).find((image) => image.id === staged.data.id);
+      expect(keysOf(listed as object)).toEqual(sorted([
+        'attachedAt', 'byteSize', 'capturedAt', 'evidenceType', 'fuelTransactionId', 'id', 'mimeType', 'originalFilename',
+        'retireReason', 'retiredAt', 'sha256', 'uploadedAt', 'uploadedBy',
+      ]));
       expect((await boss.post(`/fuel-evidence/${staged.data.id}/discard`)).status).toBe(204);
+      expect((await waiting()).map((image) => image.id)).not.toContain(staged.data.id);
     });
 
     /**
