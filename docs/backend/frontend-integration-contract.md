@@ -1745,3 +1745,63 @@ route nào ở đây tạo chi phí**; không có kết quả thì không ghi g�
   lên, chưa gắn": Dùng / Bỏ / Bỏ tất cả, không ảnh nào tự gắn; rời màn hình vẫn thử discard, chỉ là phép lịch sự) → kết quả theo
   nhóm "Đã ghi ở Chi phí xe" / "Đã ghi ở Chi phí chuyến" + "chi phí khác quanh ngày" → "Gắn vào chi phí
   này" → hộp xác nhận (không tạo chi phí mới; tick từng fill khác đã giữ chứng từ). Không có nút tạo chi phí.
+
+## 32. Nhiên liệu: tài xế ghi nhận, kế toán kiểm tra rồi đánh dấu đã thanh toán (0038, 2026-10-09)
+
+**Luồng sống chính là của tài xế.** Tài xế đổ dầu cho xe mình đang chạy → ghi nhận trên điện thoại kèm ảnh
+(đồng hồ bơm, hoá đơn/phiếu, **QR thanh toán của cây xăng**) → kế toán kiểm tra → duyệt → chuyển tiền bằng app
+ngân hàng/QR **ngoài hệ thống** → đánh dấu đã thanh toán. Không cổng thanh toán, không tích hợp ngân hàng, không
+công nợ. Lô #113 ("Chứng từ nhiên liệu") vẫn để số hoá chứng từ cũ / đối soát / sửa ngoại lệ.
+
+**Không nguồn sự thật thứ hai.** Tiền, xe, ngày, lít, odo: dòng `vehicle_costs` của lần đổ (0034). Cây xăng, MST,
+số hoá đơn, giờ, ảnh: fuel transaction của nó (0037). 0038 chỉ thêm **các bước kiểm tra**
+(`fuel_review_events`, append-only: ai, chuyển sang trạng thái nào, khi nào, vì sao) — trạng thái hiện tại là
+bước mới nhất. Chỉ áp dụng cho xe ghi nhiên liệu trên xe (`dailyFuelCheckRequired`); xe khác giữ dầu là chi phí
+chuyến như cũ.
+
+### 32.1 Tài xế ghi nhận — một chi phí, một fuel transaction, một hồ sơ kiểm tra
+
+* `POST /driver/assignments/:id/fuel-transactions` và `…/fuel-checks` (`outcome: 'fuel_added'`) nhận thêm
+  (không bắt buộc): `vendorName`, `vendorTaxCode`, `documentSeries`, `documentNumber`, `occurredAt`,
+  `evidence: [{ id, type? }]` (≤ 10; ảnh **của chính tài xế** đã stage). Cùng **một transaction**: dòng tiền +
+  fuel transaction (tài xế là provenance) + thông tin + ảnh + bước `submitted`. Từ chối ở đâu → không ghi gì.
+  Response giữ nguyên shape. Xe và ngày vẫn của server; tài xế không chọn xe, không thấy sổ, không thấy ứng viên.
+* Ảnh hoặc MST + số hoá đơn **đã ở một lần đổ khác** → 422 `details.evidence | documentNumber: ON_ANOTHER_FILL`,
+  không ghi gì (tài xế không "xác nhận khác giao dịch" — việc đó của kế toán). Lần đổ thứ hai hợp lệ cùng xe,
+  cùng ngày, cùng số tiền **được nhận** — kế toán thấy cảnh báo "có thể trùng", không gộp, không tự từ chối.
+* Gửi lại cùng `clientRequestId` = cùng chi phí, cùng fuel transaction, cùng hồ sơ.
+* ★ **Khai đầu ca có tiền mà ngày đã được khai** (màn hình cũ / hai máy cùng lúc) → **422
+  `details.dailyFuelCheck: CHECK_ALREADY_ANSWERED`**: lần đổ đó **chưa được lưu** — không bao giờ trả 201 như
+  đã lưu. Khai "không đổ" vẫn nhận check đang đứng (201) như trước; app báo "Đầu ca đã được khai báo trước đó".
+
+### 32.2 Cửa của tài xế (không `cost.import`)
+
+`DriverOnlyGuard` + tài khoản đã đổi mật khẩu tạm; ghi có CSRF. Chỉ của chính mình:
+
+* `POST /driver/fuel-evidence` (multipart `file`, như §31.2) · `GET /driver/fuel-evidence/staged` (ảnh đã chụp
+  chưa gửi — đóng app / mất mạng vẫn lấy lại được) · `POST /driver/fuel-evidence/:id/discard` ·
+  `GET /driver/fuel-evidence/:id/content` (chỉ ảnh **mình** tải lên).
+* `GET /driver/fuel-submissions?status=a,b&day=YYYY-MM-DD` → `DriverFuelSubmission[]` (≤ 100, mới nhất trước).
+  `DriverFuelSubmission = { fuelTransactionId, vehicle: {id, plate}, businessDate, occurredAt, recordedAt, amount,
+  liters, odometerKm, vendor, document, evidenceCount, status, statusNote, statusAt }`.
+* `GET /driver/fuel-submissions/:id` → thêm `history: [{status, note, at}]`, `evidence` (ảnh mình gửi). Của người
+  khác → 404.
+* `POST /driver/fuel-submissions/:id/resubmit` `{ vendorName?, vendorTaxCode?, documentSeries?, documentNumber?,
+  occurredAt?, evidence?, note? }` → **chỉ khi `needs_info`** (khác → 409): thông tin chỉ **thêm** (đã có giá trị
+  khác → 422 `FACT_ALREADY_SET`), ảnh mới gắn vào, trạng thái về `submitted`. Tiền/lít/odo không sửa ở đây: sai →
+  kế toán từ chối, tài xế ghi lần đổ mới.
+
+### 32.3 Kế toán kiểm tra (`cost.import`, menu KẾ TOÁN → Nhiên liệu)
+
+* `GET /fuel-reviews?status=&page=&limit=` → `OffsetPage<FuelSubmission>` (`DriverFuelSubmission` + `costId`,
+  `driver`). `GET /fuel-reviews/:id` → `{ status, fill: FuelTransactionView, history: [{seq, status, note, actor,
+  at}], warnings: FuelCandidate[] }` (§31.4: cùng ảnh / cùng hoá đơn / cùng xe-số tiền-±1 ngày — **cờ**, không chặn).
+* `POST /fuel-reviews/:id/{request-info|approve|reject|mark-paid}` `{ note? }` → `FuelReviewDetail`.
+  `request-info`, `reject` **bắt buộc** `note` (tài xế đọc) → 422 `details.note: REASON_REQUIRED`;
+  `mark-paid` có thể kèm mã giao dịch.
+* Máy trạng thái (DB giữ, trigger 0038): `submitted → needs_info | approved | rejected`;
+  `needs_info → submitted | rejected`; `approved → paid`; `paid`, `rejected` là cuối. **Không bao giờ
+  `submitted → paid`.** Sai bước → 409. Cùng quyết định lặp lại = quyết định đã có, không thêm bước.
+* `rejected` không chạm dòng tiền: lần đổ không được thanh toán; rút chi phí khỏi sổ xe là việc **void của
+  SuperAdmin** (chưa có route — việc sau).
+* Ảnh `payment_qr` chỉ là **ảnh** để kế toán chuyển tiền — không đọc mã, không lưu thông tin ngân hàng.

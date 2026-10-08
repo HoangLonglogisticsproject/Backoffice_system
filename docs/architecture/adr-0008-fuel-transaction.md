@@ -62,3 +62,10 @@ approved ones are immutable.
   §31.3 command on the one cost a person picked. The same receipt on another live fill is accepted only
   when acknowledged (`fuel_match_acks`), checked under a per-image / per-document advisory lock. Nothing
   under `cost.import` creates a cost; with no candidate, nothing is written.
+
+* **PR-3 — driver-first (0038):** a driver's fill on a lorry whose fuel is declared on it (`declare` with
+  money, `recordFill`) now opens its fuel transaction in the same transaction as its `vehicle_costs` row,
+  with the driver's own photos, and writes the first step of an append-only review (`fuel_review_events`:
+  submitted → needs_info | approved | rejected; needs_info → submitted | rejected; approved → paid). No
+  column of money or fact is copied into the review. Drivers have their own routes (never `cost.import`);
+  Accounting decides with `cost.import`. Rejecting never voids the money row — that stays the SuperAdmin's.
