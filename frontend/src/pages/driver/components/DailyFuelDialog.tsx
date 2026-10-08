@@ -125,7 +125,7 @@ export function DailyFuelDialog({
           <Button variant="ghost" size="lg" className="h-11" onClick={onClose} disabled={saving}>
             {t('driverCancel')}
           </Button>
-          <Button size="lg" className="h-11 flex-1" disabled={!ready || saving} onClick={() => void submit()}>
+          <Button size="lg" className="h-11 flex-1" disabled={!ready || saving || photos.uploading} onClick={() => void submit()}>
             {saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
             {t(copy.submit)}
           </Button>

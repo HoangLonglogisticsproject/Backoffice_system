@@ -105,6 +105,7 @@ describe('DriverFuelPage', () => {
     fetchDriverWaitingPhotos.mockResolvedValue([]);
     recordFuelFill.mockResolvedValue({ id: 'cost-1' });
     URL.createObjectURL = vi.fn(() => 'blob:photo');
+    URL.revokeObjectURL = vi.fn(); // jsdom has none
   });
 
   it('★ records a fill on the lorry the driver runs today — with the pump photo, the QR and the station — never choosing a lorry', async () => {
@@ -134,6 +135,26 @@ describe('DriverFuelPage', () => {
       evidence: [{ id: 'img-pump', type: 'pump_meter' }, { id: 'img-qr', type: 'payment_qr' }],
     });
     expect(document.body.textContent).not.toMatch(/Chi phí xe|Chi phí chuyến|Gắn vào chi phí|ledger/);
+  });
+
+  it('★ holds the save while a photo is still uploading, and frees each preview it made', async () => {
+    let arrive: (value: unknown) => void = () => undefined;
+    stageDriverFuelPhoto.mockReturnValue(new Promise((resolve) => (arrive = resolve)));
+    discardDriverFuelPhoto.mockResolvedValue(undefined);
+    URL.revokeObjectURL = vi.fn();
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Ghi nhận nhiên liệu.*51H-27314/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Ghi nhận đổ nhiên liệu' });
+    fireEvent.change(within(dialog).getByLabelText('Số tiền *'), { target: { value: '772460' } });
+    fireEvent.change(within(dialog).getByLabelText('Đồng hồ bơm'), { target: { files: [new File(['p'], 'p.jpg', { type: 'image/jpeg' })] } });
+    // On its way: saving now would send the fill without it.
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Lưu' })).toBeDisabled());
+    arrive({ id: 'img-pump', originalFilename: 'p.jpg', evidenceType: null });
+    await within(dialog).findByRole('img', { name: 'Đồng hồ bơm' });
+    expect(within(dialog).getByRole('button', { name: 'Lưu' })).toBeEnabled();
+    // Removing it gives the blob back.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Bỏ ảnh' }));
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:photo'));
   });
 
   it('★ offers photos left unsent last time — used only when the driver says so', async () => {

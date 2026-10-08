@@ -60,7 +60,7 @@ export class DriverFuelService {
    */
   async resubmit(driver: string, fuelTransactionId: string, receipt: DriverReceipt & { note?: string }): Promise<DriverFuelSubmissionDetail> {
     const submission = await this.reviews.submission(fuelTransactionId);
-    if (!submission || submission.driverUserId !== driver) throw new NotFoundError('Fuel submission not found.');
+    if (submission?.driverUserId !== driver) throw new NotFoundError('Fuel submission not found.');
     const facts = normalized(receipt.facts);
     await this.db.transaction(async (tx) => {
       const stored = await this.transactions.lockLive('vehicle_cost_id', submission.costId, tx);

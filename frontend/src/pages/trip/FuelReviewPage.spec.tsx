@@ -150,6 +150,19 @@ describe('FuelReviewPage', () => {
     await waitFor(() => expect(decideFuelReview).toHaveBeenLastCalledWith('ft-1', 'mark-paid', 'CK VCB 4589'));
   });
 
+  it('follows a queue that shrank under the page being read back to its last page', async () => {
+    fetchFuelReviews.mockImplementation(async (_status: string, page: number) =>
+      page === 1
+        ? { items: [row()], page: 1, limit: 50, total: 51, totalPages: 2 }
+        : { items: [], page, limit: 50, total: 50, totalPages: 1 },
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sau' }));
+    await waitFor(() => expect(fetchFuelReviews).toHaveBeenCalledWith('submitted', 2));
+    // Page 2 came back with only one page left: the screen goes back to page 1, never an empty page 2.
+    await waitFor(() => expect(fetchFuelReviews).toHaveBeenLastCalledWith('submitted', 1));
+  });
+
   it('offers nothing on a paid or a rejected fill', async () => {
     fetchFuelReview.mockResolvedValue(detail('paid'));
     renderPage();

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   discardDriverFuelPhoto,
@@ -78,9 +78,18 @@ export function photoErrorKey(error: unknown): TranslationKey {
  * the server and comes back as a `leftover`: used for this fill or removed by
  * the driver, never sent on its own. Nothing is discarded behind their back.
  */
+/** A preview the phone made is a blob to give back; a recovered one is the server's URL. */
+const release = (photo: FuelPhoto) => {
+  if (photo.previewUrl.startsWith('blob:')) URL.revokeObjectURL(photo.previewUrl);
+};
+
 export function useFuelPhotos() {
   const client = useQueryClient();
   const [tray, setTray] = useState<FuelPhoto[]>([]);
+  const held = useRef<FuelPhoto[]>([]);
+  held.current = tray;
+  // A camera photo is megabytes: its preview is freed with the form, never kept until a reload.
+  useEffect(() => () => held.current.forEach(release), []);
   const waiting = useQuery({ queryKey: driverFuelKeys.waiting(), queryFn: fetchDriverWaitingPhotos, staleTime: 0 });
   const inTray = new Set(tray.map((photo) => photo.evidence.id));
   const leftovers = (waiting.data ?? []).filter((evidence) => !inTray.has(evidence.id));
@@ -100,6 +109,7 @@ export function useFuelPhotos() {
   const discard = useMutation({
     mutationFn: (evidence: FuelEvidence) => discardDriverFuelPhoto(evidence.id),
     onSuccess: (_done, evidence) => {
+      held.current.filter((photo) => photo.evidence.id === evidence.id).forEach(release);
       setTray((current) => current.filter((photo) => photo.evidence.id !== evidence.id));
       return refreshWaiting();
     },
@@ -118,6 +128,7 @@ export function useFuelPhotos() {
       tray.map((photo) => ({ id: photo.evidence.id, ...(photo.type ? { type: photo.type } : {}) })),
     /** Sent with a fill that was saved: they are attached now, not waiting. */
     clear: () => {
+      held.current.forEach(release);
       setTray([]);
       return refreshWaiting();
     },

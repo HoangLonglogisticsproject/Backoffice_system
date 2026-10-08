@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -31,6 +31,11 @@ export default function FuelReviewPage() {
   const [page, setPage] = useState(1);
   const [open, setOpen] = useState<string | null>(null);
   const reviews = useFuelReviews(status, page);
+  const lastPage = Math.max(reviews.data?.totalPages ?? 1, 1);
+  // Deciding the last fill of a page shrinks the queue under it: follow it back rather than show an empty page.
+  useEffect(() => {
+    if (page > lastPage) setPage(lastPage);
+  }, [page, lastPage]);
 
   if (!can('cost.import')) return <PageHeader title={t('fuelReviews')} subtitle={t('fuelReceiptsNoAccess')} />;
   const data = reviews.data;
