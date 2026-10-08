@@ -49,11 +49,22 @@ export class FuelMatchService {
     if (images.size !== evidence.length) {
       throw new ValidationError('Only images you uploaded can be compared.', { evidence: 'NOT_STAGED' });
     }
-    const shas = [...new Set(images.values())];
-    const document = documentIdentityOf(facts);
+    return this.compare(vehicleId, { businessDate, amount, facts }, [...new Set(images.values())], null);
+  }
 
-    const nearby = await this.matches.nearby(vehicleId, businessDate, amount);
-    const hits = shas.length > 0 || document ? await this.matches.fillsHolding(shas, document, null) : [];
+  /**
+   * Judges a receipt — its day, amount, facts and image hashes — against the
+   * lorry's fuel around the day and every live fill holding its image or
+   * document. `except` leaves one fill out: the fill being reviewed is not its
+   * own duplicate.
+   */
+  async compare(vehicleId: string, receipt: FuelReceipt, shas: readonly string[], except: string | null): Promise<FuelMatchResult> {
+    const { businessDate, amount, facts } = receipt;
+    const document = documentIdentityOf(facts);
+    const nearby = (await this.matches.nearby(vehicleId, businessDate, amount)).filter(
+      (view) => except === null || view.fuelTransactionId !== except,
+    );
+    const hits = shas.length > 0 || document ? await this.matches.fillsHolding(shas, document, except) : [];
     const known = new Set(nearby.map((view) => view.fuelTransactionId).filter(Boolean));
     const elsewhere = await this.matches.ofFills([...new Set(hits.map((hit) => hit.fuelTransactionId))].filter((id) => !known.has(id)));
 
@@ -64,7 +75,6 @@ export class FuelMatchService {
       const held = view.fuelTransactionId ? evidenceOn.get(view.fuelTransactionId) : undefined;
       return { view: rest, evidenceCount: held?.count ?? 0, imageOnFill: held?.hit ?? false, nearby: isNearby };
     };
-    const receipt: FuelReceipt = { businessDate, amount, facts };
     return judge(receipt, [...nearby.map((view) => seen(view, true)), ...elsewhere.map((view) => seen(view, false))]);
   }
 }

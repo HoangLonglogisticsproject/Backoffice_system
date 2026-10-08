@@ -7,6 +7,7 @@ import {
   openTestSchema,
   poolAsDatabase,
 } from '../helpers/integration-database';
+import { fuelSubmissionWriter } from '../helpers/fuel-wiring';
 import { ConflictError, ForbiddenError, NotFoundError } from '@common/errors/domain.error';
 import type { Database } from '@common/types/database.port';
 import { UserRepository } from '@core/users/persistence/user.repository';
@@ -127,7 +128,7 @@ describeIntegration('Fleet operations and fuel transactions against real Postgre
       checks,
       dispatchCrewOn(database),
     );
-    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, ledger, new FleetOperationsRepository(database));
+    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, ledger, new FleetOperationsRepository(database), fuelSubmissionWriter(database));
     fleet = new FleetOperationsService(new FleetOperationsRepository(counted));
     portal = new DriverPortalService(
       new DriverTripReadModelRepository(database),

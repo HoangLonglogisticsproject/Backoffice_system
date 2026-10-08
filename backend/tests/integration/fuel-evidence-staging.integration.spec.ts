@@ -11,15 +11,13 @@ import {
   openTestSchema,
   poolAsDatabase,
 } from '../helpers/integration-database';
+import { fuelWriter } from '../helpers/fuel-wiring';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { FilesystemObjectStorage } from '@infrastructure/object-storage/filesystem-object-storage';
-import { FuelDuplicateGuard } from '../../src/capabilities/trip-schedule/application/fuel-duplicate-guard';
 import { FuelEvidenceService } from '../../src/capabilities/trip-schedule/application/fuel-evidence.service';
 import { FuelTransactionService } from '../../src/capabilities/trip-schedule/application/fuel-transaction.service';
-import { FuelTransactionWriter } from '../../src/capabilities/trip-schedule/application/fuel-transaction-writer';
 import { MAX_STAGED_PER_UPLOADER } from '../../src/capabilities/trip-schedule/domain/fuel-evidence';
 import { FuelEvidenceRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-evidence.repository';
-import { FuelMatchRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-match.repository';
 import { FuelTransactionRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-transaction.repository';
 import { FuelTransactionViewRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-transaction-view.repository';
 
@@ -94,8 +92,7 @@ describeIntegration('Staged fuel evidence — abandoned, recovered, never a lock
       transactions,
       new FuelTransactionViewRepository(database),
       images,
-      new FuelTransactionWriter(transactions, images),
-      new FuelDuplicateGuard(new FuelMatchRepository(database)),
+      fuelWriter(database),
     );
     const users = new UserRepository(database);
     office = (await users.insertUser({ displayName: 'Kế Toán' })).id;

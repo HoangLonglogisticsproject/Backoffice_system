@@ -427,6 +427,11 @@ nhiên liệu cũ (CHECK một-trong-hai, unique "một fill sống / dòng ti�
   `fuel-evidence/<sha256>`, R2 riêng tư (prod) / filesystem (dev).
 * **Quyền:** `cost.import` (SuperAdmin + chức năng Kế toán) — không mở sổ xe hay tổng nào; `cost.read` giữ nguyên.
 * Khoá: dòng tiền `FOR NO KEY UPDATE` — hai người bọc cùng dòng xếp hàng; không khoá chuyến/lượt.
+* **Tài xế ghi, kế toán kiểm tra (0038):** `recordFill` và khai đầu ca có tiền mở fuel transaction của
+  chi phí ngay trong transaction của nó, gắn ảnh của tài xế (cửa `/driver/fuel-*`, không `cost.import`) và
+  ghi bước `submitted` vào `fuel_review_events` (append-only; trạng thái = bước cuối; DB giữ máy trạng thái).
+  Kế toán: `/fuel-reviews` (`cost.import`) — yêu cầu bổ sung / duyệt / từ chối / đánh dấu đã thanh toán.
+  Khai đầu ca có tiền khi ngày đã khai → 422 `CHECK_ALREADY_ANSWERED`, không còn "lưu" giả.
 * **Tìm chi phí đã ghi (PR-2):** `GET /trip-vehicles/:vehicleId/fuel-matches` đọc cả hai sổ — chỉ đọc,
   không chọn, không tạo. Mức `exact` (cùng ảnh) · `high` (cùng MST + số) · `possible` (xe, số tiền, ±1 ngày);
   dòng chuyến không ghi xe nào chỉ hiện khi cùng số tiền. Gắn là lệnh ghi §31.3 trên đúng sổ.
@@ -484,4 +489,9 @@ domain/fuel-match.ts                 judge: exact/high/possible, none/single/amb
 application/fuel-match.service.ts    tìm trên cả hai sổ (chỉ đọc)
 application/fuel-duplicate-guard.ts  cùng chứng từ trên fill khác → phải xác nhận; khoá theo ảnh/chứng từ
 persistence/fuel-match.repository.ts tập quanh ngày · fill giữ ảnh/chứng từ · khoá · fuel_match_acks
+domain/fuel-review.ts                trạng thái kiểm tra, canMove (máy trạng thái 0038)
+application/fuel-submission-writer.ts  lần đổ của tài xế → fuel transaction + ảnh + bước submitted, cùng transaction
+application/driver-fuel.service.ts   tài xế: danh sách / chi tiết của mình, gửi lại khi được hỏi
+application/fuel-review.service.ts   kế toán: danh sách theo trạng thái, chi tiết + cảnh báo, quyết định
+persistence/fuel-review.repository.ts  bước kiểm tra (append-only) · danh sách đọc từ dòng tiền + fuel transaction
 ```

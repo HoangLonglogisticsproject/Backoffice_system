@@ -7,6 +7,7 @@ import {
   openTestSchema,
   poolAsDatabase,
 } from '../helpers/integration-database';
+import { fuelSubmissionWriter } from '../helpers/fuel-wiring';
 import { ConflictError, ForbiddenError, NotFoundError } from '@common/errors/domain.error';
 import { businessToday } from '@common/pagination/date-range-page-query.dto';
 import { UserRepository } from '@core/users/persistence/user.repository';
@@ -125,7 +126,7 @@ describeIntegration('Vehicle daily fuel against real PostgreSQL', () => {
       vehicles,
       requests,
     );
-    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, vehicleCosts, new FleetOperationsRepository(database));
+    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, vehicleCosts, new FleetOperationsRepository(database), fuelSubmissionWriter(database));
     ledger = new VehicleCostService(vehicles, vehicleCosts);
     catalogue = new TripCatalogueService(vehicles, new TripCustomerRepository(database), new TripLocationRepository(database));
     totals = new TripCostTotalsRepository(database);
@@ -325,16 +326,20 @@ describeIntegration('Vehicle daily fuel against real PostgreSQL', () => {
       const vehicle = await newVehicle(true);
       const turns = await Promise.all([driverA, driverB, driverA, driverB, driverA].map((driver) => turn(vehicle, driver)));
 
-      const answers = await Promise.all(
+      const answers = await Promise.allSettled(
         turns.map((t, index) => declare(t.assignment, FILL, `race-${index}`, index % 2 === 0 ? driverA : driverB)),
       );
 
       expect(await checksOf(vehicle)).toHaveLength(1);
       expect(await costsOf(vehicle)).toHaveLength(1);
-      expect(new Set(answers.map((answer) => answer.sourceAssignmentId)).size).toBe(1);
+      // One winner; every loser that typed money is TOLD it was not recorded (0038) — never handed the winner's check.
+      expect(answers.filter((answer) => answer.status === 'fulfilled')).toHaveLength(1);
+      for (const lost of answers.filter((answer): answer is PromiseRejectedResult => answer.status === 'rejected')) {
+        expect(lost.reason).toMatchObject({ details: { dailyFuelCheck: 'CHECK_ALREADY_ANSWERED' } });
+      }
     });
 
-    it('8b. ★ the loser WAITS on the winner’s uncommitted check, then writes nothing', async () => {
+    it('8b. ★ the loser WAITS on the winner’s uncommitted check, then writes nothing — and says so when it carried money', async () => {
       const vehicle = await newVehicle(true);
       const winner = await turn(vehicle);
       const loser = await turn(vehicle);
@@ -348,7 +353,11 @@ describeIntegration('Vehicle daily fuel against real PostgreSQL', () => {
           [vehicle, today(), winner.trip, winner.assignment, driverA],
         );
         let answered = false;
-        const pending = declare(loser.assignment).finally(() => {
+        const pending = declare(loser.assignment).then(
+          () => undefined,
+          (error: { details?: unknown }) => error.details,
+        );
+        void pending.finally(() => {
           answered = true;
         });
         await new Promise((resolve) => setTimeout(resolve, 300));
@@ -356,7 +365,14 @@ describeIntegration('Vehicle daily fuel against real PostgreSQL', () => {
         expect(answered).toBe(false);
         await held.query('COMMIT');
 
-        expect(await pending).toMatchObject({ outcome: 'no_fuel', sourceAssignmentId: winner.assignment });
+        // Its money was not recorded, and it is told so — not answered with the winner's check (0038).
+        expect(await pending).toEqual({ dailyFuelCheck: 'CHECK_ALREADY_ANSWERED' });
+        // A loser that declared NO fuel loses nothing: it is answered with the check that stands.
+        const other = await turn(vehicle);
+        expect(await declare(other.assignment, { outcome: 'no_fuel' })).toMatchObject({
+          outcome: 'no_fuel',
+          sourceAssignmentId: winner.assignment,
+        });
       } finally {
         held.release();
       }

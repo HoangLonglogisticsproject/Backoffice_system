@@ -120,6 +120,28 @@ describe('★ cost.import attaches to costs that exist — it never creates one 
   });
 });
 
+describe('★ drivers have their own fuel door; Accounting keeps cost.import (0038)', () => {
+  const api = join(__dirname, '..', '..', 'src', 'capabilities', 'trip-schedule', 'api');
+  const guardsOf = (source: string) => [...source.matchAll(/@UseGuards\(([^)]*)\)/g)].map(([, guards]) => guards ?? '');
+
+  it('never hands a driver cost.import — every driver fuel route is a driver account’s, and asks no permission key', async () => {
+    const driver = await readFile(join(api, 'driver-fuel.controller.ts'), 'utf8');
+    expect(driver).not.toContain('RequirePermission');
+    expect(driver).not.toMatch(/['"]cost\./); // no permission key in code — the doc comment may say what it is not
+    const guards = guardsOf(driver);
+    expect(guards.length).toBeGreaterThanOrEqual(7);
+    for (const route of guards) expect(route).toMatch(/AuthGuard.*DriverOnlyGuard.*ProvisionedAccountGuard/);
+  });
+
+  it('keeps every review decision Accounting’s: cost.import, an office account, on every route', async () => {
+    const review = await readFile(join(api, 'fuel-review.controller.ts'), 'utf8');
+    const guards = guardsOf(review);
+    expect(guards).toHaveLength(3);
+    for (const route of guards) expect(route).toMatch(/BackofficeOnlyGuard.*PermissionGuard/);
+    expect(review.split("@RequirePermission('cost.import')").length - 1).toBe(3);
+  });
+});
+
 describe('★ the two price keys agree with each other', () => {
   it('everybody who may WRITE a price may READ it back', () => {
     // A holder who could type a figure and not see it saved would have a form
