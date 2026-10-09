@@ -663,6 +663,63 @@ that ran. If the release you are undoing carried a migration, the dump taken
 above is the only way back — and restoring it is a decision a person makes, on
 purpose. Nothing automated will do it for you.
 
+## Fuel evidence storage — a private R2 bucket
+
+Images (0037) never go in PostgreSQL and never sit at a public URL: the backend
+writes them to a **private** Cloudflare R2 bucket and streams each one only to a
+caller it has authorised. Until this is done, every image route answers 503 —
+"Kho chứng từ chưa được cấu hình trên máy chủ."
+
+The compose file must already pass the values through (deployed with the change
+that added this section; harmless while they are absent — still `none`). Then do
+steps 2–4 together, so no release meets values nobody has proved.
+
+1. **Cloudflare (dashboard):** create the bucket. Under its Settings, **Public
+   access → R2.dev subdomain: Disabled**, and **no Custom Domain**. No CORS rule
+   is needed: browsers never talk to R2. Then **R2 → Manage API tokens → Create**:
+   permission **Object Read & Write**, applied to **this bucket only**. Copy the
+   Access Key ID and the Secret Access Key (shown once) and the Account ID.
+2. **VPS, as root:** add the five lines to `/etc/hoanglong-bo/staging.env` with an
+   editor (`sudoedit` / `nano`), never `echo … >>`, which leaves the secret in
+   shell history. Keep the file `root:root 0600`.
+
+   ```
+   OBJECT_STORAGE_DRIVER=r2
+   R2_ACCOUNT_ID=<32 hex characters>
+   R2_BUCKET=<bucket name>
+   R2_ACCESS_KEY_ID=<access key id>
+   R2_SECRET_ACCESS_KEY=<secret access key>
+   ```
+3. **Prove it before anything deploys it**, as root. A malformed value refuses the
+   backend at boot, and the release's automatic rollback would meet the same file.
+   The probe runs as a one-off of the backend service itself, so it sees exactly
+   the environment Compose will give the container:
+
+   ```bash
+   set -euo pipefail
+   cd /opt/hoanglong-bo/deploy
+   IMAGE=$(docker ps --format '{{.Image}}' | grep '^hoanglong-bo-backend:' | head -1)
+   [ -n "$IMAGE" ] || { echo "no running backend image"; exit 1; }
+   APP_VERSION="${IMAGE#*:}" docker compose --env-file /etc/hoanglong-bo/staging.env \
+     run --rm --no-deps -T backend node - < verify-r2.cjs
+   ```
+
+   `R2 OK — …` or `R2 NOT READY — <reason>`, naming a bad key, never a value.
+   (`verify-r2.cjs` is in this checkout once this section's change is deployed.)
+4. **Restart onto it**, as root — the same commit, recreated with the new values
+   (`bo-release` of the running commit skips the restart):
+
+   ```bash
+   set -euo pipefail
+   cd /opt/hoanglong-bo/deploy
+   APP_VERSION="${IMAGE#*:}" docker compose --env-file /etc/hoanglong-bo/staging.env up -d --no-build --wait backend
+   ```
+5. **Prove it end to end**, from a workstation, as real accounts:
+   `node --env-file=<private file> deploy/smoke-evidence.mjs` (the variables are in
+   its header). It uploads, reads back, recovers in a new session, checks another
+   `cost.import` account is refused a waiting image (and can read an attached one),
+   and discards — through the public path.
+
 ## Backup / restore
 
 ```bash

@@ -68,6 +68,17 @@ services:
       # says it is unavailable, while the OpenStreetMap pin and the two
       # coordinate fields still locate a place. Get one at account.goong.io.
       GOONG_API_KEY: ${GOONG_API_KEY:-}
+      # ★ FUEL EVIDENCE IMAGES (0037) — a PRIVATE R2 bucket, read only through the
+      # backend's authorised routes. Listed here because `--env-file` only feeds
+      # this file's `${…}`: a value in the env file that is not named here never
+      # reaches the container (which is why `r2` there still answered 503).
+      # Unset is `none` — the same 503 as before, never a failed boot. `filesystem`
+      # is refused in production, so OBJECT_STORAGE_ROOT is deliberately absent.
+      OBJECT_STORAGE_DRIVER: ${OBJECT_STORAGE_DRIVER:-none}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
     ports:  
       - '127.0.0.1:3000:3000'
     healthcheck:
