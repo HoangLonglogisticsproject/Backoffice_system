@@ -28,9 +28,12 @@ import { deflateSync } from 'node:zlib';
 const BASES = ['https://opssystem.hoanglonglti.com/api', 'http://localhost:3000', 'http://localhost:3001'];
 const BASE = (process.env.SMOKE_BASE_URL ?? BASES[0]).replace(/\/$/, '');
 /** Every request goes through here: the backend is checked against the list right before it is called. */
+const ORIGINS = BASES.map((base) => new URL(base).origin);
 const send = (path, init) => {
   if (!BASES.includes(BASE)) throw new Error(`SMOKE_BASE_URL must be one of: ${BASES.join(', ')}`);
-  return fetch(BASE + path, init);
+  const url = new URL(BASE + path);
+  if (!ORIGINS.includes(url.origin)) throw new Error('refused a request outside the backend');
+  return fetch(url, init);
 };
 const env = (name) => process.env[name] ?? '';
 /** A path segment from the server or the operator: a uuid, encoded — never a way out of the route. */
