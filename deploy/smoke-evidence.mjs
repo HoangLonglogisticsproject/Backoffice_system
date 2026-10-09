@@ -6,7 +6,7 @@
  *
  *   node --env-file=<path>/bo-smoke.env deploy/smoke-evidence.mjs
  *
- *   SMOKE_BASE_URL=https://opssystem.hoanglonglti.com/api
+ *   SMOKE_BASE_URL=https://opssystem.hoanglonglti.com/api   # or a local backend
  *   SMOKE_OFFICE_EMAIL=…   SMOKE_OFFICE_PASSWORD=…   # holds cost.import
  *   SMOKE_OTHER_EMAIL=…    SMOKE_OTHER_PASSWORD=…    # any OTHER settled account
  *   SMOKE_DRIVER_EMAIL=…   SMOKE_DRIVER_PASSWORD=…   # optional: driver checks
@@ -20,12 +20,24 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 
-const BASE = (process.env.SMOKE_BASE_URL ?? 'https://opssystem.hoanglonglti.com/api').replace(/\/$/, '');
+/**
+ * ★ ONLY A KNOWN BACKEND. The script signs in with real credentials, so it
+ * talks to the deployment or a local backend — picked from this list, never a
+ * URL taken as typed (a typo must not send a password somewhere else).
+ */
+const BASES = ['https://opssystem.hoanglonglti.com/api', 'http://localhost:3000', 'http://localhost:3001'];
+const BASE = BASES.find((base) => base === (process.env.SMOKE_BASE_URL ?? BASES[0]).replace(/\/$/, ''));
 const env = (name) => process.env[name] ?? '';
+/** A path segment from the server or the operator: a uuid, encoded — never a way out of the route. */
+const segment = (value) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value))) throw new Error('an id is not a uuid');
+  return encodeURIComponent(value);
+};
 const results = [];
 const record = (status, check, detail = '') => {
   results.push(status);
-  console.log(`${status.padEnd(4)} ${check}${detail ? ` — ${detail}` : ''}`);
+  const line = detail ? `${status.padEnd(4)} ${check} — ${detail}` : `${status.padEnd(4)} ${check}`;
+  console.log(line.replaceAll(/[\r\n]+/g, ' '));
 };
 const expect = (ok, check, detail) => record(ok ? 'PASS' : 'FAIL', check, detail);
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -106,6 +118,7 @@ const login = async (label, email, password) => {
 
 // ---------------------------------------------------------------- run ----
 try {
+  if (!BASE) throw new Error(`SMOKE_BASE_URL must be one of: ${BASES.join(', ')}`);
   for (const name of ['SMOKE_OFFICE_EMAIL', 'SMOKE_OFFICE_PASSWORD', 'SMOKE_OTHER_EMAIL', 'SMOKE_OTHER_PASSWORD']) {
     if (!env(name)) throw new Error(`${name} is not set`);
   }
@@ -125,11 +138,11 @@ try {
     throw new Error('stopped: nothing further can be proved without a store');
   }
   expect(staged.status === 201 && image?.sha256 === sha(bytes), '2. upload (POST /fuel-evidence)', `${staged.status}, sha256 ${image?.sha256 === sha(bytes) ? 'matches' : 'DIFFERS'}`);
-  const id = image.id;
+  const id = segment(image.id);
 
   // 3. Metadata row.
   const mine = await (await office.call('GET', '/fuel-evidence/staged')).json();
-  const row = mine.find((entry) => entry.id === id);
+  const row = mine.find((entry) => entry.id === image.id);
   expect(row?.sha256 === sha(bytes) && row.fuelTransactionId === null, '3. metadata row (GET /fuel-evidence/staged)', row ? `${row.mimeType}, ${row.byteSize} bytes, waiting` : 'NOT LISTED');
 
   // 4–5. The object, read back through the backend from the store.
@@ -145,7 +158,7 @@ try {
   const again = await login('the office account (new session)', env('SMOKE_OFFICE_EMAIL'), env('SMOKE_OFFICE_PASSWORD'));
   const recovered = await listed(again, '/fuel-evidence/staged');
   const preview = await content(again, `/fuel-evidence/${id}/content`);
-  expect(recovered?.includes(id), '6. recovery after refresh (new session lists it)');
+  expect(recovered?.includes(image.id), '6. recovery after refresh (new session lists it)');
   expect(preview.status === 200 && preview.bytes && sha(preview.bytes) === sha(bytes), '7. preview/content after refresh', String(preview.status));
 
   // 9. Isolation.
@@ -154,8 +167,8 @@ try {
   const theirDiscard = (await other.call('POST', `/fuel-evidence/${id}/discard`)).status;
   const anonymous = (await fetch(`${BASE}/fuel-evidence/${id}/content`)).status;
   expect([403, 404].includes(theirs.status), '9. another account cannot read it', String(theirs.status));
-  expect(!(theirList ?? []).includes(id), '   …nor list it', theirList === null ? 'no access to the list' : 'not in their list');
-  expect([403, 404].includes(theirDiscard) && (await listed(office, '/fuel-evidence/staged'))?.includes(id), '   …nor discard it', String(theirDiscard));
+  expect(!(theirList ?? []).includes(image.id), '   …nor list it', theirList === null ? 'no access to the list' : 'not in their list');
+  expect([403, 404].includes(theirDiscard) && (await listed(office, '/fuel-evidence/staged'))?.includes(image.id), '   …nor discard it', String(theirDiscard));
   expect(anonymous === 401, '   …and no session reads nothing', String(anonymous));
 
   // 8. Discard.
@@ -163,16 +176,18 @@ try {
   const afterList = await listed(office, '/fuel-evidence/staged');
   const afterRead = (await content(office, `/fuel-evidence/${id}/content`)).status;
   const twice = (await office.call('POST', `/fuel-evidence/${id}/discard`)).status;
-  expect(discarded === 204 && !afterList?.includes(id) && afterRead === 404 && twice === 404, '8. discard', `${discarded}; then listed: ${afterList?.includes(id)}, content ${afterRead}, again ${twice}`);
+  const stillListed = afterList?.includes(image.id);
+  expect(discarded === 204 && !stillListed && afterRead === 404 && twice === 404, '8. discard', `${discarded}; then listed: ${stillListed}, content ${afterRead}, again ${twice}`);
 
   // 10. Attached evidence stays readable (opt-in: writes to a real cost's fuel transaction).
   if (env('SMOKE_ATTACH_VEHICLE_ID') && env('SMOKE_ATTACH_COST_ID')) {
     const attachBytes = png();
     const toAttach = await json(await office.upload('/fuel-evidence', attachBytes));
-    const route = `/trip-vehicles/${env('SMOKE_ATTACH_VEHICLE_ID')}/costs/${env('SMOKE_ATTACH_COST_ID')}/fuel-transaction`;
+    const attachId = segment(toAttach.id);
+    const route = `/trip-vehicles/${segment(env('SMOKE_ATTACH_VEHICLE_ID'))}/costs/${segment(env('SMOKE_ATTACH_COST_ID'))}/fuel-transaction`;
     const attached = await office.call('POST', route, { evidence: [{ id: toAttach.id, type: 'receipt' }] });
-    const attachedRead = await content(office, `/fuel-evidence/${toAttach.id}/content`);
-    const attachedOther = await content(other, `/fuel-evidence/${toAttach.id}/content`);
+    const attachedRead = await content(office, `/fuel-evidence/${attachId}/content`);
+    const attachedOther = await content(other, `/fuel-evidence/${attachId}/content`);
     expect(
       attached.status === 201 && attachedRead.status === 200 && sha(attachedRead.bytes ?? Buffer.alloc(0)) === sha(attachBytes),
       '10. attached evidence remains readable',
@@ -191,14 +206,15 @@ try {
       record('SKIP', 'driver door (POST /driver/fuel-evidence)', 'route not deployed — it arrives with #114');
     } else {
       const theirImage = await json(up);
+      const theirId = segment(theirImage?.id);
       const driverList = await listed(driver, '/driver/fuel-evidence/staged');
-      const driverRead = await content(driver, `/driver/fuel-evidence/${theirImage?.id}/content`);
+      const driverRead = await content(driver, `/driver/fuel-evidence/${theirId}/content`);
       expect(up.status === 201 && driverList?.includes(theirImage.id) && driverRead.status === 200 && sha(driverRead.bytes ?? Buffer.alloc(0)) === sha(driverBytes),
         'driver door: upload, list, read own', `${up.status}, ${driverRead.status}`);
       expect((await office.call('GET', '/driver/fuel-evidence/staged')).status === 403, 'driver door closed to an office account');
       expect((await driver.call('GET', '/fuel-evidence/staged')).status === 403, 'office door closed to a driver');
-      expect((await content(other, `/driver/fuel-evidence/${theirImage.id}/content`)).status !== 200, 'another account cannot read the driver\'s image');
-      expect((await driver.call('POST', `/driver/fuel-evidence/${theirImage.id}/discard`)).status === 204, 'driver discards their own');
+      expect((await content(other, `/driver/fuel-evidence/${theirId}/content`)).status !== 200, 'another account cannot read the driver\'s image');
+      expect((await driver.call('POST', `/driver/fuel-evidence/${theirId}/discard`)).status === 204, 'driver discards their own');
     }
   } else {
     record('SKIP', 'driver door', 'set SMOKE_DRIVER_EMAIL + SMOKE_DRIVER_PASSWORD');

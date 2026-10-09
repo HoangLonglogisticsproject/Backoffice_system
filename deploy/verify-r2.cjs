@@ -18,8 +18,9 @@
  * would meet the same env file. Prove it here first.
  */
 const { createHash, randomBytes } = require('node:crypto');
-const { validateEnv } = require('/app/dist/config/env.schema');
-const { R2ObjectStorage } = require('/app/dist/infrastructure/object-storage/r2-object-storage');
+// `node -` resolves from the working directory — the image's /app.
+const { validateEnv } = require('./dist/config/env.schema');
+const { R2ObjectStorage } = require('./dist/infrastructure/object-storage/r2-object-storage');
 
 (async () => {
   // The env file has no DATABASE_URL (compose builds it); this check needs none.
