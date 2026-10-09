@@ -21,7 +21,7 @@ const toQuery = ({ vehicleId: _vehicle, businessDate, amount, ...rest }: Receipt
 });
 
 /**
- * "Chứng từ nhiên liệu" — Accounting's screen for receipts of fuel that is
+ * "Đối soát chứng từ" — Accounting's screen for receipts of fuel that is
  * ALREADY recorded, on a lorry's ledger or a trip's (`cost.import`).
  *
  * ★ ATTACH-ONLY. It finds candidates on both ledgers, a person picks one, and

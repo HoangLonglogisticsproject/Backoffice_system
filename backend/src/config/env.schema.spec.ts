@@ -220,5 +220,12 @@ describe('validateEnv', () => {
       );
       expect(() => validateEnv({ ...valid, OBJECT_STORAGE_DRIVER: 'filesystem' })).toThrow(/OBJECT_STORAGE_ROOT is required/);
     });
+
+    it('lets filesystem through in production ONLY on the explicit CI opt-in', () => {
+      const ci = { ...valid, NODE_ENV: 'production', OBJECT_STORAGE_DRIVER: 'filesystem', OBJECT_STORAGE_ROOT: '/tmp/ci' };
+      expect(validateEnv({ ...ci, OBJECT_STORAGE_FILESYSTEM_IN_PRODUCTION: 'ci-only' }).OBJECT_STORAGE_ROOT).toBe('/tmp/ci');
+      expect(() => validateEnv({ ...ci, OBJECT_STORAGE_FILESYSTEM_IN_PRODUCTION: 'refused' })).toThrow(/production uses r2/);
+      expect(() => validateEnv({ ...ci, OBJECT_STORAGE_FILESYSTEM_IN_PRODUCTION: 'true' })).toThrow();
+    });
   });
 });

@@ -432,6 +432,9 @@ nhiên liệu cũ (CHECK một-trong-hai, unique "một fill sống / dòng ti�
   ghi bước `submitted` vào `fuel_review_events` (append-only; trạng thái = bước cuối; DB giữ máy trạng thái).
   Kế toán: `/fuel-reviews` (`cost.import`) — yêu cầu bổ sung / duyệt / từ chối / đánh dấu đã thanh toán.
   Khai đầu ca có tiền khi ngày đã khai → 422 `CHECK_ALREADY_ANSWERED`, không còn "lưu" giả.
+  Lần đổ của tài xế cần ≥ 1 ảnh (422 `EVIDENCE_REQUIRED`, kiểm ở `FuelSubmissionWriter`). **Từ chối = void dòng
+  `vehicle_costs` cùng transaction** (người từ chối, lý do); fill có dòng tiền đã void không còn giữ ảnh/chứng từ
+  trước bộ chặn trùng, nên lần đổ sửa lại dùng lại được.
 * **Tìm chi phí đã ghi (PR-2):** `GET /trip-vehicles/:vehicleId/fuel-matches` đọc cả hai sổ — chỉ đọc,
   không chọn, không tạo. Mức `exact` (cùng ảnh) · `high` (cùng MST + số) · `possible` (xe, số tiền, ±1 ngày);
   dòng chuyến không ghi xe nào chỉ hiện khi cùng số tiền. Gắn là lệnh ghi §31.3 trên đúng sổ.

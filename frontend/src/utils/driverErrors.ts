@@ -63,6 +63,8 @@ const validationKey = (details: Readonly<Record<string, string>> | undefined): T
   if (details?.['evidence'] === 'ON_ANOTHER_FILL' || details?.['documentNumber'] === 'ON_ANOTHER_FILL') {
     return 'driverErrReceiptOnAnotherFill';
   }
+  // A fill sent without a single photo: NOT saved (0038).
+  if (details?.['evidence'] === 'EVIDENCE_REQUIRED') return 'driverErrEvidenceRequired';
   if (Object.values(details ?? {}).includes('FACT_ALREADY_SET')) return 'driverErrFactAlreadySet';
   const rejection = details?.['location'];
   return (rejection && LOCATION_REJECTION_KEYS[rejection]) || 'driverErrValidation';

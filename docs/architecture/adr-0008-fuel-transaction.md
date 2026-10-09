@@ -68,4 +68,8 @@ approved ones are immutable.
   with the driver's own photos, and writes the first step of an append-only review (`fuel_review_events`:
   submitted → needs_info | approved | rejected; needs_info → submitted | rejected; approved → paid). No
   column of money or fact is copied into the review. Drivers have their own routes (never `cost.import`);
-  Accounting decides with `cost.import`. Rejecting never voids the money row — that stays the SuperAdmin's.
+  Accounting decides with `cost.import`. A driver's fill carries at least one photo (422 `EVIDENCE_REQUIRED`,
+  enforced where every driver fill is submitted). **Rejecting voids the money row in the same transaction**
+  (`voided_by` the reviewer, `void_reason` the reason): a refused fill is not money owed, so the lorry's ledger
+  never counts it and its corrected replacement is not counted twice. Nothing is deleted. A fill whose money row
+  is voided no longer holds its photo or invoice for the duplicate guard, so the corrected fill may carry them.

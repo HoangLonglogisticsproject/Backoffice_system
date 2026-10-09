@@ -7,7 +7,7 @@ import {
   openTestSchema,
   poolAsDatabase,
 } from '../helpers/integration-database';
-import { fuelSubmissionWriter } from '../helpers/fuel-wiring';
+import { fuelSubmissionWriter, stagedPhoto } from '../helpers/fuel-wiring';
 import { ConflictError, ForbiddenError, NotFoundError } from '@common/errors/domain.error';
 import { businessToday } from '@common/pagination/date-range-page-query.dto';
 import { UserRepository } from '@core/users/persistence/user.repository';
@@ -180,13 +180,24 @@ describeIntegration('Vehicle daily fuel against real PostgreSQL', () => {
       serverNow,
     );
   const FILL: DailyFuelDeclaration = { outcome: 'fuel_added', amount: '1250000.00', liters: '50.25', odometerKm: 182345, note: 'Petrolimex Q7' };
-  const declare = (
+  /** As the phone sends it: a declaration with fuel carries a photo (0038). */
+  const declare = async (
     assignment: string,
     declaration: DailyFuelDeclaration = FILL,
     key = `fuel-${assignment}`,
     by = driverA,
     serverNow?: Date,
-  ) => fuel.declare({ assignmentId: assignment, declaration, clientRequestId: key, declaredBy: by }, serverNow);
+  ) =>
+    fuel.declare(
+      {
+        assignmentId: assignment,
+        declaration,
+        clientRequestId: key,
+        declaredBy: by,
+        ...(declaration.outcome === 'fuel_added' ? { receipt: { facts: {}, evidence: [await stagedPhoto(poolAsDatabase(pool), by)] } } : {}),
+      },
+      serverNow,
+    );
   /** A check written by hand in its own transaction, left OPEN — the winner a race is made to wait on. */
   const holdCheck = async (vehicle: string, day: string, owner: { trip: string; assignment: string }, key: string) => {
     const held = await pool.connect();

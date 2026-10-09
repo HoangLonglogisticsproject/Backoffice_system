@@ -277,16 +277,16 @@ describe('MainLayout', () => {
       expect(hrefOf('Điều hành xe')).toBe('/dispatch/fleet-operations');
     });
 
-    it('★ offers "Chứng từ nhiên liệu" to `cost.import` holders only — a trip reader without it never sees it', () => {
+    it('★ offers "Đối soát chứng từ" to `cost.import` holders only — a trip reader without it never sees it', () => {
       useSession.mockReturnValue({ ...ready('sales', 'MEMBER'), can: (p: string) => p === 'trip.read' });
       const sales = renderLayout();
-      expect(screen.queryByText('Chứng từ nhiên liệu')).toBeNull();
+      expect(screen.queryByText('Đối soát chứng từ')).toBeNull();
       expect(screen.queryByText('Nhiên liệu')).toBeNull();
       sales.unmount();
 
       useSession.mockReturnValue({ ...ready('ketoan', 'MEMBER'), can: (p: string) => p === 'trip.read' || p === 'cost.import' });
       renderLayout();
-      expect(hrefOf('Chứng từ nhiên liệu')).toBe('/accounting/fuel-receipts');
+      expect(hrefOf('Đối soát chứng từ')).toBe('/accounting/fuel-receipts');
       // The drivers' fills to check and mark paid (0038) — the same key, the same holders.
       expect(hrefOf('Nhiên liệu')).toBe('/accounting/fuel-reviews');
     });

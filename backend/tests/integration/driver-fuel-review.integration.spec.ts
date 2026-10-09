@@ -51,6 +51,7 @@ describeIntegration('Driver fuel submission and Accounting review against real P
   let mine: DriverFuelService;
   let review: FuelReviewService;
   let evidence: FuelEvidenceService;
+  let ledger: VehicleCostRepository;
   let office: string;
   let accountant: string;
   let driverA: string;
@@ -94,13 +95,14 @@ describeIntegration('Driver fuel submission and Accounting review against real P
     evidence: images.map((id) => ({ id, type: 'receipt' as const })),
   });
   let keys = 0;
-  const record = (turn: string, driver: string, over: { amount?: string; receipt?: DriverReceipt; key?: string } = {}) =>
+  /** A fill as the phone sends it: by default with one fresh photo of the driver's own. */
+  const record = async (turn: string, driver: string, over: { amount?: string; receipt?: DriverReceipt; key?: string } = {}) =>
     fuel.recordFill({
       assignmentId: turn,
       fill: fill(over.amount),
       clientRequestId: over.key ?? `fill-${++keys}`,
       recordedBy: driver,
-      receipt: over.receipt ?? receipt(),
+      receipt: over.receipt ?? receipt([await stage(driver)]),
     });
   const fillOf = async (costId: string) =>
     one<{ id: string; driver_user_id: string; vehicle_cost_id: string }>(
@@ -126,13 +128,15 @@ describeIntegration('Driver fuel submission and Accounting review against real P
       new DriverAssignmentRepository(database),
       new TripVehicleRepository(database),
       new VehicleDailyFuelCheckRepository(database),
-      new VehicleCostRepository(database),
+      (ledger = new VehicleCostRepository(database)),
       new FleetOperationsRepository(database),
       fuelSubmissionWriter(database),
     );
     mine = new DriverFuelService(database, reviews, transactions, writer, images);
     const fills = new FuelTransactionService(database, transactions, new FuelTransactionViewRepository(database), images, writer);
-    review = new FuelReviewService(database, reviews, transactions, fills, new FuelMatchService(database, new FuelMatchRepository(database), transactions));
+    review = new FuelReviewService(
+      database, reviews, transactions, fills, new FuelMatchService(database, new FuelMatchRepository(database), transactions), ledger,
+    );
     const users = new UserRepository(database);
     office = (await users.insertUser({ displayName: 'Điều Độ' })).id;
     accountant = (await users.insertUser({ displayName: 'Kế Toán' })).id;
@@ -267,7 +271,8 @@ describeIntegration('Driver fuel submission and Accounting review against real P
       const before = [await count('vehicle_costs'), await count('fuel_transactions'), await count('fuel_review_events')];
       const again = await stage(driverA, bytes);
       expect((await refusal(() => record(turn, driverA, { receipt: receipt([again]) })))?.details).toEqual({ evidence: 'ON_ANOTHER_FILL' });
-      expect((await refusal(() => record(turn, driverA, { receipt: receipt([], { vendorTaxCode: '0100109106', documentNumber: '0001' }) })))?.details)
+      const fresh = await stage(driverA);
+      expect((await refusal(() => record(turn, driverA, { receipt: receipt([fresh], { vendorTaxCode: '0100109106', documentNumber: '0001' }) })))?.details)
         .toEqual({ documentNumber: 'ON_ANOTHER_FILL' });
       expect([await count('vehicle_costs'), await count('fuel_transactions'), await count('fuel_review_events')]).toEqual(before);
     });
@@ -285,10 +290,17 @@ describeIntegration('Driver fuel submission and Accounting review against real P
 
     it('15 · ★ a stale second start-of-shift declaration with money is refused as NOT recorded — never a false “saved”', async () => {
       const lorry = await flaggedLorry();
-      await fuel.declare({ assignmentId: await todaysTurn(lorry, driverA), declaration: { outcome: 'fuel_added', ...fill() }, clientRequestId: 'a', declaredBy: driverA });
+      await fuel.declare({
+        assignmentId: await todaysTurn(lorry, driverA), declaration: { outcome: 'fuel_added', ...fill() }, clientRequestId: 'a', declaredBy: driverA,
+        receipt: receipt([await stage(driverA)]),
+      });
       const turnB = await todaysTurn(lorry, driverB);
+      const photoB = await stage(driverB);
       const stale = await refusal(() =>
-        fuel.declare({ assignmentId: turnB, declaration: { outcome: 'fuel_added', ...fill('500000') }, clientRequestId: 'b', declaredBy: driverB }),
+        fuel.declare({
+          assignmentId: turnB, declaration: { outcome: 'fuel_added', ...fill('500000') }, clientRequestId: 'b', declaredBy: driverB,
+          receipt: receipt([photoB]),
+        }),
       );
       expect(stale?.details).toEqual({ dailyFuelCheck: 'CHECK_ALREADY_ANSWERED' });
       expect([await count('vehicle_costs'), await count('fuel_review_events')]).toEqual([1, 1]);
@@ -296,7 +308,7 @@ describeIntegration('Driver fuel submission and Accounting review against real P
   });
 
   describe('★ Accounting checks it — each decision one audited step', () => {
-    const submitted = async (driver = driverA, rcpt = receipt()) => {
+    const submitted = async (driver = driverA, rcpt?: DriverReceipt) => {
       const lorry = await flaggedLorry();
       const cost = await record(await todaysTurn(lorry, driver), driver, { receipt: rcpt });
       return (await fillOf(cost.id)).id;
@@ -318,7 +330,8 @@ describeIntegration('Driver fuel submission and Accounting review against real P
     });
 
     it('9 · ★ NEEDS_INFO keeps its reason; the driver sees it, adds what was missing — never over a fact — and resubmits', async () => {
-      const id = await submitted(driverA, receipt([], { vendorName: 'Cây xăng Phú Lâm' }));
+      const pump = await stage(driverA);
+      const id = await submitted(driverA, receipt([pump], { vendorName: 'Cây xăng Phú Lâm' }));
       expect((await refusal(() => review.act(id, 'request-info', '  ', accountant)))?.details).toEqual({ note: 'REASON_REQUIRED' });
       await review.act(id, 'request-info', 'Thiếu ảnh hoá đơn', accountant);
 
@@ -332,7 +345,7 @@ describeIntegration('Driver fuel submission and Accounting review against real P
       const invoice = await stage(driverA);
       const answered = await mine.resubmit(driverA, id, { ...receipt([invoice], { documentNumber: '0007' }), note: 'Đã bổ sung' });
       expect(answered).toMatchObject({ status: 'submitted', document: { series: null, number: '0007' } });
-      expect(answered.evidence.map((image) => image.id)).toEqual([invoice]);
+      expect(new Set(answered.evidence.map((image) => image.id))).toEqual(new Set([pump, invoice]));
       expect((await steps(id)).map((s) => [s.status, s.note])).toEqual([
         ['submitted', null], ['needs_info', 'Thiếu ảnh hoá đơn'], ['submitted', 'Đã bổ sung'],
       ]);
@@ -348,7 +361,7 @@ describeIntegration('Driver fuel submission and Accounting review against real P
       expect((await refusal(() => mine.resubmit(driverA, id, receipt([late]))))?.code).toBe('CONFLICT');
       expect((await refusal(() => review.act(id, 'approve', undefined, accountant)))?.code).toBe('CONFLICT');
       expect((await refusal(() => review.act(id, 'mark-paid', undefined, accountant)))?.code).toBe('CONFLICT');
-      expect(await count('fuel_transaction_evidence', 'fuel_transaction_id = $1', [id])).toBe(0);
+      expect(await count('fuel_transaction_evidence', 'fuel_transaction_id = $1', [id])).toBe(1);
     });
 
     it('11 · ★ APPROVED then PAID — two steps; paying again is the payment already recorded; never SUBMITTED → PAID', async () => {
@@ -405,6 +418,223 @@ describeIntegration('Driver fuel submission and Accounting review against real P
       expect(waiting).toMatchObject({ total: 1, items: [{ fuelTransactionId: b, status: 'submitted', driver: { id: driverB } }] });
       expect((await review.list('approved', 1, 50)).items.map((item) => item.fuelTransactionId)).toEqual([a]);
       expect((await review.list(undefined, 1, 50)).total).toBe(2);
+    });
+  });
+  describe('★ a refused fill is not money owed — rejecting withdraws its cost in the same transaction', () => {
+    const fillOn = async (driver = driverA) => {
+      const lorry = await flaggedLorry();
+      const turn = await todaysTurn(lorry, driver);
+      const cost = (await record(turn, driver)).id;
+      return { lorry, turn, cost, id: (await fillOf(cost)).id };
+    };
+    const liveLedger = (lorry: string) => ledger.page(lorry, { from: today(), to: today(), category: null }, 50, 0);
+    const voidOf = (costId: string) =>
+      one<{ voided: boolean; voided_by: string | null; void_reason: string | null }>(
+        `SELECT voided_at IS NOT NULL AS voided, voided_by, void_reason FROM vehicle_costs WHERE id = $1`,
+        [costId],
+      );
+    const stepsOf = (id: string) =>
+      sql<{ status: string; note: string | null; actor: string }>(
+        `SELECT status, note, actor FROM fuel_review_events WHERE fuel_transaction_id = $1 ORDER BY seq`,
+        [id],
+      );
+    /** The one invariant: the latest step is `rejected` exactly when the money row is withdrawn. */
+    const consistent = async (fill: { cost: string; id: string }) => {
+      const steps = await stepsOf(fill.id);
+      return steps.at(-1)?.status === 'rejected' && steps.filter((step) => step.status === 'rejected').length === 1
+        ? (await voidOf(fill.cost)).voided
+        : !(await voidOf(fill.cost)).voided && !steps.some((step) => step.status === 'rejected');
+    };
+
+    it('R1 · ★ a rejected fill leaves the lorry’s live ledger and its total — the row, its fill, its photo and its review stay', async () => {
+      const { lorry, cost, id } = await fillOn();
+      expect(await liveLedger(lorry)).toMatchObject({ total: 1, totalAmount: '772460.00' });
+      const decided = await review.act(id, 'reject', 'Ảnh không phải bơm của xe này', accountant);
+      expect(await liveLedger(lorry)).toMatchObject({ total: 0, totalAmount: '0.00', items: [] });
+      // Withdrawn, never deleted: the money row, its fuel transaction, its photo and both steps are all still there.
+      expect([
+        await count('vehicle_costs', 'id = $1', [cost]),
+        await count('fuel_transactions', 'id = $1 AND voided_at IS NULL', [id]),
+        await count('fuel_transaction_evidence', 'fuel_transaction_id = $1', [id]),
+      ]).toEqual([1, 1, 1]);
+      expect((await stepsOf(id)).map((step) => step.status)).toEqual(['submitted', 'rejected']);
+      expect(decided).toMatchObject({ status: 'rejected', fill: { amount: '772460.00', backing: { costId: cost, voided: true } } });
+      // The same refusal again is the refusal already made: no second step, the void untouched.
+      const before = await one<{ voided_at: Date }>(`SELECT voided_at FROM vehicle_costs WHERE id = $1`, [cost]);
+      await review.act(id, 'reject', 'lần nữa', accountant);
+      expect((await stepsOf(id)).map((step) => step.status)).toEqual(['submitted', 'rejected']);
+      expect(await one(`SELECT voided_at, void_reason FROM vehicle_costs WHERE id = $1`, [cost]))
+        .toEqual({ voided_at: before.voided_at, void_reason: 'Ảnh không phải bơm của xe này' });
+    });
+
+    it('R2 · ★ reject, then the corrected fill — the same photo and invoice — counts ONCE: only the corrected one', async () => {
+      const lorry = await flaggedLorry();
+      const turn = await todaysTurn(lorry, driverA);
+      const bytes = jpeg();
+      const invoice = { vendorTaxCode: '0100109106', documentNumber: '0004567' };
+      const wrong = await record(turn, driverA, { amount: '7724600', receipt: receipt([await stage(driverA, bytes)], invoice) });
+      await review.act((await fillOf(wrong.id)).id, 'reject', 'Số tiền thừa một số 0', accountant);
+      // The refused fill no longer holds its receipt: the corrected one may carry the very same photo and invoice.
+      const corrected = await record(turn, driverA, { amount: '772460', receipt: receipt([await stage(driverA, bytes)], invoice) });
+      const page = await liveLedger(lorry);
+      expect(page).toMatchObject({ total: 1, totalAmount: '772460.00' });
+      expect(page.items.map((item) => item.id)).toEqual([corrected.id]);
+      expect(await statusOf((await fillOf(corrected.id)).id)).toBe('submitted');
+      expect((await review.detail((await fillOf(corrected.id)).id)).warnings).toEqual([]);
+    });
+
+    it('R3 · ★ the reason and the one who refused are on BOTH the review step and the withdrawn cost — from SUBMITTED or NEEDS_INFO', async () => {
+      const fresh = await fillOn();
+      await review.act(fresh.id, 'reject', '  Không phải xe của công ty  ', accountant);
+      const asked = await fillOn(driverB);
+      await review.act(asked.id, 'request-info', 'Thiếu ảnh hoá đơn', accountant);
+      await review.act(asked.id, 'reject', 'Không bổ sung được hoá đơn', office);
+      for (const [fill, reason, by] of [
+        [fresh, 'Không phải xe của công ty', accountant],
+        [asked, 'Không bổ sung được hoá đơn', office],
+      ] as const) {
+        expect((await stepsOf(fill.id)).at(-1)).toEqual({ status: 'rejected', note: reason, actor: by });
+        expect(await voidOf(fill.cost)).toEqual({ voided: true, voided_by: by, void_reason: reason });
+      }
+    });
+
+    it('R4 · NEEDS_INFO does not withdraw the cost', async () => {
+      const fill = await fillOn();
+      await review.act(fill.id, 'request-info', 'Thiếu ảnh hoá đơn', accountant);
+      expect(await voidOf(fill.cost)).toEqual({ voided: false, voided_by: null, void_reason: null });
+      expect((await liveLedger(fill.lorry)).total).toBe(1);
+    });
+
+    it('R5 · APPROVED does not withdraw the cost', async () => {
+      const fill = await fillOn();
+      await review.act(fill.id, 'approve', undefined, accountant);
+      expect(await voidOf(fill.cost)).toEqual({ voided: false, voided_by: null, void_reason: null });
+      expect((await liveLedger(fill.lorry)).total).toBe(1);
+    });
+
+    it('R6 · PAID does not withdraw the cost', async () => {
+      const fill = await fillOn();
+      await review.act(fill.id, 'approve', undefined, accountant);
+      await review.act(fill.id, 'mark-paid', 'CK VCB 4589', accountant);
+      expect(await voidOf(fill.cost)).toEqual({ voided: false, voided_by: null, void_reason: null });
+      expect((await liveLedger(fill.lorry)).total).toBe(1);
+    });
+
+    it('R7 · ★ racing decisions and retries never leave “rejected but counted” or “withdrawn but not rejected”', async () => {
+      // Two refusals at once: one step, one void — the second is the refusal already made.
+      const twice = await fillOn();
+      const both = await Promise.allSettled([
+        review.act(twice.id, 'reject', 'Lý do một', accountant),
+        review.act(twice.id, 'reject', 'Lý do hai', office),
+      ]);
+      expect(both.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
+      const [refusal1] = (await stepsOf(twice.id)).filter((step) => step.status === 'rejected');
+      expect(await voidOf(twice.cost)).toEqual({ voided: true, voided_by: refusal1?.actor, void_reason: refusal1?.note });
+      expect(await consistent(twice)).toBe(true);
+
+      // Approve against reject, on several fills: exactly one wins each, the loser is a 409 — and the pair always agrees.
+      const fills = await Promise.all([fillOn(), fillOn(), fillOn(), fillOn(driverB), fillOn(driverB)]);
+      const raced = await Promise.all(
+        fills.map((fill) =>
+          Promise.allSettled([review.act(fill.id, 'approve', undefined, accountant), review.act(fill.id, 'reject', 'Trùng', office)]),
+        ),
+      );
+      for (const [index, outcomes] of raced.entries()) {
+        expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+        const lost = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+        expect((lost?.reason as { code?: string }).code).toBe('CONFLICT');
+        expect(await consistent(fills[index] as { cost: string; id: string })).toBe(true);
+      }
+    });
+
+    it('R8 · ★ all or nothing: a void that fails takes the `rejected` step with it, a step that fails takes the void — and the retry lands once', async () => {
+      const fill = await fillOn();
+      await pool.query(`
+        CREATE FUNCTION itest_refuse_void() RETURNS trigger AS $$
+        BEGIN
+          IF OLD.voided_at IS NULL AND NEW.voided_at IS NOT NULL THEN RAISE EXCEPTION 'itest: the void fails'; END IF;
+          RETURN NEW;
+        END $$ LANGUAGE plpgsql;
+        CREATE TRIGGER itest_refuse_void BEFORE UPDATE ON vehicle_costs FOR EACH ROW EXECUTE FUNCTION itest_refuse_void();
+        CREATE FUNCTION itest_refuse_rejected() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.status = 'rejected' AND NEW.note = 'step fails' THEN RAISE EXCEPTION 'itest: the step fails'; END IF;
+          RETURN NEW;
+        END $$ LANGUAGE plpgsql;
+        CREATE TRIGGER itest_refuse_rejected BEFORE INSERT ON fuel_review_events FOR EACH ROW EXECUTE FUNCTION itest_refuse_rejected();`);
+      try {
+        await expect(review.act(fill.id, 'reject', 'Trùng', accountant)).rejects.toThrow(/the void fails/);
+        expect((await stepsOf(fill.id)).map((step) => step.status)).toEqual(['submitted']);
+        expect((await voidOf(fill.cost)).voided).toBe(false);
+        await pool.query(`DROP TRIGGER itest_refuse_void ON vehicle_costs`);
+        await expect(review.act(fill.id, 'reject', 'step fails', accountant)).rejects.toThrow(/the step fails/);
+        expect((await stepsOf(fill.id)).map((step) => step.status)).toEqual(['submitted']);
+        expect((await voidOf(fill.cost)).voided).toBe(false);
+      } finally {
+        await pool.query(`
+          DROP TRIGGER IF EXISTS itest_refuse_void ON vehicle_costs;
+          DROP TRIGGER IF EXISTS itest_refuse_rejected ON fuel_review_events;
+          DROP FUNCTION IF EXISTS itest_refuse_void();
+          DROP FUNCTION IF EXISTS itest_refuse_rejected();`);
+      }
+      await review.act(fill.id, 'reject', 'Trùng', accountant);
+      expect((await stepsOf(fill.id)).map((step) => step.status)).toEqual(['submitted', 'rejected']);
+      expect(await voidOf(fill.cost)).toEqual({ voided: true, voided_by: accountant, void_reason: 'Trùng' });
+    });
+  });
+
+  describe('★ a driver’s fill carries at least one photo — the server’s rule, not the phone’s', () => {
+    const written = async () => [await count('vehicle_daily_fuel_checks'), await count('vehicle_costs'), await count('fuel_transactions'), await count('fuel_review_events')];
+
+    it('P1 · ★ a fill with no photo is refused 422 EVIDENCE_REQUIRED — nothing written', async () => {
+      const turn = await todaysTurn(await flaggedLorry(), driverA);
+      expect((await refusal(() => record(turn, driverA, { receipt: receipt([], { vendorName: 'Petrolimex' }) })))?.details)
+        .toEqual({ evidence: 'EVIDENCE_REQUIRED' });
+      expect(await written()).toEqual([0, 0, 0, 0]);
+    });
+
+    it('P2 · ★ a start-of-shift “fuel added” with no photo is refused 422 — the day stays open; “no fuel” needs none', async () => {
+      const lorry = await flaggedLorry();
+      const turn = await todaysTurn(lorry, driverA);
+      const declare = (key: string, rcpt?: DriverReceipt) =>
+        fuel.declare({ assignmentId: turn, declaration: { outcome: 'fuel_added', ...fill() }, clientRequestId: key, declaredBy: driverA, ...(rcpt ? { receipt: rcpt } : {}) });
+      expect((await refusal(() => declare('bare')))?.details).toEqual({ evidence: 'EVIDENCE_REQUIRED' });
+      expect((await refusal(() => declare('empty', receipt([]))))?.details).toEqual({ evidence: 'EVIDENCE_REQUIRED' });
+      expect(await written()).toEqual([0, 0, 0, 0]);
+      // The refused declaration did not take the lorry's day: the same driver answers it properly.
+      const check = await declare('with-photo', receipt([await stage(driverA)]));
+      expect(check.outcome).toBe('fuel_added');
+      expect(await written()).toEqual([1, 1, 1, 1]);
+      const other = await todaysTurn(await flaggedLorry(), driverA);
+      await fuel.declare({ assignmentId: other, declaration: { outcome: 'no_fuel' }, clientRequestId: 'nf', declaredBy: driverA });
+      expect(await written()).toEqual([2, 1, 1, 1]);
+    });
+
+    it('P3 · ★ only the driver’s OWN waiting photo counts — another driver’s is refused NOT_STAGED, nothing written', async () => {
+      const turn = await todaysTurn(await flaggedLorry(), driverA);
+      const theirs = await stage(driverB);
+      expect((await refusal(() => record(turn, driverA, { receipt: receipt([theirs]) })))?.details).toEqual({ evidence: 'NOT_STAGED' });
+      expect(await written()).toEqual([0, 0, 0, 0]);
+      expect((await evidence.staged(driverB)).map((image) => image.id)).toEqual([theirs]);
+      await record(turn, driverA, { receipt: receipt([await stage(driverA)]) });
+      expect(await written()).toEqual([0, 1, 1, 1]);
+    });
+
+    it('P4 · ★ a retry by key is the stored fill — even one whose photos the phone no longer has', async () => {
+      const turn = await todaysTurn(await flaggedLorry(), driverA);
+      const first = await record(turn, driverA, { key: 'retry', receipt: receipt([await stage(driverA)]) });
+      const again = await record(turn, driverA, { key: 'retry', receipt: receipt([]) });
+      expect(again.id).toBe(first.id);
+      expect(await written()).toEqual([0, 1, 1, 1]);
+    });
+
+    it('P5 · answering “Cần bổ sung” needs no new photo — the fill already has one', async () => {
+      const turn = await todaysTurn(await flaggedLorry(), driverA);
+      const id = (await fillOf((await record(turn, driverA)).id)).id;
+      await review.act(id, 'request-info', 'Ghi số hoá đơn', accountant);
+      const answered = await mine.resubmit(driverA, id, { ...receipt([], { documentNumber: '0009' }), note: 'Đã ghi' });
+      expect(answered).toMatchObject({ status: 'submitted', document: { number: '0009' } });
+      expect(answered.evidence).toHaveLength(1);
     });
   });
 });

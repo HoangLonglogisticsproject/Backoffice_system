@@ -30,10 +30,12 @@ const editExpense = vi.fn();
 const submitCompletion = vi.fn();
 const declareDailyFuel = vi.fn();
 
+const stageDriverFuelPhoto = vi.fn();
+
 vi.mock('@/api/driverFuel', () => ({
   // The fill's photos (0038): none waiting on the server in these cases.
   fetchDriverWaitingPhotos: () => Promise.resolve([]),
-  stageDriverFuelPhoto: vi.fn(),
+  stageDriverFuelPhoto: (...a: unknown[]) => stageDriverFuelPhoto(...a),
   discardDriverFuelPhoto: vi.fn(),
   driverFuelPhotoUrl: (id: string) => `/api/driver/fuel-evidence/${id}/content`,
 }));
@@ -1662,7 +1664,19 @@ describe('★ a closed trip — opened from "Đã chạy xong", read-only', () =
   });
 });
 
+/** Takes the pump photo in an open fuel dialog — "fuel added" is sent with at least one (0038). */
+const photograph = async (dialog: HTMLElement) => {
+  fireEvent.change(within(dialog).getByLabelText('Đồng hồ bơm'), { target: { files: [new File(['p'], 'p.jpg', { type: 'image/jpeg' })] } });
+  await within(dialog).findByRole('img', { name: 'Đồng hồ bơm' });
+};
+
 describe('★ the day’s first milestone, held for the lorry’s daily fuel check', () => {
+  beforeEach(() => {
+    stageDriverFuelPhoto.mockReset().mockResolvedValue({ id: 'img-1', originalFilename: 'p.jpg', evidenceType: null });
+    URL.createObjectURL = vi.fn(() => 'blob:photo');
+    URL.revokeObjectURL = vi.fn(); // jsdom has none
+  });
+
   const held = () =>
     new ApiError(422, 'VALIDATION_FAILED', 'This lorry needs its daily fuel check.', {
       dailyFuelCheck: 'FUEL_DECLARATION_REQUIRED',
@@ -1710,6 +1724,9 @@ describe('★ the day’s first milestone, held for the lorry’s daily fuel che
     fireEvent.change(within(dialog).getByLabelText('Số lít (không bắt buộc)'), { target: { value: '50,5' } });
     fireEvent.change(within(dialog).getByLabelText('Số km trên đồng hồ (không bắt buộc)'), { target: { value: '182345' } });
     fireEvent.change(within(dialog).getByLabelText('Ghi chú (không bắt buộc)'), { target: { value: 'Petrolimex Q7' } });
+    expect(save).toBeDisabled(); // ★ fuel added waits for a photo; "no fuel" never does
+    await photograph(dialog);
+    expect(save).toBeEnabled();
     fireEvent.click(save);
 
     await waitFor(() =>
@@ -1720,7 +1737,7 @@ describe('★ the day’s first milestone, held for the lorry’s daily fuel che
         odometerKm: 182345,
         note: 'Petrolimex Q7',
         clientRequestId: expect.any(String),
-        evidence: [],
+        evidence: [{ id: 'img-1', type: 'pump_meter' }],
       }),
     );
     await waitFor(() => expect(recordExecutionEvent).toHaveBeenCalledTimes(2));

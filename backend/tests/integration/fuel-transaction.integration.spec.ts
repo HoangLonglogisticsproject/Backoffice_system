@@ -639,6 +639,8 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       return turn(tripId, vehicleId, driver);
     };
     const fill = (amount: string, liters: string | null) => ({ amount, liters, odometerKm: null, note: null });
+    /** A driver's fill carries a photo of their own (0038). */
+    const photo = async (by: string) => ({ facts: {}, evidence: [{ id: await stage(by), type: 'receipt' as const }] });
     const costsOf = (vehicleId: string) =>
       sql<{ id: string; amount: string; liters: string | null; business_date: string; created_by: string }>(
         `SELECT id, amount::text, liters::text, business_date::text, created_by FROM vehicle_costs
@@ -655,12 +657,13 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
         declaration: { outcome: 'fuel_added', ...fill('772460', '26') },
         clientRequestId: 'event-a',
         declaredBy: driverA,
+        receipt: await photo(driverA),
       });
       // Event B — later the same day, the same driver: a fill after the check.
-      await driverFuel.recordFill({ assignmentId: turnA, fill: fill('500000', '17'), clientRequestId: 'event-b', recordedBy: driverA });
+      await driverFuel.recordFill({ assignmentId: turnA, fill: fill('500000', '17'), clientRequestId: 'event-b', recordedBy: driverA, receipt: await photo(driverA) });
       // Event C — another driver, on another trip of the same lorry, the same day.
       const turnC = await todaysTurn(vehicle, driverB);
-      await driverFuel.recordFill({ assignmentId: turnC, fill: fill('300000', '10.5'), clientRequestId: 'event-c', recordedBy: driverB });
+      await driverFuel.recordFill({ assignmentId: turnC, fill: fill('300000', '10.5'), clientRequestId: 'event-c', recordedBy: driverB, receipt: await photo(driverB) });
 
       const costs = await costsOf(vehicle);
       expect(costs.map((cost) => [cost.amount, cost.liters, cost.created_by])).toEqual([
@@ -694,7 +697,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
           vendor: { name: vendors[i] },
           driver: { id: costs[i]?.created_by },
         });
-        expect(view.evidence).toHaveLength(1);
+        expect(view.evidence).toHaveLength(2); // the driver's photo, then the office's
       });
 
       // After commit, all three are there, each on its own cost — the first untouched by the later two.
@@ -716,7 +719,9 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
         declaration: { outcome: 'fuel_added', ...fill('772460', '26') },
         clientRequestId: 'a',
         declaredBy: driverA,
+        receipt: await photo(driverA),
       });
+      const photoB = await photo(driverB);
       // The day's obligation is met: a stale screen declaring MONEY is told it was not recorded (0038) — never
       // answered with A's check as if saved — and writes no cost (pinned by vehicle-daily-fuel 8b).
       expect(
@@ -726,12 +731,13 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
             declaration: { outcome: 'fuel_added', ...fill('500000', '17') },
             clientRequestId: 'b',
             declaredBy: driverB,
+            receipt: photoB,
           }),
         ))?.details,
       ).toEqual({ dailyFuelCheck: 'CHECK_ALREADY_ANSWERED' });
       expect(await costsOf(vehicle)).toHaveLength(1);
       // What the handset offers instead — a fill — is its own cost.
-      await driverFuel.recordFill({ assignmentId: turnB, fill: fill('500000', '17'), clientRequestId: 'b-fill', recordedBy: driverB });
+      await driverFuel.recordFill({ assignmentId: turnB, fill: fill('500000', '17'), clientRequestId: 'b-fill', recordedBy: driverB, receipt: await photo(driverB) });
       expect((await costsOf(vehicle)).map((cost) => cost.created_by)).toEqual([driverA, driverB]);
     });
   });

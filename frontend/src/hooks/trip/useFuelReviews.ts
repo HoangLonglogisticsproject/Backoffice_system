@@ -34,7 +34,9 @@ export function useDecideFuelReview(id: string) {
     mutationFn: ({ action, note }: { action: FuelReviewAction; note?: string }) => decideFuelReview(id, action, note),
     onSuccess: (_detail, { action }) => {
       notifySuccess(DONE[action]);
-      return client.invalidateQueries({ queryKey: tripKeys.fuel() });
+      // A refusal withdraws the fill's cost: "Chi phí xe" and the day's board count it no more.
+      const withdrawn = action === 'reject' ? [tripKeys.vehicleLedgers(), tripKeys.fleets()] : [];
+      return Promise.all([tripKeys.fuel(), ...withdrawn].map((queryKey) => client.invalidateQueries({ queryKey })));
     },
     onError: (error) => notifyApiError(error, 'fuelReviewFailed'),
   });

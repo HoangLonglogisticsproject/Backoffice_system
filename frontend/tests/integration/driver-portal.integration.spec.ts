@@ -1014,6 +1014,15 @@ describe('driver portal (D1) against the real API', () => {
       fuelTurn = assigned.data.id;
     });
 
+    /** A photo the driver uploads through their own door: a fill with fuel is sent with at least one (0038). */
+    const driverPhoto = async (driver: typeof driverA) => {
+      const form = new FormData();
+      form.append('file', new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...randomBytes(32)])], { type: 'image/jpeg' }), 'pump.jpg');
+      const staged = await driver.post('/driver/fuel-evidence', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      expect(staged.status).toBe(201);
+      return { id: staged.data.id as string, type: 'pump_meter' };
+    };
+
     const arrive = () =>
       driverA.post(`/driver/assignments/${fuelTurn}/execution-events`, {
         type: 'ARRIVED_PICKUP',
@@ -1060,6 +1069,13 @@ describe('driver portal (D1) against the real API', () => {
           .status,
       ).toBe(403);
 
+      // ★ Fuel added with no photo is refused — 422 EVIDENCE_REQUIRED — and takes nothing: not the day, not a cost.
+      const bare = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-checks`, {
+        outcome: 'fuel_added', amount: '1250000.00', clientRequestId: `bare-${unique}`,
+      });
+      expect(bare.status).toBe(422);
+      expect(toApiError(bare.status, bare.data).details).toEqual({ evidence: 'EVIDENCE_REQUIRED' });
+
       const body = {
         outcome: 'fuel_added',
         amount: '1250000.00',
@@ -1067,6 +1083,7 @@ describe('driver portal (D1) against the real API', () => {
         odometerKm: 182345,
         note: 'Petrolimex',
         clientRequestId: FILL_KEY,
+        evidence: [await driverPhoto(driverA)],
         vehicleId: randomUUID(),
         businessDate: '2020-01-01',
         tripId: randomUUID(),
@@ -1152,8 +1169,16 @@ describe('driver portal (D1) against the real API', () => {
     const fillBody = { amount: '300000.00', liters: '12.50', odometerKm: 182400, note: null, clientRequestId: FILL_AFTER };
 
     it('★ records a fill after the check: one more ledger row, the check untouched, only the driver’s own row back', async () => {
-      const filled = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, {
+      // ★ Not without a photo of the driver's OWN: none is 422 EVIDENCE_REQUIRED, another driver's is NOT_STAGED.
+      const fuelPath = `/driver/assignments/${fuelTurn}/fuel-transactions`;
+      const bare = await driverA.post(fuelPath, { ...fillBody, clientRequestId: `bare-fill-${unique}` });
+      expect([bare.status, toApiError(bare.status, bare.data).details]).toEqual([422, { evidence: 'EVIDENCE_REQUIRED' }]);
+      const borrowed = await driverA.post(fuelPath, { ...fillBody, clientRequestId: `borrowed-${unique}`, evidence: [await driverPhoto(driverB)] });
+      expect([borrowed.status, toApiError(borrowed.status, borrowed.data).details]).toEqual([422, { evidence: 'NOT_STAGED' }]);
+
+      const filled = await driverA.post(fuelPath, {
         ...fillBody,
+        evidence: [await driverPhoto(driverA)],
         // None of these is the body's to say; each is stripped.
         vehicleId: randomUUID(),
         businessDate: '2020-01-01',
@@ -1164,7 +1189,7 @@ describe('driver portal (D1) against the real API', () => {
       expect(keysOf(filled.data)).toEqual(sorted(['id', 'businessDate', 'amount', 'liters', 'odometerKm', 'note', 'createdAt']));
       expect(filled.data).toMatchObject({ businessDate: todayAsCalendarDay(), amount: '300000.00', liters: '12.50', odometerKm: 182400 });
 
-      // The same key and fill is the same row; the same key with another fill is a 409.
+      // The same key and fill is the same row — even sent without its photos; the same key with another fill is a 409.
       const retried = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, fillBody);
       expect([retried.status, retried.data.id]).toEqual([201, filled.data.id]);
       expect((await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, { ...fillBody, amount: '310000.00' })).status).toBe(409);
@@ -1230,7 +1255,7 @@ describe('driver portal (D1) against the real API', () => {
     ];
     const CANDIDATE_KEYS = [...VIEW_KEYS, 'basis', 'conflicts', 'evidenceCount', 'level'];
 
-    it('★ Chứng từ nhiên liệu — finds the fill on the lorry ledger, attaches to THAT cost, and creates none', async () => {
+    it('★ Đối soát chứng từ — finds the fill on the lorry ledger, attaches to THAT cost, and creates none', async () => {
       const day = todayAsCalendarDay();
       const document = `FE${unique.toUpperCase()}`;
       const ledger = () => boss.get(`/trip-vehicles/${fuelVehicle}/costs`, { params: { from: day, to: day } });
@@ -1248,7 +1273,7 @@ describe('driver portal (D1) against the real API', () => {
       expect(match).toMatchObject({
         backing: { ledger: 'vehicle', source: 'driver_portal', voided: false },
         amount: '1250000.00', liters: '50.25', level: 'possible', basis: ['fingerprint'],
-        evidenceCount: 0, conflicts: [],
+        evidenceCount: 1, conflicts: [],
       });
       // ★ The driver's fill is already its own fuel transaction (0038): Accounting adds to THAT one.
       expect(match.fuelTransactionId).toEqual(expect.any(String));
@@ -1355,12 +1380,41 @@ describe('driver portal (D1) against the real API', () => {
         outcome: 'fuel_added',
         amount: '450000',
         clientRequestId: `fuel-stale-${unique}`,
+        evidence: [await driverPhoto(driverB)],
       });
       expect(stale.status).toBe(422);
       expect(toApiError(stale.status, stale.data).details).toEqual({ dailyFuelCheck: 'CHECK_ALREADY_ANSWERED' });
       const day = todayAsCalendarDay();
       const ledger = await boss.get(`/trip-vehicles/${fuelVehicle}/costs`, { params: { from: day, to: day } });
       expect(ledger.data.items.map((cost: { amount: string }) => cost.amount)).not.toContain('450000.00');
+    });
+
+    it('★ a REJECTED fill leaves "Chi phí xe" and the board — withdrawn by its reviewer, for the reason the driver reads', async () => {
+      const day = todayAsCalendarDay();
+      const ledger = async () => (await boss.get(`/trip-vehicles/${fuelVehicle}/costs`, { params: { from: day, to: day } })).data;
+      const before = await ledger();
+      const recorded = await driverA.post(`/driver/assignments/${fuelTurn}/fuel-transactions`, {
+        amount: '777000.00', liters: null, odometerKm: null, note: null, clientRequestId: `rejected-${unique}`, evidence: [await driverPhoto(driverA)],
+      });
+      expect(recorded.status).toBe(201);
+      expect((await ledger()).total).toBe(before.total + 1);
+      const mine = (await driverA.get('/driver/fuel-submissions')).data as Array<{ fuelTransactionId: string; amount: string }>;
+      const id = (mine.find((fill) => fill.amount === '777000.00') as { fuelTransactionId: string }).fuelTransactionId;
+
+      expect((await boss.post(`/fuel-reviews/${id}/reject`, {})).status).toBe(422);
+      const rejected = await boss.post(`/fuel-reviews/${id}/reject`, { note: 'Ảnh không phải của xe này' });
+      expect(rejected.status).toBe(200);
+      expect(rejected.data).toMatchObject({ status: 'rejected', fill: { amount: '777000.00', backing: { voided: true } } });
+      expect(rejected.data.history.at(-1)).toMatchObject({ status: 'rejected', note: 'Ảnh không phải của xe này' });
+      // Out of the lorry's live costs and out of the board's figure — exactly as before it was recorded.
+      expect(await ledger()).toMatchObject({ total: before.total, totalAmount: before.totalAmount });
+      const board = await boss.get('/fleet-operations', { params: { date: day } });
+      const row = board.data.vehicles.find((entry: { vehicle: { id: string } }) => entry.vehicle.id === fuelVehicle);
+      expect(row.fuel).toMatchObject({ fills: before.total, totalAmount: before.totalAmount });
+      // The driver reads why; refusing again is the refusal already made.
+      expect((await driverA.get(`/driver/fuel-submissions/${id}`)).data).toMatchObject({ status: 'rejected', statusNote: 'Ảnh không phải của xe này' });
+      const again = await boss.post(`/fuel-reviews/${id}/reject`, { note: 'lần nữa' });
+      expect([again.status, again.data.history.length]).toEqual([200, rejected.data.history.length]);
     });
 
     it('★ stages a receipt image (503 with no store) and hands every waiting image back to its uploader — the browser need not remember', async () => {

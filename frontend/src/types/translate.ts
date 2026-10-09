@@ -1951,9 +1951,9 @@ const PHRASES = {
   noEmployeesToPick: { vi: 'Không có nhân viên phù hợp.', en: 'No matching employee.' },
   memberTransferred: { vi: 'Đã chuyển vào phòng', en: 'Moved into the unit' },
   transferFailed: { vi: 'Không chuyển được.', en: 'Could not move them.' },
-  // ---------------------------- Chứng từ nhiên liệu (PR-2, `cost.import`) --
+  // ----------------------------- Đối soát chứng từ (PR-2, `cost.import`) --
   accountingSection: { vi: 'Kế toán', en: 'Accounting' },
-  fuelReceipts: { vi: 'Chứng từ nhiên liệu', en: 'Fuel receipts' },
+  fuelReceipts: { vi: 'Đối soát chứng từ', en: 'Receipt matching' },
   fuelReceiptsSubtitle: {
     vi: 'Gắn chứng từ vào chi phí nhiên liệu ĐÃ GHI ở Chi phí xe hoặc Chi phí chuyến. Màn hình này không tạo chi phí mới.',
     en: 'Attach a receipt to fuel ALREADY recorded on a lorry or a trip. This screen never creates a cost.',
@@ -2099,6 +2099,11 @@ const PHRASES = {
     vi: 'Ảnh hoặc số hoá đơn này đã được gửi cho một lần đổ khác. Kiểm tra lại ảnh / số hoá đơn.',
     en: 'This photo or invoice number was already sent with another fill. Check the photo / number.',
   },
+  driverErrEvidenceRequired: {
+    vi: 'Cần ít nhất 1 ảnh (đồng hồ bơm, hoá đơn/phiếu hoặc QR) — lần đổ này CHƯA được lưu.',
+    en: 'At least one photo is needed (pump, receipt or QR) — this fill was NOT saved.',
+  },
+  driverPhotosRequired: { vi: 'Cần ít nhất 1 ảnh để gửi.', en: 'At least one photo is needed to send.' },
   driverErrFactAlreadySet: { vi: 'Thông tin này đã được ghi trước đó, không sửa được ở đây.', en: 'That detail was already recorded and cannot be changed here.' },
   toastFuelCheckAlreadyStood: { vi: 'Đầu ca của xe đã được khai báo trước đó', en: 'The lorry’s start-of-shift was already declared' },
   toastFuelResubmitted: { vi: 'Đã gửi lại cho kế toán', en: 'Sent back to Accounting' },
@@ -2122,8 +2127,8 @@ const PHRASES = {
   fuelReviewHistory: { vi: 'Các bước', en: 'Steps' },
   fuelReviewNote: { vi: 'Ghi chú', en: 'Note' },
   fuelReviewNoteHint: {
-    vi: 'Bắt buộc khi yêu cầu bổ sung hoặc từ chối (tài xế đọc được). Khi đánh dấu đã thanh toán có thể ghi mã giao dịch.',
-    en: 'Required to ask for more or to reject (the driver reads it). When marking paid, the transfer reference may go here.',
+    vi: 'Bắt buộc khi yêu cầu bổ sung hoặc từ chối (tài xế đọc được). Từ chối sẽ huỷ chi phí này khỏi Chi phí xe. Khi đánh dấu đã thanh toán có thể ghi mã giao dịch.',
+    en: 'Required to ask for more or to reject (the driver reads it). Rejecting withdraws this cost from the lorry’s costs. When marking paid, the transfer reference may go here.',
   },
   fuelReviewFailed: { vi: 'Không thực hiện được.', en: 'Could not do that.' },
   fuelActionRequestInfo: { vi: 'Yêu cầu bổ sung', en: 'Ask for more' },

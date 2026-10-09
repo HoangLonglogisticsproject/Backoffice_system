@@ -16,6 +16,7 @@ import {
 import type { FuelTransactionView } from '../domain/fuel-transaction-view';
 import { FuelReviewRepository } from '../persistence/fuel-review.repository';
 import { FuelTransactionRepository } from '../persistence/fuel-transaction.repository';
+import { VehicleCostRepository } from '../persistence/vehicle-cost.repository';
 import { FuelMatchService } from './fuel-match.service';
 import { FuelTransactionService } from './fuel-transaction.service';
 
@@ -33,9 +34,13 @@ export interface FuelReviewDetail {
  * decision is one more append-only step, taken under the fill's row lock and
  * allowed only as the next move (`canMove`, held again by the database): a
  * fill is approved before it is paid, asked about or refused only with a
- * reason. The same decision twice is the decision already taken. Nothing
- * here touches the money row — a rejected fill is not paid; withdrawing its
- * cost is the SuperAdmin's void, a separate act.
+ * reason. The same decision twice is the decision already taken.
+ *
+ * ★ A REFUSED FILL IS NOT MONEY OWED. Rejecting voids the fill's
+ * `vehicle_costs` row in the SAME transaction as the `rejected` step — by the
+ * one who refused it, for the reason the driver reads — so "Chi phí xe" never
+ * counts it and a corrected fill is never counted twice. Every other step
+ * leaves the money row as it is. The review, the fill and its images stay.
  */
 @Injectable()
 export class FuelReviewService {
@@ -45,6 +50,7 @@ export class FuelReviewService {
     private readonly transactions: FuelTransactionRepository,
     private readonly fuel: FuelTransactionService,
     private readonly matches: FuelMatchService,
+    private readonly costs: VehicleCostRepository,
   ) {}
 
   async list(status: FuelReviewStatus | undefined, page: number, limit: number): Promise<OffsetPage<FuelSubmission>> {
@@ -86,12 +92,15 @@ export class FuelReviewService {
     const submission = await this.reviews.submission(fuelTransactionId);
     if (!submission) throw new NotFoundError('Fuel submission not found.');
     await this.db.transaction(async (tx) => {
+      // The money row first, then the fill — the order every writer of a fill takes them (#112): no lock cycle.
+      const cost = await this.transactions.lockVehicleCost(submission.vehicleId, submission.costId, tx);
       const stored = await this.transactions.lockLive('vehicle_cost_id', submission.costId, tx);
-      if (stored?.id !== fuelTransactionId) throw new NotFoundError('Fuel submission not found.');
+      if (!cost || stored?.id !== fuelTransactionId) throw new NotFoundError('Fuel submission not found.');
       const latest = await this.reviews.latest(fuelTransactionId, tx);
       if (!latest || latest.status === to) return; // the decision already taken: nothing new
       if (!canMove(latest.status, to)) throw new ConflictError(`A fill that is ${latest.status} cannot become ${to}.`);
       await this.reviews.append({ fuelTransactionId, seq: latest.seq + 1, status: to, note: reason, actor }, tx);
+      if (to === 'rejected') await this.costs.voidCost(submission.costId, actor, reason as string, tx);
     });
     return this.detail(fuelTransactionId);
   }

@@ -27,6 +27,14 @@ export interface Acknowledgement {
 const WINDOW = `BETWEEN $2::date - 1 AND $2::date + 1`;
 
 /**
+ * A fill whose money row was withdrawn (a rejected driver fill, a voided trip
+ * line) no longer holds its receipt: the corrected fill may carry the same
+ * photo or invoice without being taken for a duplicate.
+ */
+const LIVE_BACKING = `NOT EXISTS (SELECT 1 FROM vehicle_costs vc WHERE vc.id = ft.vehicle_cost_id AND vc.voided_at IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM trip_costs tc WHERE tc.id = ft.trip_cost_id AND tc.voided_at IS NOT NULL)`;
+
+/**
  * ★ THE LORRY'S FUEL COSTS AROUND ONE DAY, ON BOTH LEDGERS. A trip line counts
  * when it names the lorry, when the trip records the lorry, or when it is
  * wrapped for the lorry. A line on a trip that records NO lorry is everybody's
@@ -81,12 +89,13 @@ export class FuelMatchRepository {
          FROM fuel_transaction_evidence e
          JOIN fuel_transactions ft ON ft.id = e.fuel_transaction_id AND ft.voided_at IS NULL
         WHERE e.sha256 = ANY($1::text[]) AND e.retired_at IS NULL AND ft.id IS DISTINCT FROM $5::uuid
+          AND ${LIVE_BACKING}
        UNION ALL
-       SELECT id, 'document_identity', NULL
-         FROM fuel_transactions
-        WHERE voided_at IS NULL AND vendor_tax_code = $2 AND document_number = $3
-          AND (document_series IS NULL OR $4::text IS NULL OR document_series = $4)
-          AND id IS DISTINCT FROM $5::uuid`,
+       SELECT ft.id, 'document_identity', NULL
+         FROM fuel_transactions ft
+        WHERE ft.voided_at IS NULL AND ft.vendor_tax_code = $2 AND ft.document_number = $3
+          AND (ft.document_series IS NULL OR $4::text IS NULL OR ft.document_series = $4)
+          AND ft.id IS DISTINCT FROM $5::uuid AND ${LIVE_BACKING}`,
       [shas, document?.taxCode ?? null, document?.number ?? null, document?.series ?? null, except],
     );
   }

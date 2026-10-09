@@ -41,6 +41,9 @@ const COPY: Record<'check' | 'fill', { title: TranslationKey; intro: Translation
  * ★ ONE KEY PER OPENING. A retry after a dropped connection reuses it, so the
  * fill is written once; the parent mounts a fresh dialog each time it asks.
  * "Không đổ nhiên liệu đầu ca" sends no amount — there is no 0-đồng cost to invent.
+ *
+ * ★ FUEL ADDED GOES WITH AT LEAST ONE PHOTO. The server refuses it without
+ * (`EVIDENCE_REQUIRED`); the button waits for one so the driver is told here.
  */
 export function DailyFuelDialog({
   mode = 'check',
@@ -76,7 +79,9 @@ export function DailyFuelDialog({
 
   const litersBad = liters.trim() !== '' && !(LITERS.test(litersOf(liters)) && /[1-9]/.test(liters));
   const odometerBad = odometer.trim() !== '' && !(ODOMETER.test(odometer.trim()) && Number(odometer) <= 2_147_483_647);
-  const ready = outcome === 'no_fuel' || (outcome === 'fuel_added' && amount.trim() !== '' && !litersBad && !odometerBad);
+  const photographed = photos.tray.length > 0;
+  const ready =
+    outcome === 'no_fuel' || (outcome === 'fuel_added' && amount.trim() !== '' && !litersBad && !odometerBad && photographed);
 
   const submit = async () => {
     if (!outcome || !ready) return;
@@ -181,8 +186,9 @@ export function DailyFuelDialog({
               <Input id={`${id}-odometer`} inputMode="numeric" value={odometer} onChange={(event) => setOdometer(event.target.value)} className="h-11" aria-invalid={odometerBad} />
             ), odometerBad ? t('driverFuelOdometerInvalid') : null)}
             <div>
-              <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('driverPhotosTitle')}</p>
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('driverPhotosTitle')} *</p>
               <FuelPhotoPicker photos={photos} />
+              {photographed ? null : <p className="mt-1 text-xs text-muted-foreground">{t('driverPhotosRequired')}</p>}
             </div>
             <details className="rounded-lg border px-3 py-2">
               <summary className="cursor-pointer py-1 text-sm font-medium">{t('driverReceiptDetails')}</summary>
