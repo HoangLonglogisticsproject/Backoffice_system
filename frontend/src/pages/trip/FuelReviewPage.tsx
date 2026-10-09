@@ -22,7 +22,8 @@ const TABS: readonly FuelReviewStatus[] = ['submitted', 'needs_info', 'approved'
  * ★ ACCOUNTING CHECKS, THE DRIVER RECORDS. Every row was recorded by a driver
  * on the lorry they ran, with their photos; here it is asked about, refused,
  * approved, and — once paid in the bank app or by the station's QR — marked
- * paid. Nothing is paid by this screen, and nothing about the money row changes.
+ * paid. Nothing is paid by this screen; refusing a fill withdraws its cost from
+ * the lorry's ledger (the server does it, in the same transaction).
  */
 export default function FuelReviewPage() {
   const { t, language } = useLanguage();
@@ -32,10 +33,12 @@ export default function FuelReviewPage() {
   const [open, setOpen] = useState<string | null>(null);
   const reviews = useFuelReviews(status, page);
   const lastPage = Math.max(reviews.data?.totalPages ?? 1, 1);
-  // Deciding the last fill of a page shrinks the queue under it: follow it back rather than show an empty page.
+  // Deciding the last fill of a page shrinks the queue under it: follow it back rather than show an empty page —
+  // once that page has answered. A page still loading has no count yet, and is not "past the end".
+  const answered = reviews.data !== undefined;
   useEffect(() => {
-    if (page > lastPage) setPage(lastPage);
-  }, [page, lastPage]);
+    if (answered && page > lastPage) setPage(lastPage);
+  }, [answered, page, lastPage]);
 
   if (!can('cost.import')) return <PageHeader title={t('fuelReviews')} subtitle={t('fuelReceiptsNoAccess')} />;
   const data = reviews.data;

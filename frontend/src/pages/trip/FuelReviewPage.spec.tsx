@@ -173,6 +173,21 @@ describe('FuelReviewPage', () => {
     expect(withdrawnKeys()).toContain(JSON.stringify(tripKeys.fleets()));
   });
 
+  it('★ browses to a page not read yet — it waits for that page, never snapping back to page 1 while it loads', async () => {
+    let arrive: (page: unknown) => void = () => undefined;
+    fetchFuelReviews.mockImplementation((_status: string, page: number) =>
+      page === 1
+        ? Promise.resolve({ items: [row()], page: 1, limit: 50, total: 51, totalPages: 2 })
+        : new Promise((resolve) => (arrive = resolve)),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sau' }));
+    await waitFor(() => expect(fetchFuelReviews).toHaveBeenCalledWith('submitted', 2));
+    arrive({ items: [row({ fuelTransactionId: 'ft-51', driver: { id: 'd2', displayName: 'Tài Xế Trang Hai' } })], page: 2, limit: 50, total: 51, totalPages: 2 });
+    expect(await screen.findByText('Tài Xế Trang Hai')).toBeInTheDocument();
+    expect(fetchFuelReviews).not.toHaveBeenLastCalledWith('submitted', 1);
+  });
+
   it('follows a queue that shrank under the page being read back to its last page', async () => {
     fetchFuelReviews.mockImplementation(async (_status: string, page: number) =>
       page === 1
