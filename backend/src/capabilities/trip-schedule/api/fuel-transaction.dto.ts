@@ -14,7 +14,7 @@ import { isRecordableLiters } from '../domain/vehicle-fuel';
  * Facts arrive as typed (the service normalises spelling); a fact a body does
  * not send is left alone — there is no way to send "clear this".
  */
-const evidence = z
+export const evidence = z
   .array(
     z.object({
       id: z.string().uuid(),
@@ -27,7 +27,7 @@ const evidence = z
   .default([])
   .refine((items) => new Set(items.map((item) => item.id)).size === items.length, 'Each image may be listed once.');
 
-const receiptFacts = {
+export const receiptFacts = {
   vendorName: z.string().max(400).optional(),
   vendorTaxCode: z.string().max(40).optional(),
   documentSeries: z.string().max(60).optional(),

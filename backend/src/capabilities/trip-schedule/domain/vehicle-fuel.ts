@@ -126,6 +126,13 @@ export interface DriverFuelTransaction extends VehicleFuelFill {
   createdAt: Date;
 }
 
+/**
+ * The `details` code on the 422 a "Có đổ nhiên liệu" declaration earns when the
+ * lorry's day was already answered by another declaration: its money was NOT
+ * recorded. The handset says so and offers "Ghi nhận đổ nhiên liệu" instead.
+ */
+export const CHECK_ALREADY_ANSWERED = 'CHECK_ALREADY_ANSWERED';
+
 /** The `details` code on the 422 that refuses a fill on a lorry that was not the driver's work today. */
 export const NOT_OPERATED_TODAY = 'NOT_OPERATED_TODAY';
 

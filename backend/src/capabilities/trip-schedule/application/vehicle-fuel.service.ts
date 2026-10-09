@@ -3,6 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../../common/errors/domain.error';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import {
+  CHECK_ALREADY_ANSWERED,
   dailyFuelDate,
   needsDailyFuelCheck,
   NOT_OPERATED_TODAY,
@@ -18,6 +19,7 @@ import { DriverAssignmentRepository } from '../persistence/trip-execution.reposi
 import { TripScheduleRepository } from '../persistence/trip-schedule.repository';
 import { VehicleCostRepository } from '../persistence/vehicle-cost.repository';
 import { KEY_REUSED, VehicleDailyFuelCheckRepository } from '../persistence/vehicle-fuel-check.repository';
+import { FuelSubmissionWriter, NO_RECEIPT, type DriverReceipt } from './fuel-submission-writer';
 
 /**
  * A driver answers their lorry's daily fuel check (0034).
@@ -54,11 +56,18 @@ export class VehicleFuelService {
     private readonly checks: VehicleDailyFuelCheckRepository,
     private readonly costs: VehicleCostRepository,
     private readonly fleet: FleetOperationsRepository,
+    private readonly submissions: FuelSubmissionWriter,
   ) {}
 
   /** `serverNow` is the server's clock at the request; tests pin it, nothing else passes one. */
   async declare(
-    input: { assignmentId: string; declaration: DailyFuelDeclaration; clientRequestId: string; declaredBy: string },
+    input: {
+      assignmentId: string;
+      declaration: DailyFuelDeclaration;
+      clientRequestId: string;
+      declaredBy: string;
+      receipt?: DriverReceipt;
+    },
     serverNow = new Date(),
   ): Promise<DailyFuelCheck> {
     const named = await this.assignments.findById(input.assignmentId);
@@ -111,7 +120,7 @@ export class VehicleFuelService {
    * bought. Lock order as `declare`: trip → assignment → lorry.
    */
   async recordFill(
-    input: { assignmentId: string; fill: VehicleFuelFill; clientRequestId: string; recordedBy: string },
+    input: { assignmentId: string; fill: VehicleFuelFill; clientRequestId: string; recordedBy: string; receipt?: DriverReceipt },
     serverNow = new Date(),
   ): Promise<DriverFuelTransaction> {
     const named = await this.assignments.findById(input.assignmentId);
@@ -158,6 +167,8 @@ export class VehicleFuelService {
         },
         tx,
       );
+      // The same transaction submits it for Accounting's check (0038): one cost, one fuel transaction, one review.
+      await this.submissions.submit({ id, vehicleId: assignment.vehicleId, businessDate }, input.receipt ?? NO_RECEIPT, input.recordedBy, tx);
       return { id, businessDate, ...input.fill, createdAt };
     });
   }
@@ -192,7 +203,7 @@ export class VehicleFuelService {
 
   /** Takes the lorry's day, writing the fill after the check that names it — or reads the winner. */
   private async claim(
-    input: { assignmentId: string; declaration: DailyFuelDeclaration; clientRequestId: string; declaredBy: string },
+    input: { assignmentId: string; declaration: DailyFuelDeclaration; clientRequestId: string; declaredBy: string; receipt?: DriverReceipt },
     turn: { trip: string; assignment: string; vehicle: string },
     serverNow: Date,
     tx: DatabaseQuery,
@@ -213,6 +224,13 @@ export class VehicleFuelService {
       // The primary key waited for the winner to commit, so it is visible now.
       const winner = await this.checks.find(provenance.vehicleId, provenance.businessDate, tx);
       if (!winner) throw new Error('A daily fuel check conflicted but cannot be read.');
+      // ★ A FILL IS NEVER ANSWERED WITH SOMEBODY ELSE'S CHECK. Money typed into a declaration that lost the
+      // day was NOT recorded — say so, so the handset never shows it as saved; it goes in as a fill instead.
+      if (declaration.outcome === 'fuel_added' && winner.clientRequestId !== input.clientRequestId) {
+        throw new ValidationError('Today’s check for this lorry was already answered — this fill was not recorded.', {
+          dailyFuelCheck: CHECK_ALREADY_ANSWERED,
+        });
+      }
       return answer(winner, input);
     }
 
@@ -228,6 +246,12 @@ export class VehicleFuelService {
           note: declaration.note,
           source: 'driver_portal',
         },
+        tx,
+      );
+      await this.submissions.submit(
+        { id: costId, vehicleId: provenance.vehicleId, businessDate: provenance.businessDate },
+        input.receipt ?? NO_RECEIPT,
+        input.declaredBy,
         tx,
       );
     }

@@ -7,6 +7,7 @@ import {
   openTestSchema,
   poolAsDatabase,
 } from '../helpers/integration-database';
+import { fuelSubmissionWriter, stagedPhoto } from '../helpers/fuel-wiring';
 import { ConflictError, ForbiddenError, NotFoundError } from '@common/errors/domain.error';
 import type { Database } from '@common/types/database.port';
 import { UserRepository } from '@core/users/persistence/user.repository';
@@ -127,7 +128,7 @@ describeIntegration('Fleet operations and fuel transactions against real Postgre
       checks,
       dispatchCrewOn(database),
     );
-    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, ledger, new FleetOperationsRepository(database));
+    fuel = new VehicleFuelService(database, trips, assignments, vehicles, checks, ledger, new FleetOperationsRepository(database), fuelSubmissionWriter(database));
     fleet = new FleetOperationsService(new FleetOperationsRepository(counted));
     portal = new DriverPortalService(
       new DriverTripReadModelRepository(database),
@@ -189,10 +190,21 @@ describeIntegration('Fleet operations and fuel transactions against real Postgre
 
   let keys = 0;
   const FILL: VehicleFuelFill = { amount: '700000', liters: '30.50', odometerKm: 120500, note: null };
-  const record = (assignment: string, fill: VehicleFuelFill = FILL, key = `fill-${(keys += 1)}`, by = driverA, now = NOW) =>
-    fuel.recordFill({ assignmentId: assignment, fill, clientRequestId: key, recordedBy: by }, now);
-  const declare = (assignment: string, declaration: DailyFuelDeclaration, key = `check-${assignment}`, by = driverA) =>
-    fuel.declare({ assignmentId: assignment, declaration, clientRequestId: key, declaredBy: by }, NOW);
+  /** A driver's fill carries a photo (0038), as the phone sends it. */
+  const photo = async (by: string) => ({ facts: {}, evidence: [await stagedPhoto(poolAsDatabase(pool), by)] });
+  const record = async (assignment: string, fill: VehicleFuelFill = FILL, key = `fill-${(keys += 1)}`, by = driverA, now = NOW) =>
+    fuel.recordFill({ assignmentId: assignment, fill, clientRequestId: key, recordedBy: by, receipt: await photo(by) }, now);
+  const declare = async (assignment: string, declaration: DailyFuelDeclaration, key = `check-${assignment}`, by = driverA) =>
+    fuel.declare(
+      {
+        assignmentId: assignment,
+        declaration,
+        clientRequestId: key,
+        declaredBy: by,
+        ...(declaration.outcome === 'fuel_added' ? { receipt: await photo(by) } : {}),
+      },
+      NOW,
+    );
   const fillOf = (amount: string): DailyFuelDeclaration => ({ outcome: 'fuel_added', amount, liters: '40.00', odometerKm: 120000, note: null });
 
   const dayOf = async (vehicle: string, day = TODAY, withMoney = true) => {

@@ -9,7 +9,7 @@ import { todayAsCalendarDay } from '@/utils/format/datetime';
 import FuelReceiptPage from './FuelReceiptPage';
 
 /**
- * "Chứng từ nhiên liệu", as an accountant uses it.
+ * "Đối soát chứng từ", as an accountant uses it.
  *
  * ★ ATTACH-ONLY. The screen searches both ledgers, shows what it found, and
  * writes only when a person presses "Gắn" on ONE cost and confirms. It never

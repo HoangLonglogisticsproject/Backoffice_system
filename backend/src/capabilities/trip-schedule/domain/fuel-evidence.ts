@@ -7,7 +7,8 @@ import type { UserSummary } from '../../../common/types/user-summary';
  */
 
 /** What a person says an image is. `null` is unclassified; there is no `other`. */
-export const FUEL_EVIDENCE_TYPES = ['pump_meter', 'timemark', 'fuel_voucher', 'receipt', 'tax_invoice'] as const;
+/** `payment_qr` (0038): a picture of the station's payment QR — kept as an image, never parsed. */
+export const FUEL_EVIDENCE_TYPES = ['pump_meter', 'timemark', 'fuel_voucher', 'receipt', 'tax_invoice', 'payment_qr'] as const;
 export type FuelEvidenceType = (typeof FUEL_EVIDENCE_TYPES)[number];
 
 export type EvidenceImageType = 'image/jpeg' | 'image/png' | 'image/webp';

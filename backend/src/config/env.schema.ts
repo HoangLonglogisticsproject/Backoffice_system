@@ -409,6 +409,14 @@ export const envSchema = z.object({
   /** The directory `filesystem` writes under. Required with that driver. */
   OBJECT_STORAGE_ROOT: z.string().default(''),
   /**
+   * ★ CI ONLY. The integration job runs a production-mode backend (its cookies
+   * are what the suite asserts) on a runner that is destroyed afterwards; a
+   * driver's fill needs a photo, so that backend needs a store. `ci-only` lets
+   * `filesystem` through in production for exactly that — never set it on a
+   * real deployment, where a container disk loses evidence on redeploy.
+   */
+  OBJECT_STORAGE_FILESYSTEM_IN_PRODUCTION: z.enum(['refused', 'ci-only']).default('refused'),
+  /**
    * ★ THE ACCOUNT ID BECOMES A HOSTNAME (`<id>.r2.cloudflarestorage.com`), so
    * it is held to exactly what Cloudflare issues: 32 hex characters. Anything
    * else could point the signed request at another host.
@@ -446,7 +454,7 @@ export const envSchema = z.object({
     if (env.OBJECT_STORAGE_ROOT.trim() === '') {
       missing('OBJECT_STORAGE_ROOT', 'OBJECT_STORAGE_ROOT is required when OBJECT_STORAGE_DRIVER=filesystem');
     }
-    if (env.NODE_ENV === 'production') {
+    if (env.NODE_ENV === 'production' && env.OBJECT_STORAGE_FILESYSTEM_IN_PRODUCTION !== 'ci-only') {
       missing('OBJECT_STORAGE_DRIVER', 'filesystem storage is for development and tests — production uses r2');
     }
   }

@@ -8,7 +8,9 @@ import { AssignmentRequestController } from './api/assignment-request.controller
 import { BookingExportController } from './api/booking-export.controller';
 import { DriverOpenBookingController } from './api/driver-open-booking.controller';
 import { FleetOperationsController } from './api/fleet-operations.controller';
+import { DriverFuelController } from './api/driver-fuel.controller';
 import { FuelEvidenceController } from './api/fuel-evidence.controller';
+import { FuelReviewController } from './api/fuel-review.controller';
 import { FuelTransactionController } from './api/fuel-transaction.controller';
 import { ExpenseAssignmentGuard } from './api/expense-assignment.guard';
 import { ReadableAssignmentGuard } from './api/readable-assignment.guard';
@@ -34,9 +36,12 @@ import { TripEntryCrew } from './application/trip-entry-crew';
 import { LegacyConfirmedNormalization } from './application/legacy-confirmed-normalization';
 import { TripScheduleService } from './application/trip-schedule.service';
 import { FleetOperationsService } from './application/fleet-operations.service';
+import { DriverFuelService } from './application/driver-fuel.service';
 import { FuelDuplicateGuard } from './application/fuel-duplicate-guard';
 import { FuelEvidenceService } from './application/fuel-evidence.service';
 import { FuelMatchService } from './application/fuel-match.service';
+import { FuelReviewService } from './application/fuel-review.service';
+import { FuelSubmissionWriter } from './application/fuel-submission-writer';
 import { FuelTransactionService } from './application/fuel-transaction.service';
 import { FuelTransactionWriter } from './application/fuel-transaction-writer';
 import { VehicleCostService } from './application/vehicle-cost.service';
@@ -61,6 +66,7 @@ import { DriverTripReadModelRepository } from './persistence/driver-read-model.r
 import { FleetOperationsRepository } from './persistence/fleet-operations.repository';
 import { FuelEvidenceRepository } from './persistence/fuel-evidence.repository';
 import { FuelMatchRepository } from './persistence/fuel-match.repository';
+import { FuelReviewRepository } from './persistence/fuel-review.repository';
 import { FuelTransactionRepository } from './persistence/fuel-transaction.repository';
 import { FuelTransactionViewRepository } from './persistence/fuel-transaction-view.repository';
 import { OpenBookingRepository } from './persistence/open-booking.repository';
@@ -101,6 +107,8 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     BookingExportController,
     FuelTransactionController,
     FuelEvidenceController,
+    FuelReviewController,
+    DriverFuelController,
   ],
   providers: [
     TripScheduleService,
@@ -125,6 +133,9 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     FuelTransactionWriter,
     FuelDuplicateGuard,
     FuelMatchService,
+    FuelSubmissionWriter,
+    FuelReviewService,
+    DriverFuelService,
     FuelEvidenceService,
     ActiveAssignmentGuard,
     ExpenseAssignmentGuard,
@@ -153,6 +164,7 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
     FuelTransactionViewRepository,
     FuelEvidenceRepository,
     FuelMatchRepository,
+    FuelReviewRepository,
   ],
   exports: [
     TripScheduleService,

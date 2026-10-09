@@ -13,6 +13,15 @@ const declareDailyFuel = vi.fn();
 const recordFuelFill = vi.fn();
 const seeUpcoming = vi.fn();
 
+const stageDriverFuelPhoto = vi.fn();
+
+vi.mock('@/api/driverFuel', () => ({
+  // The fill's photos (0038): none waiting on the server in these cases.
+  fetchDriverWaitingPhotos: () => Promise.resolve([]),
+  stageDriverFuelPhoto: (...a: unknown[]) => stageDriverFuelPhoto(...a),
+  discardDriverFuelPhoto: vi.fn(),
+  driverFuelPhotoUrl: (id: string) => `/api/driver/fuel-evidence/${id}/content`,
+}));
 vi.mock('@/api/driverPortal', () => ({
   fetchMyWorkday: (...a: unknown[]) => fetchMyWorkday(...a),
   declareDailyFuel: (...a: unknown[]) => declareDailyFuel(...a),
@@ -75,8 +84,17 @@ const card = async (plate: string) => {
   return found;
 };
 
+/** Takes the pump photo in an open fuel dialog — "fuel added" is sent with at least one (0038). */
+const photograph = async (dialog: HTMLElement) => {
+  fireEvent.change(within(dialog).getByLabelText('Đồng hồ bơm'), { target: { files: [new File(['p'], 'p.jpg', { type: 'image/jpeg' })] } });
+  await within(dialog).findByRole('img', { name: 'Đồng hồ bơm' });
+};
+
 describe('★ Ca làm việc hôm nay', () => {
   beforeEach(() => {
+    stageDriverFuelPhoto.mockReset().mockResolvedValue({ id: 'img-1', originalFilename: 'p.jpg', evidenceType: null });
+    URL.createObjectURL = vi.fn(() => 'blob:photo');
+    URL.revokeObjectURL = vi.fn(); // jsdom has none
     fetchMyWorkday.mockReset();
     declareDailyFuel.mockReset().mockResolvedValue({ businessDate: '2026-10-06', outcome: 'fuel_added' });
     recordFuelFill.mockReset().mockResolvedValue({ id: 'c1', businessDate: '2026-10-06', amount: '300000' });
@@ -147,6 +165,11 @@ describe('★ Ca làm việc hôm nay', () => {
     expect(within(dialog).queryByRole('radio')).toBeNull();
     fireEvent.change(within(dialog).getByLabelText('Số tiền *'), { target: { value: '300000' } });
     fireEvent.change(within(dialog).getByLabelText('Số lít (không bắt buộc)'), { target: { value: '12,5' } });
+    // ★ No photo, no save: the button waits and says why — the server would refuse it (EVIDENCE_REQUIRED).
+    expect(within(dialog).getByRole('button', { name: 'Lưu' })).toBeDisabled();
+    expect(within(dialog).getByText('Cần ít nhất 1 ảnh để gửi.')).toBeInTheDocument();
+    await photograph(dialog);
+    expect(within(dialog).queryByText('Cần ít nhất 1 ảnh để gửi.')).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Lưu' }));
 
     await waitFor(() =>
@@ -156,6 +179,7 @@ describe('★ Ca làm việc hôm nay', () => {
         odometerKm: null,
         note: null,
         clientRequestId: expect.any(String),
+        evidence: [{ id: 'img-1', type: 'pump_meter' }],
       }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -169,9 +193,24 @@ describe('★ Ca làm việc hôm nay', () => {
     fireEvent.click(within(await card('51H-273.14')).getByRole('button', { name: 'Ghi nhận đổ nhiên liệu' }));
     const dialog = await screen.findByRole('dialog', { name: 'Ghi nhận đổ nhiên liệu' });
     fireEvent.change(within(dialog).getByLabelText('Số tiền *'), { target: { value: '300000' } });
+    await photograph(dialog);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Lưu' }));
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Xe này không thuộc ca làm việc hôm nay của bạn.');
+  });
+
+  it('★ a fill the server refused for want of a photo says it was NOT saved — the dialog stays', async () => {
+    fetchMyWorkday.mockResolvedValue({ businessDate: '2026-10-06', vehicles: [lorry()] });
+    recordFuelFill.mockRejectedValue(new ApiError(422, 'VALIDATION_FAILED', 'no', { evidence: 'EVIDENCE_REQUIRED' }));
+    renderPanel();
+
+    fireEvent.click(within(await card('51H-273.14')).getByRole('button', { name: 'Ghi nhận đổ nhiên liệu' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Ghi nhận đổ nhiên liệu' });
+    fireEvent.change(within(dialog).getByLabelText('Số tiền *'), { target: { value: '300000' } });
+    await photograph(dialog);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Lưu' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Cần ít nhất 1 ảnh (đồng hồ bơm, hoá đơn/phiếu hoặc QR) — lần đổ này CHƯA được lưu.');
   });
 
   it('★ every trip done: no "Tiếp tục chuyến", the fill still offered — fuelling on the way home', async () => {

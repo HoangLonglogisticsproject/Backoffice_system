@@ -1,3 +1,4 @@
+import type { DriverReceiptInput } from './fuel';
 import type { UserSummary } from './organization';
 import type { TripCost } from './tripCost';
 
@@ -219,14 +220,14 @@ export type DailyFuelOutcome = 'fuel_added' | 'no_fuel';
  * decimal STRINGS for the reason `DeclareExpenseInput.amount` gives.
  */
 export type DailyFuelDeclarationInput =
-  | {
+  | ({
       outcome: 'fuel_added';
       amount: string;
       liters: string | null;
       odometerKm: number | null;
       note: string | null;
       clientRequestId: string;
-    }
+    } & DriverReceiptInput)
   | { outcome: 'no_fuel'; clientRequestId: string };
 
 /** The check that stands for the lorry today — possibly another driver's. */
@@ -272,7 +273,7 @@ export interface DriverWorkday {
  * "Ghi nhận đổ nhiên liệu" — a fill after the day's check. ★ No lorry and no
  * day: the turn names the lorry, the server's clock names the day.
  */
-export interface FuelFillInput {
+export interface FuelFillInput extends DriverReceiptInput {
   amount: string;
   liters: string | null;
   odometerKm: number | null;

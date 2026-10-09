@@ -1,18 +1,14 @@
-import { StatusPill, type StatusTone } from '@/components/common/StatusPill';
+import { StatusPill } from '@/components/common/StatusPill';
 import { Button } from '@/components/ui/button';
 import { useLanguage } from '@/contexts/LanguageContext';
-import type { FuelCandidate, FuelLedger, FuelMatchLevel, FuelMatchResult } from '@/types/fuel';
+import type { FuelCandidate, FuelLedger, FuelMatchResult } from '@/types/fuel';
 import type { TranslationKey } from '@/types/translate';
 import { formatPlate } from '@/utils/format';
 import { formatCalendarDay } from '@/utils/format/datetime';
 import { formatMoney } from '@/utils/format/money';
+import { MATCH_LEVEL } from '@/utils/fuelStatus';
 import { blockedReason } from './fuelCandidates';
 
-const LEVEL: Record<FuelMatchLevel, { label: TranslationKey; tone: StatusTone }> = {
-  exact: { label: 'fuelLevelExact', tone: 'red' },
-  high: { label: 'fuelLevelHigh', tone: 'amber' },
-  possible: { label: 'fuelLevelPossible', tone: 'blue' },
-};
 const LEDGER: Record<FuelLedger, TranslationKey> = { vehicle: 'fuelLedgerVehicle', trip: 'fuelLedgerTrip' };
 const OUTCOME: Record<FuelMatchResult['outcome'], TranslationKey> = {
   none: 'fuelOutcomeNone',
@@ -28,7 +24,7 @@ function CandidateRow({ candidate, onAttach }: Readonly<{ candidate: FuelCandida
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
       <div className="min-w-56 flex-1 space-y-1">
         <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-gray-900">
-          {candidate.level ? <StatusPill tone={LEVEL[candidate.level].tone}>{t(LEVEL[candidate.level].label)}</StatusPill> : null}
+          {candidate.level ? <StatusPill tone={MATCH_LEVEL[candidate.level].tone}>{t(MATCH_LEVEL[candidate.level].label)}</StatusPill> : null}
           <span className="tabular-nums">{formatMoney(candidate.amount)} đ</span>
           {candidate.liters ? <span className="text-gray-500 tabular-nums">· {candidate.liters} L</span> : null}
           <span className="text-gray-500">· {day ? formatCalendarDay(day, language) : '—'}</span>

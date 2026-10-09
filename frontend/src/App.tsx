@@ -52,6 +52,7 @@ const LocationCataloguePage = lazy(() => import('./pages/trip/LocationCatalogueP
 const CompletionReviewPage = lazy(() => import('./pages/trip/CompletionReviewPage'))
 const FleetOperationsPage = lazy(() => import('./pages/trip/FleetOperationsPage'))
 const FuelReceiptPage = lazy(() => import('./pages/trip/FuelReceiptPage'))
+const FuelReviewPage = lazy(() => import('./pages/trip/FuelReviewPage'))
 
 const NoAccessPage = lazy(() => import('./pages/system/NoAccessPage'))
 const PlaceholderPage = lazy(() => import('./pages/system/PlaceholderPage'))
@@ -68,6 +69,7 @@ const AccountSecurityPage = lazy(() => import('./pages/account/AccountSecurityPa
 const DriverTripsPage = lazy(() => import('./pages/driver/DriverTripsPage'))
 const DriverTripPage = lazy(() => import('./pages/driver/DriverTripPage'))
 const DriverHistoryPage = lazy(() => import('./pages/driver/DriverHistoryPage'))
+const DriverFuelPage = lazy(() => import('./pages/driver/DriverFuelPage'))
 const DriverNotificationsPage = lazy(() => import('./pages/driver/DriverNotificationsPage'))
 
 function App() {
@@ -107,6 +109,8 @@ function App() {
           {/* The trips already run to the end. Declared before the catch-all
               below, which would otherwise send it back to the schedule. */}
           <Route path="/driver/history" element={<DriverHistoryPage />} />
+          {/* The driver's fuel: record a fill with its photos, see where Accounting's check stands (0038). */}
+          <Route path="/driver/fuel" element={<DriverFuelPage />} />
           {/* What the driver has been told. The API's list, not the stream's. */}
           <Route path="/driver/notifications" element={<DriverNotificationsPage />} />
           {/* The one account function a driver has: their password. Same page
@@ -166,6 +170,8 @@ function App() {
           <Route path="/dispatch/completion-review" element={<CompletionReviewPage />} />
           {/* Accounting: receipts onto fuel ALREADY recorded — attach-only, never a new cost. */}
           <Route path="/accounting/fuel-receipts" element={<FuelReceiptPage />} />
+          {/* Accounting checks the fills drivers recorded, then marks them paid (0038). */}
+          <Route path="/accounting/fuel-reviews" element={<FuelReviewPage />} />
 
           <Route path="/account/security" element={<AccountSecurityPage />} />
           <Route path="/system/approvals" element={<ApprovalsPage />} />

@@ -6,14 +6,15 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { DriverEmptyState } from '@/components/driver/DriverEmptyState';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { useMyWorkday, useWorkdayFuel } from '@/hooks/driver';
+import { useMyWorkday } from '@/hooks/driver';
 import type { DriverWorkday, DriverWorkdayTurn, FuelObligation } from '@/types/driver';
 import type { TranslationKey } from '@/types/translate';
 import { cn } from '@/utils/cn';
 import { currentAndNext, OPENED_FROM_SCHEDULE } from '@/utils/driverSchedule';
 import { formatPlate } from '@/utils/format';
 import { formatTime } from '@/utils/format/datetime';
-import { DailyFuelDialog } from './DailyFuelDialog';
+import { fuelActionOf, type FuelAction } from '@/utils/driverFuel';
+import { WorkdayFuelDialog } from './WorkdayFuelDialog';
 import { DriverLoadError } from './DriverLoadError';
 
 /**
@@ -62,13 +63,10 @@ const progressLabel = (turn: DriverWorkdayTurn): TranslationKey => {
   return turn.progress.next ? PROGRESS_LABEL[turn.progress.next] : 'driverStatusAwaitingCompletion';
 };
 
-type FuelAction = { kind: 'check' | 'fill'; lorry: Lorry; assignmentId: string };
-
 export function WorkdayPanel({ onSeeUpcoming }: Readonly<{ onSeeUpcoming: () => void }>) {
   // Nothing in this component body needs a translation any more — the empty
   // state and the cards each ask for their own.
   const { workday, loading, error, reload } = useMyWorkday();
-  const { declareCheck, recordFill } = useWorkdayFuel();
   const [action, setAction] = useState<FuelAction | null>(null);
 
   const lorries = workday?.vehicles ?? [];
@@ -112,21 +110,8 @@ export function WorkdayPanel({ onSeeUpcoming }: Readonly<{ onSeeUpcoming: () => 
       ) : null}
 
       {action ? (
-        <DailyFuelDialog
-          // A fresh dialog each time, so each opening carries its own key.
-          key={`${action.kind}-${action.assignmentId}`}
-          mode={action.kind}
-          plate={action.lorry.vehicle.plate}
-          saving={declareCheck.isPending || recordFill.isPending}
-          onSubmit={(input) => {
-            if (action.kind === 'check') return declareCheck.mutateAsync({ assignmentId: action.assignmentId, input });
-            if (input.outcome !== 'fuel_added') throw new Error('A fill always adds fuel.');
-            const { outcome: _outcome, ...fill } = input;
-            return recordFill.mutateAsync({ assignmentId: action.assignmentId, input: fill });
-          }}
-          onDeclared={() => setAction(null)}
-          onClose={() => setAction(null)}
-        />
+        // A fresh dialog each time, so each opening carries its own key.
+        <WorkdayFuelDialog key={`${action.kind}-${action.assignmentId}`} action={action} onDone={() => setAction(null)} />
       ) : null}
     </section>
   );
@@ -140,12 +125,7 @@ function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: 
   // it is what made the old card disagree with the tab's own count.
   const rest = lorry.turns.filter((turn) => turn !== current);
   const plate = formatPlate(lorry.vehicle.plate);
-  // Any of today's turns may carry a fill; the one in hand is the natural provenance.
-  const fillThrough = current ?? lorry.turns[lorry.turns.length - 1] ?? null;
-  // The check is answered through a turn whose trip is still open — the server's rule too.
-  const checkThrough = lorry.turns.find((turn) => !turn.closed) ?? null;
-  const canDeclare = lorry.fuel === 'REQUIRED_MISSING' && checkThrough !== null;
-  const canFill = lorry.fuelOnVehicle && !canDeclare && fillThrough !== null;
+  const fuel = fuelActionOf(lorry);
 
   return (
     <Card>
@@ -203,26 +183,10 @@ function LorryCard({ lorry, onFuel }: Readonly<{ lorry: Lorry; onFuel: (action: 
           </div>
         ) : null}
 
-        {canDeclare && checkThrough ? (
-          <Button
-            variant="outline"
-            size="lg"
-            className="h-12 w-full"
-            onClick={() => onFuel({ kind: 'check', lorry, assignmentId: checkThrough.assignment.id })}
-          >
+        {fuel ? (
+          <Button variant="outline" size="lg" className="h-12 w-full" onClick={() => onFuel(fuel)}>
             <Fuel className="size-4" aria-hidden />
-            {t('driverWorkdayDeclare')}
-          </Button>
-        ) : null}
-        {canFill && fillThrough ? (
-          <Button
-            variant="outline"
-            size="lg"
-            className="h-12 w-full"
-            onClick={() => onFuel({ kind: 'fill', lorry, assignmentId: fillThrough.assignment.id })}
-          >
-            <Fuel className="size-4" aria-hidden />
-            {t('driverWorkdayRecordFill')}
+            {t(fuel.kind === 'check' ? 'driverWorkdayDeclare' : 'driverWorkdayRecordFill')}
           </Button>
         ) : null}
       </CardContent>

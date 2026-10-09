@@ -118,7 +118,7 @@ export default function DriverLayout() {
         </div>
 
         <nav aria-label={t('driverPortal')} className="md:flex-1 md:overflow-y-auto md:p-3">
-          <ul className="mx-auto grid max-w-2xl grid-cols-4 md:mx-0 md:flex md:max-w-none md:flex-col md:gap-1">
+          <ul className="mx-auto grid max-w-2xl grid-cols-5 md:mx-0 md:flex md:max-w-none md:flex-col md:gap-1">
             {DRIVER_NAVIGATION.map((destination) => (
               <li key={destination.key}>
                 <DriverNavLink
@@ -214,7 +214,8 @@ function DriverNavLink({ destination, unread }: Readonly<{ destination: DriverDe
           </span>
         ) : null}
       </span>
-      <span className="max-w-full truncate">{t(destination.label)}</span>
+      {/* Five destinations on a phone: a label wraps to two short lines rather than losing its end. */}
+      <span className="line-clamp-2 max-w-full text-center leading-tight md:line-clamp-none md:truncate md:text-left">{t(destination.label)}</span>
       {/* Spaces as their own text nodes: element text is trimmed when an
           accessible name is built. */}
       {unread > 0 ? (
