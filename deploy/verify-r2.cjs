@@ -1,12 +1,11 @@
 /**
- * ★ PROVES THE ENV FILE'S R2 SETTINGS BEFORE ANYTHING DEPLOYS THEM — run as
- * root on the VPS, inside the backend image that is running, fed the runtime
- * env file directly (so it does not depend on the compose file that is
- * deployed):
+ * ★ PROVES THE ENV FILE'S R2 SETTINGS BEFORE THE BACKEND RESTARTS ONTO THEM —
+ * run as root on the VPS as a one-off of the backend service, so it sees exactly
+ * the environment Compose gives the container (deploy/README.md, "Fuel
+ * evidence storage", step 3):
  *
- *   IMAGE=$(docker ps --format '{{.Image}}' | grep '^hoanglong-bo-backend:' | head -1)
- *   git -C /opt/hoanglong-bo show <reviewed-commit>:deploy/verify-r2.cjs \
- *     | docker run --rm -i --env-file /etc/hoanglong-bo/staging.env "$IMAGE" node -
+ *   APP_VERSION=<running tag> docker compose --env-file /etc/hoanglong-bo/staging.env \
+ *     run --rm --no-deps -T backend node - < verify-r2.cjs
  *
  * Uses the app's OWN validation and R2 adapter — the exact code that will
  * serve the images. Writes one small probe object under `probe/`, reads it

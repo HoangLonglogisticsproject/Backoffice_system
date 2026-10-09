@@ -8,8 +8,12 @@
  *
  *   SMOKE_BASE_URL=https://opssystem.hoanglonglti.com/api   # or a local backend
  *   SMOKE_OFFICE_EMAIL=…   SMOKE_OFFICE_PASSWORD=…   # holds cost.import
- *   SMOKE_OTHER_EMAIL=…    SMOKE_OTHER_PASSWORD=…    # any OTHER settled account
+ *   SMOKE_OTHER_EMAIL=…    SMOKE_OTHER_PASSWORD=…    # ANOTHER cost.import holder
  *   SMOKE_DRIVER_EMAIL=…   SMOKE_DRIVER_PASSWORD=…   # optional: driver checks
+ *   SMOKE_OTHER_DRIVER_EMAIL=… SMOKE_OTHER_DRIVER_PASSWORD=…  # optional: driver isolation
+ *
+ * The "other" accounts pass the same guards as the first ones, so a refusal
+ * proves the image is the uploader's — not merely that a door is closed.
  *   SMOKE_ATTACH_VEHICLE_ID=… SMOKE_ATTACH_COST_ID=…  # optional: WRITES a fact
  *
  * Each run leaves one discarded image per door (rows are never deleted, and
@@ -113,9 +117,16 @@ const content = async (client, path) => {
   const bytes = response.ok ? Buffer.from(await response.arrayBuffer()) : null;
   return { status: response.status, type: response.headers.get('content-type'), cache: response.headers.get('cache-control'), bytes };
 };
+/** A list that answered: its status and ids. A failure is never read as "empty". */
 const listed = async (client, path) => {
   const response = await client.call('GET', path);
-  return response.ok ? ((await json(response)) ?? []).map((image) => image.id) : null;
+  return { status: response.status, ids: response.ok ? ((await json(response)) ?? []).map((image) => image.id) : null };
+};
+/** The ids, from a list that MUST have answered 200. */
+const idsOf = async (client, path) => {
+  const list = await listed(client, path);
+  if (list.status !== 200) throw new Error(`GET ${path} answered ${list.status}`);
+  return list.ids;
 };
 const login = async (label, email, password) => {
   const client = session();
@@ -135,6 +146,8 @@ try {
 
   const office = await login('the office account', env('SMOKE_OFFICE_EMAIL'), env('SMOKE_OFFICE_PASSWORD'));
   const other = await login('the other account', env('SMOKE_OTHER_EMAIL'), env('SMOKE_OTHER_PASSWORD'));
+  const peer = (await listed(other, '/fuel-evidence/staged')).status;
+  if (peer !== 200) throw new Error(`the other account must also hold cost.import (its own list answered ${peer}), or a refusal proves nothing`);
 
   // 2. Upload.
   const bytes = png();
@@ -163,27 +176,27 @@ try {
 
   // 6–7. A new session — a refreshed browser — finds the waiting image and its preview.
   const again = await login('the office account (new session)', env('SMOKE_OFFICE_EMAIL'), env('SMOKE_OFFICE_PASSWORD'));
-  const recovered = await listed(again, '/fuel-evidence/staged');
+  const recovered = await idsOf(again, '/fuel-evidence/staged');
   const preview = await content(again, `/fuel-evidence/${id}/content`);
   expect(recovered?.includes(image.id), '6. recovery after refresh (new session lists it)');
   expect(preview.status === 200 && preview.bytes && sha(preview.bytes) === sha(bytes), '7. preview/content after refresh', String(preview.status));
 
   // 9. Isolation.
   const theirs = await content(other, `/fuel-evidence/${id}/content`);
-  const theirList = await listed(other, '/fuel-evidence/staged');
+  const theirList = await idsOf(other, '/fuel-evidence/staged');
   const theirDiscard = (await other.call('POST', `/fuel-evidence/${id}/discard`)).status;
   const anonymous = (await send(`/fuel-evidence/${id}/content`)).status;
-  expect([403, 404].includes(theirs.status), '9. another account cannot read it', String(theirs.status));
-  expect(!(theirList ?? []).includes(image.id), '   …nor list it', theirList === null ? 'no access to the list' : 'not in their list');
-  expect([403, 404].includes(theirDiscard) && (await listed(office, '/fuel-evidence/staged'))?.includes(image.id), '   …nor discard it', String(theirDiscard));
+  expect(theirs.status === 404, '9. another cost.import account cannot read it', String(theirs.status));
+  expect(!theirList.includes(image.id), '   …nor list it', 'not in their list');
+  expect(theirDiscard === 404 && (await idsOf(office, '/fuel-evidence/staged')).includes(image.id), '   …nor discard it', String(theirDiscard));
   expect(anonymous === 401, '   …and no session reads nothing', String(anonymous));
 
   // 8. Discard.
   const discarded = (await office.call('POST', `/fuel-evidence/${id}/discard`)).status;
-  const afterList = await listed(office, '/fuel-evidence/staged');
+  const afterList = await idsOf(office, '/fuel-evidence/staged');
   const afterRead = (await content(office, `/fuel-evidence/${id}/content`)).status;
   const twice = (await office.call('POST', `/fuel-evidence/${id}/discard`)).status;
-  const stillListed = afterList?.includes(image.id);
+  const stillListed = afterList.includes(image.id);
   expect(discarded === 204 && !stillListed && afterRead === 404 && twice === 404, '8. discard', `${discarded}; then listed: ${stillListed}, content ${afterRead}, again ${twice}`);
 
   // 10. Attached evidence stays readable (opt-in: writes to a real cost's fuel transaction).
@@ -196,7 +209,8 @@ try {
     const attachedRead = await content(office, `/fuel-evidence/${attachId}/content`);
     const attachedOther = await content(other, `/fuel-evidence/${attachId}/content`);
     expect(
-      attached.status === 201 && attachedRead.status === 200 && sha(attachedRead.bytes ?? Buffer.alloc(0)) === sha(attachBytes),
+      attached.status === 201 && attachedRead.status === 200 && attachedOther.status === 200 &&
+        sha(attachedRead.bytes ?? Buffer.alloc(0)) === sha(attachBytes) && sha(attachedOther.bytes ?? Buffer.alloc(0)) === sha(attachBytes),
       '10. attached evidence remains readable',
       `attach ${attached.status}, read ${attachedRead.status}; another cost.import account ${attachedOther.status} (attached images are the team's; only a waiting one is the uploader's)`,
     );
@@ -214,13 +228,20 @@ try {
     } else {
       const theirImage = await json(up);
       const theirId = segment(theirImage?.id);
-      const driverList = await listed(driver, '/driver/fuel-evidence/staged');
+      const driverList = await idsOf(driver, '/driver/fuel-evidence/staged');
       const driverRead = await content(driver, `/driver/fuel-evidence/${theirId}/content`);
-      expect(up.status === 201 && driverList?.includes(theirImage.id) && driverRead.status === 200 && sha(driverRead.bytes ?? Buffer.alloc(0)) === sha(driverBytes),
+      expect(up.status === 201 && driverList.includes(theirImage.id) && driverRead.status === 200 && sha(driverRead.bytes ?? Buffer.alloc(0)) === sha(driverBytes),
         'driver door: upload, list, read own', `${up.status}, ${driverRead.status}`);
       expect((await office.call('GET', '/driver/fuel-evidence/staged')).status === 403, 'driver door closed to an office account');
       expect((await driver.call('GET', '/fuel-evidence/staged')).status === 403, 'office door closed to a driver');
-      expect((await content(other, `/driver/fuel-evidence/${theirId}/content`)).status !== 200, 'another account cannot read the driver\'s image');
+      if (env('SMOKE_OTHER_DRIVER_EMAIL')) {
+        const otherDriver = await login('the other driver account', env('SMOKE_OTHER_DRIVER_EMAIL'), env('SMOKE_OTHER_DRIVER_PASSWORD'));
+        const theirOwn = await idsOf(otherDriver, '/driver/fuel-evidence/staged');
+        const peerRead = (await content(otherDriver, `/driver/fuel-evidence/${theirId}/content`)).status;
+        expect(peerRead === 404 && !theirOwn.includes(theirImage.id), 'another driver cannot read or list it', String(peerRead));
+      } else {
+        record('SKIP', 'driver isolation', 'set SMOKE_OTHER_DRIVER_EMAIL + SMOKE_OTHER_DRIVER_PASSWORD');
+      }
       expect((await driver.call('POST', `/driver/fuel-evidence/${theirId}/discard`)).status === 204, 'driver discards their own');
     }
   } else {

@@ -691,27 +691,34 @@ steps 2–4 together, so no release meets values nobody has proved.
    R2_SECRET_ACCESS_KEY=<secret access key>
    ```
 3. **Prove it before anything deploys it**, as root. A malformed value refuses the
-   backend at boot, and the release's automatic rollback would meet the same file:
+   backend at boot, and the release's automatic rollback would meet the same file.
+   The probe runs as a one-off of the backend service itself, so it sees exactly
+   the environment Compose will give the container:
 
    ```bash
+   set -euo pipefail
+   cd /opt/hoanglong-bo/deploy
    IMAGE=$(docker ps --format '{{.Image}}' | grep '^hoanglong-bo-backend:' | head -1)
-   git -C /opt/hoanglong-bo fetch -q origin main
-   git -C /opt/hoanglong-bo show origin/main:deploy/verify-r2.cjs \
-     | docker run --rm -i --env-file /etc/hoanglong-bo/staging.env "$IMAGE" node -
+   [ -n "$IMAGE" ] || { echo "no running backend image"; exit 1; }
+   APP_VERSION="${IMAGE#*:}" docker compose --env-file /etc/hoanglong-bo/staging.env \
+     run --rm --no-deps -T backend node - < verify-r2.cjs
    ```
 
    `R2 OK — …` or `R2 NOT READY — <reason>`, naming a bad key, never a value.
+   (`verify-r2.cjs` is in this checkout once this section's change is deployed.)
 4. **Restart onto it**, as root — the same commit, recreated with the new values
    (`bo-release` of the running commit skips the restart):
 
    ```bash
+   set -euo pipefail
    cd /opt/hoanglong-bo/deploy
    APP_VERSION="${IMAGE#*:}" docker compose --env-file /etc/hoanglong-bo/staging.env up -d --no-build --wait backend
    ```
 5. **Prove it end to end**, from a workstation, as real accounts:
    `node --env-file=<private file> deploy/smoke-evidence.mjs` (the variables are in
    its header). It uploads, reads back, recovers in a new session, checks another
-   account is refused, and discards — through the public path.
+   `cost.import` account is refused a waiting image (and can read an attached one),
+   and discards — through the public path.
 
 ## Backup / restore
 
