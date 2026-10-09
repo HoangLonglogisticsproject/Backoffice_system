@@ -26,7 +26,12 @@ import { deflateSync } from 'node:zlib';
  * URL taken as typed (a typo must not send a password somewhere else).
  */
 const BASES = ['https://opssystem.hoanglonglti.com/api', 'http://localhost:3000', 'http://localhost:3001'];
-const BASE = BASES.find((base) => base === (process.env.SMOKE_BASE_URL ?? BASES[0]).replace(/\/$/, ''));
+const BASE = (process.env.SMOKE_BASE_URL ?? BASES[0]).replace(/\/$/, '');
+/** Every request goes through here: the backend is checked against the list right before it is called. */
+const send = (path, init) => {
+  if (!BASES.includes(BASE)) throw new Error(`SMOKE_BASE_URL must be one of: ${BASES.join(', ')}`);
+  return fetch(BASE + path, init);
+};
 const env = (name) => process.env[name] ?? '';
 /** A path segment from the server or the operator: a uuid, encoded — never a way out of the route. */
 const segment = (value) => {
@@ -84,7 +89,7 @@ const session = () => {
       headers['Content-Type'] = 'application/json';
       payload = JSON.stringify(body);
     }
-    const response = await fetch(BASE + path, { method, headers, body: payload, redirect: 'manual' });
+    const response = await send(path, { method, headers, body: payload, redirect: 'manual' });
     const set = response.headers.getSetCookie?.().find((line) => line.startsWith('bo_session='));
     if (set) cookie = set.split(';')[0].endsWith('=') ? null : set.split(';')[0];
     return response;
@@ -118,12 +123,11 @@ const login = async (label, email, password) => {
 
 // ---------------------------------------------------------------- run ----
 try {
-  if (!BASE) throw new Error(`SMOKE_BASE_URL must be one of: ${BASES.join(', ')}`);
   for (const name of ['SMOKE_OFFICE_EMAIL', 'SMOKE_OFFICE_PASSWORD', 'SMOKE_OTHER_EMAIL', 'SMOKE_OTHER_PASSWORD']) {
     if (!env(name)) throw new Error(`${name} is not set`);
   }
   console.log(`Evidence store smoke test against ${BASE}`);
-  const health = await fetch(`${BASE}/health`);
+  const health = await send('/health');
   expect(health.ok, '1. backend answers /health', `${health.status} ${JSON.stringify((await json(health))?.checks ?? {})}`);
 
   const office = await login('the office account', env('SMOKE_OFFICE_EMAIL'), env('SMOKE_OFFICE_PASSWORD'));
@@ -165,7 +169,7 @@ try {
   const theirs = await content(other, `/fuel-evidence/${id}/content`);
   const theirList = await listed(other, '/fuel-evidence/staged');
   const theirDiscard = (await other.call('POST', `/fuel-evidence/${id}/discard`)).status;
-  const anonymous = (await fetch(`${BASE}/fuel-evidence/${id}/content`)).status;
+  const anonymous = (await send(`/fuel-evidence/${id}/content`)).status;
   expect([403, 404].includes(theirs.status), '9. another account cannot read it', String(theirs.status));
   expect(!(theirList ?? []).includes(image.id), '   …nor list it', theirList === null ? 'no access to the list' : 'not in their list');
   expect([403, 404].includes(theirDiscard) && (await listed(office, '/fuel-evidence/staged'))?.includes(image.id), '   …nor discard it', String(theirDiscard));
