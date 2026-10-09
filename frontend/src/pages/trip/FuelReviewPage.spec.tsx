@@ -183,8 +183,12 @@ describe('FuelReviewPage', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Sau' }));
     await waitFor(() => expect(fetchFuelReviews).toHaveBeenCalledWith('submitted', 2));
+    // While it loads the table says so — never a blank table, never "nothing in this state".
+    expect(await screen.findByRole('status')).toHaveTextContent('Đang tải…');
+    expect(screen.queryByText('Không có lần đổ nào ở trạng thái này.')).toBeNull();
     arrive({ items: [row({ fuelTransactionId: 'ft-51', driver: { id: 'd2', displayName: 'Tài Xế Trang Hai' } })], page: 2, limit: 50, total: 51, totalPages: 2 });
     expect(await screen.findByText('Tài Xế Trang Hai')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
     expect(fetchFuelReviews).not.toHaveBeenLastCalledWith('submitted', 1);
   });
 

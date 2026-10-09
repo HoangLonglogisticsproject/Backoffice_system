@@ -83,6 +83,11 @@ export default function FuelReviewPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
+            {reviews.isPending ? (
+              <TableRow>
+                <TableCell colSpan={8} role="status" className="py-8 text-center text-sm text-gray-500">{t('loading')}</TableCell>
+              </TableRow>
+            ) : null}
             {data?.items.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={8} className="py-8 text-center text-sm text-gray-500">{t('fuelReviewsEmpty')}</TableCell>
