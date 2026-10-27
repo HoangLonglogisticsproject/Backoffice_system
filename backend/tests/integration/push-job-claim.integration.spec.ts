@@ -227,9 +227,12 @@ describeIntegration('Hàng đợi Web Push đối mặt PostgreSQL thật', () =
 
       // Lượt mới trên cùng chuyến — như `replaceDriver` vẫn làm: kết thúc một
       // hàng, mở một hàng khác, không bao giờ ghi đè `driver_user_id`.
-      await pool.query(`UPDATE trip_driver_assignments SET state = 'ended' WHERE id = $1`, [
-        first.assignment,
-      ]);
+      await pool.query(
+        `UPDATE trip_driver_assignments
+            SET state = 'ended', ended_at = now(), ended_by = $2, end_reason = $3
+          WHERE id = $1`,
+        [first.assignment, operator, 'đổi tài xế'],
+      );
       const vehicle = (
         await pool.query<{ vehicle_id: string }>(
           `SELECT vehicle_id FROM trip_driver_assignments WHERE id = $1`,
