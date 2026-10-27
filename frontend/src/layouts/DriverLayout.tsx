@@ -1,11 +1,13 @@
-import { Suspense } from 'react';
+import { Suspense, useCallback } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PageFallback } from '@/components/common/PageFallback';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { useNotificationStream, useNotifications } from '@/hooks/notifications';
+import { usePushForegroundMessages } from '@/hooks/usePushNotifications';
 import { cn } from '@/utils/cn';
 import logo from '@/assets/img/LOGO.png';
 import { isNavActive } from './navActive';
@@ -58,6 +60,12 @@ export default function DriverLayout() {
   // shell, so no stream outlives the session that opened it. What it hears
   // triggers refetches; the badge is read from the API like everything.
   useNotificationStream();
+  // ★ THÔNG ĐIỆP ĐẨY ĐẾN LÚC TAB ĐANG MỞ CHỈ LÀ MỘT TOAST. Service worker độc
+  // quyền việc hiện thông báo hệ thống (xem public/firebase-messaging-sw.js);
+  // nếu cả hai cùng dựng, một sự kiện sẽ thành hai thông báo trên vài trình duyệt.
+  usePushForegroundMessages(useCallback((message) => {
+    if (message.body) toast(message.title ?? '', { description: message.body });
+  }, []));
   const unread = useNotifications().data?.unreadCount ?? 0;
 
   const leave = async () => {

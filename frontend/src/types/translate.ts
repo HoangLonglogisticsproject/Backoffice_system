@@ -391,6 +391,33 @@ const PHRASES = {
   driverUnread: { vi: 'chưa đọc', en: 'unread' },
   driverNoNotifications: { vi: 'Chưa có thông báo nào.', en: 'No notifications yet.' },
   driverTripOn: { vi: 'Chuyến ngày', en: 'Trip on' },
+
+  // ------------------------------------------------- web push (0038) --
+  // Nhắc trước giờ khởi hành một tiếng, kể cả khi trình duyệt đã đóng.
+  pushTitle: { vi: 'Thông báo đẩy trên máy này', en: 'Push notifications on this device' },
+  pushExplain: {
+    vi: 'Bật để được nhắc trước giờ khởi hành 1 tiếng, kể cả khi bạn đã đóng trình duyệt.',
+    en: 'Turn on to be reminded one hour before departure, even with the browser closed.',
+  },
+  pushEnable: { vi: 'Bật thông báo', en: 'Turn on' },
+  pushDisable: { vi: 'Tắt thông báo', en: 'Turn off' },
+  pushWorking: { vi: 'Đang xử lý…', en: 'Working…' },
+  pushOn: { vi: 'Đang bật trên máy này', en: 'On for this device' },
+  pushOff: { vi: 'Đang tắt trên máy này', en: 'Off for this device' },
+  // Ba trạng thái KHÔNG phải lỗi của người dùng, và mỗi cái cần một câu khác
+  // nhau: gộp chúng thành "không bật được" sẽ khiến người ta bấm lại mãi.
+  pushUnsupported: {
+    vi: 'Trình duyệt này không hỗ trợ thông báo đẩy. Hãy mở bằng Chrome hoặc Edge trên Android, hoặc thêm trang web vào màn hình chính trên iPhone.',
+    en: 'This browser does not support push notifications. Use Chrome or Edge on Android, or add this site to the Home Screen on iPhone.',
+  },
+  pushDenied: {
+    vi: 'Bạn đã chặn quyền thông báo cho trang này. Hãy mở cài đặt trình duyệt và cho phép lại, rồi thử lần nữa.',
+    en: 'Notifications are blocked for this site. Allow them in your browser settings, then try again.',
+  },
+  pushFailed: {
+    vi: 'Chưa bật được thông báo. Hãy kiểm tra kết nối mạng rồi thử lại.',
+    en: 'Could not turn notifications on. Check your connection and try again.',
+  },
   notifReason: { vi: 'Lý do', en: 'Reason' },
   notifTripAssigned: { vi: 'Bạn được phân công chuyến', en: 'You have been assigned a trip' },
   notifTripUnassigned: {

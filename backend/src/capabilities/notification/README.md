@@ -68,9 +68,36 @@ lại gì**, không đủ để làm gì mà không hỏi server. Thông báo c�
 tài xế bấm vào thông báo của chuyến đã bị đổi người vẫn bị `ActiveAssignmentGuard`
 từ chối.
 
-## Web Push
+## Web Push (0038)
 
-Chưa có. SSE chỉ đẩy khi portal đang mở; điện thoại khoá màn hình thì đọc lại
-từ API khi mở lại (`visibilitychange` + reconnect đều refetch). Web Push cần cặp
-khoá VAPID cấp ở deployment, package `web-push`, service worker và bảng
-subscription — quyết định hạ tầng, ghi ở báo cáo phát hành.
+Đã có, cho **một** việc: nhắc tài xế **trước giờ khởi hành 1 tiếng**. WebSocket
+chỉ đẩy khi portal đang mở; một tài xế đóng trình duyệt lúc 8 giờ tối sẽ không
+biết chuyến 10 giờ sáng hôm sau — Web Push đi qua hệ điều hành chứ không qua
+tab, nên nó là đường duy nhất chạm tới người đã rời khỏi trang.
+
+Hình dạng:
+
+- `push_devices` — gửi tới đâu. Một tài xế, nhiều máy. `fcm_token` **duy nhất
+  toàn cục**: máy dùng chung đổi chủ chứ không nhân bản.
+- `push_jobs` — gửi cái gì, lúc nào. Một hàng cho một lượt nhắc, gắn với
+  **assignment** chứ không với chuyến, nên đổi tài xế không thể lẫn người.
+- `PushSchedulerService` — các service của chuyến đi gọi **trong transaction
+  của chúng**, đúng kỷ luật `record(..., tx)` ở trên.
+- `PushWorkerService` — cron mỗi phút, giành job bằng `FOR UPDATE SKIP LOCKED`,
+  đọc lại nghiệp vụ ngay trước khi gửi, thử lại có backoff + jitter.
+
+### Không hứa exactly-once
+
+`sendEachForMulticast` chỉ nói FCM đã **nhận** thông điệp, không nói điện thoại
+đã **hiển thị** nó đúng một lần — FCM không đảm bảo điều đó, nên hệ này cũng
+không. Cụ thể: một tiến trình bị kill sau khi FCM nhận nhưng trước khi
+`markSent` commit sẽ để job ở `processing`, và `recoverStuck` thả nó về
+`pending` sau 5 phút. Không có cách nào từ phía backend phân biệt nó với một
+job chết *trước* khi gửi. Lựa chọn là thả về: một tài xế thấy lượt nhắc hai
+lần là cái giá chấp nhận được để không ai bị bỏ quên.
+
+### Chưa có
+
+Mọi loại thông báo đẩy khác. `TRIP_ASSIGNED`, `COMPLETION_*` vẫn chỉ đi qua
+WebSocket và bảng `notifications`; đẩy chúng ra Web Push là một quyết định
+nghiệp vụ riêng, không phải một phần mở rộng hiển nhiên.

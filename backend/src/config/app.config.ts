@@ -94,6 +94,34 @@ export class AppConfig {
     };
   }
 
+  /**
+   * Credentials gửi Web Push, hoặc `null` khi deployment này chưa có.
+   *
+   * `null` chứ không phải một object rỗng: nơi gọi phải xử lý trường hợp
+   * "không có" một cách rõ ràng, và `if (!credentials)` nói điều đó tốt hơn ba
+   * phép so sánh chuỗi rỗng. Schema đã bảo đảm ba biến hoặc cùng có hoặc cùng
+   * trống, nên kiểm tra một biến là đủ.
+   */
+  get firebase(): { projectId: string; clientEmail: string; privateKey: string } | null {
+    const projectId = this.config.get('FIREBASE_PROJECT_ID', { infer: true });
+    if (projectId.trim() === '') return null;
+    return {
+      projectId,
+      clientEmail: this.config.get('FIREBASE_CLIENT_EMAIL', { infer: true }),
+      privateKey: this.config.get('FIREBASE_PRIVATE_KEY', { infer: true }),
+    };
+  }
+
+  /** Tiến trình này có chạy cron gửi Web Push không. */
+  get pushWorkerEnabled(): boolean {
+    return this.config.get('PUSH_WORKER_ENABLED', { infer: true });
+  }
+
+  /** Origin công khai của frontend, cho link tuyệt đối trong thông báo. Trống = bỏ qua. */
+  get pushAppBaseUrl(): string {
+    return this.config.get('PUSH_APP_BASE_URL', { infer: true });
+  }
+
   get isProduction(): boolean {
     return this.nodeEnv === 'production';
   }

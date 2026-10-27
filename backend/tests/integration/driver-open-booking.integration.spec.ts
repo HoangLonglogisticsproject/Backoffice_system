@@ -1,4 +1,4 @@
-import { dispatchCrewOn, entryCrewOn, supersessionOn } from '../helpers/trip-board-fixture';
+import { dispatchCrewOn, entryCrewOn, pushSchedulerOn, supersessionOn } from '../helpers/trip-board-fixture';
 import { Pool, type PoolClient } from 'pg';
 import {
   TEST_URL,
@@ -97,9 +97,10 @@ describeIntegration('Driver open bookings — real PostgreSQL', () => {
     const bookings = new OpenBookingRepository(database);
 
     board = new TripScheduleService(database, trips, new TripCustomerRepository(database), history,
-      new TripLocationRepository(database), entryCrewOn(database), supersessionOn(database));
+      new TripLocationRepository(database), entryCrewOn(database), supersessionOn(database),
+      new DriverAssignmentRepository(database), pushSchedulerOn(database));
     execution = new TripExecutionService(database, trips, assignments, events, new TripVehicleRepository(database),
-      users, notifications, completions, history, new VehicleDailyFuelCheckRepository(database), dispatchCrewOn(database));
+      users, notifications, pushSchedulerOn(database), completions, history, new VehicleDailyFuelCheckRepository(database), dispatchCrewOn(database));
     completion = new TripCompletionService(database, trips, assignments, completions, new TripCostRepository(database),
       history, notifications, events, supersessionOn(database), new AuthorizationRepository(database));
     asks = new DriverAssignmentRequestService(database, trips, bookings, requests, users);

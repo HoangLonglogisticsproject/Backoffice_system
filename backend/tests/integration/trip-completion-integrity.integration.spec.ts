@@ -1,4 +1,4 @@
-import { entryCrewOn, dispatchCrewOn, supersessionOn } from '../helpers/trip-board-fixture';
+import { entryCrewOn, dispatchCrewOn, pushSchedulerOn, supersessionOn } from '../helpers/trip-board-fixture';
 import { Pool } from 'pg';
 import {
   TEST_URL,
@@ -86,6 +86,8 @@ describeIntegration('Completion needs a complete execution — real PostgreSQL',
       new TripLocationRepository(database),
       entryCrewOn(database),
       supersessionOn(database),
+      new DriverAssignmentRepository(database),
+      pushSchedulerOn(database),
     );
     execution = new TripExecutionService(
       database,
@@ -95,6 +97,7 @@ describeIntegration('Completion needs a complete execution — real PostgreSQL',
       new TripVehicleRepository(database),
       users,
       notifications,
+      pushSchedulerOn(database),
       requests,
       history,
       new VehicleDailyFuelCheckRepository(database),
