@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, type UseQueryResult } from '@tan
 import * as authApi from '@/api/auth';
 import { isApiError } from '@/utils/errors';
 import { notifyApiError, notifySuccess } from '@/utils/toast';
+import { releasePushDeviceOnLogout } from './usePushNotifications';
 import type { AuthorizationMe, Identity } from '@/types/auth';
 
 /**
@@ -98,7 +99,15 @@ export function useLogout() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: authApi.logout,
+    // ★ THIẾT BỊ ĐƯỢC GỠ TRƯỚC KHI PHIÊN ĐÓNG, VÌ VIỆC GỠ CẦN MỘT PHIÊN CÒN
+    // SỐNG. Gọi sau `logout` sẽ gặp 401 và để lại một hàng `active` trỏ tới
+    // chiếc máy vừa có người đăng xuất — nghĩa là lượt nhắc của tài xế này
+    // vẫn rung trên máy mà người kế tiếp đang cầm. Nuốt mọi lỗi: không điều
+    // gì ở đây được phép giữ một người lại trong phiên họ muốn thoát.
+    mutationFn: async () => {
+      await releasePushDeviceOnLogout();
+      return authApi.logout();
+    },
 
     onSuccess: () => {
       notifySuccess('toastSignedOut');

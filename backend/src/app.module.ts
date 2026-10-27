@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './infrastructure/database/database.module';
 import { HealthModule } from './infrastructure/health/health.module';
@@ -43,6 +44,11 @@ import { TripScheduleModule } from './capabilities/trip-schedule/trip-schedule.m
     // config + technology adapters first: core modules consume the ports they
     // register, and nothing here consumes core.
     ConfigModule,
+    // ★ CÁI HẸN GIỜ CỦA TIẾN TRÌNH, KHÔNG PHẢI MỘT HÀNG ĐỢI. Nó chỉ gọi hàm
+    // theo lịch; mọi thứ về "job nào, của ai, đã gửi chưa" nằm trong PostgreSQL
+    // (0038), nên hai instance cùng chạy là an toàn và không có broker nào phải
+    // vận hành. Hôm nay chỉ `PushWorkerService` dùng nó.
+    ScheduleModule.forRoot(),
     DatabaseModule,
     AuthModule,
     TtyModule,

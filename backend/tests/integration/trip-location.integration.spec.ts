@@ -1,4 +1,5 @@
-import { entryCrewOn, supersessionOn } from '../helpers/trip-board-fixture';
+import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
+import { entryCrewOn, pushSchedulerOn, supersessionOn } from '../helpers/trip-board-fixture';
 import { Pool } from 'pg';
 import { TEST_URL, applyAllMigrations, openTestSchema, poolAsDatabase } from '../helpers/integration-database';
 import type { Database } from '@common/types/database.port';
@@ -77,6 +78,8 @@ describeIfDatabase('Customer locations against real PostgreSQL', () => {
       locations,
       entryCrewOn(database),
       supersessionOn(database),
+      new DriverAssignmentRepository(database),
+      pushSchedulerOn(database),
     );
     driverView = new DriverTripReadModelRepository(database);
 

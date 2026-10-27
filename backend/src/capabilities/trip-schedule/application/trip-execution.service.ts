@@ -34,6 +34,7 @@ import { EXECUTION_STARTED_REASON } from '../domain/trip-status-history';
 import type { UserSummary } from '../../../common/types/user-summary';
 import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { NotificationService } from '../../notification/application/notification.service';
+import { PushSchedulerService } from '../../notification/application/push-scheduler.service';
 
 /**
  * Who is driving what on a trip, and what they report.
@@ -60,6 +61,7 @@ export class TripExecutionService {
     private readonly vehicles: TripVehicleRepository,
     private readonly users: UserRepository,
     private readonly notifications: NotificationService,
+    private readonly pushScheduler: PushSchedulerService,
     private readonly requests: CompletionRequestRepository,
     private readonly history: TripStatusHistoryRepository,
     private readonly fuelChecks: VehicleDailyFuelCheckRepository,
@@ -156,6 +158,25 @@ export class TripExecutionService {
         await this.notifications.record(tell('TRIP_UNASSIGNED', trip, ended), tx),
         await this.notifications.record(tell('TRIP_ASSIGNED', trip, assignment), tx),
       ];
+
+      // ★ VÀ LỊCH NHẮC THEO ĐÚNG MỘT ĐƯỜNG ĐÓ: lượt cũ tắt, lượt mới bật
+      // (0038). Hai lời gọi mang hai assignment id KHÁC NHAU — đổi tài xế kết
+      // thúc một hàng và mở một hàng khác, không bao giờ ghi đè
+      // `driver_user_id` — nên lượt nhắc của người cũ không có đường nào biến
+      // thành lượt nhắc của người mới, và ngược lại. Cùng transaction, nên
+      // không có khoảnh khắc nào cả hai cùng sống.
+      await this.pushScheduler.cancelForAssignment(ended.id, tx);
+      await this.pushScheduler.syncForAssignment(
+        {
+          tripId: trip.id,
+          assignmentId: assignment.id,
+          driverUserId: assignment.driverUserId,
+          pickupAt: trip.pickupAt,
+          tripStatus: trip.status,
+        },
+        tx,
+      );
+
       return { assignment, told };
     });
 
@@ -184,6 +205,10 @@ export class TripExecutionService {
       if (!ended) throw new ConflictError('That assignment has already ended.');
 
       const told = [await this.notifications.record(tell('TRIP_UNASSIGNED', trip, ended), tx)];
+
+      // Không còn ai cầm lượt này thì không còn ai cần được nhắc về nó (0038).
+      await this.pushScheduler.cancelForAssignment(ended.id, tx);
+
       return { ended, told };
     });
 

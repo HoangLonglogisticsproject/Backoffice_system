@@ -53,3 +53,20 @@ export const notificationSocketTarget = (): { origin: string; path: string } => 
 
   return { origin: '', path: `${base}/socket.io` };
 };
+
+/**
+ * Thiết bị nhận Web Push của chính người đang đăng nhập (0038).
+ *
+ * ★ KHÔNG CÓ THAM SỐ NÀO NÓI "CỦA AI", và đó là cả thiết kế. Máy chủ lấy chủ
+ * sở hữu từ phiên; một body mang `userId` bị từ chối thẳng. Cùng một quy tắc
+ * mọi lời gọi trong file này tuân theo.
+ */
+
+export async function registerPushDevice(token: string): Promise<void> {
+  await httpClient.post('/notifications/push-devices', { token });
+}
+
+export async function unregisterPushDevice(token: string): Promise<void> {
+  // `delete` có body: axios đòi nó nằm trong `data`.
+  await httpClient.delete('/notifications/push-devices', { data: { token } });
+}

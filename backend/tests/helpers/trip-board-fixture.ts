@@ -10,6 +10,8 @@ import { NotificationService } from '../../src/capabilities/notification/applica
 import { NotificationRepository } from '../../src/capabilities/notification/persistence/notification.repository';
 import { NotificationStream } from '../../src/capabilities/notification/application/notification-stream';
 import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule/persistence/trip-execution.repository';
+import { PushSchedulerService } from '../../src/capabilities/notification/application/push-scheduler.service';
+import { PushJobRepository } from '../../src/capabilities/notification/persistence/push-job.repository';
 import {
   TripScheduleService,
   type TripBoardQuery,
@@ -76,6 +78,8 @@ export async function openTripBoard(schema: string): Promise<TripBoardFixture> {
     new TripLocationRepository(counted),
     entryCrewOn(counted),
     supersessionOn(counted),
+    new DriverAssignmentRepository(counted),
+    pushSchedulerOn(counted),
   );
   const users = new UserRepository(base);
   const author = (await users.insertUser({ displayName: 'Điều Độ' })).id;
@@ -96,6 +100,10 @@ export async function openTripBoard(schema: string): Promise<TripBoardFixture> {
 export const entryCrewOn = (db: Database): TripEntryCrew =>
   new TripEntryCrew(new DriverAssignmentRepository(db), new TripVehicleRepository(db), new UserRepository(db));
 
+/** Lịch nhắc Web Push (0038) — các service của chuyến đi đồng bộ nó trong transaction của chúng. */
+export const pushSchedulerOn = (db: Database): PushSchedulerService =>
+  new PushSchedulerService(new PushJobRepository(db));
+
 const notificationsOn = (db: Database): NotificationService =>
   new NotificationService(new NotificationRepository(db), new NotificationStream());
 
@@ -110,6 +118,7 @@ export const dispatchCrewOn = (db: Database, notifications = notificationsOn(db)
     new TripVehicleRepository(db),
     new UserRepository(db),
     notifications,
+    pushSchedulerOn(db),
     supersessionOn(db, notifications),
   );
 

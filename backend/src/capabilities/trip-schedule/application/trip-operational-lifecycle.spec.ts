@@ -16,6 +16,20 @@ import { DispatchCrew } from './dispatch-crew';
 const noAsks = () => ({ supersede: jest.fn().mockResolvedValue([]), deliver: jest.fn() });
 
 /**
+ * Lịch nhắc Web Push (0038). Những bài test trong file này nói về vòng đời của
+ * chuyến, không về thông báo — nên lịch nhắc là một con rối im lặng ở đây, và
+ * hành vi thật của nó có spec riêng (`push-scheduler.service.spec.ts`).
+ */
+const noReminders = () => ({
+  syncForAssignment: jest.fn().mockResolvedValue(undefined),
+  cancelForAssignment: jest.fn().mockResolvedValue(undefined),
+  cancelForTrip: jest.fn().mockResolvedValue(undefined),
+});
+
+/** Không chuyến nào trong file này có xe chạy, nên không có lượt phân công nào để đồng bộ. */
+const noAssignments = () => ({ listByTrip: jest.fn().mockResolvedValue([]) });
+
+/**
  * The one active global assignment — who a submitted completion is reported to
  * (0036). `null` is a deployment mid-handover, which some cases below pin.
  */
@@ -534,6 +548,8 @@ describe('the one write path to DONE — and no office path through the lifecycl
       // No trip here is recorded after it ran, so no crew is written with one.
       { recordEnded: jest.fn() } as never,
       noAsks() as never,
+      noAssignments() as never,
+      noReminders() as never,
     );
 
     return { service, trips, history };
@@ -722,10 +738,11 @@ describe('execution events', () => {
       vehicles as never,
       users as never,
       notifications as never,
+      noReminders() as never,
       requests as never,
       history as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
-      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noAsks() as never),
+      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noReminders() as never, noAsks() as never),
     );
 
     return { service, trips, assignments, events, vehicles, users, notifications, requests, history };
@@ -1175,10 +1192,11 @@ describe('dispatch assignment', () => {
       vehicles as never,
       users as never,
       notifications as never,
+      noReminders() as never,
       requests as never,
       { record: jest.fn() } as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
-      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noAsks() as never),
+      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noReminders() as never, noAsks() as never),
     );
     return { service, trips, assignments, events, vehicles, users, notifications, requests };
   };
@@ -1809,10 +1827,11 @@ describe('★ assignment eligibility and what the driver is told', () => {
       vehicles as never,
       users as never,
       notifications as never,
+      noReminders() as never,
       requests as never,
       { record: jest.fn() } as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
-      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noAsks() as never),
+      new DispatchCrew(assignments as never, vehicles as never, users as never, notifications as never, noReminders() as never, noAsks() as never),
     );
     return { service, trips, assignments, users, notifications };
   };
@@ -1960,10 +1979,11 @@ describe('★ confirming a delivery takes no position either', () => {
       vehicles as never,
       drivers() as never,
       told() as never,
+      noReminders() as never,
       { listByAssignment: jest.fn().mockResolvedValue([]) } as never,
       { record: jest.fn() } as never,
       { exists: jest.fn().mockResolvedValue(false) } as never,
-      new DispatchCrew(assignments as never, vehicles as never, drivers() as never, told() as never, noAsks() as never),
+      new DispatchCrew(assignments as never, vehicles as never, drivers() as never, told() as never, noReminders() as never, noAsks() as never),
     );
     return { service, events };
   };

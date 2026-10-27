@@ -1,4 +1,4 @@
-import { entryCrewOn, dispatchCrewOn, supersessionOn } from '../helpers/trip-board-fixture';
+import { entryCrewOn, dispatchCrewOn, pushSchedulerOn, supersessionOn } from '../helpers/trip-board-fixture';
 import { Pool, type PoolClient } from 'pg';
 import {
   TEST_URL,
@@ -177,6 +177,8 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       new TripLocationRepository(database),
       entryCrewOn(database),
       supersessionOn(database),
+      new DriverAssignmentRepository(database),
+      pushSchedulerOn(database),
     );
     const users = new UserRepository(database);
     notificationRows = new NotificationRepository(database);
@@ -195,6 +197,7 @@ describeIfDatabase('Operational lifecycle against real PostgreSQL', () => {
       vehicles,
       users,
       notifications,
+      pushSchedulerOn(database),
       requests,
       history,
       new VehicleDailyFuelCheckRepository(database),

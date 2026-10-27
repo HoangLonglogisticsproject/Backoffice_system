@@ -39,6 +39,8 @@ import {
   type TripScheduleValues,
 } from '../persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
+import { DriverAssignmentRepository } from '../persistence/trip-execution.repository';
+import { PushSchedulerService } from '../../notification/application/push-scheduler.service';
 
 /**
  * What a caller may say when creating a trip. Everything is optional but a
@@ -206,6 +208,8 @@ export class TripScheduleService {
     private readonly locations: TripLocationRepository,
     private readonly crew: TripEntryCrew,
     private readonly supersession: AssignmentRequestSupersession,
+    private readonly assignments: DriverAssignmentRepository,
+    private readonly pushScheduler: PushSchedulerService,
   ) {}
 
   /**
@@ -436,6 +440,32 @@ export class TripScheduleService {
       // hide it behind a plausible 404.
       if (!updated) throw new Error('Locked trip disappeared during update.');
 
+      // ★ GIỜ KHỞI HÀNH ĐỔI THÌ LỊCH NHẮC ĐỔI THEO (0038). Đồng bộ KHÔNG ĐIỀU
+      // KIỆN cho mọi lượt phân công đang sống, chứ không chỉ khi phát hiện
+      // `pickupAt` lệch: `syncForAssignment` vốn là một phép đặt lại từ sự thật
+      // hiện tại, nên gọi thừa là vô hại, còn một điều kiện bỏ sót một đường
+      // ghi thì để lại một lượt nhắc sai giờ mà không ai thấy. Dời giờ về quá
+      // khứ — hoặc xoá hẳn — cũng đi qua đây và kết thúc bằng việc huỷ job.
+      //
+      // Trong CÙNG transaction, dưới CÙNG khoá của chuyến: một lượt dispatch
+      // chạy song song phải xếp hàng sau, nên không có khả năng nó đặt lịch
+      // theo giờ cũ sau khi chỗ này đã đặt theo giờ mới.
+      const active = (await this.assignments.listByTrip(id, tx)).filter(
+        (assignment) => assignment.state === 'active',
+      );
+      for (const assignment of active) {
+        await this.pushScheduler.syncForAssignment(
+          {
+            tripId: updated.id,
+            assignmentId: assignment.id,
+            driverUserId: assignment.driverUserId,
+            pickupAt: updated.pickupAt,
+            tripStatus: updated.status,
+          },
+          tx,
+        );
+      }
+
       return updated;
     });
   }
@@ -466,6 +496,13 @@ export class TripScheduleService {
       const archived = await this.trips.archive(id, archivedBy, new Date(), tx);
       if (!archived) throw new Error('Locked trip disappeared while archiving.');
       const told = await this.supersession.supersede(trip, { by: archivedBy, reason: 'trip_archived' }, tx);
+
+      // Chuyến rời khỏi bảng thì mọi lượt nhắc chưa gửi của nó tắt theo
+      // (0038) — theo TRIP id, nên không lượt phân công nào sót lại dù có bao
+      // nhiêu xe trên chuyến. Trong cùng transaction: archive bị rollback thì
+      // lịch nhắc cũng trở lại nguyên vẹn.
+      await this.pushScheduler.cancelForTrip(id, tx);
+
       return { archived, told };
     });
     this.supersession.deliver(told);

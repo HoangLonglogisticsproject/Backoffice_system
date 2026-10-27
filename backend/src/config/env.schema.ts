@@ -438,6 +438,63 @@ export const envSchema = z.object({
     .refine((value) => value === '' || /^\S{32,}$/.test(value), {
       message: 'R2_SECRET_ACCESS_KEY must be the secret Cloudflare issued (at least 32 characters)',
     }),
+
+  /**
+   * Service account của Firebase, để backend gửi Web Push nhắc tài xế trước
+   * giờ khởi hành (0038).
+   *
+   * ★ TUỲ CHỌN, VÀ TRỐNG NGHĨA LÀ KHÔNG GỬI — CHỨ KHÔNG PHẢI KHÔNG BOOT. Cùng
+   * một lập luận `GOONG_API_KEY` đã nêu: bắt buộc ba biến này sẽ khiến mọi
+   * developer và mọi job CI phải xin một service account cho phần việc chẳng
+   * liên quan gì tới thông báo. Thiếu cấu hình thì lượt nhắc nằm chờ trong
+   * `push_jobs` và một dòng cảnh báo được ghi ra; ngày credentials được nạp,
+   * chúng đi tiếp.
+   *
+   * ★ NHƯNG MỘT BỘ THIẾU LÀ LỖI CẤU HÌNH, và `superRefine` bên dưới từ chối
+   * boot. Khai báo được hai trong ba biến gần như luôn là chép thiếu, và hậu
+   * quả — thông báo im lặng không bao giờ gửi — là thứ không ai phát hiện ra
+   * cho tới khi một tài xế lỡ chuyến.
+   *
+   * ⚠ CREDENTIAL. Không bao giờ log, không bao giờ gửi tới trình duyệt. Web
+   * config phía frontend là thứ KHÁC và công khai được; private key thì không.
+   */
+  FIREBASE_PROJECT_ID: z.string().default(''),
+  FIREBASE_CLIENT_EMAIL: z.string().default(''),
+  /**
+   * PEM của service account. Trong `.env` nó nằm trên một dòng với `\n` viết
+   * theo nghĩa đen, vì định dạng đó không mang nổi xuống dòng thật — nên hai
+   * ký tự đó được dịch lại thành xuống dòng ở đây, đúng một lần, thay vì ở
+   * từng nơi đọc nó.
+   */
+  FIREBASE_PRIVATE_KEY: z
+    .string()
+    .default('')
+    .transform((value) => value.replace(/\\n/g, '\n')),
+
+  /**
+   * Có chạy cron gửi Web Push trong tiến trình này không.
+   *
+   * ★ MẶC ĐỊNH BẬT, VÀ CHỈ TẮT CHO MỘT LÝ DO CỤ THỂ. Nhiều instance cùng bật
+   * là trường hợp ĐÚNG — `FOR UPDATE SKIP LOCKED` khiến chúng chia việc. Biến
+   * này tồn tại cho bài test và cho một tiến trình cố tình chỉ phục vụ HTTP,
+   * không phải để chọn "máy nào chạy cron".
+   */
+  PUSH_WORKER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((value) => value === 'true'),
+
+  /**
+   * Địa chỉ công khai của frontend, để `fcmOptions.link` của FCM có một URL
+   * tuyệt đối. Trống thì trường đó bỏ qua và service worker tự ghép đường dẫn
+   * với origin của chính nó — nên đây là tiện nghi, không phải phụ thuộc.
+   */
+  PUSH_APP_BASE_URL: z
+    .string()
+    .default('')
+    .refine((value) => value === '' || /^https?:\/\/\S+$/.test(value), {
+      message: 'PUSH_APP_BASE_URL phải là một URL http(s) đầy đủ, hoặc để trống',
+    }),
 }).superRefine((env, ctx) => {
   const missing = (path: string, message: string) =>
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
@@ -453,6 +510,18 @@ export const envSchema = z.object({
   if (env.OBJECT_STORAGE_DRIVER === 'r2') {
     for (const key of ['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'] as const) {
       if (env[key] === '') missing(key, `${key} is required when OBJECT_STORAGE_DRIVER=r2`);
+    }
+  }
+
+  // Firebase: cả ba, hoặc không cái nào. Một bộ thiếu là lỗi chép dở, và hậu
+  // quả của nó — thông báo im lặng không bao giờ gửi — không tự lộ ra.
+  const firebase = ['FIREBASE_PROJECT_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY'] as const;
+  const declared = firebase.filter((key) => env[key].trim() !== '');
+  if (declared.length > 0 && declared.length < firebase.length) {
+    for (const key of firebase) {
+      if (env[key].trim() === '') {
+        missing(key, `${key} là bắt buộc khi đã khai báo bất kỳ biến FIREBASE_* nào khác`);
+      }
     }
   }
 });

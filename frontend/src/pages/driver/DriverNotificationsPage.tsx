@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Bell, CheckCircle2, CircleSlash, Truck, UserMinus, XCircle } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
+import { PushToggle } from '@/components/driver/PushToggle';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useMarkNotificationRead, useNotifications } from '@/hooks/notifications';
 import { driverErrorKey } from '@/utils/driverErrors';
@@ -90,6 +91,10 @@ export default function DriverNotificationsPage() {
           {t('driverNotifications')}
         </h1>
       </div>
+
+      {/* Bật thông báo đẩy cho máy này (0038) — ngay trên danh sách, vì đây là
+          nơi tài xế đến khi tự hỏi vì sao mình không nhận được gì. */}
+      <PushToggle />
 
       {isLoading ? (
         <p className="py-12 text-center text-sm text-muted-foreground">{t('driverLoading')}</p>

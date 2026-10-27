@@ -3,6 +3,7 @@ import { ConflictError } from '../../../common/errors/domain.error';
 import type { DatabaseQuery } from '../../../common/types/database.port';
 import { UserRepository } from '../../../core/users/persistence/user.repository';
 import { NotificationService } from '../../notification/application/notification.service';
+import { PushSchedulerService } from '../../notification/application/push-scheduler.service';
 import {
   eventKeys,
   type Notification,
@@ -34,6 +35,7 @@ export class DispatchCrew {
     private readonly vehicles: TripVehicleRepository,
     private readonly users: UserRepository,
     private readonly notifications: NotificationService,
+    private readonly pushScheduler: PushSchedulerService,
     private readonly supersession: AssignmentRequestSupersession,
   ) {}
 
@@ -68,6 +70,25 @@ export class DispatchCrew {
     // ★ THE NOTIFICATION IS PART OF THE SAME TRANSACTION, keyed by the
     // assignment row, so it exists exactly when the assignment does.
     const told = [await this.notifications.record(tell('TRIP_ASSIGNED', trip, assignment), tx)];
+
+    // ★ VÀ LỊCH NHẮC TRƯỚC GIỜ KHỞI HÀNH CŨNG VẬY (0038). Cùng transaction,
+    // cùng lý lẽ: một lượt nhắc cho lần phân công bị rollback là lượt nhắc về
+    // việc không hề xảy ra. Đặt ở ĐÂY chứ không ở `TripExecutionService.assign`
+    // vì đây là con đường DUY NHẤT crew một chuyến — dispatch trực tiếp và một
+    // yêu cầu nhận chuyến được duyệt đều đi qua chỗ này, nên lịch nhắc không
+    // thể thiếu ở một trong hai. Chuyến không có giờ lấy hàng, hoặc tạo quá sát
+    // giờ, thì không sinh job — `shouldSchedule` quyết định.
+    await this.pushScheduler.syncForAssignment(
+      {
+        tripId: trip.id,
+        assignmentId: assignment.id,
+        driverUserId: assignment.driverUserId,
+        pickupAt: trip.pickupAt,
+        tripStatus: trip.status,
+      },
+      tx,
+    );
+
     told.push(...(await this.supersession.supersede(trip, { by: assignedBy, reason: 'trip_assigned', except: approving }, tx)));
     return { assignment, told };
   }
