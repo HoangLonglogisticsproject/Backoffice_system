@@ -230,7 +230,7 @@ export async function fetchTripExportSnapshot({ from, to, customer, scope }: Tri
     params: { from, to, lifecycle: scope, assignment: 'all', customer },
   });
   if (!Array.isArray(data?.items) || typeof data.readAt !== 'string' || Number.isNaN(Date.parse(data.readAt))) {
-    throw new Error('The export answer carried no snapshot.');
+    throw new TypeError('The export answer carried no snapshot.');
   }
   return { items: (data.items as Wire<TripBoardRow>[]).map(fromWire), readAt: data.readAt };
 }
