@@ -1273,7 +1273,7 @@ xuất được chi phí trong Excel nhưng **vẫn không** thấy cột chi ph
 | Trạng thái | Cột chi phí | Giá trị |
 |---|---|---|
 | **A.** Có `cost.export`, chuyến có chi phí đã ghi nhận | có | số theo từng khoản, tổng |
-| **B.** Có `cost.export`, chuyến **không** có chi phí nào | có | **`0`** ở mọi ô, kể cả Tổng — không bao giờ để trống |
+| **B.** Có `cost.export`, chuyến **không** có chi phí nào | có | **để trống** ở mọi ô, kể cả Tổng (từ 2026-11-05 — trước đó là `0`). Một loại chi phí không có dòng nào cũng để trống. Ô trống = chưa có dòng chi phí còn hiệu lực, **không** phải "chi phí bằng 0" |
 | **C.** Không có `cost.export` (Sales · Điều phối · CS) | **bỏ hẳn** (như cột giá khi thiếu `trip.price.read`) | không có giá trị chi phí nào trong dữ liệu export |
 
 Quyền và "không có chi phí" **tách bạch**: khối cột bật theo quyền của người xuất
@@ -1287,6 +1287,31 @@ trong trang (chuyến không có dòng nào → toàn `"0.00"`), nên B không b
 Chi phí xuất Excel là **chi phí đã ghi nhận vận hành, không đồng nghĩa chi phí kế toán
 đã duyệt**: gồm mọi dòng còn hiệu lực (không bị huỷ), **kể cả dòng tài xế khai còn chờ
 duyệt** — khớp board và hộp thoại chi phí chuyến.
+
+**Export Excel — một ảnh chụp dữ liệu (2026-11-05).** Frontend hiện tại xuất qua
+**`GET /trip-schedules/export-snapshot`**, cho cả file của từng màn hình lẫn file tổng hợp:
+
+* Query như board (`from`, `to`, `assignment`, `sort`, `direction`, `customer`); `page`/`limit`
+  được nhận và bỏ qua. `lifecycle` nhận thêm **`all`** = Lịch xe ∪ Lịch sử chuyến — **chỉ**
+  route này; `GET /trip-schedules` và `GET /trip-schedules/export` vẫn trả **422** cho `all`.
+* Trả **`{ items, readAt }`** — không có envelope trang. `items` là mọi chuyến khớp bộ lọc
+  (dạng dòng như board, `costSummary` theo `cost.export`, giá theo `trip.price.read`);
+  `readAt` (ISO 8601, đồng hồ máy chủ) là lúc lần đọc bắt đầu.
+* Server đọc trong **một transaction `REPEATABLE READ, READ ONLY`**: danh sách chuyến (kèm
+  tổ lái, khách hàng, người tạo) và tổng chi phí cùng một ảnh chụp. Thay đổi được lưu sau
+  khi lần đọc bắt đầu không có trong kết quả. Lỗi → không có `items` nào (không bao giờ
+  trả một phần).
+* Frontend **không** quay về `GET /trip-schedules/export` khi route này lỗi, và coi một
+  response thiếu `items`/`readAt` là lỗi (không tạo file).
+* `GET /trip-schedules/export` (phân trang) **giữ nguyên** cho trình duyệt còn chạy bản
+  frontend trước; bỏ khi không còn bản đó.
+
+File: sheet dữ liệu giữ nguyên cột và thứ tự của từng màn hình; file tổng hợp
+(`tong-hop-chuyen_<from>_<to>.xlsx`) dùng bố cục Lịch xe và thêm **Nhóm chuyến**, **Mã
+chuyến** ở cuối. Ô "Ngày" và hai ô "Thời gian" là **giá trị ngày thật** (`dd/mm/yyyy`,
+`dd/mm/yyyy hh:mm`), giờ theo **Asia/Ho_Chi_Minh** bất kể múi giờ của máy. Sheet thứ hai
+"Thông tin xuất" ghi phạm vi, kỳ, bộ lọc khách hàng, quy tắc loại chuyến lưu trữ, thời
+điểm bắt đầu đọc dữ liệu (giờ máy chủ) và thời điểm tạo file.
 
 ## 23. Lịch xe / Lịch sử chuyến và mô hình thời gian (2026-09-29)
 
