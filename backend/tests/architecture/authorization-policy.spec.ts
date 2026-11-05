@@ -61,14 +61,19 @@ describe('★ cost.export is the SuperAdmin’s and accounting’s — for the e
     expect(PERMISSION_REQUIREMENT['cost.export']).toEqual({ tier: 'global', orFunction: ['accounting'] });
   });
 
-  it('is read by the export route alone — the board route still asks cost.read', async () => {
+  it('is read by the two export routes alone — the board route still asks cost.read', async () => {
     const api = join(__dirname, '..', '..', 'src', 'capabilities', 'trip-schedule', 'api');
     const schedule = await readFile(join(api, 'trip-schedule.controller.ts'), 'utf8');
-    const exportRoute = schedule.slice(schedule.indexOf("@Get('trip-schedules/export')"));
-    const exportHandler = exportRoute.slice(0, exportRoute.indexOf('@Get(', 1));
+    const handlerOf = (route: string) => {
+      const from = schedule.slice(schedule.indexOf(`@Get('${route}')`));
+      return from.slice(0, from.indexOf('@Get(', 1));
+    };
 
-    expect(exportHandler).toContain('canExportTripCosts(');
-    expect(schedule.split('canExportTripCosts(').length - 1).toBe(1);
+    // The paged export a browser on the previous build still walks, and the
+    // one-snapshot export the current build reads.
+    expect(handlerOf('trip-schedules/export')).toContain('canExportTripCosts(');
+    expect(handlerOf('trip-schedules/export-snapshot')).toContain('canExportTripCosts(');
+    expect(schedule.split('canExportTripCosts(').length - 1).toBe(2);
     expect(schedule).toContain('canSeeTripCosts(authorizationOf(request))');
   });
 });

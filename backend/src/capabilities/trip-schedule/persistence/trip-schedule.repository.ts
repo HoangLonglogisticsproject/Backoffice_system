@@ -3,6 +3,7 @@ import { DATABASE, type Database, type DatabaseQuery } from '../../../common/typ
 import {
   TripAssignmentFilter,
   TripAssignmentRef,
+  TripExportScope,
   TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
@@ -90,10 +91,18 @@ export const LIFECYCLE_PREDICATE: Record<TripLifecycle, string> = {
   history: `AND t.status = 'finished'`,
 };
 
+/**
+ * The two screens, plus both at once for the export (`TripExportScope`).
+ * `all` adds NO predicate — it is the same read with the status split left out,
+ * never a third definition of either side.
+ */
+const SCOPE_PREDICATE: Record<TripExportScope, string> = { ...LIFECYCLE_PREDICATE, all: '' };
+
 /** What narrows a board read on top of its range. */
 export interface BoardFilter {
   assignment: TripAssignmentFilter;
-  lifecycle: TripLifecycle;
+  /** A screen — or, for the snapshot export only, `all` (the route is what refuses it elsewhere). */
+  lifecycle: TripExportScope;
   /**
    * Free text matched against the CUSTOMER's name. `null` means every customer,
    * which is what a caller that never heard of this filter sends.
@@ -151,7 +160,7 @@ const filterSql = (
   { assignment, lifecycle, customer }: BoardFilter,
   firstParameter: number,
 ): { sql: string; params: string[] } => {
-  const shared = `${ASSIGNMENT_PREDICATE[assignment]} ${LIFECYCLE_PREDICATE[lifecycle]}`;
+  const shared = `${ASSIGNMENT_PREDICATE[assignment]} ${SCOPE_PREDICATE[lifecycle]}`;
   if (customer === null) return { sql: shared, params: [] };
 
   return {
@@ -448,12 +457,17 @@ export class TripScheduleRepository {
    * count never scans the table. `idx_trip_schedule_page` supplies the default
    * order (`executionDate desc`), tiebreaker included; the other orders sort the
    * bounded range the window function has to read in full anyway.
+   *
+   * ★ `limit: null` IS THE WHOLE FILTERED SET IN THIS ONE STATEMENT —
+   * PostgreSQL reads `LIMIT NULL` as `LIMIT ALL`. Only the snapshot export asks
+   * for it, inside its own read-only transaction; the range is still mandatory
+   * and capped, so "all" is never more than a year of the board.
    */
   async listPage(
     range: DateRange,
     filter: BoardFilter,
     order: TripBoardOrder,
-    limit: number,
+    limit: number | null,
     offset: number,
     executor: DatabaseQuery = this.db,
   ): Promise<{ items: TripScheduleWithRefs[]; total: number }> {

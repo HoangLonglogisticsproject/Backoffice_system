@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { DomainErrorFilter } from '../../../common/http/domain-error.filter';
+import { DATABASE } from '../../../common/types/database.port';
 import { AppConfig } from '../../../config/app.config';
 import { AuthorizationService } from '../../../core/authorization/application/authorization.service';
 import {
@@ -58,6 +59,7 @@ describe('trip-schedule HTTP security', () => {
    */
   interface TripServiceMock {
     list: jest.Mock;
+    listForExport: jest.Mock;
     findById: jest.Mock;
     create: jest.Mock;
     update: jest.Mock;
@@ -96,6 +98,8 @@ describe('trip-schedule HTTP security', () => {
   };
   /** The page's one batched cost read. The service in front of it is the real one. */
   let boardCosts: { forTrips: jest.Mock };
+  /** The snapshot export's transaction — opened only once a request has been let through. */
+  let snapshotDb: { transaction: jest.Mock; query: jest.Mock };
   /** Somebody with a driver account, to be assigned. */
   const DRIVER_USER = '99999999-9999-4999-8999-999999999999';
   let context: AuthorizationContext;
@@ -143,6 +147,7 @@ describe('trip-schedule HTTP security', () => {
         total: 1,
         totalPages: 1,
       }),
+      listForExport: jest.fn().mockResolvedValue([storedTrip]),
       findById: jest.fn().mockResolvedValue(storedTrip),
       create: jest.fn().mockResolvedValue(storedTrip),
       update: jest.fn().mockResolvedValue(storedTrip),
@@ -168,6 +173,16 @@ describe('trip-schedule HTTP security', () => {
 
     boardCosts = {
       forTrips: jest.fn().mockResolvedValue(new Map([[TRIP, { total: '6000000.00', itemCount: 2 }]])),
+    };
+
+    const tx = {
+      query: jest.fn(async (sql: string) =>
+        sql.includes('statement_timestamp') ? [{ read_at: new Date('2026-11-05T08:42:07.000Z') }] : [],
+      ),
+    };
+    snapshotDb = {
+      transaction: jest.fn(async (work: (executor: typeof tx) => Promise<unknown>) => work(tx)),
+      query: jest.fn(),
     };
 
     catalogue = {
@@ -197,6 +212,7 @@ describe('trip-schedule HTTP security', () => {
         { provide: TripScheduleService, useValue: trips },
         TripBoardService,
         { provide: TripBoardCostRepository, useValue: boardCosts },
+        { provide: DATABASE, useValue: snapshotDb },
         { provide: OperationalBoardService, useValue: operations },
         { provide: TripExecutionService, useValue: execution },
         { provide: TripCatalogueService, useValue: catalogue },
@@ -250,6 +266,8 @@ describe('trip-schedule HTTP security', () => {
 
   const READS = [
     ['get', '/trip-schedules'],
+    // The Excel export's one-snapshot read — the same two guards as the board.
+    ['get', '/trip-schedules/export-snapshot'],
     ['get', `/trip-schedules/${TRIP}`],
     ['get', `/trip-schedules/${TRIP}/status-history`],
     // The operational board is dispatch information behind the same two guards.
@@ -288,6 +306,7 @@ describe('trip-schedule HTTP security', () => {
           ...Object.values(catalogue),
           ...Object.values(operations),
           ...Object.values(execution),
+          ...Object.values(snapshotDb),
         ]) {
           expect(mock).not.toHaveBeenCalled();
         }
@@ -838,7 +857,7 @@ describe('trip-schedule HTTP security', () => {
 
       expect(response.body.items[0].costSummary).toEqual({ total: '6000000.00', itemCount: 2 });
       expect(boardCosts.forTrips).toHaveBeenCalledTimes(1);
-      expect(boardCosts.forTrips).toHaveBeenCalledWith([TRIP]);
+      expect(boardCosts.forTrips.mock.calls[0][0]).toEqual([TRIP]);
     });
   });
 
@@ -867,7 +886,7 @@ describe('trip-schedule HTTP security', () => {
       const response = await authed('get', '/trip-schedules/export').expect(200);
 
       expect(response.body.items[0].costSummary).toEqual(COSTS);
-      expect(boardCosts.forTrips).toHaveBeenCalledWith([TRIP]);
+      expect(boardCosts.forTrips.mock.calls[0][0]).toEqual([TRIP]);
     });
 
     it('★ C. still gives ACCOUNTING no cost on the normal board request', async () => {
@@ -918,6 +937,121 @@ describe('trip-schedule HTTP security', () => {
       context = as(['accounting']);
       await authed('get', '/trip-schedules/export?sort=created_at').expect(422);
       expect(trips.list).not.toHaveBeenCalled();
+    });
+  });
+
+  // ================================== ★ THE SNAPSHOT EXPORT — ONE READ, SAME KEYS ==
+
+  /**
+   * ★ `/trip-schedules/export-snapshot` IS A SECOND DOOR TO THE SAME DATA, so
+   * every key the paged export enforces is pinned here again on the new route:
+   * `trip.read` for the rows, `cost.export` for the costs, `trip.price.read`
+   * for the prices — all decided by the server before anything is serialised.
+   * And `/export` keeps the contract a browser on the previous build relies on.
+   */
+  describe('★ the snapshot export route', () => {
+    const as = (functions: DepartmentFunction[]) => asContext({ memberOf: [DEPT], functions });
+    const priced = { ...storedTrip, sellPrice: '4500000.00', purchasePrice: '3000000.00' };
+
+    beforeEach(() => {
+      trips.listForExport.mockResolvedValue([priced]);
+    });
+
+    it('★ answers the rows and when their snapshot was read — one transaction, no page envelope', async () => {
+      context = asContext({ global: true });
+      const response = await authed('get', '/trip-schedules/export-snapshot?from=2026-11-02&to=2026-11-08').expect(200);
+
+      expect(Object.keys(response.body).sort()).toEqual(['items', 'readAt']);
+      expect(response.body.readAt).toBe('2026-11-05T08:42:07.000Z');
+      expect(response.body.items).toHaveLength(1);
+      expect(snapshotDb.transaction).toHaveBeenCalledTimes(1);
+      expect(trips.list).not.toHaveBeenCalled();
+      expect(trips.findById).not.toHaveBeenCalled(); // not swallowed by `:tripId`
+      expect(trips.listForExport).toHaveBeenCalledWith(
+        expect.objectContaining({ from: '2026-11-02', to: '2026-11-08', lifecycle: 'operational', assignment: 'all' }),
+        expect.anything(),
+      );
+    });
+
+    it('★ accepts both screens at once here — and nowhere else', async () => {
+      context = asContext({ global: true });
+      await authed('get', '/trip-schedules/export-snapshot?lifecycle=all').expect(200);
+      expect(trips.listForExport).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'all' }), expect.anything());
+
+      await authed('get', '/trip-schedules?lifecycle=all').expect(422);
+      await authed('get', '/trip-schedules/export?lifecycle=all').expect(422);
+      expect(trips.list).not.toHaveBeenCalled();
+    });
+
+    it('carries the applied customer search and the same validation as the board', async () => {
+      context = asContext({ global: true });
+      await authed('get', '/trip-schedules/export-snapshot?customer=%20vi%E1%BB%85n%20').expect(200);
+      expect(trips.listForExport).toHaveBeenCalledWith(expect.objectContaining({ customer: 'viễn' }), expect.anything());
+
+      await authed('get', '/trip-schedules/export-snapshot?sort=created_at').expect(422);
+      await authed('get', '/trip-schedules/export-snapshot?lifecycle=everything').expect(422);
+      expect(trips.listForExport).toHaveBeenCalledTimes(1);
+    });
+
+    it('★ gives ACCOUNTING the costs (cost.export) and the prices (trip.price.read)', async () => {
+      context = as(['accounting']);
+      const response = await authed('get', '/trip-schedules/export-snapshot').expect(200);
+
+      expect(response.body.items[0].costSummary).toEqual({ total: '6000000.00', itemCount: 2 });
+      expect(response.body.items[0].sellPrice).toBe('4500000.00');
+      expect(boardCosts.forTrips.mock.calls[0][0]).toEqual([TRIP]);
+    });
+
+    it.each(['sales', 'dispatch', 'customer_service'] as const)(
+      '★ gives %s the rows with no cost and no price — and runs no cost read',
+      async (fn) => {
+        context = as([fn]);
+        const response = await authed('get', '/trip-schedules/export-snapshot?lifecycle=all').expect(200);
+
+        expect(response.body.items[0].costSummary).toBeNull();
+        expect(response.body.items[0].sellPrice).toBeNull();
+        expect(response.body.items[0].purchasePrice).toBeNull();
+        expect(boardCosts.forTrips).not.toHaveBeenCalled();
+        const body = JSON.stringify(response.body);
+        for (const figure of ['6000000', '4500000', '3000000']) expect(body).not.toContain(figure);
+      },
+    );
+
+    it('lets no crafted request turn the costs on', async () => {
+      context = as(['sales']);
+      const response = await authed('get', '/trip-schedules/export-snapshot?includeCosts=true&costs=true').expect(200);
+
+      expect(response.body.items[0].costSummary).toBeNull();
+      expect(boardCosts.forTrips).not.toHaveBeenCalled();
+    });
+
+    it('★ refuses a caller who may not read the board — before any transaction opens', async () => {
+      context = asContext({ memberOf: [DEPT] });
+      const response = await authed('get', '/trip-schedules/export-snapshot?lifecycle=all');
+
+      expect(response.status).toBe(403);
+      expect(snapshotDb.transaction).not.toHaveBeenCalled();
+      expect(trips.listForExport).not.toHaveBeenCalled();
+      expect(JSON.stringify(response.body)).not.toContain('4500000');
+    });
+
+    it('★ answers a failed read with an error and no rows', async () => {
+      context = asContext({ global: true });
+      trips.listForExport.mockRejectedValue(new Error('canceling statement due to statement timeout'));
+
+      const response = await authed('get', '/trip-schedules/export-snapshot?lifecycle=all');
+
+      expect(response.status).toBe(500);
+      expect(response.body.items).toBeUndefined();
+    });
+
+    it('★ leaves the paged /export exactly as a browser on the previous build reads it', async () => {
+      context = asContext({ global: true });
+      const response = await authed('get', '/trip-schedules/export?page=1&limit=200&lifecycle=history').expect(200);
+
+      expect(Object.keys(response.body).sort()).toEqual(['items', 'limit', 'page', 'total', 'totalPages']);
+      expect(trips.list).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'history', page: 1, limit: 200 }));
+      expect(snapshotDb.transaction).not.toHaveBeenCalled();
     });
   });
 

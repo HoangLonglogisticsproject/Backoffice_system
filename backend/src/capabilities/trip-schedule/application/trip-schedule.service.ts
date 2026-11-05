@@ -8,6 +8,7 @@ import { optionalPoint } from '../domain/trip-location';
 import {
   isRetiredStatus,
   type TripAssignmentFilter,
+  type TripExportScope,
   type TripLifecycle,
   type TripSchedule,
   type TripScheduleWithRefs,
@@ -36,6 +37,7 @@ import {
 } from '../persistence/trip-catalogue.repository';
 import {
   TripScheduleRepository,
+  type BoardFilter,
   type TripScheduleValues,
 } from '../persistence/trip-schedule.repository';
 import { TripStatusHistoryRepository } from '../persistence/trip-status-history.repository';
@@ -172,6 +174,26 @@ export interface TripBoardQuery extends DateRangePageQuery, TripBoardOrder {
   customer?: string | null;
 }
 
+/**
+ * What the snapshot export reads: the board's query, with either screen or
+ * both (`TripExportScope`). The page and size are parsed and ignored — the
+ * export's subject is the whole filtered set.
+ */
+export type TripExportQuery = Omit<TripBoardQuery, 'lifecycle'> & { lifecycle: TripExportScope };
+
+/**
+ * The board's filter, built ONCE for every read of it — a page, its recount,
+ * and the export. Two spellings of one filter is how a screen and its file
+ * come to describe different sets.
+ */
+const boardFilterOf = (query: TripBoardQuery | TripExportQuery): BoardFilter => ({
+  assignment: query.assignment,
+  lifecycle: query.lifecycle,
+  // Absent and `null` are one thing here: no filter. Resolved once, so the
+  // repository is never handed `undefined` to interpret.
+  customer: query.customer ?? null,
+});
+
 /** The fields a patch may CLEAR with `null` — everything but the day, the status and the intent. */
 type NullableTripField = Exclude<keyof CreateTripInput, 'scheduledOn' | 'status' | 'entryMode' | 'crew'>;
 
@@ -232,13 +254,7 @@ export class TripScheduleService {
     // that recovers a stale page number must describe one set; building the
     // second from a subset of the query is how "20 of 137" gets printed over
     // four rows.
-    const filter = {
-      assignment: query.assignment,
-      lifecycle: query.lifecycle,
-      // Absent and `null` are one thing here: no filter. Resolved once, so the
-      // repository is never handed `undefined` to interpret.
-      customer: query.customer ?? null,
-    };
+    const filter = boardFilterOf(query);
     const offset = (query.page - 1) * query.limit;
 
     const { items, total } = await this.trips.listPage(
@@ -257,6 +273,26 @@ export class TripScheduleService {
       items.length === 0 && query.page > 1 ? await this.trips.countInRange(range, filter) : total;
 
     return toOffsetPage(items, resolvedTotal, query.page, query.limit);
+  }
+
+  /**
+   * Every row one export holds, read through the caller's `executor` so it
+   * shares the caller's snapshot (`TripBoardService.exportSnapshot`).
+   *
+   * ★ THE SAME FILTER AND ORDER AS `list`, in ONE statement and no page. Rows
+   * read page by page are read at different instants; a row archived between
+   * two pages shifts every later offset and one trip is never read at all.
+   */
+  async listForExport(query: TripExportQuery, executor: DatabaseQuery): Promise<TripScheduleWithRefs[]> {
+    const { items } = await this.trips.listPage(
+      { from: query.from, to: query.to },
+      boardFilterOf(query),
+      { sort: query.sort, direction: query.direction },
+      null,
+      0,
+      executor,
+    );
+    return items;
   }
 
   async findById(id: string): Promise<TripScheduleWithRefs> {

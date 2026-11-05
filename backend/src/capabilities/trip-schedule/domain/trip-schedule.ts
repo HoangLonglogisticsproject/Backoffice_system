@@ -111,6 +111,22 @@ export const TRIP_LIFECYCLES = ['operational', 'history'] as const;
 export type TripLifecycle = (typeof TRIP_LIFECYCLES)[number];
 
 /**
+ * ★ WHAT ONE EXCEL FILE MAY HOLD — either screen, or both in one table.
+ *
+ * `all` is the two projections together: no status predicate at all. That is
+ * EXACTLY `operational` ∪ `history`, with nothing between them, because
+ * `trip_schedules.status` is NOT NULL (0011) and CHECKed to four values (0025),
+ * so `status <> 'finished'` and `status = 'finished'` split every row.
+ *
+ * ★ ONLY THE SNAPSHOT EXPORT ACCEPTS IT. The board keeps `TRIP_LIFECYCLES`, so
+ * no screen can come to mean "both" — the file holds both only because the
+ * person exporting chose it.
+ */
+export const TRIP_EXPORT_SCOPES = [...TRIP_LIFECYCLES, 'all'] as const;
+
+export type TripExportScope = (typeof TRIP_EXPORT_SCOPES)[number];
+
+/**
  * One row of the dispatch board.
  *
  * The eight free-text fields are free text ON PURPOSE. They are the parts of
