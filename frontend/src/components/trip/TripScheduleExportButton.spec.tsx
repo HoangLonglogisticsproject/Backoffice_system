@@ -158,6 +158,34 @@ describe('TripScheduleExportButton', () => {
     );
   });
 
+  /**
+   * ★ THE CORE PROMISE: same range, same applied search, same data — the
+   * combined file is the same whichever screen it was asked from. Nothing
+   * about the screen reaches the request or the builder once "both" is chosen.
+   */
+  it('★ asks for — and builds — the identical combined file from Lịch xe and from Lịch sử chuyến', async () => {
+    const exportBothFrom = async (lifecycle: 'operational' | 'history') => {
+      fetchTripExportSnapshot.mockClear();
+      downloadTripScheduleWorkbook.mockClear();
+      const view = renderButton(lifecycle, 'An Phát');
+      openDialog();
+      fireEvent.click(option('exportScopeAll'));
+      exportFile();
+      await waitFor(() => expect(downloadTripScheduleWorkbook).toHaveBeenCalledTimes(1));
+      const { t: _t, ...built } = downloadTripScheduleWorkbook.mock.calls[0]![0] as Record<string, unknown>;
+      const asked = fetchTripExportSnapshot.mock.calls[0]![0];
+      view.unmount();
+      return { asked, built };
+    };
+
+    const fromSchedule = await exportBothFrom('operational');
+    const fromHistory = await exportBothFrom('history');
+
+    expect(fromSchedule.asked).toEqual({ ...RANGE, customer: 'An Phát', scope: 'all' });
+    expect(fromHistory.asked).toEqual(fromSchedule.asked);
+    expect(fromHistory.built).toEqual(fromSchedule.built);
+  });
+
   it('opens on this screen again every time — the last choice is not remembered', async () => {
     renderButton();
     openDialog();
