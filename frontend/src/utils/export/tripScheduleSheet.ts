@@ -1,8 +1,8 @@
-import { TRIP_STATUS_LABELS, type TripLifecycle } from '@/types/trip';
-import type { Language, TranslationKey } from '@/types/translate';
+import { TRIP_STATUS_LABELS, type TripExportScope } from '@/types/trip';
+import type { TranslationKey } from '@/types/translate';
 import { formatPlate } from '@/utils/format';
-import { formatCalendarDay, formatDateTime } from '@/utils/format/datetime';
 import type { TripBoardRow } from '@/types/tripBoard';
+import { sheetDay, sheetInstant } from './sheetDate';
 import { sheetMoney } from './sheetMoney';
 import {
   TRIP_SHEET_COST_WIDTHS,
@@ -52,13 +52,14 @@ const leg = (
   address: string | null,
   contact: string | null,
   at: string | null,
-  language: Language,
-): [string, string, string] => [
+): [string, string, number | null] => [
   address ?? '',
   contact ?? '',
   // A full date and time, not just the hour, for the same reason the board
-  // shows one: delivery routinely falls on a day after the trip's own.
-  at ? formatDateTime(at, language) : '',
+  // shows one: delivery routinely falls on a day after the trip's own. A date
+  // cell on Hồ Chí Minh's clock (`sheetInstant`), never text in the
+  // browser's zone.
+  sheetInstant(at),
 ];
 
 /**
@@ -80,17 +81,20 @@ export interface SheetVisibility {
  * the page a row happened to arrive on — the export is one list, so its numbers
  * run 1..n whatever the page size was.
  *
- * ★ `lifecycle` IS WHICH SCREEN THE FILE IS OF, AND IT CHANGES ONE COLUMN.
+ * ★ `scope` IS WHICH SCREEN THE FILE IS OF, AND IT CHANGES ONLY THE EDGES.
  * Lịch sử chuyến holds finished trips only, so a status column there would say
- * "Hoàn thành" on every row — it is left out. Everything else, the money
- * included, is the same composition: one row shaper, not two.
+ * "Đã xác nhận" on every row — it is left out. Both screens in one file (`all`)
+ * is Lịch xe's layout — status included — with two columns appended at the
+ * END, so nothing anybody already filters on moves: "Nhóm chuyến", the screen
+ * the trip was on when it was read, and "Mã chuyến", the one key that tells
+ * two trips of one customer on one day apart. Everything else, the money
+ * included, is the same composition: one row shaper, not three.
  */
 export function toTripSheetRows(
   trips: readonly TripBoardRow[],
   t: Translate,
-  language: Language,
   { prices = false, costs = false }: SheetVisibility = {},
-  lifecycle: TripLifecycle = 'operational',
+  scope: TripExportScope = 'operational',
 ): TripSheetRow[] {
   const heading = {
     index: t('colIndex'),
@@ -113,22 +117,17 @@ export function toTripSheetRows(
   const costHeadings = costs ? tripSheetCostHeadings(t) : [];
 
   return trips.map((trip, position) => {
-    const [pickupAddress, pickupContact, pickupAt] = leg(
-      trip.pickupAddress,
-      trip.pickupContact,
-      trip.pickupAt,
-      language,
-    );
+    const [pickupAddress, pickupContact, pickupAt] = leg(trip.pickupAddress, trip.pickupContact, trip.pickupAt);
     const [deliveryAddress, deliveryContact, deliveryAt] = leg(
       trip.deliveryAddress,
       trip.deliveryContact,
       trip.deliveryAt,
-      language,
     );
 
     return {
       [heading.index]: position + 1,
-      [heading.date]: formatCalendarDay(trip.scheduledOn, language),
+      // `scheduled_on` — the day the period is cut on — as a DATE cell.
+      [heading.date]: sheetDay(trip.scheduledOn),
       // ★ ONE ROW PER TRIP, WHATEVER THE CREW (ADR-0004). A trip with three
       // lorries stays one line, its plates and its drivers joined with `;` —
       // a sheet that grew a row per lorry would count trips wrong in every
@@ -150,7 +149,7 @@ export function toTripSheetRows(
       // The label a dispatcher reads, not the enum. An unknown sixth status
       // from the server falls back to its raw value — visibly wrong beats
       // blank, the same rule the badge follows.
-      ...(lifecycle === 'operational' ? { [heading.status]: statusLabel(trip.status, t) } : {}),
+      ...(scope === 'history' ? {} : { [heading.status]: statusLabel(trip.status, t) }),
       // ★ BOTH COLUMNS ARE OMITTED ENTIRELY FOR A VIEWER WHO MAY NOT SEE
       // PRICES, exactly as the board drops them. The server has already blanked
       // the values, so keeping the headings would export two columns of empty
@@ -169,9 +168,26 @@ export function toTripSheetRows(
       ...(costs ? tripSheetCostCells(trip.costSummary, costHeadings) : {}),
       [heading.note]: trip.note ?? '',
       [heading.createdBy]: trip.createdByUser.displayName,
+      // ★ THE SAME RULE THE SERVER SPLITS THE SCREENS BY — `status = 'finished'`
+      // and nothing else — so the group can never disagree with the file of
+      // either screen. A retired "Đã xác nhận (dữ liệu cũ)" is NOT finished and
+      // stays Lịch xe here exactly as on the board.
+      ...(scope === 'all'
+        ? {
+            [t('exportColGroup')]: t(trip.status === 'finished' ? 'tripHistoryTitle' : 'tripScheduleTitle'),
+            [t('exportColTripId')]: trip.id,
+          }
+        : {}),
     };
   });
 }
+
+/** The headings whose cells are days, and those that are instants — the workbook formats them. */
+export const tripSheetDayHeadings = (t: Translate): string[] => [t('colDate')];
+export const tripSheetTimeHeadings = (t: Translate): string[] => [
+  `${t('colPickup')} — ${t('exportColTime')}`,
+  `${t('colDelivery')} — ${t('exportColTime')}`,
+];
 
 /**
  * How wide each column opens, in characters.
@@ -190,16 +206,19 @@ const LEADING_WIDTHS = [6, 12, 14, 20, 24, 30, 32, 20, 18, 32, 20, 18];
 const STATUS_WIDTHS = [16];
 const PRICE_WIDTHS = [14, 14];
 const TRAILING_WIDTHS = [40, 20];
+/** "Nhóm chuyến" and "Mã chuyến" — the combined file's two appended columns. */
+const COMBINED_WIDTHS = [16, 38];
 
 export const tripSheetColumnWidths = (
   { prices = false, costs = false }: SheetVisibility = {},
-  lifecycle: TripLifecycle = 'operational',
+  scope: TripExportScope = 'operational',
 ): number[] => [
   ...LEADING_WIDTHS,
-  ...(lifecycle === 'operational' ? STATUS_WIDTHS : []),
+  ...(scope === 'history' ? [] : STATUS_WIDTHS),
   ...(prices ? PRICE_WIDTHS : []),
   ...(costs ? TRIP_SHEET_COST_WIDTHS : []),
   ...TRAILING_WIDTHS,
+  ...(scope === 'all' ? COMBINED_WIDTHS : []),
 ];
 
 const statusLabel = (status: TripBoardRow['status'], t: Translate): string =>

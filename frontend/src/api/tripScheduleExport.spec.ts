@@ -6,145 +6,89 @@ vi.mock('./client', () => ({
   httpClient: { get: (...args: unknown[]) => get(...args) },
 }));
 
-const { fetchAllTripSchedules } = await import('./tripSchedule');
+const { fetchTripExportSnapshot } = await import('./tripSchedule');
 
 /**
- * The page walk behind the Excel export.
+ * The one read behind the Excel export.
  *
- * ★ WHAT THESE PIN IS THE THING THAT MAKES AN EXPORT TRUSTWORTHY: that the file
- * holds the whole result set. A walk that quietly stopped after page one would
- * produce a file that looks completely normal — headings, rows, a plausible
- * count — and is missing most of the month. Nothing downstream can detect that,
- * so it has to be caught here.
+ * ★ WHAT THESE PIN IS WHAT MAKES A FILE TRUSTWORTHY: every row of the range,
+ * from ONE consistent read, or no file at all. A file that is a little short —
+ * one trip missed while pages were read at different instants — looks
+ * completely normal, and nothing downstream can detect it.
  */
 
-const page = (items: unknown[], over: Record<string, unknown> = {}) => ({
-  data: { items, page: 1, limit: 200, total: items.length, totalPages: 1, ...over },
-});
+const REQUEST = { from: '2026-11-02', to: '2026-11-08', customer: '', scope: 'all' as const };
+const READ_AT = '2026-11-05T08:42:07.000Z';
 
-const trip = (id: string) => ({ id });
-
-describe('fetchAllTripSchedules', () => {
+describe('fetchTripExportSnapshot', () => {
   beforeEach(() => {
     get.mockReset();
   });
 
-  it('★ walks every page and returns the rows in order', async () => {
-    get
-      .mockResolvedValueOnce(page([trip('a'), trip('b')], { total: 5, totalPages: 3 }))
-      .mockResolvedValueOnce(page([trip('c'), trip('d')], { page: 2, total: 5, totalPages: 3 }))
-      .mockResolvedValueOnce(page([trip('e')], { page: 3, total: 5, totalPages: 3 }));
-
-    const rows = await fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' });
-
-    expect(rows.map((row) => (row as { id: string }).id)).toEqual(['a', 'b', 'c', 'd', 'e']);
-    expect(get).toHaveBeenCalledTimes(3);
-  });
-
-  /**
-   * ★ AT THE API'S CEILING, NOT THE BOARD'S PAGE SIZE. The endpoint refuses a
-   * limit above 200 rather than clamping it, so asking for more would fail the
-   * export outright; asking for the screen's fifty would triple the requests.
-   */
-  it('★ asks for the largest page the endpoint allows', async () => {
-    get.mockResolvedValue(page([]));
-
-    await fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' });
-
-    // ★ THE EXPORT'S OWN ROUTE — its costs follow `cost.export`, not the
-    // board's `cost.read` (DL-117).
-    expect(get).toHaveBeenCalledWith(
-      '/trip-schedules/export',
-      expect.objectContaining({
-        params: expect.objectContaining({ page: 1, limit: 200 }),
-      }),
-    );
-  });
-
-  it('carries the range and the tab into every page it asks for', async () => {
-    get
-      .mockResolvedValueOnce(page([trip('a')], { total: 2, totalPages: 2 }))
-      .mockResolvedValueOnce(page([trip('b')], { page: 2, total: 2, totalPages: 2 }));
-
-    await fetchAllTripSchedules({
-      from: '2026-08-01',
-      to: '2026-08-31',
-      assignment: 'all',
+  it('★ reads the whole export in ONE request to the snapshot route — no page, no walk', async () => {
+    get.mockResolvedValue({
+      data: { items: [{ id: 'a', vehicleId: null }, { id: 'b', vehicleId: 'v1' }], readAt: READ_AT },
     });
 
-    for (const call of get.mock.calls) {
-      expect(call[1].params).toMatchObject({
-        from: '2026-08-01',
-        to: '2026-08-31',
-        assignment: 'all',
-      });
-    }
-  });
+    const snapshot = await fetchTripExportSnapshot(REQUEST);
 
-  /**
-   * ★ ONE PAGE IN FLIGHT, NEVER A BURST. The pages after the first depend only
-   * on its `totalPages`, so they COULD go at once — but a 366-day range is
-   * dozens of pages, the API's pool is ten connections with a five-second
-   * acquire timeout, and the dispatch board and the drivers' phones share it.
-   * A burst would time out this export's pages, or everybody else's requests.
-   */
-  it('★ asks for the next page only once the previous one has arrived', async () => {
-    let release!: (value: unknown) => void;
-    get
-      .mockResolvedValueOnce(page([trip('a')], { total: 3, totalPages: 3 }))
-      .mockReturnValueOnce(new Promise((resolve) => { release = resolve; }))
-      .mockResolvedValueOnce(page([trip('c')], { page: 3, total: 3, totalPages: 3 }));
-
-    const walk = fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(get).toHaveBeenCalledTimes(2);
-
-    release(page([trip('b')], { page: 2, total: 3, totalPages: 3 }));
-    expect((await walk).map((row) => (row as { id: string }).id)).toEqual(['a', 'b', 'c']);
-    expect(get).toHaveBeenCalledTimes(3);
-  });
-
-  /**
-   * `totalPages` is `0` for an empty result — there is no "page 1 of 0" to
-   * navigate to — so the loop must not ask for a second page over nothing.
-   */
-  it('stops at one request when the range is empty', async () => {
-    get.mockResolvedValue(page([], { total: 0, totalPages: 0 }));
-
-    const rows = await fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' });
-
-    expect(rows).toEqual([]);
     expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith('/trip-schedules/export-snapshot', {
+      params: { from: '2026-11-02', to: '2026-11-08', lifecycle: 'all', assignment: 'all', customer: '' },
+    });
+    expect(snapshot.readAt).toBe(READ_AT);
+    expect(snapshot.items.map((row) => row.id)).toEqual(['a', 'b']);
+    // The wire's legacy column is renamed here, as on every other trip read.
+    expect(snapshot.items[1]).toMatchObject({ legacyVehicleId: 'v1' });
+    expect(snapshot.items[1]).not.toHaveProperty('vehicleId');
   });
 
-  it('reports progress as it goes, so a long range can say so', async () => {
-    get
-      .mockResolvedValueOnce(page([trip('a')], { total: 2, totalPages: 2 }))
-      .mockResolvedValueOnce(page([trip('b')], { page: 2, total: 2, totalPages: 2 }));
+  it.each(['operational', 'history'] as const)('asks for one screen — %s — through the same route', async (scope) => {
+    get.mockResolvedValue({ data: { items: [], readAt: READ_AT } });
 
-    const seen: Array<[number, number]> = [];
-    await fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' }, (loaded, total) =>
-      seen.push([loaded, total]),
+    await fetchTripExportSnapshot({ ...REQUEST, scope });
+
+    expect(get).toHaveBeenCalledWith(
+      '/trip-schedules/export-snapshot',
+      expect.objectContaining({ params: expect.objectContaining({ lifecycle: scope }) }),
     );
+  });
 
-    expect(seen).toEqual([
-      [1, 2],
-      [2, 2],
-    ]);
+  it('carries the applied customer search', async () => {
+    get.mockResolvedValue({ data: { items: [], readAt: READ_AT } });
+
+    await fetchTripExportSnapshot({ ...REQUEST, customer: 'viễn' });
+
+    expect(get).toHaveBeenCalledWith(
+      '/trip-schedules/export-snapshot',
+      expect.objectContaining({ params: expect.objectContaining({ customer: 'viễn' }) }),
+    );
   });
 
   /**
-   * ★ A REFUSAL MID-WALK IS A FAILED EXPORT, NOT A SHORT ONE. Returning the
-   * pages that did arrive would hand somebody a file that is missing rows and
-   * says nothing about it — the exact failure the whole walk exists to avoid.
+   * ★ A SERVER WITHOUT THE ROUTE FAILS THE EXPORT. An older backend answers
+   * `/trip-schedules/export-snapshot` as a trip id and refuses it; this build
+   * must not then walk the paged `/export` it no longer trusts.
    */
-  it('★ fails outright when a later page is refused', async () => {
-    get
-      .mockResolvedValueOnce(page([trip('a')], { total: 2, totalPages: 2 }))
-      .mockRejectedValueOnce(new Error('boom'));
+  it('★ never falls back to the paged /export when the snapshot route is refused', async () => {
+    get.mockRejectedValue(Object.assign(new Error('Request failed with status code 422'), { response: { status: 422 } }));
 
-    await expect(
-      fetchAllTripSchedules({ from: '2026-08-01', to: '2026-08-31' }),
-    ).rejects.toThrow();
+    await expect(fetchTripExportSnapshot(REQUEST)).rejects.toThrow();
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls.map(([path]) => path)).toEqual(['/trip-schedules/export-snapshot']);
+  });
+
+  it.each([
+    ['an older server’s page envelope', { items: [{ id: 'a' }], page: 1, limit: 50, total: 120, totalPages: 3 }],
+    ['rows with no readAt', { items: [{ id: 'a' }] }],
+    ['a readAt that is not a time', { items: [{ id: 'a' }], readAt: 'yesterday' }],
+    ['no rows at all', { readAt: READ_AT }],
+    ['a proxy’s HTML page served with a 200', '<!doctype html><html></html>'],
+    ['an empty body', undefined],
+  ])('★ refuses %s — no snapshot, no file', async (_label, data) => {
+    get.mockResolvedValue({ data });
+
+    await expect(fetchTripExportSnapshot(REQUEST)).rejects.toThrow('no snapshot');
   });
 });

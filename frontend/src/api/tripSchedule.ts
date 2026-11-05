@@ -2,6 +2,7 @@ import { httpClient } from './client';
 import type {
   TripAssignmentFilter,
   TripEntryMode,
+  TripExportScope,
   TripLifecycle,
   TripSchedule,
   TripScheduleWithRefs,
@@ -161,16 +162,9 @@ const fromWire = <T extends { legacyVehicleId: string | null }>(row: Wire<T>): T
   return { ...rest, legacyVehicleId: vehicleId } as unknown as T;
 };
 
-/**
- * One page of trips from either list route — the board's, or the export's.
- * The two take the same query and return the same envelope; they differ only
- * in the server's cost rule (`cost.read` vs `cost.export`, DL-117).
- */
-async function readTripPage(
-  path: '/trip-schedules' | '/trip-schedules/export',
-  request: TripScheduleQuery,
-): Promise<OffsetPage<TripBoardRow>> {
-  const { data } = await httpClient.get<OffsetPage<Wire<TripBoardRow>>>(path, {
+/** One page of the board. Its cost figures follow `cost.read`. */
+export async function fetchTripSchedules(request: TripScheduleQuery = {}): Promise<OffsetPage<TripBoardRow>> {
+  const { data } = await httpClient.get<OffsetPage<Wire<TripBoardRow>>>('/trip-schedules', {
     // axios drops `undefined` params, so an unset filter simply is not sent and
     // the server applies its own default — the current month, and the whole
     // board rather than one of its halves.
@@ -197,61 +191,48 @@ async function readTripPage(
   return { ...data, items: data.items.map(fromWire) };
 }
 
-/** One page of the board. Its cost figures follow `cost.read`. */
-export const fetchTripSchedules = (request: TripScheduleQuery = {}): Promise<OffsetPage<TripBoardRow>> =>
-  readTripPage('/trip-schedules', request);
+/** What one Excel file is asked for: the range and the APPLIED customer search, and which screen(s). */
+export interface TripExportRequest {
+  from: string;
+  to: string;
+  /** `''` for every customer. */
+  customer: string;
+  scope: TripExportScope;
+}
+
+/** Every row one Excel file holds, and when the server began reading them. */
+export interface TripExportSnapshot {
+  items: TripBoardRow[];
+  /** The server's clock when the snapshot read began, ISO 8601. */
+  readAt: string;
+}
 
 /**
- * The API's ceiling on one page — `MAX_LIMIT` in the backend's `cursor.ts`.
+ * Every trip one Excel file holds — one screen or both — read by the server as
+ * ONE consistent snapshot (`GET /trip-schedules/export-snapshot`).
  *
- * Asking for more is refused rather than clamped, on purpose, so this constant
- * has to match. It is the page size for the walk below and nothing else: the
- * board on screen keeps its own, smaller one.
+ * ★ ONE REQUEST, NOT A WALK. Pages read one request at a time are read at
+ * different instants: a trip archived between two of them shifts every later
+ * offset and another trip is never read — with the count unchanged and no id
+ * twice. The server reads the whole filtered range in one transaction instead,
+ * and its costs follow `cost.export` (DL-117) exactly as the paged route did.
+ *
+ * ★ THERE IS NO FALLBACK TO THE PAGED `/export`, ON PURPOSE. A server that does
+ * not have this route yet must fail the export, not quietly produce a file from
+ * a walk this build no longer trusts.
+ *
+ * ★ NO SNAPSHOT, NO FILE. An answer without its rows or its `readAt` — an
+ * older server's page envelope, a proxy's HTML page served with a 200 — is
+ * refused here, before anything is written.
  */
-const MAX_PAGE_SIZE = 200;
-
-/**
- * Every trip matching a filter, across every page.
- *
- * ★ THIS IS NOT THE READER THE BOARD USES, AND MUST NOT BECOME IT. The screen
- * pages deliberately — see the header of `types/pagination.ts` — and the whole
- * argument for offset pagination here is that a mandatory date range keeps the
- * result set small. This walk leans on the SAME bound rather than escaping it:
- * a range is at most 366 days, so the loop is bounded by something the server
- * enforces, not by the caller's good manners.
- *
- * It exists for the Excel export, which is the one operation whose subject
- * genuinely IS the result set rather than a page of it. Rendering these rows in
- * a table would put the app back where the workbook was.
- *
- * ★ SEQUENTIAL, NOT CONCURRENT. `totalPages` comes from the first response, so
- * the pages after it could be fetched at once — but firing fifty requests at a
- * server sized for a dispatch office trades a progress bar nobody watches for a
- * spike everybody feels. In order, one at a time, reporting as it goes.
- *
- * ⚠ AND IT IS A SNAPSHOT ACROSS SEVERAL READS, not one consistent query. A trip
- * added while the walk runs can shift rows between pages. For an export of a
- * past range — what this is for — that cannot happen; for today's board it can,
- * and the fix would be a server-side export, not a smarter loop here.
- */
-export async function fetchAllTripSchedules(
-  request: Omit<TripScheduleQuery, 'page' | 'limit'> = {},
-  onProgress?: (loaded: number, total: number) => void,
-): Promise<TripBoardRow[]> {
-  // ★ THE EXPORT ROUTE, NOT THE BOARD'S: its costs follow `cost.export`, which
-  // accounting holds and `cost.read` does not grant (DL-117).
-  const first = await readTripPage('/trip-schedules/export', { ...request, page: 1, limit: MAX_PAGE_SIZE });
-
-  const rows = [...first.items];
-  onProgress?.(rows.length, first.total);
-
-  for (let page = 2; page <= first.totalPages; page += 1) {
-    const next = await readTripPage('/trip-schedules/export', { ...request, page, limit: MAX_PAGE_SIZE });
-    rows.push(...next.items);
-    onProgress?.(rows.length, first.total);
+export async function fetchTripExportSnapshot({ from, to, customer, scope }: TripExportRequest): Promise<TripExportSnapshot> {
+  const { data } = await httpClient.get<{ items?: unknown; readAt?: unknown }>('/trip-schedules/export-snapshot', {
+    params: { from, to, lifecycle: scope, assignment: 'all', customer },
+  });
+  if (!Array.isArray(data?.items) || typeof data.readAt !== 'string' || Number.isNaN(Date.parse(data.readAt))) {
+    throw new Error('The export answer carried no snapshot.');
   }
-
-  return rows;
+  return { items: (data.items as Wire<TripBoardRow>[]).map(fromWire), readAt: data.readAt };
 }
 
 export async function fetchTripSchedule(tripId: string): Promise<TripScheduleWithRefs> {

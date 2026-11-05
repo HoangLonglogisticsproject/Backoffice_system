@@ -40,14 +40,16 @@ export const TRIP_SHEET_COST_WIDTHS: readonly number[] = [
  * left out of the sheet altogether (`toTripSheetRows`), decided from the
  * session, never from the rows.
  *
- * ★ A COUNTED ZERO IS 0. The server answers every trip it computed, including
- * one with no line at all, with "0.00"s — "nothing recorded" is a real answer
- * and is written as a number, the total included.
+ * ★ NO LIVE LINE IS A BLANK, NEVER A 0 — the trip finished or not. The server
+ * answers a category with nothing recorded as "0.00", which in a FILE reads as
+ * "confirmed to have cost nothing" — a claim nobody made. Every recorded
+ * amount is > 0 (`trip_costs.amount`, `trip_outsource_hires.agreed_amount`,
+ * 0012), so a sum of "0.00" can only mean no live line was summed, and that
+ * cell is left empty. `SUM` over the column is unchanged.
  *
- * ★ NO SUMMARY IS BLANK, NEVER ZEROS. A row can arrive without one only when
- * the session said `cost.read` and the server did not agree (a stale session)
- * or failed to answer for that trip. That is "not known", and a zero would
- * claim "this trip cost nothing".
+ * ★ NO SUMMARY IS BLANK TOO. A row can arrive without one only when the
+ * session said `cost.read` and the server did not agree (a stale session) or
+ * failed to answer for that trip. That is "not known" — the same empty cell.
  */
 export const tripSheetCostCells = (
   summary: TripCostSummary | null | undefined,
@@ -56,5 +58,11 @@ export const tripSheetCostCells = (
   const amounts = summary
     ? [...TRIP_COST_CATEGORIES.map((category) => summary.byCategory[category]), summary.hires, summary.total]
     : [];
-  return Object.fromEntries(headings.map((heading, index) => [heading, sheetMoney(amounts[index])]));
+  return Object.fromEntries(headings.map((heading, index) => [heading, recorded(amounts[index])]));
+};
+
+/** An amount of something recorded, or `null` when nothing was. */
+const recorded = (amount: string | undefined): number | null => {
+  const value = sheetMoney(amount);
+  return value === 0 ? null : value;
 };

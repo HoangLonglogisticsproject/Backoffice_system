@@ -31,7 +31,7 @@ describe('tripSheetCostHeadings', () => {
 });
 
 describe('tripSheetCostCells', () => {
-  it('★ writes every figure as a number a spreadsheet can sum', () => {
+  it('★ writes every recorded figure as a number a spreadsheet can sum — and a category with no line as empty', () => {
     const cells = tripSheetCostCells(
       summary({
         total: '5300000.50',
@@ -42,16 +42,20 @@ describe('tripSheetCostCells', () => {
     );
 
     expect(cells).toEqual({
-      'Dầu': 800000.5, 'Cầu trạm': 0, 'Phí kho': 0, 'Bốc xếp': 0, 'Tăng ca': 0,
+      'Dầu': 800000.5, 'Cầu trạm': null, 'Phí kho': null, 'Bốc xếp': null, 'Tăng ca': null,
       'Xe thuê ngoài': 4500000, 'Tổng chi phí chuyến': 5300000.5,
     });
-    expect(Object.values(cells).every((value) => typeof value === 'number')).toBe(true);
   });
 
-  it('★ writes a counted zero as 0 — never the board’s "Chưa có" text', () => {
+  /**
+   * ★ NOTHING RECORDED IS EMPTY, NEVER 0 — and never the board's "Chưa có"
+   * text. Every stored amount is > 0, so the server's "0.00" can only mean no
+   * live line; a 0 in a file would read as a cost confirmed to be nothing.
+   */
+  it('★ leaves a trip with nothing recorded empty — the total included, not 0, not text', () => {
     const cells = tripSheetCostCells(summary(), HEADINGS);
 
-    expect(Object.values(cells)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    expect(Object.values(cells)).toEqual(Array(7).fill(null));
   });
 
   it('★ leaves every cell blank when there is no summary — unknown is not zero', () => {

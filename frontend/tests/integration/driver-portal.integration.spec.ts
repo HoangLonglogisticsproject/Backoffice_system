@@ -868,7 +868,9 @@ describe('driver portal (D1) against the real API', () => {
       expect(page.status).toBe(200);
       return page.data.trips.map((row: { assignment: { id: string } }) => row.assignment.id) as string[];
     };
-    const historyRow = async (path: '/trip-schedules' | '/trip-schedules/export') => {
+    const historyRow = async (
+      path: '/trip-schedules' | '/trip-schedules/export' | '/trip-schedules/export-snapshot',
+    ) => {
       const page = await boss.get(path, {
         params: { from: ranOn, to: ranOn, lifecycle: 'history', page: 1, limit: 200 },
       });
@@ -895,6 +897,23 @@ describe('driver portal (D1) against the real API', () => {
       const turns = await boss.get(`/trip-schedules/${recordedTrip}/driver-assignments`);
       expect(turns.status).toBe(200);
       recordedTurn = turns.data.find((turn: { driverUserId: string }) => turn.driverUserId === driverAId).id;
+    });
+
+    /**
+     * ★ THE EXCEL EXPORT'S ONE-SNAPSHOT READ, against the real server: its exact
+     * answer, both screens at once only here, and the office-only guard.
+     */
+    it('★ the snapshot export answers rows and when its read began — both screens only on that route', async () => {
+      const snapshot = await boss.get('/trip-schedules/export-snapshot', {
+        params: { from: ranOn, to: ranOn, lifecycle: 'all' },
+      });
+      expect(snapshot.status).toBe(200);
+      expect(keysOf(snapshot.data)).toEqual(sorted(['items', 'readAt']));
+      expect(Number.isNaN(Date.parse(snapshot.data.readAt))).toBe(false);
+      expect(snapshot.data.items.map((row: { id: string }) => row.id)).toContain(recordedTrip);
+
+      expect((await boss.get('/trip-schedules', { params: { from: ranOn, to: ranOn, lifecycle: 'all' } })).status).toBe(422);
+      expect((await driverA.get('/trip-schedules/export-snapshot')).status).toBe(403);
     });
 
     it('★ is in the driver’s history, opens closed with its money open — and not to driver B', async () => {
@@ -937,6 +956,7 @@ describe('driver portal (D1) against the real API', () => {
       const summary = { total: '275000.00', itemCount: 1 };
       expect((await historyRow('/trip-schedules')).costSummary).toMatchObject(summary);
       expect((await historyRow('/trip-schedules/export')).costSummary).toMatchObject(summary);
+      expect((await historyRow('/trip-schedules/export-snapshot')).costSummary).toMatchObject(summary);
 
       // Driver B cannot write to A's run.
       const other = await driverB.post(`/driver/assignments/${recordedTurn}/expenses`, {
