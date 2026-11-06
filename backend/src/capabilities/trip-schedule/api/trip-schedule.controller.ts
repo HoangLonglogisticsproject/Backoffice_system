@@ -1,5 +1,7 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { ForbiddenError, ValidationError } from '../../../common/errors/domain.error';
 import { UuidParam } from '../../../common/http/uuid-param.pipe';
@@ -25,8 +27,13 @@ import { CurrentUser } from '../../../core/identity/api/current-user.decorator';
 import type { SessionUser } from '../../../core/identity/application/session.service';
 import { OperationalBoardService } from '../application/operational-board.service';
 import { TripBoardService } from '../application/trip-board.service';
+import { TripExportSlots } from '../application/trip-export-slots';
 import { TripExecutionService } from '../application/trip-execution.service';
-import { TripScheduleService, type TripBoardQuery } from '../application/trip-schedule.service';
+import {
+  TripScheduleService,
+  type TripBoardQuery,
+  type TripExportQuery,
+} from '../application/trip-schedule.service';
 import {
   canExportTripCosts,
   canSeeTripCosts,
@@ -36,6 +43,7 @@ import {
   type TripBoardRow,
 } from '../domain/trip-board';
 import { isRecordableAmount } from '../domain/trip-cost';
+import { toExportRow } from '../domain/trip-export';
 import {
   canSeeTripPrices,
   canSetTripPrices,
@@ -52,6 +60,7 @@ import type {
 import type { TripStatusChange } from '../domain/trip-status-history';
 import {
   TRIP_ASSIGNMENT_FILTERS,
+  TRIP_EXPORT_SCOPES,
   TRIP_LIFECYCLES,
   TRIP_STATUSES,
   type TripSchedule,
@@ -415,6 +424,19 @@ const boardFilterSchema = z.object({
 const boardQuerySchema = dateRangePageQuerySchema.and(boardFilterSchema);
 
 /**
+ * The snapshot export's query: the board's, with `lifecycle` widened to `all`
+ * (`TripExportScope`). `.extend` of the SAME object, so the crew filter, the
+ * order and the customer search are parsed by the one definition above — the
+ * file of a screen cannot come to be filtered differently from the screen.
+ */
+/** zlib on the thread pool — compressing a year of trips never blocks the event loop. */
+const gzipAsync = promisify(gzip);
+
+const exportSnapshotQuerySchema = dateRangePageQuerySchema.and(
+  boardFilterSchema.extend({ lifecycle: z.enum(TRIP_EXPORT_SCOPES).default('operational') }),
+);
+
+/**
  * Dispatching a lorry and its driver onto a trip, swapping the driver, or
  * taking the pair off.
  *
@@ -451,6 +473,7 @@ export class TripScheduleController {
     private readonly operations: OperationalBoardService,
     private readonly execution: TripExecutionService,
     private readonly board: TripBoardService,
+    private readonly exportSlots: TripExportSlots,
   ) {}
 
   /**
@@ -571,6 +594,60 @@ export class TripScheduleController {
   ): Promise<OffsetPage<TripBoardRow>> {
     const page = await this.board.page(query, canExportTripCosts(authorizationOf(request)));
     return { ...page, items: redactPricesIn(page.items, this.mayPrice(request)) };
+  }
+
+  /**
+   * Everything one Excel file holds — one screen, or both — read as ONE snapshot
+   * (`TripBoardService.exportSnapshot`), with when that read began (`readAt`).
+   *
+   * ★ A SECOND ROUTE, NOT A NEW CONTRACT FOR THE ONE ABOVE. A browser still on
+   * the previous build walks `/export` page by page and keeps working while
+   * both are deployed; the current build reads only here. `/export` can go once
+   * no such browser is left.
+   *
+   * ★ THE SAME GUARDS AND KEYS AS `/export`: `trip.read` for the rows, prices
+   * blanked on the way out without `trip.price.read`, and the cost aggregate
+   * never run without `cost.export` (DL-117). `lifecycle=all` is accepted here
+   * and on no other route.
+   *
+   * ★ THE ANSWER IS A GZIP FILE (`application/gzip`) HOLDING THE JSON
+   * `{ items, readAt }` — each item only what the workbook reads
+   * (`TripExportRow`). Compressed HERE, by the application, and deliberately
+   * not with `Content-Encoding`: the edge proxy's `fetch` decodes an encoded
+   * body yet forwards the `Content-Encoding` header, so an HTTP-encoded answer
+   * reaches the browser as plain bytes labelled gzip (measured). Opaque gzip
+   * bytes pass every hop unchanged and arrive ~25× smaller.
+   *
+   * ★ AT MOST `EXPORT_MAX_CONCURRENT` AT ONCE, PER PROCESS. A slot is taken
+   * before the read and given back only once the response has CLOSED — sent
+   * in full, refused, or the connection dropped — and the work above has
+   * ended. The transaction itself is over before the first byte is sent.
+   *
+   * Declared before `:tripId`: Nest matches in declaration order.
+   */
+  @Get('trip-schedules/export-snapshot')
+  @UseGuards(AuthGuard, BackofficeOnlyGuard, PermissionGuard)
+  @RequirePermission('trip.read')
+  async exportSnapshot(
+    @Query(new ZodValidationPipe(exportSnapshotQuerySchema)) query: TripExportQuery,
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<void> {
+    const release = this.exportSlots.acquire();
+    const closed = new Promise<void>((resolve) => response.once('close', resolve));
+    try {
+      const snapshot = await this.board.exportSnapshot(query, canExportTripCosts(authorizationOf(request)));
+      const items = redactPricesIn(snapshot.items.map(toExportRow), this.mayPrice(request));
+      const file = await gzipAsync(JSON.stringify({ items, readAt: snapshot.readAt }), { level: 6 });
+      response
+        .status(200)
+        .set({ 'Content-Type': 'application/gzip', 'Content-Length': String(file.length), 'Cache-Control': 'no-store' })
+        .end(file);
+    } finally {
+      // A refusal reaches the client through the exception filter AFTER this
+      // runs; waiting for `close` keeps the slot until that answer is out too.
+      void closed.then(release);
+    }
   }
 
   @Get('trip-schedules/:tripId')

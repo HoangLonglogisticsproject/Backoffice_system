@@ -89,6 +89,19 @@ export const TRIP_ASSIGNMENT_FILTERS: readonly TripAssignmentFilter[] = [
 export type TripLifecycle = 'operational' | 'history';
 
 /**
+ * What one Excel file holds: a screen, or both screens in one table (`all`).
+ * Only `/trip-schedules/export-snapshot` accepts `all`; the board never shows it.
+ */
+export type TripExportScope = TripLifecycle | 'all';
+
+/** What each scope is called — the same words on the dialog's radio and in the file's "Phạm vi". */
+export const TRIP_EXPORT_SCOPE_LABELS: Record<TripExportScope, TranslationKey> = {
+  operational: 'exportScopeOperational',
+  history: 'exportScopeHistory',
+  all: 'exportScopeAll',
+};
+
+/**
  * ★ WHY A TRIP IS BEING ENTERED — set by the button that opened the form.
  * `operational` books work still to run (no past day); `historical` records a
  * run that already happened. Every other rule binds both.

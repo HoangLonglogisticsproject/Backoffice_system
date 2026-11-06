@@ -69,7 +69,6 @@ describe('toTripSheetRows', () => {
     const [row] = toTripSheetRows(
       [trip({ sellPrice: '4500000', purchasePrice: '3000000' })],
       t,
-      'vi',
       { prices: true },
     );
 
@@ -90,7 +89,6 @@ describe('toTripSheetRows', () => {
     const [row] = toTripSheetRows(
       [trip({ sellPrice: '4500000', purchasePrice: '3000000' })],
       t,
-      'vi',
       { prices: false },
     );
 
@@ -108,7 +106,7 @@ describe('toTripSheetRows', () => {
    * then emails on.
    */
   it('★ omits them when the argument is not passed at all', () => {
-    const [row] = toTripSheetRows([trip({ sellPrice: '4500000' })], t, 'vi');
+    const [row] = toTripSheetRows([trip({ sellPrice: '4500000' })], t);
 
     expect(Object.keys(row)).not.toContain(t('colSellPrice'));
   });
@@ -119,7 +117,7 @@ describe('toTripSheetRows', () => {
    * any average taken over the column without anybody noticing.
    */
   it('★ leaves an unpriced trip blank rather than writing 0', () => {
-    const [row] = toTripSheetRows([trip({ sellPrice: null, purchasePrice: null })], t, 'vi', { prices: true });
+    const [row] = toTripSheetRows([trip({ sellPrice: null, purchasePrice: null })], t, { prices: true });
 
     expect(row[t('colSellPrice')]).toBeNull();
     expect(row[t('colPurchasePrice')]).toBeNull();
@@ -130,14 +128,14 @@ describe('toTripSheetRows', () => {
    * Most runs go on our own lorries and are bought from nobody.
    */
   it('writes a selling price with no buying price, and leaves the other blank', () => {
-    const [row] = toTripSheetRows([trip({ sellPrice: '4500000', purchasePrice: null })], t, 'vi', { prices: true });
+    const [row] = toTripSheetRows([trip({ sellPrice: '4500000', purchasePrice: null })], t, { prices: true });
 
     expect(row[t('colSellPrice')]).toBe(4_500_000);
     expect(row[t('colPurchasePrice')]).toBeNull();
   });
 
   it('writes the status label a dispatcher reads, never the enum', () => {
-    const [row] = toTripSheetRows([trip({ status: 'executing' })], t, 'vi', { prices: true });
+    const [row] = toTripSheetRows([trip({ status: 'executing' })], t, { prices: true });
 
     expect(row[t('colStatus')]).toBe(t('tripExecuting'));
     expect(row[t('colStatus')]).not.toBe('executing');
@@ -152,7 +150,6 @@ describe('toTripSheetRows', () => {
     const rows = toTripSheetRows(
       [trip({ id: 'a' }), trip({ id: 'b' }), trip({ id: 'c' })],
       t,
-      'vi',
     );
 
     expect(rows.map((row) => row[t('colIndex')])).toEqual([1, 2, 3]);
@@ -166,7 +163,6 @@ describe('toTripSheetRows', () => {
     const [row] = toTripSheetRows(
       [trip({ pickupAt: '2026-08-04T02:00:00.000Z' })],
       t,
-      'vi',
     );
 
     expect(row[t('colPickup')]).toBe('BÃI XE MIỀN NAM');
@@ -183,7 +179,6 @@ describe('toTripSheetRows', () => {
     const [row] = toTripSheetRows(
       [trip({ assignments: [], customer: null })],
       t,
-      'vi',
     );
 
     expect(row[t('colVehicle')]).toBe('');
@@ -192,7 +187,7 @@ describe('toTripSheetRows', () => {
   });
 
   it('formats the plate the way the board does', () => {
-    const [row] = toTripSheetRows([trip()], t, 'vi');
+    const [row] = toTripSheetRows([trip()], t);
 
     // Stored as somebody typed it, drawn for reading — one lorry down one column.
     expect(row[t('colVehicle')]).toBe('50H-49266');
@@ -219,7 +214,6 @@ describe('toTripSheetRows', () => {
         }),
       ],
       t,
-      'vi',
     );
 
     expect(row[t('colVehicle')]).toBe('50H-49266; 51D-12345; 51D-67890');
@@ -227,7 +221,7 @@ describe('toTripSheetRows', () => {
   });
 
   it('follows the interface language, so the headings match the screen', () => {
-    const [row] = toTripSheetRows([trip()], (key) => translate('en', key), 'en');
+    const [row] = toTripSheetRows([trip()], (key) => translate('en', key));
 
     expect(row).toHaveProperty(translate('en', 'colStatus'));
     expect(row[translate('en', 'colStatus')]).toBe(translate('en', 'tripConfirmed'));

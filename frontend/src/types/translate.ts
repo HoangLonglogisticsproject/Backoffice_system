@@ -1350,6 +1350,76 @@ const PHRASES = {
     vi: 'Không xuất được file. Vui lòng thử lại.',
     en: 'The export failed. Please try again.',
   },
+  // The export dialog. The scope is read off the RADIO, so each option names
+  // the screen(s) whose rows the file will hold — never "tất cả" on its own,
+  // which reads as "the whole company".
+  exportConfirm: { vi: 'Xuất file', en: 'Export file' },
+  // The server's two refusals, in words for the office (never its English sentence).
+  exportBusy: {
+    vi: 'Đang có hai lượt xuất Excel chạy cùng lúc. Vui lòng thử lại sau ít phút.',
+    en: 'Two Excel exports are already running. Please try again in a moment.',
+  },
+  exportTooLarge: {
+    vi: 'Khoảng ngày này có quá nhiều chuyến cho một lần xuất.',
+    en: 'This date range holds too many trips for one export.',
+  },
+  exportTooLargeCounts: { vi: 'chuyến trong khoảng ngày — tối đa', en: 'trips in the range — at most' },
+  exportTooLargeHint: {
+    vi: 'chuyến mỗi lần xuất. Vui lòng chọn khoảng ngày ngắn hơn.',
+    en: 'trips per export. Please choose a shorter range.',
+  },
+  exportPickupRange: { vi: 'Ngày lấy hàng', en: 'Pickup date' },
+  exportAllCustomers: { vi: 'Tất cả khách hàng', en: 'All customers' },
+  exportCustomerContains: { vi: 'Tên có chứa', en: 'Name contains' },
+  exportScopeLegend: { vi: 'Dữ liệu cần xuất', en: 'What to export' },
+  exportScopeOperational: { vi: 'Chỉ Lịch xe', en: 'Trip schedule only' },
+  exportScopeHistory: { vi: 'Chỉ Lịch sử chuyến', en: 'Trip history only' },
+  exportScopeAll: { vi: 'Cả Lịch xe và Lịch sử chuyến', en: 'Both trip schedule and trip history' },
+  exportExcludesArchived: { vi: 'Không gồm chuyến đã lưu trữ.', en: 'Archived trips are not included.' },
+  // The combined file: its sheet, and the two columns it adds at the END.
+  exportCombinedSheet: { vi: 'Tổng hợp chuyến', en: 'All trips' },
+  exportColGroup: { vi: 'Nhóm chuyến', en: 'Trip group' },
+  exportColTripId: { vi: 'Mã chuyến', en: 'Trip ID' },
+  // The "Thông tin xuất" sheet — what the file holds and when it was read.
+  exportInfoSheet: { vi: 'Thông tin xuất', en: 'Export details' },
+  exportInfoScope: { vi: 'Phạm vi', en: 'Scope' },
+  exportInfoPeriod: { vi: 'Kỳ xuất (theo ngày lấy hàng)', en: 'Period (by pickup date)' },
+  exportInfoPeriodBounds: { vi: 'gồm cả ngày đầu và ngày cuối', en: 'both days included' },
+  exportInfoExcluded: { vi: 'Không gồm', en: 'Not included' },
+  exportInfoExcludedArchived: { vi: 'Chuyến đã lưu trữ', en: 'Archived trips' },
+  exportInfoReadAt: {
+    vi: 'Thời điểm bắt đầu đọc dữ liệu — giờ máy chủ',
+    en: 'Data read started at — server clock',
+  },
+  exportInfoReadNote: {
+    vi: 'Mọi dòng trong file được đọc trong cùng một lần đọc nhất quán, bắt đầu vào khoảng thời điểm trên. Thay đổi được lưu sau khi lần đọc bắt đầu không có trong file.',
+    en: 'Every row was read in one consistent read that began around the time above. Changes saved after that read began are not in the file.',
+  },
+  exportInfoCreatedAt: { vi: 'Thời điểm tạo file', en: 'File created at' },
+  exportInfoVietnamTime: { vi: 'giờ Việt Nam', en: 'Vietnam time' },
+  exportInfoClientClock: {
+    vi: 'giờ Việt Nam, theo đồng hồ máy tính tạo file',
+    en: 'Vietnam time, by the clock of the computer that made the file',
+  },
+  exportInfoTripCount: { vi: 'Số chuyến', en: 'Trips' },
+  exportInfoGroupNote: {
+    vi: 'Nhóm chuyến là màn hình chứa chuyến tại lần đọc: Lịch sử chuyến khi trạng thái là “Đã xác nhận”; còn lại là Lịch xe, kể cả “Đã xác nhận (dữ liệu cũ)”.',
+    en: 'Trip group is the screen that held the trip when it was read: trip history when its status is “Confirmed — done”; otherwise the trip schedule, “Confirmed (legacy data)” included.',
+  },
+  exportInfoHidden: { vi: 'Cột không có do quyền', en: 'Columns left out by permission' },
+  exportInfoHiddenPrices: {
+    vi: 'Giá cước bán, Giá cước mua — tài khoản không có quyền xem giá cước',
+    en: 'Selling price, Buying price — this account may not see prices',
+  },
+  exportInfoHiddenCosts: {
+    vi: 'Chi phí chuyến — tài khoản không có quyền xuất chi phí',
+    en: 'Trip costs — this account may not export costs',
+  },
+  exportInfoMoney: { vi: 'Ghi chú về tiền', en: 'About the amounts' },
+  exportInfoMoneyNote: {
+    vi: 'Giá cước và chi phí là số đang lưu trong hệ thống tại lần đọc và vẫn có thể được sửa sau đó. Ô chi phí để trống: chưa có dòng chi phí còn hiệu lực — không có nghĩa là chi phí bằng 0.',
+    en: 'Prices and costs are the figures stored at the time of the read and may still be corrected later. A blank cost cell means no live cost line — not a cost of zero.',
+  },
   emptyTrips: {
     vi: 'Không có chuyến nào trong khoảng ngày này.',
     en: 'No trips in this date range.',

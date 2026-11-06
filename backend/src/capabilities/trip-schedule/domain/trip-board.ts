@@ -79,6 +79,18 @@ export interface TripCostSummary {
 export type TripBoardRow = TripScheduleWithRefs & { costSummary: TripCostSummary | null };
 
 /**
+ * One Excel file's rows, and when the state they describe was read.
+ *
+ * `readAt` is the SERVER's clock when the first read of the snapshot began —
+ * every row and cost in `items` is the database as of then. It is not a commit
+ * time of anything, and not when the file was written.
+ */
+export interface TripExportSnapshot {
+  items: TripBoardRow[];
+  readAt: Date;
+}
+
+/**
  * May this caller see what trips cost?
  *
  * `cost.read`, the key every cost route is guarded by, asked through the same

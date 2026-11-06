@@ -23,6 +23,10 @@ const STATUS_BY_CODE = new Map<string, HttpStatus>([
   // Refused like a ForbiddenError but carrying its own code, so it is mapped
   // here rather than by class — the mechanism working as intended.
   ['PASSWORD_CHANGE_REQUIRED', HttpStatus.FORBIDDEN],
+  // The Excel export: two already running (try again), or more trips than one
+  // file holds (choose a shorter range) — each its own code for the client.
+  ['EXPORT_BUSY', HttpStatus.TOO_MANY_REQUESTS],
+  ['EXPORT_TOO_LARGE', HttpStatus.UNPROCESSABLE_ENTITY],
 ]);
 
 const STATUS_BY_ERROR = new Map<Function, HttpStatus>([
@@ -63,11 +67,15 @@ export class DomainErrorFilter implements ExceptionFilter {
       response.setHeader('Retry-After', String(retryAfter));
     }
 
+    // Any domain error may carry `details` — a ValidationError's fields, the
+    // export's counts — and the client reads them the same way.
+    const details = (error as DomainError & { details?: Readonly<Record<string, string>> }).details;
+
     response.status(status).json({
       error: {
         code: error.code,
         message: error.message,
-        ...(error instanceof ValidationError && error.details ? { details: error.details } : {}),
+        ...(details ? { details } : {}),
       },
     });
   }

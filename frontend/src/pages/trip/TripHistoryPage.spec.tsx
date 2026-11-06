@@ -9,7 +9,7 @@ import { toTripSheetRows } from '@/utils/export/tripScheduleSheet';
 import { formatCalendarDay, formatDateTime, todayAsCalendarDay } from '@/utils/format/datetime';
 
 const fetchTripSchedules = vi.fn();
-const fetchAllTripSchedules = vi.fn();
+const fetchTripExportSnapshot = vi.fn();
 const createTripSchedule = vi.fn();
 const useSession = vi.fn();
 const downloadTripScheduleWorkbook = vi.fn();
@@ -18,7 +18,7 @@ const fetchBookingExport = vi.fn();
 
 vi.mock('@/api/tripSchedule', () => ({
   fetchTripSchedules: (...a: unknown[]) => fetchTripSchedules(...a),
-  fetchAllTripSchedules: (...a: unknown[]) => fetchAllTripSchedules(...a),
+  fetchTripExportSnapshot: (...a: unknown[]) => fetchTripExportSnapshot(...a),
   createTripSchedule: (...a: unknown[]) => createTripSchedule(...a),
   updateTripSchedule: vi.fn(),
   archiveTripSchedule: vi.fn(),
@@ -100,7 +100,7 @@ const save = () => {
 describe('TripHistoryPage', () => {
   beforeEach(() => {
     fetchTripSchedules.mockReset().mockResolvedValue({ items: [finished], page: 1, limit: 20, total: 1, totalPages: 1 });
-    fetchAllTripSchedules.mockReset().mockResolvedValue([finished]);
+    fetchTripExportSnapshot.mockReset().mockResolvedValue({ items: [finished], readAt: '2026-11-05T08:42:07.000Z' });
     createTripSchedule.mockReset().mockResolvedValue({ ...finished, id: 't9' });
     downloadTripScheduleWorkbook.mockReset().mockResolvedValue(1);
     notifySuccess.mockReset();
@@ -165,7 +165,7 @@ describe('TripHistoryPage', () => {
 
     // The file, from the same row: the same order, joined.
     const vi = (key: TranslationKey) => translate('vi', key);
-    const [row] = toTripSheetRows([finished as unknown as TripBoardRow], vi, 'vi', {}, 'history');
+    const [row] = toTripSheetRows([finished as unknown as TripBoardRow], vi, {}, 'history');
     expect(row![vi('colVehicle')]).toBe('50H-49266; 51D-65233');
     expect(row![vi('colDriver')]).toBe('Tài Xế A; Tài Xế B');
   });
@@ -253,15 +253,19 @@ describe('TripHistoryPage', () => {
     expect(createTripSchedule).not.toHaveBeenCalled();
   });
 
-  it('★ exports Lịch sử chuyến — its own rows, not the board’s', async () => {
+  it('★ exports Lịch sử chuyến — its own rows by default, both screens only when chosen', async () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Xuất Excel' }));
 
+    expect(screen.getByRole('radio', { name: 'Chỉ Lịch sử chuyến' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Cả Lịch xe và Lịch sử chuyến' })).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Xuất file' }));
+
     await waitFor(() =>
-      expect(fetchAllTripSchedules).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'history', assignment: 'all' })),
+      expect(fetchTripExportSnapshot).toHaveBeenCalledWith(expect.objectContaining({ scope: 'history' })),
     );
     await waitFor(() =>
-      expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'history' })),
+      expect(downloadTripScheduleWorkbook).toHaveBeenCalledWith(expect.objectContaining({ scope: 'history' })),
     );
   });
 

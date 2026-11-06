@@ -24,6 +24,7 @@ import { BookingExportService } from './application/booking-export.service';
 import { DispatchCrew } from './application/dispatch-crew';
 import { DriverAssignmentRequestService } from './application/driver-assignment-request.service';
 import { TripBoardService } from './application/trip-board.service';
+import { TripExportSlots } from './application/trip-export-slots';
 import { TripCatalogueService } from './application/trip-catalogue.service';
 import { DriverPortalService } from './application/driver-portal.service';
 import { OperationalBoardService } from './application/operational-board.service';
@@ -105,6 +106,7 @@ import { VehicleDailyFuelCheckRepository } from './persistence/vehicle-fuel-chec
   providers: [
     TripScheduleService,
     TripBoardService,
+    TripExportSlots,
     TripCatalogueService,
     TripCostService,
     TripExecutionService,

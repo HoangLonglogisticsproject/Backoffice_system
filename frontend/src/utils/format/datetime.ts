@@ -218,6 +218,58 @@ const businessClock = new Intl.DateTimeFormat('en-GB', {
   hourCycle: 'h23',
 });
 
+const businessStampParts = new Intl.DateTimeFormat('en-GB', {
+  timeZone: BUSINESS_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** An instant's fields on the business wall clock; `month` is 1-based. */
+export interface BusinessWallClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+/**
+ * An instant as the business wall clock reads it — or `null` for text that is
+ * not an instant.
+ *
+ * ★ FOR WHAT IS WRITTEN DOWN, NOT WHAT IS SHOWN. A screen shows the viewer's own
+ * clock; an exported FILE is read by people who never saw the browser that made
+ * it, so its times are Hồ Chí Minh's wherever that browser was.
+ */
+export function businessWallClock(iso: string): BusinessWallClock | null {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  const parts = businessStampParts.formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value);
+  return {
+    year: part('year'),
+    month: part('month'),
+    day: part('day'),
+    hour: part('hour'),
+    minute: part('minute'),
+    second: part('second'),
+  };
+}
+
+/** `"05/11/2026 15:42:07"` on the business clock — `dd/mm/yyyy`, never the viewer's locale order. */
+export function formatBusinessStamp(iso: string): string {
+  const clock = businessWallClock(iso);
+  if (!clock) return iso;
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${two(clock.day)}/${two(clock.month)}/${clock.year} ${two(clock.hour)}:${two(clock.minute)}:${two(clock.second)}`;
+}
+
 /** The first and last day of the month containing `now`, on the viewer's calendar. */
 /**
  * The month a date filter opens on.

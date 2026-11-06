@@ -17,7 +17,7 @@ const fetchTripCustomers = vi.fn();
 const useSession = vi.fn();
 
 const createTripSchedule = vi.fn();
-const fetchAllTripSchedules = vi.fn();
+const fetchTripExportSnapshot = vi.fn();
 
 /**
  * The two administrative dropdowns, stubbed at the hook.
@@ -34,7 +34,7 @@ vi.mock('@/hooks/useVnAdministrative', () => ({
 
 vi.mock('@/api/tripSchedule', () => ({
   fetchTripSchedules: (...a: unknown[]) => fetchTripSchedules(...a),
-  fetchAllTripSchedules: (...a: unknown[]) => fetchAllTripSchedules(...a),
+  fetchTripExportSnapshot: (...a: unknown[]) => fetchTripExportSnapshot(...a),
   archiveTripSchedule: (...a: unknown[]) => archiveTripSchedule(...a),
   createTripSchedule: (...a: unknown[]) => createTripSchedule(...a),
   updateTripSchedule: (...a: unknown[]) => updateTripSchedule(...a),

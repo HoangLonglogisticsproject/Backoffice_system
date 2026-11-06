@@ -87,7 +87,7 @@ export async function openTripBoard(schema: string): Promise<TripBoardFixture> {
 
   return {
     pool,
-    board: new TripBoardService(trips, new TripBoardCostRepository(counted)),
+    board: new TripBoardService(trips, new TripBoardCostRepository(counted), counted),
     trips,
     totals: new TripCostTotalsRepository(base),
     author,

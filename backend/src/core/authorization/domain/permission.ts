@@ -105,7 +105,8 @@ export const PERMISSIONS = [
   /**
    * ★ TAKE THE COST BREAKDOWN OUT IN THE EXCEL EXPORT — and nothing else.
    * Not `cost.read`: holding this opens neither the cost dialog nor the
-   * board's cost column. Read by `GET /trip-schedules/export` alone (DL-117).
+   * board's cost column. Read by the two export routes alone —
+   * `GET /trip-schedules/export` and `/export-snapshot` (DL-117).
    */
   'cost.export',
   /**

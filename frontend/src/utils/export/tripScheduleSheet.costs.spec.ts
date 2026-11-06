@@ -47,7 +47,7 @@ const BEFORE = [
 const COST_BLOCK = ['Dầu', 'Cầu trạm', 'Phí kho', 'Bốc xếp', 'Tăng ca', 'Xe thuê ngoài', 'Tổng chi phí chuyến'];
 
 const headingsOf = (visible: { prices?: boolean; costs?: boolean }) =>
-  Object.keys(toTripSheetRows([trip()], t, 'vi', visible)[0]!);
+  Object.keys(toTripSheetRows([trip()], t, visible)[0]!);
 
 describe('toTripSheetRows — the cost block', () => {
   it('★ leaves every existing column exactly as it was when costs are not asked for', () => {
@@ -61,7 +61,7 @@ describe('toTripSheetRows — the cost block', () => {
   });
 
   it('★ omits the block without cost.read — even when a figure arrived — and leaks none of it', () => {
-    const [row] = toTripSheetRows([trip()], t, 'vi', { prices: true });
+    const [row] = toTripSheetRows([trip()], t, { prices: true });
 
     COST_BLOCK.forEach((heading) => expect(Object.keys(row!)).not.toContain(heading));
     expect(JSON.stringify(row)).not.toContain('800000');
@@ -70,7 +70,7 @@ describe('toTripSheetRows — the cost block', () => {
   it('★ keeps a multi-lorry trip on one row, its money once', () => {
     const rows = toTripSheetRows(
       [trip({ assignments: [turn('a1', '50H49266'), turn('a2', '51D65233'), turn('a3', '51C12345')] })],
-      t, 'vi', { costs: true },
+      t, { costs: true },
     );
 
     expect(rows).toHaveLength(1);
@@ -80,12 +80,12 @@ describe('toTripSheetRows — the cost block', () => {
   it('keeps each trip’s money on its own row', () => {
     const rows = toTripSheetRows(
       [trip(), trip({ id: 't2', costSummary: costs({ total: '50.00', itemCount: 1, hires: '50.00' }) })],
-      t, 'vi', { costs: true },
+      t, { costs: true },
     );
 
     expect(rows.map((row) => [row['Dầu'], row['Xe thuê ngoài'], row['Tổng chi phí chuyến']])).toEqual([
-      [800000, 0, 800000],
-      [0, 50, 50],
+      [800000, null, 800000],
+      [null, 50, 50],
     ]);
   });
 
@@ -98,7 +98,7 @@ describe('toTripSheetRows — the cost block', () => {
           byCategory: { ...costs().byCategory, loading: '200000.00' },
         }),
       })],
-      t, 'vi', { prices: true, costs: true },
+      t, { prices: true, costs: true },
     );
 
     expect(row!['Giá cước mua']).toBe(4500000);
@@ -108,23 +108,24 @@ describe('toTripSheetRows — the cost block', () => {
   });
 
   /**
-   * ★ AUTHORIZED AND NOTHING RECORDED IS ZERO, NOT BLANK. The server sends a
-   * summary of "0.00"s for every trip it counted — a trip with no line still
-   * gets one — so a SUPERADMIN exporting a quiet month gets the whole block,
-   * every cell a number. Whether the block exists is never read off the figures.
+   * ★ AUTHORIZED AND NOTHING RECORDED: THE BLOCK IS THERE, ITS CELLS EMPTY.
+   * The server sends a summary of "0.00"s for every trip it counted, so a
+   * SUPERADMIN exporting a quiet month still gets the whole block — whether the
+   * block exists is never read off the figures — but no cell claims a cost of
+   * 0 that nobody recorded.
    */
-  it('★ gives 100 trips with nothing recorded the full block, every cell a numeric 0', () => {
+  it('★ gives 100 trips with nothing recorded the full block, every cell empty — not 0', () => {
     const quiet = Array.from({ length: 100 }, (_, i) => trip({ id: `t${i}`, costSummary: costs() }));
-    const rows = toTripSheetRows(quiet, t, 'vi', { costs: true });
+    const rows = toTripSheetRows(quiet, t, { costs: true });
 
     expect(rows).toHaveLength(100);
     for (const row of rows) {
-      expect(COST_BLOCK.map((heading) => row[heading])).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      expect(COST_BLOCK.map((heading) => row[heading])).toEqual(Array(7).fill(null));
     }
   });
 
   it('★ decides the block from the viewer, never from the rows — a first row without a figure changes nothing', () => {
-    const rows = toTripSheetRows([trip({ costSummary: null }), trip({ id: 't2' })], t, 'vi', { costs: true });
+    const rows = toTripSheetRows([trip({ costSummary: null }), trip({ id: 't2' })], t, { costs: true });
 
     expect(Object.keys(rows[0]!)).toEqual(expect.arrayContaining(COST_BLOCK));
     expect(rows[1]!['Tổng chi phí chuyến']).toBe(800000);
@@ -136,7 +137,7 @@ describe('toTripSheetRows — the cost block', () => {
    * not zero, and it is never "no costs": that arrives as zeros, above.
    */
   it('★ writes a row that arrived with no figure as blank cells — unknown, not zero', () => {
-    const [row] = toTripSheetRows([trip({ costSummary: null })], t, 'vi', { costs: true });
+    const [row] = toTripSheetRows([trip({ costSummary: null })], t, { costs: true });
 
     COST_BLOCK.forEach((heading) => expect(row![heading]).toBeNull());
   });

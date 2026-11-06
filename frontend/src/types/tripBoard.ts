@@ -65,3 +65,28 @@ export interface TripCostSummary {
 export interface TripBoardRow extends TripScheduleWithRefs {
   costSummary: TripCostSummary | null;
 }
+
+/**
+ * One trip as the Excel export carries it (`GET /trip-schedules/export-snapshot`)
+ * — exactly what the workbook reads, mirrored from the backend's `TripExportRow`.
+ * A board row is a superset, so anything building a sheet takes either.
+ */
+export interface TripExportRow {
+  id: string;
+  scheduledOn: string;
+  status: TripScheduleWithRefs['status'];
+  customer: { name: string } | null;
+  cargoInfo: string | null;
+  pickupAddress: string | null;
+  pickupContact: string | null;
+  pickupAt: string | null;
+  deliveryAddress: string | null;
+  deliveryContact: string | null;
+  deliveryAt: string | null;
+  sellPrice: string | null;
+  purchasePrice: string | null;
+  note: string | null;
+  createdByUser: { displayName: string };
+  assignments: { vehicle: { plate: string } | null; driver: { displayName: string } }[];
+  costSummary: Pick<TripCostSummary, 'total' | 'hires' | 'byCategory'> | null;
+}

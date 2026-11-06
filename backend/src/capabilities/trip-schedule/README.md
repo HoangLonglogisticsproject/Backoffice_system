@@ -45,7 +45,7 @@ dispatch.write    global | function dispatch     (0032) — assign / replace / e
 trip.price.read   global | function accounting   (DL-111) — Sales / CS / Điều phối không thấy giá
 trip.price.write  global | function accounting   — key giá trong body POST / PATCH
 cost.read         global                        — hộp thoại Chi phí chuyến + cột chi phí board (cost.create / cost.void cũng global)
-cost.export       global | function accounting   (DL-117) — CHỈ khối chi phí trong Excel, GET /trip-schedules/export
+cost.export       global | function accounting   (DL-117) — CHỈ khối chi phí trong Excel, GET /trip-schedules/export và /export-snapshot
 ```
 
 Dữ liệu chuyến thuộc **bốn phòng nghiệp vụ** (Sales, Kế toán, Điều phối, Customer
