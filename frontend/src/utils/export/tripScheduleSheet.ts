@@ -1,7 +1,7 @@
 import { TRIP_STATUS_LABELS, type TripExportScope } from '@/types/trip';
 import type { TranslationKey } from '@/types/translate';
 import { formatPlate } from '@/utils/format';
-import type { TripBoardRow } from '@/types/tripBoard';
+import type { TripExportRow } from '@/types/tripBoard';
 import { sheetDay, sheetInstant } from './sheetDate';
 import { sheetMoney } from './sheetMoney';
 import {
@@ -91,7 +91,7 @@ export interface SheetVisibility {
  * included, is the same composition: one row shaper, not three.
  */
 export function toTripSheetRows(
-  trips: readonly TripBoardRow[],
+  trips: readonly TripExportRow[],
   t: Translate,
   { prices = false, costs = false }: SheetVisibility = {},
   scope: TripExportScope = 'operational',
@@ -221,5 +221,5 @@ export const tripSheetColumnWidths = (
   ...(scope === 'all' ? COMBINED_WIDTHS : []),
 ];
 
-const statusLabel = (status: TripBoardRow['status'], t: Translate): string =>
+const statusLabel = (status: TripExportRow['status'], t: Translate): string =>
   TRIP_STATUS_LABELS[status] ? t(TRIP_STATUS_LABELS[status]) : status;

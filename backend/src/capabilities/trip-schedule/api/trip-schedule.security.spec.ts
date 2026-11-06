@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib';
 import { INestApplication } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
@@ -24,6 +25,7 @@ import { OperationalBoardService } from '../application/operational-board.servic
 import { TripExecutionService } from '../application/trip-execution.service';
 import { TripScheduleService } from '../application/trip-schedule.service';
 import { TripBoardService } from '../application/trip-board.service';
+import { TripExportSlots } from '../application/trip-export-slots';
 import { TripBoardCostRepository } from '../persistence/trip-board-cost.repository';
 import { TripCatalogueController } from './trip-catalogue.controller';
 import { TripScheduleController } from './trip-schedule.controller';
@@ -59,6 +61,7 @@ describe('trip-schedule HTTP security', () => {
    */
   interface TripServiceMock {
     list: jest.Mock;
+    countForExport: jest.Mock;
     listForExport: jest.Mock;
     findById: jest.Mock;
     create: jest.Mock;
@@ -100,6 +103,8 @@ describe('trip-schedule HTTP security', () => {
   let boardCosts: { forTrips: jest.Mock };
   /** The snapshot export's transaction — opened only once a request has been let through. */
   let snapshotDb: { transaction: jest.Mock; query: jest.Mock };
+  /** The process's export slots — the instance the controller under test holds. */
+  let exportSlots: TripExportSlots;
   /** Somebody with a driver account, to be assigned. */
   const DRIVER_USER = '99999999-9999-4999-8999-999999999999';
   let context: AuthorizationContext;
@@ -134,6 +139,13 @@ describe('trip-schedule HTTP security', () => {
     createdAt: new Date('2026-08-01'),
     updatedAt: new Date('2026-08-01'),
   };
+  /** The same trip as a LIST read returns it — with the refs the export projects. */
+  const listedTrip = {
+    ...storedTrip,
+    customer: { id: CUSTOMER, name: 'WWL' },
+    createdByUser: { id: ACTOR, displayName: 'Actor' },
+    assignments: [] as unknown[],
+  };
 
   beforeEach(async () => {
     accountType = 'employee';
@@ -147,7 +159,8 @@ describe('trip-schedule HTTP security', () => {
         total: 1,
         totalPages: 1,
       }),
-      listForExport: jest.fn().mockResolvedValue([storedTrip]),
+      countForExport: jest.fn().mockResolvedValue(1),
+      listForExport: jest.fn().mockResolvedValue([listedTrip]),
       findById: jest.fn().mockResolvedValue(storedTrip),
       create: jest.fn().mockResolvedValue(storedTrip),
       update: jest.fn().mockResolvedValue(storedTrip),
@@ -213,6 +226,7 @@ describe('trip-schedule HTTP security', () => {
         TripBoardService,
         { provide: TripBoardCostRepository, useValue: boardCosts },
         { provide: DATABASE, useValue: snapshotDb },
+        TripExportSlots,
         { provide: OperationalBoardService, useValue: operations },
         { provide: TripExecutionService, useValue: execution },
         { provide: TripCatalogueService, useValue: catalogue },
@@ -239,6 +253,7 @@ describe('trip-schedule HTTP security', () => {
     app.use(cookieParser());
     app.useGlobalFilters(new DomainErrorFilter());
     await app.init();
+    exportSlots = moduleRef.get(TripExportSlots);
   });
 
   afterEach(async () => {
@@ -948,22 +963,45 @@ describe('trip-schedule HTTP security', () => {
    * `trip.read` for the rows, `cost.export` for the costs, `trip.price.read`
    * for the prices — all decided by the server before anything is serialised.
    * And `/export` keeps the contract a browser on the previous build relies on.
+   *
+   * The answer is a gzip FILE holding `{ items, readAt }` — read back here the
+   * way the browser does: unzip, then parse. Refusals stay JSON.
    */
   describe('★ the snapshot export route', () => {
     const as = (functions: DepartmentFunction[]) => asContext({ memberOf: [DEPT], functions });
-    const priced = { ...storedTrip, sellPrice: '4500000.00', purchasePrice: '3000000.00' };
+    const priced = { ...listedTrip, sellPrice: '4500000.00', purchasePrice: '3000000.00' };
+
+    /** The request, its status and headers, and the body — unzipped when it is the file. */
+    const exportSnapshot = async (query = '') => {
+      const response = await authed('get', `/trip-schedules/export-snapshot${query}`)
+        .buffer(true)
+        .parse((res, done) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => done(null, Buffer.concat(chunks)));
+        });
+      const raw = response.body as Buffer;
+      const isFile = String(response.headers['content-type']).startsWith('application/gzip');
+      const body = JSON.parse((isFile ? gunzipSync(raw) : raw).toString('utf8'));
+      return { status: response.status, headers: response.headers, body, isFile, wire: raw.length };
+    };
 
     beforeEach(() => {
       trips.listForExport.mockResolvedValue([priced]);
     });
 
-    it('★ answers the rows and when their snapshot was read — one transaction, no page envelope', async () => {
+    it('★ answers a gzip file of the rows and when their snapshot was read — one transaction, no page envelope', async () => {
       context = asContext({ global: true });
-      const response = await authed('get', '/trip-schedules/export-snapshot?from=2026-11-02&to=2026-11-08').expect(200);
+      const answer = await exportSnapshot('?from=2026-11-02&to=2026-11-08');
 
-      expect(Object.keys(response.body).sort()).toEqual(['items', 'readAt']);
-      expect(response.body.readAt).toBe('2026-11-05T08:42:07.000Z');
-      expect(response.body.items).toHaveLength(1);
+      expect(answer.status).toBe(200);
+      expect(answer.isFile).toBe(true);
+      expect(answer.headers['content-encoding']).toBeUndefined(); // opaque bytes, not HTTP-encoded JSON
+      expect(answer.headers['cache-control']).toBe('no-store');
+      expect(Number(answer.headers['content-length'])).toBe(answer.wire);
+      expect(Object.keys(answer.body).sort()).toEqual(['items', 'readAt']);
+      expect(answer.body.readAt).toBe('2026-11-05T08:42:07.000Z');
+      expect(answer.body.items).toHaveLength(1);
       expect(snapshotDb.transaction).toHaveBeenCalledTimes(1);
       expect(trips.list).not.toHaveBeenCalled();
       expect(trips.findById).not.toHaveBeenCalled(); // not swallowed by `:tripId`
@@ -973,9 +1011,29 @@ describe('trip-schedule HTTP security', () => {
       );
     });
 
+    /**
+     * ★ ONLY WHAT THE WORKBOOK READS. Coordinates, catalogue ids, timestamps and
+     * per-turn detail stay on the board's contract and off the export's.
+     */
+    it('★ carries each trip as the workbook reads it, and nothing more', async () => {
+      context = asContext({ global: true });
+      const [row] = (await exportSnapshot()).body.items;
+
+      expect(Object.keys(row).sort()).toEqual(
+        [
+          'assignments', 'cargoInfo', 'costSummary', 'createdByUser', 'customer', 'deliveryAddress',
+          'deliveryAt', 'deliveryContact', 'id', 'note', 'pickupAddress', 'pickupAt', 'pickupContact',
+          'purchasePrice', 'scheduledOn', 'sellPrice', 'status',
+        ].sort(),
+      );
+      expect(row.createdByUser).toEqual({ displayName: 'Actor' });
+      expect(row).not.toHaveProperty('pickupLatitude');
+      expect(row).not.toHaveProperty('createdAt');
+    });
+
     it('★ accepts both screens at once here — and nowhere else', async () => {
       context = asContext({ global: true });
-      await authed('get', '/trip-schedules/export-snapshot?lifecycle=all').expect(200);
+      expect((await exportSnapshot('?lifecycle=all')).status).toBe(200);
       expect(trips.listForExport).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: 'all' }), expect.anything());
 
       await authed('get', '/trip-schedules?lifecycle=all').expect(422);
@@ -985,20 +1043,20 @@ describe('trip-schedule HTTP security', () => {
 
     it('carries the applied customer search and the same validation as the board', async () => {
       context = asContext({ global: true });
-      await authed('get', '/trip-schedules/export-snapshot?customer=%20vi%E1%BB%85n%20').expect(200);
+      expect((await exportSnapshot('?customer=%20vi%E1%BB%85n%20')).status).toBe(200);
       expect(trips.listForExport).toHaveBeenCalledWith(expect.objectContaining({ customer: 'viễn' }), expect.anything());
 
-      await authed('get', '/trip-schedules/export-snapshot?sort=created_at').expect(422);
-      await authed('get', '/trip-schedules/export-snapshot?lifecycle=everything').expect(422);
+      expect((await exportSnapshot('?sort=created_at')).status).toBe(422);
+      expect((await exportSnapshot('?lifecycle=everything')).status).toBe(422);
       expect(trips.listForExport).toHaveBeenCalledTimes(1);
     });
 
     it('★ gives ACCOUNTING the costs (cost.export) and the prices (trip.price.read)', async () => {
       context = as(['accounting']);
-      const response = await authed('get', '/trip-schedules/export-snapshot').expect(200);
+      const [row] = (await exportSnapshot()).body.items;
 
-      expect(response.body.items[0].costSummary).toEqual({ total: '6000000.00', itemCount: 2 });
-      expect(response.body.items[0].sellPrice).toBe('4500000.00');
+      expect(row.costSummary).toEqual({ total: '6000000.00' });
+      expect(row.sellPrice).toBe('4500000.00');
       expect(boardCosts.forTrips.mock.calls[0][0]).toEqual([TRIP]);
     });
 
@@ -1006,43 +1064,82 @@ describe('trip-schedule HTTP security', () => {
       '★ gives %s the rows with no cost and no price — and runs no cost read',
       async (fn) => {
         context = as([fn]);
-        const response = await authed('get', '/trip-schedules/export-snapshot?lifecycle=all').expect(200);
+        const answer = await exportSnapshot('?lifecycle=all');
+        const [row] = answer.body.items;
 
-        expect(response.body.items[0].costSummary).toBeNull();
-        expect(response.body.items[0].sellPrice).toBeNull();
-        expect(response.body.items[0].purchasePrice).toBeNull();
+        expect(row.costSummary).toBeNull();
+        expect(row.sellPrice).toBeNull();
+        expect(row.purchasePrice).toBeNull();
         expect(boardCosts.forTrips).not.toHaveBeenCalled();
-        const body = JSON.stringify(response.body);
+        const body = JSON.stringify(answer.body);
         for (const figure of ['6000000', '4500000', '3000000']) expect(body).not.toContain(figure);
       },
     );
 
     it('lets no crafted request turn the costs on', async () => {
       context = as(['sales']);
-      const response = await authed('get', '/trip-schedules/export-snapshot?includeCosts=true&costs=true').expect(200);
+      const [row] = (await exportSnapshot('?includeCosts=true&costs=true')).body.items;
 
-      expect(response.body.items[0].costSummary).toBeNull();
+      expect(row.costSummary).toBeNull();
       expect(boardCosts.forTrips).not.toHaveBeenCalled();
     });
 
-    it('★ refuses a caller who may not read the board — before any transaction opens', async () => {
+    it('★ refuses a caller who may not read the board — before any transaction opens, no slot taken', async () => {
       context = asContext({ memberOf: [DEPT] });
-      const response = await authed('get', '/trip-schedules/export-snapshot?lifecycle=all');
+      const answer = await exportSnapshot('?lifecycle=all');
 
-      expect(response.status).toBe(403);
+      expect(answer.status).toBe(403);
       expect(snapshotDb.transaction).not.toHaveBeenCalled();
       expect(trips.listForExport).not.toHaveBeenCalled();
-      expect(JSON.stringify(response.body)).not.toContain('4500000');
+      expect(JSON.stringify(answer.body)).not.toContain('4500000');
+      expect(exportSlots.inUse).toBe(0);
     });
 
-    it('★ answers a failed read with an error and no rows', async () => {
+    // ------------------------------------------------------------- limits --
+
+    it('★ refuses a third export while two run — 429 EXPORT_BUSY with a retry hint, nothing read', async () => {
       context = asContext({ global: true });
+      const first = exportSlots.acquire();
+      const second = exportSlots.acquire();
+
+      const answer = await exportSnapshot('?lifecycle=all');
+
+      expect(answer.status).toBe(429);
+      expect(answer.body.error.code).toBe('EXPORT_BUSY');
+      expect(answer.headers['retry-after']).toBe('30');
+      expect(snapshotDb.transaction).not.toHaveBeenCalled();
+      first();
+      second();
+      expect((await exportSnapshot('?lifecycle=all')).status).toBe(200);
+    });
+
+    it('★ refuses more trips than one file holds — 422 EXPORT_TOO_LARGE with the counts, no row read', async () => {
+      context = asContext({ global: true });
+      trips.countForExport.mockResolvedValue(20_001);
+
+      const answer = await exportSnapshot('?lifecycle=all');
+
+      expect(answer.status).toBe(422);
+      expect(answer.body.error).toMatchObject({ code: 'EXPORT_TOO_LARGE', details: { trips: '20001', limit: '20000' } });
+      expect(trips.listForExport).not.toHaveBeenCalled();
+      expect(boardCosts.forTrips).not.toHaveBeenCalled();
+    });
+
+    it('★ gives its slot back once the answer is out — after a file, a refusal or a failure', async () => {
+      context = asContext({ global: true });
+      expect((await exportSnapshot()).status).toBe(200);
+      expect(exportSlots.inUse).toBe(0);
+
+      trips.countForExport.mockResolvedValue(20_001);
+      expect((await exportSnapshot()).status).toBe(422);
+      expect(exportSlots.inUse).toBe(0);
+
+      trips.countForExport.mockResolvedValue(1);
       trips.listForExport.mockRejectedValue(new Error('canceling statement due to statement timeout'));
-
-      const response = await authed('get', '/trip-schedules/export-snapshot?lifecycle=all');
-
-      expect(response.status).toBe(500);
-      expect(response.body.items).toBeUndefined();
+      const failed = await exportSnapshot('?lifecycle=all');
+      expect(failed.status).toBe(500);
+      expect(failed.body.items).toBeUndefined();
+      expect(exportSlots.inUse).toBe(0);
     });
 
     it('★ leaves the paged /export exactly as a browser on the previous build reads it', async () => {

@@ -23,7 +23,10 @@ export type ApiErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'VALIDATION_FAILED'
-  | 'TOO_MANY_ATTEMPTS';
+  | 'TOO_MANY_ATTEMPTS'
+  // The Excel export: two already running / more trips than one file holds.
+  | 'EXPORT_BUSY'
+  | 'EXPORT_TOO_LARGE';
 
 export class ApiError extends Error {
   constructor(

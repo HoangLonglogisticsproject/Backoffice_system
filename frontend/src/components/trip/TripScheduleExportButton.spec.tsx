@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { translate } from '@/types/translate';
+import { ApiError } from '@/utils/errors';
 
 const fetchTripExportSnapshot = vi.fn();
 const useSession = vi.fn();
@@ -279,6 +280,42 @@ describe('TripScheduleExportButton', () => {
     await waitFor(() => expect(notifyApiError).toHaveBeenCalledWith(expect.anything(), 'exportFailed'));
     expect(notifySuccess).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  /**
+   * ★ THE SERVER'S TWO REFUSALS ARE SAID IN THE OFFICE'S WORDS — never its
+   * English sentence — and neither leaves a file behind.
+   */
+  it('★ says two exports are already running when the server is busy — no file', async () => {
+    fetchTripExportSnapshot.mockRejectedValue(new ApiError(429, 'EXPORT_BUSY', 'Two Excel exports are already running.', undefined, 30));
+    renderButton();
+    openDialog();
+
+    exportFile();
+
+    await waitFor(() => expect(notifyError).toHaveBeenCalledWith('exportBusy'));
+    expect(notifyApiError).not.toHaveBeenCalled();
+    expect(downloadTripScheduleWorkbook).not.toHaveBeenCalled();
+    expect(notifySuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('★ says how many trips the range holds and the most one file takes — refused whole, no file', async () => {
+    fetchTripExportSnapshot.mockRejectedValue(
+      new ApiError(422, 'EXPORT_TOO_LARGE', 'Too many.', { trips: '21900', limit: '20000' }),
+    );
+    renderButton();
+    openDialog();
+
+    exportFile();
+
+    await waitFor(() =>
+      expect(notifyError).toHaveBeenCalledWith('exportTooLarge', {
+        description: `21900 ${vi_('exportTooLargeCounts')} 20000 ${vi_('exportTooLargeHint')}`,
+      }),
+    );
+    expect(downloadTripScheduleWorkbook).not.toHaveBeenCalled();
+    expect(notifySuccess).not.toHaveBeenCalled();
   });
 
   it('cannot be pressed twice while it is running, nor closed under it', async () => {

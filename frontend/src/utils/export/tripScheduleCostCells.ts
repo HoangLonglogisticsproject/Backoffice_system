@@ -52,7 +52,7 @@ export const TRIP_SHEET_COST_WIDTHS: readonly number[] = [
  * failed to answer for that trip. That is "not known" — the same empty cell.
  */
 export const tripSheetCostCells = (
-  summary: TripCostSummary | null | undefined,
+  summary: Pick<TripCostSummary, 'total' | 'hires' | 'byCategory'> | null | undefined,
   headings: readonly string[],
 ): Record<string, number | null> => {
   const amounts = summary

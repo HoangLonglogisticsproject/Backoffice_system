@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { OffsetPage } from '../../../common/pagination/offset-page';
 import { DATABASE, type Database, type DatabaseQuery } from '../../../common/types/database.port';
 import type { TripBoardRow, TripCostSummary, TripExportSnapshot } from '../domain/trip-board';
+import { EXPORT_MAX_TRIPS, ExportTooLargeError } from '../domain/trip-export';
 import type { TripScheduleWithRefs } from '../domain/trip-schedule';
 import { TripBoardCostRepository } from '../persistence/trip-board-cost.repository';
 import { TripScheduleService, type TripBoardQuery, type TripExportQuery } from './trip-schedule.service';
@@ -67,11 +68,22 @@ export class TripBoardService {
    * ★ NOTHING LEAVES BEFORE COMMIT. `transaction` rolls back and rethrows on any
    * failure and releases the connection either way, so the route answers with
    * the whole set or with an error — never with the part read so far.
+   *
+   * ★ TOO MANY TRIPS IS KNOWN BEFORE ANY ROW IS READ. The count runs in the same
+   * snapshot as the read it guards, so a range over `maxTrips` is refused whole
+   * — no rows loaded, no cost aggregated, nothing cut short — and a range under
+   * it reads exactly the number counted.
    */
-  async exportSnapshot(query: TripExportQuery, costVisible: boolean): Promise<TripExportSnapshot> {
+  async exportSnapshot(
+    query: TripExportQuery,
+    costVisible: boolean,
+    maxTrips: number = EXPORT_MAX_TRIPS,
+  ): Promise<TripExportSnapshot> {
     return this.db.transaction(async (tx) => {
       await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
       const [clock] = await tx.query<{ read_at: Date }>('SELECT statement_timestamp() AS read_at');
+      const count = await this.trips.countForExport(query, tx);
+      if (count > maxTrips) throw new ExportTooLargeError(count, maxTrips);
       const trips = await this.trips.listForExport(query, tx);
       const summaries = await this.summariesFor(
         trips.map((trip) => trip.id),

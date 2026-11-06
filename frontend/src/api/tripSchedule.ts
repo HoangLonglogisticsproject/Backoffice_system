@@ -9,7 +9,7 @@ import type {
   TripStatus,
 } from '@/types/trip';
 import type { OffsetPage, OffsetPageRequest } from '@/types/pagination';
-import type { SortDirection, TripBoardRow, TripBoardSort } from '@/types/tripBoard';
+import type { SortDirection, TripBoardRow, TripBoardSort, TripExportRow } from '@/types/tripBoard';
 
 /**
  * The dispatch board (contract §21).
@@ -202,10 +202,14 @@ export interface TripExportRequest {
 
 /** Every row one Excel file holds, and when the server began reading them. */
 export interface TripExportSnapshot {
-  items: TripBoardRow[];
+  items: TripExportRow[];
   /** The server's clock when the snapshot read began, ISO 8601. */
   readAt: string;
 }
+
+/** Unzips the gzip file the export route answers with, in the browser. */
+const gunzipText = (bytes: ArrayBuffer): Promise<string> =>
+  new Response(new Response(bytes).body!.pipeThrough(new DecompressionStream('gzip'))).text();
 
 /**
  * Every trip one Excel file holds — one screen or both — read by the server as
@@ -221,18 +225,42 @@ export interface TripExportSnapshot {
  * not have this route yet must fail the export, not quietly produce a file from
  * a walk this build no longer trusts.
  *
- * ★ NO SNAPSHOT, NO FILE. An answer without its rows or its `readAt` — an
- * older server's page envelope, a proxy's HTML page served with a 200 — is
+ * ★ THE ANSWER IS A GZIP FILE (`application/gzip`) holding `{ items, readAt }`,
+ * unzipped here with the browser's own `DecompressionStream`. Compressed by the
+ * server rather than with `Content-Encoding`, so every hop between — the edge
+ * proxy included — passes the bytes through untouched and ~25× smaller.
+ * A refusal (`EXPORT_BUSY`, `EXPORT_TOO_LARGE`, 403…) is still JSON, decoded
+ * below so the shared interceptor reads its code and details as usual.
+ *
+ * ★ NO SNAPSHOT, NO FILE. An answer that is not that file, or holds no rows or
+ * no `readAt` — an older server, a proxy's HTML page served with a 200 — is
  * refused here, before anything is written.
  */
 export async function fetchTripExportSnapshot({ from, to, customer, scope }: TripExportRequest): Promise<TripExportSnapshot> {
-  const { data } = await httpClient.get<{ items?: unknown; readAt?: unknown }>('/trip-schedules/export-snapshot', {
+  const { data, headers } = await httpClient.get<ArrayBuffer>('/trip-schedules/export-snapshot', {
     params: { from, to, lifecycle: scope, assignment: 'all', customer },
+    responseType: 'arraybuffer',
+    transformResponse: (raw: ArrayBuffer, answer?: Record<string, unknown>) =>
+      String(answer?.['content-type'] ?? '').includes('application/json')
+        ? JSON.parse(new TextDecoder().decode(raw))
+        : raw,
   });
-  if (!Array.isArray(data?.items) || typeof data.readAt !== 'string' || Number.isNaN(Date.parse(data.readAt))) {
+  // The tag, not `instanceof`: an ArrayBuffer from another realm (a test's
+  // Node buffer under jsdom) is still the bytes this expects.
+  const isBytes = Object.prototype.toString.call(data) === '[object ArrayBuffer]';
+  if (!String(headers['content-type'] ?? '').startsWith('application/gzip') || !isBytes) {
     throw new TypeError('The export answer carried no snapshot.');
   }
-  return { items: (data.items as Wire<TripBoardRow>[]).map(fromWire), readAt: data.readAt };
+  let body: { items?: unknown; readAt?: unknown };
+  try {
+    body = JSON.parse(await gunzipText(data));
+  } catch {
+    throw new TypeError('The export answer carried no snapshot.');
+  }
+  if (!Array.isArray(body?.items) || typeof body.readAt !== 'string' || Number.isNaN(Date.parse(body.readAt))) {
+    throw new TypeError('The export answer carried no snapshot.');
+  }
+  return { items: body.items as TripExportRow[], readAt: body.readAt };
 }
 
 export async function fetchTripSchedule(tripId: string): Promise<TripScheduleWithRefs> {

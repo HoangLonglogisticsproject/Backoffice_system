@@ -8,6 +8,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useSession } from '@/contexts/SessionProvider';
 import { TRIP_EXPORT_SCOPE_LABELS, type TripExportScope, type TripLifecycle } from '@/types/trip';
 import { cn } from '@/utils/cn';
+import { isApiError } from '@/utils/errors';
 import { downloadTripScheduleWorkbook } from '@/utils/export/tripScheduleWorkbook';
 import { notifyApiError, notifyError, notifySuccess } from '@/utils/toast';
 
@@ -97,9 +98,19 @@ export function TripScheduleExportButton({
       setOpen(false);
       notifySuccess('exportDone', { description: `${written} ${t('exportRowsUnit')}` });
     } catch (error) {
-      // The server's own words when it spoke; ours when the request never
-      // arrived, carried no snapshot, or SheetJS failed.
-      notifyApiError(error, 'exportFailed');
+      if (isApiError(error) && error.is('EXPORT_BUSY')) {
+        notifyError('exportBusy');
+      } else if (isApiError(error) && error.is('EXPORT_TOO_LARGE')) {
+        // Refused whole — nothing was cut short. The counts say why.
+        const { trips = '?', limit = '?' } = error.details ?? {};
+        notifyError('exportTooLarge', {
+          description: `${trips} ${t('exportTooLargeCounts')} ${limit} ${t('exportTooLargeHint')}`,
+        });
+      } else {
+        // The server's own words when it spoke; ours when the request never
+        // arrived, carried no snapshot, or SheetJS failed.
+        notifyApiError(error, 'exportFailed');
+      }
     } finally {
       setRunning(false);
     }

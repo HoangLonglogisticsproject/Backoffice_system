@@ -283,6 +283,14 @@ export class TripScheduleService {
    * read page by page are read at different instants; a row archived between
    * two pages shifts every later offset and one trip is never read at all.
    */
+  /**
+   * How many trips one export would hold, through the caller's `executor` — so
+   * it counts the SAME snapshot `listForExport` then reads. Same filter.
+   */
+  async countForExport(query: TripExportQuery, executor: DatabaseQuery): Promise<number> {
+    return this.trips.countInRange({ from: query.from, to: query.to }, boardFilterOf(query), executor);
+  }
+
   async listForExport(query: TripExportQuery, executor: DatabaseQuery): Promise<TripScheduleWithRefs[]> {
     const { items } = await this.trips.listPage(
       { from: query.from, to: query.to },

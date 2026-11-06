@@ -86,6 +86,7 @@ describeIntegration('Excel export snapshot against real PostgreSQL', () => {
     const costs = new TripBoardCostRepository(db);
     return new TripBoardService(
       {
+        countForExport: (query: TripExportQuery, tx: DatabaseQuery) => fx.trips.countForExport(query, tx),
         listForExport: async (query: TripExportQuery, tx: DatabaseQuery) => {
           if (at === 'trips') await between();
           return fx.trips.listForExport(query, tx);
@@ -216,6 +217,29 @@ describeIntegration('Excel export snapshot against real PostgreSQL', () => {
     const snapshot = await fx.board.exportSnapshot(week('history'), true);
 
     expect(row(snapshot, quiet)?.costSummary).toMatchObject({ total: '0.00', itemCount: 0 });
+  });
+
+  // ------------------------------------------------------------ the limit --
+
+  it('★ counts the range in the snapshot and refuses it whole when over the limit — archived trips not counted', async () => {
+    for (const day of ['2026-11-02', '2026-11-03', '2026-11-04']) await trip(day);
+    await archive(await trip('2026-11-05'));
+
+    await expect(fx.board.exportSnapshot(week('all'), true, 2)).rejects.toMatchObject({
+      code: 'EXPORT_TOO_LARGE',
+      details: { trips: '3', limit: '2' },
+    });
+    expect((await fx.board.exportSnapshot(week('all'), true, 3)).items).toHaveLength(3);
+  });
+
+  it('★ a trip added between the count and the read is in neither — the file holds exactly the number counted', async () => {
+    await trip('2026-11-02');
+    await trip('2026-11-03');
+    const board = exportWith('trips', async () => trip('2026-11-04'));
+
+    const snapshot = await board.exportSnapshot(week('all'), true, 2);
+
+    expect(snapshot.items).toHaveLength(2);
   });
 
   // -------------------------------------------------------- all or nothing --

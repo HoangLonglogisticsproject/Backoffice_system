@@ -1354,6 +1354,20 @@ const PHRASES = {
   // the screen(s) whose rows the file will hold — never "tất cả" on its own,
   // which reads as "the whole company".
   exportConfirm: { vi: 'Xuất file', en: 'Export file' },
+  // The server's two refusals, in words for the office (never its English sentence).
+  exportBusy: {
+    vi: 'Đang có hai lượt xuất Excel chạy cùng lúc. Vui lòng thử lại sau ít phút.',
+    en: 'Two Excel exports are already running. Please try again in a moment.',
+  },
+  exportTooLarge: {
+    vi: 'Khoảng ngày này có quá nhiều chuyến cho một lần xuất.',
+    en: 'This date range holds too many trips for one export.',
+  },
+  exportTooLargeCounts: { vi: 'chuyến trong khoảng ngày — tối đa', en: 'trips in the range — at most' },
+  exportTooLargeHint: {
+    vi: 'chuyến mỗi lần xuất. Vui lòng chọn khoảng ngày ngắn hơn.',
+    en: 'trips per export. Please choose a shorter range.',
+  },
   exportPickupRange: { vi: 'Ngày lấy hàng', en: 'Pickup date' },
   exportAllCustomers: { vi: 'Tất cả khách hàng', en: 'All customers' },
   exportCustomerContains: { vi: 'Tên có chứa', en: 'Name contains' },

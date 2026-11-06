@@ -27,6 +27,7 @@ const READ_AT = new Date('2026-11-05T08:42:07.123Z');
 
 describe('TripBoardService', () => {
   let list: jest.Mock;
+  let countForExport: jest.Mock;
   let listForExport: jest.Mock;
   let forTrips: jest.Mock;
   /** Every step of an export, in the order it ran — statements on `tx` and the two reads. */
@@ -45,6 +46,10 @@ describe('TripBoardService', () => {
     };
     transaction = jest.fn(async (work: (tx: DatabaseQuery) => Promise<unknown>) => work(tx));
     list = jest.fn().mockResolvedValue(pageOf('t1', 't2'));
+    countForExport = jest.fn(async () => {
+      steps.push('countForExport');
+      return 2;
+    });
     listForExport = jest.fn(async () => {
       steps.push('listForExport');
       return [{ id: 't1' }, { id: 't2' }];
@@ -57,7 +62,7 @@ describe('TripBoardService', () => {
       ]);
     });
     board = new TripBoardService(
-      { list, listForExport } as unknown as TripScheduleService,
+      { list, countForExport, listForExport } as unknown as TripScheduleService,
       { forTrips } as unknown as TripBoardCostRepository,
       { transaction, query: jest.fn() } as unknown as Database,
     );
@@ -126,9 +131,11 @@ describe('TripBoardService', () => {
       expect(steps).toEqual([
         'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY',
         'SELECT statement_timestamp() AS read_at',
+        'countForExport',
         'listForExport',
         'forTrips',
       ]);
+      expect(countForExport).toHaveBeenCalledWith(EXPORT, tx);
       expect(listForExport).toHaveBeenCalledWith(EXPORT, tx);
       expect(forTrips).toHaveBeenCalledWith(['t1', 't2'], tx);
       expect(list).not.toHaveBeenCalled();
@@ -142,6 +149,33 @@ describe('TripBoardService', () => {
       expect(forTrips).not.toHaveBeenCalled();
       expect(steps).toContain('listForExport');
       expect(snapshot.items.every((row) => row.costSummary === null)).toBe(true);
+    });
+
+    /**
+     * ★ TOO MANY TRIPS IS REFUSED BEFORE ANY ROW OR COST IS READ — in the same
+     * snapshot the read would have used, so the count is the one the file
+     * would have held.
+     */
+    it('★ refuses more trips than one file holds — counted first, no row and no cost read', async () => {
+      countForExport.mockImplementation(async () => {
+        steps.push('countForExport');
+        return 20_001;
+      });
+
+      await expect(board.exportSnapshot(EXPORT, true)).rejects.toMatchObject({
+        code: 'EXPORT_TOO_LARGE',
+        details: { trips: '20001', limit: '20000' },
+      });
+      expect(steps.at(-1)).toBe('countForExport');
+      expect(listForExport).not.toHaveBeenCalled();
+      expect(forTrips).not.toHaveBeenCalled();
+    });
+
+    it('takes exactly the limit — the cap is inclusive', async () => {
+      countForExport.mockResolvedValue(3);
+
+      await expect(board.exportSnapshot(EXPORT, true, 3)).resolves.toMatchObject({ readAt: READ_AT });
+      await expect(board.exportSnapshot(EXPORT, true, 2)).rejects.toMatchObject({ code: 'EXPORT_TOO_LARGE' });
     });
 
     it('★ answers a failed read with the error — never with the rows read so far', async () => {

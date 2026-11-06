@@ -1,7 +1,7 @@
 import { displayCalendarDate } from '@/components/ui/dateTimeText';
 import type { TranslationKey } from '@/types/translate';
 import { TRIP_EXPORT_SCOPE_LABELS, type TripExportScope } from '@/types/trip';
-import type { TripBoardRow } from '@/types/tripBoard';
+import type { TripExportRow } from '@/types/tripBoard';
 import { formatBusinessStamp } from '@/utils/format/datetime';
 import { SHEET_DAY_FORMAT, SHEET_TIME_FORMAT } from './sheetDate';
 import { SHEET_MONEY_FORMAT } from './sheetMoney';
@@ -36,7 +36,7 @@ import {
  */
 
 export interface TripScheduleExport {
-  trips: readonly TripBoardRow[];
+  trips: readonly TripExportRow[];
   t: Translate;
   /** The range the rows came from — it names the file and is stated in it. */
   range: { from: string; to: string };
