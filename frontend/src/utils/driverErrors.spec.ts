@@ -16,4 +16,9 @@ describe('driverErrors — the lorry’s daily fuel check', () => {
     const refused = new ApiError(422, 'VALIDATION_FAILED', 'x', { category: 'FUEL_DECLARED_ON_VEHICLE' });
     expect(driverErrorKey(refused)).toBe('driverErrFuelOnVehicle');
   });
+
+  it('★ words a fill refused for want of a photo as NOT saved', () => {
+    const refused = new ApiError(422, 'VALIDATION_FAILED', 'x', { evidence: 'EVIDENCE_REQUIRED' });
+    expect(driverErrorKey(refused)).toBe('driverErrEvidenceRequired');
+  });
 });

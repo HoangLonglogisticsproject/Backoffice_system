@@ -14,7 +14,7 @@ import {
 } from '../domain/fuel-transaction';
 import { FuelEvidenceRepository } from '../persistence/fuel-evidence.repository';
 import { FuelTransactionRepository, type StoredFuelTransaction } from '../persistence/fuel-transaction.repository';
-import type { AttachedImage } from './fuel-duplicate-guard';
+import { FuelDuplicateGuard, type AttachedImage } from './fuel-duplicate-guard';
 
 const byField = (keys: readonly FuelFactKey[], code: string) => Object.fromEntries(keys.map((key) => [key, code]));
 
@@ -27,7 +27,20 @@ export class FuelTransactionWriter {
   constructor(
     private readonly transactions: FuelTransactionRepository,
     private readonly evidence: FuelEvidenceRepository,
+    private readonly duplicates: FuelDuplicateGuard,
   ) {}
+
+  /** Facts, then images, then the duplicate guard over what is new — all or nothing. A driver acknowledges none. */
+  async complete(
+    stored: StoredFuelTransaction,
+    command: { facts: FuelFactsInput; evidence: readonly EvidenceAttachment[]; acknowledgedMatches?: readonly string[] },
+    by: string,
+    tx: DatabaseQuery,
+  ): Promise<void> {
+    const added = await this.enrich(stored, command.facts, by, tx);
+    const attached = await this.attach(stored.id, command.evidence, by, tx);
+    await this.duplicates.confirm(stored, added, attached, command.acknowledgedMatches ?? [], by, tx);
+  }
 
   /** Wraps a cost. The driver its own provenance names, if any, is the first fact. */
   async open(

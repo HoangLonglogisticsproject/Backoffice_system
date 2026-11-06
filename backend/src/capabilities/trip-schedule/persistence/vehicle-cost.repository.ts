@@ -143,6 +143,20 @@ export class VehicleCostRepository {
   }
 
   /**
+   * Withdraws a cost — the one write 0034's guard allows, once. Never a delete:
+   * the row, its void time, who voided it and why all stay. Inside the caller's
+   * transaction; `false` when it was already withdrawn.
+   */
+  async voidCost(id: string, by: string, reason: string, tx: DatabaseQuery): Promise<boolean> {
+    const rows = await tx.query(
+      `UPDATE vehicle_costs SET voided_at = now(), voided_by = $2, void_reason = $3
+        WHERE id = $1 AND voided_at IS NULL RETURNING id`,
+      [id, by, reason],
+    );
+    return rows.length > 0;
+  }
+
+  /**
    * The fill a retried request already wrote under this key, if any — on any
    * day — with what is needed to tell the retry from a reuse of the key.
    */

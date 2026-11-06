@@ -87,15 +87,20 @@ export const tripKeys = {
    * `cost.read` drops them with every trip's figures (`useTripCosts`).
    */
   vehicleCosts: (vehicleId: string, range: { from: string; to: string }) =>
-    [...tripKeys.all, 'money', 'vehicle', vehicleId, range] as const,
+    [...tripKeys.vehicleLedgers(), vehicleId, range] as const,
+  /** Every lorry's costs — what a rejected driver fill (0038) leaves. */
+  vehicleLedgers: () => [...tripKeys.all, 'money', 'vehicle'] as const,
 
   /**
-   * "Chứng từ nhiên liệu" (`cost.import`): the costs a receipt may already be.
+   * "Đối soát chứng từ" (`cost.import`): the costs a receipt may already be.
    * Its own root, dropped when the key is lost (`useFuelReceipt`).
    */
   fuel: () => [...tripKeys.all, 'fuel'] as const,
   fuelMatches: (search: unknown) => [...tripKeys.fuel(), 'matches', search] as const,
   fuelStaged: () => [...tripKeys.fuel(), 'staged'] as const,
+  /** "Kế toán → Nhiên liệu" (0038): one review state's page, and one fill. Under `fuel()`, so a decision refreshes both. */
+  fuelReviews: (status: string, page: number) => [...tripKeys.fuel(), 'reviews', status, page] as const,
+  fuelReview: (id: string) => [...tripKeys.fuel(), 'review', id] as const,
 
   /** The drivers a dispatcher may assign. One list, company-wide. */
   drivers: () => [...tripKeys.all, 'drivers'] as const,

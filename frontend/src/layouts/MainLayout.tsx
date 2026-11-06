@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ClipboardList,
   FileText,
+  Fuel,
   Gauge,
   History,
   Inbox,
@@ -277,6 +278,7 @@ export default function MainLayout() {
                 cost, and the server decides regardless. */}
             {can('cost.import') && (
               <SidebarSection title={t('accountingSection')}>
+                <NavItem to="/accounting/fuel-reviews" icon={Fuel} label={t('fuelReviews')} />
                 <NavItem to="/accounting/fuel-receipts" icon={Receipt} label={t('fuelReceipts')} />
               </SidebarSection>
             )}

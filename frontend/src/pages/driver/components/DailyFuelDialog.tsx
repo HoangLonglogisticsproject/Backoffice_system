@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { MoneyInput } from '@/components/ui/money-input';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useFuelPhotos } from '@/hooks/driver/fuel';
 import type { DailyFuelDeclarationInput, DailyFuelOutcome } from '@/types/driver';
 import type { TranslationKey } from '@/types/translate';
 import { cn } from '@/utils/cn';
@@ -12,6 +13,7 @@ import { newRequestId } from '@/utils/driverDraft';
 import { driverErrorKey } from '@/utils/driverErrors';
 import { formatPlate } from '@/utils/format';
 import { formatCalendarWeekday, todayAsCalendarDay } from '@/utils/format/datetime';
+import { FuelPhotoPicker } from './FuelPhotoPicker';
 
 /** Liters as the server takes them: above 0, at most 2 decimals. A comma is read as the point. */
 const LITERS = /^\d{1,8}(\.\d{1,2})?$/;
@@ -39,6 +41,9 @@ const COPY: Record<'check' | 'fill', { title: TranslationKey; intro: Translation
  * ★ ONE KEY PER OPENING. A retry after a dropped connection reuses it, so the
  * fill is written once; the parent mounts a fresh dialog each time it asks.
  * "Không đổ nhiên liệu đầu ca" sends no amount — there is no 0-đồng cost to invent.
+ *
+ * ★ FUEL ADDED GOES WITH AT LEAST ONE PHOTO. The server refuses it without
+ * (`EVIDENCE_REQUIRED`); the button waits for one so the driver is told here.
  */
 export function DailyFuelDialog({
   mode = 'check',
@@ -65,11 +70,18 @@ export function DailyFuelDialog({
   const [liters, setLiters] = useState('');
   const [odometer, setOdometer] = useState('');
   const [note, setNote] = useState('');
+  const [vendorName, setVendorName] = useState('');
+  const [vendorTaxCode, setVendorTaxCode] = useState('');
+  const [documentNumber, setDocumentNumber] = useState('');
   const [error, setError] = useState<unknown>(null);
+  // The photos of the fill — the meter, the receipt, the station's QR — sent with it for Accounting's check.
+  const photos = useFuelPhotos();
 
   const litersBad = liters.trim() !== '' && !(LITERS.test(litersOf(liters)) && /[1-9]/.test(liters));
   const odometerBad = odometer.trim() !== '' && !(ODOMETER.test(odometer.trim()) && Number(odometer) <= 2_147_483_647);
-  const ready = outcome === 'no_fuel' || (outcome === 'fuel_added' && amount.trim() !== '' && !litersBad && !odometerBad);
+  const photographed = photos.tray.length > 0;
+  const ready =
+    outcome === 'no_fuel' || (outcome === 'fuel_added' && amount.trim() !== '' && !litersBad && !odometerBad && photographed);
 
   const submit = async () => {
     if (!outcome || !ready) return;
@@ -83,10 +95,15 @@ export function DailyFuelDialog({
             odometerKm: odometer.trim() === '' ? null : Number(odometer),
             note: note.trim() || null,
             clientRequestId,
+            ...(vendorName.trim() ? { vendorName: vendorName.trim() } : {}),
+            ...(vendorTaxCode.trim() ? { vendorTaxCode: vendorTaxCode.trim() } : {}),
+            ...(documentNumber.trim() ? { documentNumber: documentNumber.trim() } : {}),
+            evidence: photos.evidence(),
           };
     setError(null);
     try {
       await onSubmit(input);
+      await photos.clear();
       onDeclared();
     } catch (error_) {
       setError(error_);
@@ -113,7 +130,7 @@ export function DailyFuelDialog({
           <Button variant="ghost" size="lg" className="h-11" onClick={onClose} disabled={saving}>
             {t('driverCancel')}
           </Button>
-          <Button size="lg" className="h-11 flex-1" disabled={!ready || saving} onClick={() => void submit()}>
+          <Button size="lg" className="h-11 flex-1" disabled={!ready || saving || photos.uploading} onClick={() => void submit()}>
             {saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
             {t(copy.submit)}
           </Button>
@@ -168,6 +185,25 @@ export function DailyFuelDialog({
             {field('odometer', t('driverFuelOdometer'), (
               <Input id={`${id}-odometer`} inputMode="numeric" value={odometer} onChange={(event) => setOdometer(event.target.value)} className="h-11" aria-invalid={odometerBad} />
             ), odometerBad ? t('driverFuelOdometerInvalid') : null)}
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('driverPhotosTitle')} *</p>
+              <FuelPhotoPicker photos={photos} />
+              {photographed ? null : <p className="mt-1 text-xs text-muted-foreground">{t('driverPhotosRequired')}</p>}
+            </div>
+            <details className="rounded-lg border px-3 py-2">
+              <summary className="cursor-pointer py-1 text-sm font-medium">{t('driverReceiptDetails')}</summary>
+              <div className="space-y-3 pt-2">
+                {field('vendor', t('driverReceiptVendor'), (
+                  <Input id={`${id}-vendor`} maxLength={200} value={vendorName} onChange={(event) => setVendorName(event.target.value)} className="h-11" />
+                ))}
+                {field('tax', t('driverReceiptTaxCode'), (
+                  <Input id={`${id}-tax`} inputMode="numeric" maxLength={20} value={vendorTaxCode} onChange={(event) => setVendorTaxCode(event.target.value)} className="h-11" />
+                ))}
+                {field('invoice', t('driverReceiptNumber'), (
+                  <Input id={`${id}-invoice`} maxLength={40} value={documentNumber} onChange={(event) => setDocumentNumber(event.target.value)} className="h-11" />
+                ))}
+              </div>
+            </details>
             {field('note', t('driverFuelNote'), (
               <Input id={`${id}-note`} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} className="h-11" />
             ))}

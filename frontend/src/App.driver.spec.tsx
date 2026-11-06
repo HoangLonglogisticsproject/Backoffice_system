@@ -207,15 +207,16 @@ describe('★ a driver is given the Driver Portal, and only that', () => {
  * MENU is not duplicated, and the test after them is what holds that.
  */
 describe('★ the driver’s application shell', () => {
-  it('draws the driver’s four destinations, and only those', async () => {
+  it('draws the driver’s five destinations, and only those', async () => {
     renderAt('/driver');
     await screen.findByText('Bạn chưa có chuyến nào hôm nay.');
 
     // The count is asserted, not just the four names: the menu must not grow a
     // link to a screen the server would answer 403 to, and a menu that offers
     // what the server refuses is worse than no menu.
-    expect(within(driverNav()).getAllByRole('link')).toHaveLength(4);
+    expect(within(driverNav()).getAllByRole('link')).toHaveLength(5);
     expect(navLink('Lịch làm việc')).toHaveAttribute('href', '/driver');
+    expect(navLink('Nhiên liệu')).toHaveAttribute('href', '/driver/fuel');
     expect(navLink('Đã chạy xong')).toHaveAttribute('href', '/driver/history');
     expect(navLink(/^Thông báo/)).toHaveAttribute('href', '/driver/notifications');
     expect(navLink('Hồ sơ')).toHaveAttribute('href', '/driver/account/security');

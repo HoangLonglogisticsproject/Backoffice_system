@@ -10,13 +10,12 @@ import {
   openTestSchema,
   poolAsDatabase,
 } from '../helpers/integration-database';
+import { fuelWriter } from '../helpers/fuel-wiring';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { FilesystemObjectStorage } from '@infrastructure/object-storage/filesystem-object-storage';
-import { FuelDuplicateGuard } from '../../src/capabilities/trip-schedule/application/fuel-duplicate-guard';
 import { FuelEvidenceService } from '../../src/capabilities/trip-schedule/application/fuel-evidence.service';
 import { FuelMatchService, type FuelMatchQuery } from '../../src/capabilities/trip-schedule/application/fuel-match.service';
 import { FuelTransactionService } from '../../src/capabilities/trip-schedule/application/fuel-transaction.service';
-import { FuelTransactionWriter } from '../../src/capabilities/trip-schedule/application/fuel-transaction-writer';
 import { FuelEvidenceRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-evidence.repository';
 import { FuelMatchRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-match.repository';
 import { FuelTransactionRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-transaction.repository';
@@ -106,8 +105,7 @@ describeIntegration('Fuel receipt → existing cost, across both ledgers, agains
       transactions,
       new FuelTransactionViewRepository(database),
       images,
-      new FuelTransactionWriter(transactions, images),
-      new FuelDuplicateGuard(matches),
+      fuelWriter(database),
     );
     search = new FuelMatchService(database, matches, transactions);
     evidence = new FuelEvidenceService(new FilesystemObjectStorage(root), images);

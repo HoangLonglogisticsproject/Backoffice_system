@@ -595,6 +595,11 @@ jobs:
           LOG_LEVEL: error
           CORS_ORIGINS: ''
           TRUSTED_PROXIES: ''
+          # A driver's fill needs a photo (0038), so the contract suite needs a store. The runner's
+          # disk is thrown away with it; production refuses `filesystem` without this CI-only opt-in.
+          OBJECT_STORAGE_DRIVER: filesystem
+          OBJECT_STORAGE_ROOT: ${{ runner.temp }}/object-storage
+          OBJECT_STORAGE_FILESYSTEM_IN_PRODUCTION: ci-only
         run: |
           set -euo pipefail
           nohup node dist/main.js > "${RUNNER_TEMP}/backend.log" 2>&1 &

@@ -687,6 +687,7 @@ describe('driver-portal HTTP security', () => {
         declaration: { outcome: 'fuel_added', amount: '900000.00', liters: '40.5', odometerKm: null, note: null },
         clientRequestId: 'fuel-1',
         declaredBy: DRIVER_A,
+        receipt: { facts: {}, evidence: [] },
       });
     });
 
@@ -705,8 +706,34 @@ describe('driver-portal HTTP security', () => {
         fill: { amount: '300000', liters: '12.5', odometerKm: 120500, note: 'Đổ thêm' },
         clientRequestId: 'fill-1',
         recordedBy: DRIVER_A,
+        receipt: { facts: {}, evidence: [] },
       });
       expect(response.body).toMatchObject({ id: COST, businessDate: '2026-10-06' });
+    });
+
+    it('★ carries what the driver read off the receipt and their photos — never an acknowledgement, a ledger or a cost', async () => {
+      const IMAGE = '99999999-9999-4999-8999-999999999999';
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-transactions`)
+        .send({
+          amount: '300000',
+          clientRequestId: 'fill-2',
+          vendorName: 'Petrolimex CH 12',
+          vendorTaxCode: '0100109106',
+          documentNumber: '0004567',
+          evidence: [{ id: IMAGE, type: 'payment_qr' }],
+          acknowledgedMatches: [COST],
+          vehicleCostId: COST,
+          ledger: 'trip',
+        })
+        .expect(201);
+      expect(fuel.recordFill.mock.calls[0][0].receipt).toEqual({
+        facts: { vendorName: 'Petrolimex CH 12', vendorTaxCode: '0100109106', documentNumber: '0004567' },
+        evidence: [{ id: IMAGE, type: 'payment_qr' }],
+      });
+      expect(JSON.stringify(fuel.recordFill.mock.calls[0][0])).not.toMatch(/acknowledged|vehicleCostId|ledger/);
+      await authed('post', `/driver/assignments/${ASSIGNMENT_A}/fuel-transactions`)
+        .send({ amount: '300000', clientRequestId: 'fill-3', evidence: [{ id: 'not-a-uuid' }] })
+        .expect(422);
     });
 
     it('refuses a fill without its key, without an amount, or with liters that are not a quantity', async () => {
@@ -784,6 +811,7 @@ describe('driver-portal HTTP security', () => {
         fill: { amount: '300000', liters: null, odometerKm: null, note: null },
         clientRequestId: 'fill-1',
         recordedBy: DRIVER_A,
+        receipt: { facts: {}, evidence: [] },
       });
     });
 

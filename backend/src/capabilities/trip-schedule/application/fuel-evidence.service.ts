@@ -108,6 +108,16 @@ export class FuelEvidenceService {
     };
   }
 
+  /**
+   * A driver's door (0038): only an image they uploaded themselves, waiting or
+   * attached — never another driver's, never Accounting's, never a discarded one.
+   */
+  async contentOfUploader(id: string, uploader: string): Promise<{ stream: Readable; mimeType: EvidenceImageType; byteSize: number; filename: string }> {
+    const row = await this.evidence.findById(id);
+    if (!row || row.discardedAt || row.uploadedBy.id !== uploader) throw new NotFoundError('Evidence not found.');
+    return this.content(id, uploader);
+  }
+
   /** Withdraws an attached image — never deletes it. The SuperAdmin's, with a reason. */
   async retire(id: string, reason: string, by: string): Promise<FuelEvidence> {
     const why = reason.trim();

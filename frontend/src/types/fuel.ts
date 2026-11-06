@@ -9,7 +9,8 @@ import type { UserSummary } from './organization';
  */
 export type FuelLedger = 'vehicle' | 'trip';
 
-export type FuelEvidenceType = 'pump_meter' | 'timemark' | 'fuel_voucher' | 'receipt' | 'tax_invoice';
+/** `payment_qr` (0038): a picture of the station's payment QR — an image, never parsed. */
+export type FuelEvidenceType = 'pump_meter' | 'timemark' | 'fuel_voucher' | 'receipt' | 'tax_invoice' | 'payment_qr';
 
 export interface FuelEvidence {
   id: string;
@@ -80,4 +81,66 @@ export interface FuelReceiptQuery {
   vendorTaxCode?: string;
   documentSeries?: string;
   documentNumber?: string;
+}
+
+/**
+ * ★ A DRIVER'S FILL, CHECKED AND PAID (0038). The latest step is the state:
+ * submitted → needs_info | approved | rejected; needs_info → submitted | rejected;
+ * approved → paid. No payment happens in the app — `paid` records that it did.
+ */
+export type FuelReviewStatus = 'submitted' | 'needs_info' | 'approved' | 'paid' | 'rejected';
+
+/** A submitted fill in a list: the money row's figures, the fill's facts, the latest step. */
+export interface FuelSubmission {
+  fuelTransactionId: string;
+  costId: string;
+  vehicle: { id: string; plate: string };
+  businessDate: string;
+  occurredAt: string | null;
+  recordedAt: string;
+  amount: string;
+  liters: string | null;
+  odometerKm: number | null;
+  driver: UserSummary | null;
+  vendor: { name: string | null; taxCode: string | null } | null;
+  document: { series: string | null; number: string | null } | null;
+  evidenceCount: number;
+  status: FuelReviewStatus;
+  /** Why it stands where it stands, when the step said (asked, refused, a payment note). */
+  statusNote: string | null;
+  statusAt: string;
+}
+
+export interface FuelReviewEvent {
+  seq: number;
+  status: FuelReviewStatus;
+  note: string | null;
+  actor: UserSummary;
+  at: string;
+}
+
+/** What Accounting decides on: the fill, its steps, what looks like it. */
+export interface FuelReviewDetail {
+  status: FuelReviewStatus;
+  fill: FuelTransactionView;
+  history: FuelReviewEvent[];
+  warnings: FuelCandidate[];
+}
+
+export type FuelReviewAction = 'request-info' | 'approve' | 'reject' | 'mark-paid';
+
+/** A driver's own fill: no cost id, no driver — it is theirs. */
+export type DriverFuelSubmission = Omit<FuelSubmission, 'costId' | 'driver'>;
+
+export type DriverFuelSubmissionDetail = DriverFuelSubmission & {
+  history: Array<{ status: FuelReviewStatus; note: string | null; at: string }>;
+  evidence: FuelEvidence[];
+};
+
+/** What a driver read off the receipt and the photos they took. The lorry, the day and the money are the fill's own. */
+export interface DriverReceiptInput {
+  vendorName?: string;
+  vendorTaxCode?: string;
+  documentNumber?: string;
+  evidence?: Array<{ id: string; type?: FuelEvidenceType }>;
 }

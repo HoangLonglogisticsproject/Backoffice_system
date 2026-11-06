@@ -34,7 +34,9 @@ import {
   type DriverDailyFuelCheck,
   type DriverFuelTransaction,
 } from '../domain/vehicle-fuel';
+import type { DriverReceipt } from '../application/fuel-submission-writer';
 import { ActiveAssignmentGuard } from './active-assignment.guard';
+import { evidence, receiptFacts } from './fuel-transaction.dto';
 import { ExpenseAssignmentGuard } from './expense-assignment.guard';
 import { ReadableAssignmentGuard } from './readable-assignment.guard';
 
@@ -165,6 +167,10 @@ const fill = {
   odometerKm: z.number().int().min(0).max(2_147_483_647).nullable().optional(),
   note,
   clientRequestId,
+  // What the driver read off the receipt and photographed (0038) — the fill's fuel transaction, submitted for review.
+  ...receiptFacts,
+  occurredAt: z.coerce.date().optional(),
+  evidence,
 };
 
 const declareFuelCheckSchema = z.discriminatedUnion('outcome', [
@@ -236,6 +242,18 @@ type EditExpenseBody = z.infer<typeof editExpenseSchema>;
 type SubmitCompletionBody = z.infer<typeof submitCompletionSchema>;
 type DeclareFuelCheckBody = z.infer<typeof declareFuelCheckSchema>;
 type RecordFuelFillBody = z.infer<typeof recordFuelFillSchema>;
+
+/** The receipt a fill's body carries: facts typed from it and the driver's own staged images. */
+const receiptOf = (body: RecordFuelFillBody): DriverReceipt => ({
+  facts: {
+    occurredAt: body.occurredAt,
+    vendorName: body.vendorName,
+    vendorTaxCode: body.vendorTaxCode,
+    documentSeries: body.documentSeries,
+    documentNumber: body.documentNumber,
+  },
+  evidence: body.evidence,
+});
 
 /** The body's declaration, with the optional readings made explicit. */
 const declarationOf = (body: DeclareFuelCheckBody): DailyFuelDeclaration =>
@@ -433,6 +451,7 @@ export class DriverPortalController {
       declaration: declarationOf(body),
       clientRequestId: body.clientRequestId,
       declaredBy: actor.id,
+      ...(body.outcome === 'fuel_added' ? { receipt: receiptOf(body) } : {}),
     });
     return forDriver(check);
   }
@@ -465,6 +484,7 @@ export class DriverPortalController {
       },
       clientRequestId: body.clientRequestId,
       recordedBy: actor.id,
+      receipt: receiptOf(body),
     });
   }
 

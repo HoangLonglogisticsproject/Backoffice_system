@@ -55,7 +55,7 @@ export const isOnAnotherFill = (error: unknown): boolean =>
   isApiError(error) && Object.values(error.details ?? {}).includes('ON_ANOTHER_FILL');
 
 /**
- * "Chứng từ nhiên liệu" — find the cost a receipt already is, and attach to it.
+ * "Đối soát chứng từ" — find the cost a receipt already is, and attach to it.
  *
  * ★ THE SEARCH NEVER WRITES AND THE ATTACH NEVER CREATES. A receipt goes onto
  * the one cost a person picked; with nothing found, nothing is written.

@@ -11,6 +11,7 @@ import {
   openTestSchema,
   poolAsDatabase,
 } from '../helpers/integration-database';
+import { fuelSubmissionWriter, fuelWriter } from '../helpers/fuel-wiring';
 import { UserRepository } from '@core/users/persistence/user.repository';
 import { FilesystemObjectStorage } from '@infrastructure/object-storage/filesystem-object-storage';
 import { businessToday } from '@common/pagination/date-range-page-query.dto';
@@ -21,12 +22,9 @@ import { DriverAssignmentRepository } from '../../src/capabilities/trip-schedule
 import { TripScheduleRepository } from '../../src/capabilities/trip-schedule/persistence/trip-schedule.repository';
 import { VehicleCostRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-cost.repository';
 import { VehicleDailyFuelCheckRepository } from '../../src/capabilities/trip-schedule/persistence/vehicle-fuel-check.repository';
-import { FuelDuplicateGuard } from '../../src/capabilities/trip-schedule/application/fuel-duplicate-guard';
 import { FuelEvidenceService } from '../../src/capabilities/trip-schedule/application/fuel-evidence.service';
 import { FuelTransactionService } from '../../src/capabilities/trip-schedule/application/fuel-transaction.service';
-import { FuelTransactionWriter } from '../../src/capabilities/trip-schedule/application/fuel-transaction-writer';
 import { FuelEvidenceRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-evidence.repository';
-import { FuelMatchRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-match.repository';
 import { FuelTransactionRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-transaction.repository';
 import { FuelTransactionViewRepository } from '../../src/capabilities/trip-schedule/persistence/fuel-transaction-view.repository';
 
@@ -135,8 +133,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       transactions,
       new FuelTransactionViewRepository(database),
       images,
-      new FuelTransactionWriter(transactions, images),
-      new FuelDuplicateGuard(new FuelMatchRepository(database)),
+      fuelWriter(database),
     );
     evidence = new FuelEvidenceService(new FilesystemObjectStorage(root), images);
     driverFuel = new VehicleFuelService(
@@ -147,6 +144,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       new VehicleDailyFuelCheckRepository(database),
       new VehicleCostRepository(database),
       new FleetOperationsRepository(database),
+      fuelSubmissionWriter(database),
     );
     const users = new UserRepository(database);
     office = (await users.insertUser({ displayName: 'Kế Toán' })).id;
@@ -641,6 +639,8 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       return turn(tripId, vehicleId, driver);
     };
     const fill = (amount: string, liters: string | null) => ({ amount, liters, odometerKm: null, note: null });
+    /** A driver's fill carries a photo of their own (0038). */
+    const photo = async (by: string) => ({ facts: {}, evidence: [{ id: await stage(by), type: 'receipt' as const }] });
     const costsOf = (vehicleId: string) =>
       sql<{ id: string; amount: string; liters: string | null; business_date: string; created_by: string }>(
         `SELECT id, amount::text, liters::text, business_date::text, created_by FROM vehicle_costs
@@ -657,12 +657,13 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
         declaration: { outcome: 'fuel_added', ...fill('772460', '26') },
         clientRequestId: 'event-a',
         declaredBy: driverA,
+        receipt: await photo(driverA),
       });
       // Event B — later the same day, the same driver: a fill after the check.
-      await driverFuel.recordFill({ assignmentId: turnA, fill: fill('500000', '17'), clientRequestId: 'event-b', recordedBy: driverA });
+      await driverFuel.recordFill({ assignmentId: turnA, fill: fill('500000', '17'), clientRequestId: 'event-b', recordedBy: driverA, receipt: await photo(driverA) });
       // Event C — another driver, on another trip of the same lorry, the same day.
       const turnC = await todaysTurn(vehicle, driverB);
-      await driverFuel.recordFill({ assignmentId: turnC, fill: fill('300000', '10.5'), clientRequestId: 'event-c', recordedBy: driverB });
+      await driverFuel.recordFill({ assignmentId: turnC, fill: fill('300000', '10.5'), clientRequestId: 'event-c', recordedBy: driverB, receipt: await photo(driverB) });
 
       const costs = await costsOf(vehicle);
       expect(costs.map((cost) => [cost.amount, cost.liters, cost.created_by])).toEqual([
@@ -696,7 +697,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
           vendor: { name: vendors[i] },
           driver: { id: costs[i]?.created_by },
         });
-        expect(view.evidence).toHaveLength(1);
+        expect(view.evidence).toHaveLength(2); // the driver's photo, then the office's
       });
 
       // After commit, all three are there, each on its own cost — the first untouched by the later two.
@@ -709,7 +710,7 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
       expect((await fuel.viewOfVehicleCost(vehicle, costs[0]?.id as string)).vendor).toEqual({ name: 'Cây xăng A', taxCode: null });
     });
 
-    it('records a second driver’s same-day fuel as a fill — a second START-OF-SHIFT declaration only reads the check that stands', async () => {
+    it('records a second driver’s same-day fuel as a fill — a second START-OF-SHIFT declaration with money is refused, never “saved”', async () => {
       const vehicle = await flaggedLorry();
       const turnA = await todaysTurn(vehicle, driverA);
       const turnB = await todaysTurn(vehicle, driverB);
@@ -718,19 +719,25 @@ describeIntegration('Fuel transactions against real PostgreSQL', () => {
         declaration: { outcome: 'fuel_added', ...fill('772460', '26') },
         clientRequestId: 'a',
         declaredBy: driverA,
+        receipt: await photo(driverA),
       });
-      // The day's obligation is met: this declaration reads A's check and writes no cost (0034's rule, pinned by
-      // vehicle-daily-fuel 8b). The handset does not offer it once the day is answered.
-      const standing = await driverFuel.declare({
-        assignmentId: turnB,
-        declaration: { outcome: 'fuel_added', ...fill('500000', '17') },
-        clientRequestId: 'b',
-        declaredBy: driverB,
-      });
-      expect(standing.sourceAssignmentId).toBe(turnA);
+      const photoB = await photo(driverB);
+      // The day's obligation is met: a stale screen declaring MONEY is told it was not recorded (0038) — never
+      // answered with A's check as if saved — and writes no cost (pinned by vehicle-daily-fuel 8b).
+      expect(
+        (await refusal(() =>
+          driverFuel.declare({
+            assignmentId: turnB,
+            declaration: { outcome: 'fuel_added', ...fill('500000', '17') },
+            clientRequestId: 'b',
+            declaredBy: driverB,
+            receipt: photoB,
+          }),
+        ))?.details,
+      ).toEqual({ dailyFuelCheck: 'CHECK_ALREADY_ANSWERED' });
       expect(await costsOf(vehicle)).toHaveLength(1);
       // What the handset offers instead — a fill — is its own cost.
-      await driverFuel.recordFill({ assignmentId: turnB, fill: fill('500000', '17'), clientRequestId: 'b-fill', recordedBy: driverB });
+      await driverFuel.recordFill({ assignmentId: turnB, fill: fill('500000', '17'), clientRequestId: 'b-fill', recordedBy: driverB, receipt: await photo(driverB) });
       expect((await costsOf(vehicle)).map((cost) => cost.created_by)).toEqual([driverA, driverB]);
     });
   });
